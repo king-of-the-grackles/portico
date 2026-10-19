@@ -1,8 +1,9 @@
 import type { Store } from "../db";
 import { BridgeError } from "./errors";
 import { resolveRule } from "./rules";
+import { renderTemplate } from "./templates";
 import { isFinal } from "./types";
-import type { AgentConfig, BridgeConfig, Notice, Task, TaskStatus } from "./types";
+import type { AgentConfig, BridgeConfig, BridgeEvent, Notice, Task, TaskStatus } from "./types";
 
 export interface ServiceDeps {
   store: Store;
@@ -14,6 +15,13 @@ export interface ServiceDeps {
 }
 
 const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+const EVENT_NAME = /^[A-Za-z0-9_.-]{1,100}$/;
+const EXPIRY_REASON: Record<"waiting_approval" | "queued" | "working", string> = {
+  waiting_approval: "expired: not approved in time",
+  queued: "expired: never picked up",
+  working: "expired: not finished in time",
+};
 
 export class BridgeService {
   private readonly store: Store;
@@ -99,6 +107,81 @@ export class BridgeService {
       return this.store.updateTask(task.id, { senderNotifiedAt: this.iso() });
     }
     return task;
+  }
+
+  reportEvent(caller: string, input: { name: string; details: string }): { event: BridgeEvent; tasks: Task[] } {
+    if (typeof input.name !== "string" || !EVENT_NAME.test(input.name)) {
+      throw new BridgeError("bad_request", "name must be 1–100 characters: letters, digits, _ . -");
+    }
+    const details = input.details ?? "";
+    if (typeof details !== "string") throw new BridgeError("bad_request", "details must be a string.");
+    this.requireSize("details", details);
+
+    const eventLimit = this.config.limits.eventsPerHourPerAgent;
+    if (this.store.countEventsFromSince(caller, this.iso(-HOUR_MS)) >= eventLimit) {
+      throw new BridgeError("rate_limited", `${caller} has reached the limit of ${eventLimit} events per hour.`);
+    }
+
+    const event: BridgeEvent = { id: this.newId(), agent: caller, name: input.name, details, createdAt: this.iso() };
+    const planned = this.config.triggers
+      .filter((trigger) => trigger.when.agent === caller && trigger.when.event === input.name)
+      .map((trigger) => ({ trigger, instructions: renderTemplate(trigger.send.instructions, event) }));
+    for (const { trigger, instructions } of planned) {
+      this.requireSize(`instructions for trigger ${trigger.name}`, instructions);
+    }
+    // Triggered tasks count against the reporting agent's budget; check them all before creating anything.
+    if (planned.length > 0) this.requireTaskBudget(caller, planned.length);
+
+    return this.store.transaction(() => {
+      this.store.insertEvent(event);
+      this.log("event_reported", { event_id: event.id, agent: caller, name: event.name, triggers: planned.length });
+      const tasks = planned.map(({ trigger, instructions }) =>
+        this.createTask(caller, trigger.send.to, instructions, { eventId: event.id, triggerName: trigger.name }),
+      );
+      return { event, tasks };
+    });
+  }
+
+  approveTask(taskId: string): Task {
+    const task = this.requireTask(taskId);
+    if (task.status !== "waiting_approval") {
+      throw new BridgeError("wrong_status", `Task ${task.id} is already ${task.status}.`);
+    }
+    const updated = this.store.updateTask(task.id, { status: "queued", updatedAt: this.iso() });
+    this.log("task_status", { task_id: task.id, status: "queued", by: "approval" });
+    this.notify({ kind: "queued", task: updated });
+    return updated;
+  }
+
+  denyTask(taskId: string, note?: string): Task {
+    const task = this.requireTask(taskId);
+    if (task.status !== "waiting_approval") {
+      throw new BridgeError("wrong_status", `Task ${task.id} is already ${task.status}.`);
+    }
+    const reason = note?.trim() ? note.trim() : "denied by the user";
+    this.requireSize("note", reason);
+    const updated = this.store.updateTask(task.id, { status: "denied", reason, updatedAt: this.iso() });
+    this.log("task_status", { task_id: task.id, status: "denied", by: "approval" });
+    this.notify({ kind: "result_ready", task: updated });
+    return updated;
+  }
+
+  expireDue(): Task[] {
+    const at = this.iso();
+    return this.store.transaction(() =>
+      this.store.listExpirable(at).map((task) => {
+        const reason = EXPIRY_REASON[task.status as keyof typeof EXPIRY_REASON];
+        const updated = this.store.updateTask(task.id, { status: "expired", reason, updatedAt: at });
+        this.log("task_status", { task_id: task.id, status: "expired", was: task.status });
+        this.notify({ kind: "result_ready", task: updated });
+        return updated;
+      }),
+    );
+  }
+
+  deleteOldHistory(): { tasks: number; events: number } {
+    const cutoff = this.iso(-this.config.limits.historyDays * DAY_MS);
+    return { tasks: this.store.deleteFinishedBefore(cutoff), events: this.store.deleteEventsBefore(cutoff) };
   }
 
   // ---- helpers (also used by the event, approval and expiry methods in Task 5) ----
