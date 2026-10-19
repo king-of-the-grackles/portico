@@ -1,3 +1,4 @@
+import { buildApp } from "../src/app";
 import { parseConfig } from "../src/config";
 import { BridgeError } from "../src/core/errors";
 import { BridgeService } from "../src/core/service";
@@ -88,4 +89,20 @@ export function errorCode(fn: () => unknown): string | null {
     throw err;
   }
   return null;
+}
+
+export function makeApp(config: BridgeConfig = testConfig()) {
+  const ctx = makeService(config);
+  const app = buildApp(ctx.service, ctx.config);
+  async function call(agent: TestAgent | null, method: string, path: string, body?: unknown): Promise<Response> {
+    const headers: Record<string, string> = {};
+    if (agent) headers.authorization = `Bearer ${TOKENS[agent]}`;
+    let payload: string | undefined;
+    if (body !== undefined) {
+      headers["content-type"] = "application/json";
+      payload = typeof body === "string" ? body : JSON.stringify(body);
+    }
+    return await app.request(path, { method, headers, body: payload });
+  }
+  return { ...ctx, app, call };
 }
