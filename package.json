@@ -1,0 +1,9 @@
+{
+  "name": "agent-bridge",
+  "private": true,
+  "workspaces": ["hub"],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bun run --cwd hub typecheck"
+  }
+}

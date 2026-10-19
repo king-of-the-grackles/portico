@@ -1,0 +1,22 @@
+{
+  "name": "@agent-bridge/hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "bridge": "src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli.ts serve",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "hono": "^4.13",
+    "yaml": "^2.9",
+    "zod": "^4.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2"
+  }
+}
