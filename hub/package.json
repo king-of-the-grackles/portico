@@ -16,6 +16,7 @@
     "zod": "^4.6"
   },
   "devDependencies": {
+    "@apidevtools/swagger-parser": "^13.1.0",
     "@types/bun": "^1.4.3",
     "typescript": "^7.0.2"
   }
