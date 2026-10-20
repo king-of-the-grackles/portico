@@ -216,7 +216,7 @@ export class BridgeService {
     return this.store.getTask(taskId);
   }
 
-  listTasks(filter: { agent?: string; status?: TaskStatus; limit: number }): Task[] {
+  listTasks(filter: { agent?: string; status?: TaskStatus; limit: number; oldestFirst?: boolean }): Task[] {
     return this.store.listTasks(filter);
   }
 

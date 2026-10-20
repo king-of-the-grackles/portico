@@ -6,10 +6,11 @@ import { formatTime, type Html, STATUS_WORDS } from "./layout";
 const clipText = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 const taskPath = (task: Task) => `/hub/tasks/${encodeURIComponent(task.id)}`;
 
-export function loginView(error: string | null): Html {
+export function loginView(error: string | null, next = "/hub"): Html {
   return html`<h1>Sign in</h1>
 ${error ? html`<div class="card error">${error}</div>` : ""}
 <form method="post" action="/hub/login" class="card">
+${next !== "/hub" ? html`<input type="hidden" name="next" value="${next}">` : ""}
 <label for="password">Password</label>
 <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
 <div class="actions"><button type="submit" class="primary">Sign in</button></div>
@@ -52,11 +53,11 @@ export interface AgentRow {
   connected: boolean;
 }
 
-export function homeView(waiting: { task: Task; chain: Task[] }[], permissions: PermissionRequest[], agents: AgentRow[]): Html {
+export function homeView(waiting: { task: Task; chain: Task[] }[], permissions: PermissionRequest[], agents: AgentRow[], moreWaiting = false): Html {
   return html`<h1>Waiting</h1>
 ${waiting.length === 0 && permissions.length === 0 ? html`<p class="meta">Nothing waiting.</p>` : ""}
 ${permissions.length > 0 ? html`<h2>Permission prompts</h2>${permissions.map(waitingPermission)}` : ""}
-${waiting.length > 0 ? html`<h2>Tasks waiting for approval</h2>${waiting.map(waitingTask)}` : ""}
+${waiting.length > 0 ? html`<h2>Tasks waiting for approval</h2>${waiting.map(waitingTask)}${moreWaiting ? html`<p class="meta">Showing the oldest ${waiting.length} tasks. More are waiting.</p>` : ""}` : ""}
 <h2>Agents</h2>
 <table><thead><tr><th>Agent</th><th>Delivery</th><th>Last checked in</th><th>Description</th></tr></thead><tbody>
 ${agents.map(

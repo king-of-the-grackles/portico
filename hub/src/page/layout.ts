@@ -1,7 +1,8 @@
 import type { Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
-import type { TaskStatus } from "../core/types";
+import type { BridgeConfig, TaskStatus } from "../core/types";
 
 export type Html = HtmlEscapedString | Promise<HtmlEscapedString>;
 
@@ -75,4 +76,13 @@ export function sendPage(
   c.header("X-Frame-Options", "DENY");
   c.header("Content-Security-Policy", CSP);
   return c.html(layout(title, body, opts), status);
+}
+
+/** Like jsonBodyLimit, but answers with an HTML page, because these forms are posted from a browser. */
+export function formBodyLimit(config: BridgeConfig) {
+  const maxBodyBytes = config.limits.maxTextKb * 1024 * 3;
+  return bodyLimit({
+    maxSize: maxBodyBytes,
+    onError: (c) => sendPage(c, 413, "Too large", html`<h1>The form is too large.</h1><p class="meta">Nothing was changed.</p>`),
+  });
 }

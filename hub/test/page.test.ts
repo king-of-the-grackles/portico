@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { safeNext } from "../src/page/session";
 import { ADMIN_PASSWORD, BASE_YAML, HOUR, flush, makeApp, signIn, testConfig } from "./helpers";
 
 const login = (password: string) => ({ method: "POST", body: new URLSearchParams({ password }) });
@@ -9,7 +10,9 @@ describe("hub page sign-in", () => {
     for (const path of ["/hub", "/hub/history", "/hub/tasks/x"]) {
       const res = await app.request(path);
       expect(res.status).toBe(303);
-      expect(res.headers.get("location")).toBe("/hub/login");
+      expect(res.headers.get("location")).toBe(
+        path === "/hub" ? "/hub/login" : `/hub/login?next=${encodeURIComponent(path)}`,
+      );
     }
   });
 
@@ -225,5 +228,86 @@ describe("hub page", () => {
       expect(text).not.toMatch(PRONOUNS);
       expect(text.toLowerCase()).not.toContain("agent-bridge");
     }
+  });
+});
+
+describe("hub page: carried-over fixes", () => {
+  test("a signed-out visit to a task page returns there after sign-in", async () => {
+    const { app, service } = makeApp();
+    const task = service.sendTask("grok-bot", { to: "muse", instructions: "Summarize the inbox" });
+    const page = `/hub/tasks/${task.id}`;
+
+    const res = await app.request(page);
+    expect(res.status).toBe(303);
+    const login = res.headers.get("location")!;
+    expect(login).toBe(`/hub/login?next=${encodeURIComponent(page)}`);
+    expect(await (await app.request(login)).text()).toContain(`<input type="hidden" name="next" value="${page}">`);
+
+    const signedIn = await app.request("/hub/login", {
+      method: "POST",
+      body: new URLSearchParams({ password: ADMIN_PASSWORD, next: page }),
+    });
+    expect(signedIn.status).toBe(303);
+    expect(signedIn.headers.get("location")).toBe(page);
+  });
+
+  test("sign-in only returns to pages under /hub", () => {
+    expect(safeNext("/hub/tasks/abc")).toBe("/hub/tasks/abc");
+    expect(safeNext("/hub/history?agent=muse&status=done")).toBe("/hub/history?agent=muse&status=done");
+    for (const bad of [
+      "//evil.example",
+      "https://evil.example/hub",
+      "/hub//evil.example",
+      "/hubx",
+      "/hub/../x",
+      "/hub/%2e%2e/x",
+      "/hub\\evil",
+      "/hub/login?next=/hub",
+      undefined,
+      5,
+    ]) {
+      expect(safeNext(bad)).toBe("/hub");
+    }
+  });
+
+  test("a signed-in visit to the sign-in page goes straight to next", async () => {
+    const { app } = makeApp();
+    const cookie = await signIn(app);
+    const res = await app.request("/hub/login?next=%2Fhub%2Fhistory", { headers: { cookie } });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/hub/history");
+  });
+
+  test("HEAD without a session redirects like GET", async () => {
+    const { app } = makeApp();
+    const res = await app.request("/hub", { method: "HEAD" });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/hub/login");
+  });
+
+  test("the waiting list shows the oldest first, and says when more are waiting", async () => {
+    const { app, service, clock } = makeApp(testConfig(`${BASE_YAML}\nlimits:\n  tasks_per_hour_per_agent: 500\n`));
+    for (let i = 0; i < 101; i++) {
+      service.sendTask("grok-bot", { to: "muse", instructions: `job-${String(i).padStart(3, "0")}` });
+      clock.advance(1000);
+    }
+    const cookie = await signIn(app);
+    const page = await (await app.request("/hub", { headers: { cookie } })).text();
+    expect(page).toContain("job-000");
+    expect(page).toContain("job-099");
+    expect(page).not.toContain("job-100");
+    expect(page.indexOf("job-000")).toBeLessThan(page.indexOf("job-099"));
+    expect(page).toContain("Showing the oldest 100 tasks. More are waiting.");
+  });
+
+  test("an oversized form gets an HTML 413 page", async () => {
+    const { app } = makeApp();
+    const res = await app.request("/hub/login", {
+      method: "POST",
+      body: new URLSearchParams({ password: "x".repeat(70 * 1024) }),
+    });
+    expect(res.status).toBe(413);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(await res.text()).toContain("The form is too large.");
   });
 });

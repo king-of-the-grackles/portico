@@ -140,3 +140,48 @@ describe("permission links", () => {
     expect(ctx.relay.get("claude-code", "abcde")?.answer).toBeNull();
   });
 });
+
+describe("expired and oversized approval links", () => {
+  test("an expired permission link says the prompt is no longer pending; a tampered one is still invalid", async () => {
+    const { app, relay, config, clock } = makeApp();
+    relay.add("claude-code", { requestId: "abcde", toolName: "Bash" });
+    const token = signLink(config.signingSecret, {
+      subject: "permission",
+      id: "abcde",
+      agent: "claude-code",
+      action: "approve",
+      expiresAt: new Date(clock.now().getTime() + 3_600_000).toISOString(),
+    });
+    clock.advance(3_600_001);
+    for (const method of ["GET", "POST"]) {
+      const res = await app.request(`/approve/${token}`, { method });
+      expect(res.status).toBe(404);
+      expect(await res.text()).toContain("This permission prompt is no longer pending.");
+    }
+    const tampered = (token[0] === "A" ? "B" : "A") + token.slice(1);
+    expect(await (await app.request(`/approve/${tampered}`)).text()).toContain("This link is invalid or has expired.");
+  });
+
+  test("an expired task link shows what happened to the task", async () => {
+    const { app, service, config, clock } = makeApp();
+    const task = service.sendTask("grok-bot", { to: "muse", instructions: "x" });
+    const token = signLink(config.signingSecret, { subject: "task", id: task.id, action: "approve", expiresAt: task.expiresAt });
+    clock.advance(25 * 3_600_000);
+    service.expireDue();
+    const res = await app.request(`/approve/${token}`);
+    expect(res.status).toBe(200);
+    const page = await res.text();
+    expect(page).toContain("This task is no longer waiting for approval.");
+    expect(page).toContain("Nothing was changed.");
+  });
+
+  test("an oversized deny note on a link gets an HTML 413 page", async () => {
+    const { app, service, config } = makeApp();
+    const task = service.sendTask("grok-bot", { to: "muse", instructions: "x" });
+    const token = signLink(config.signingSecret, { subject: "task", id: task.id, action: "deny", expiresAt: task.expiresAt });
+    const res = await app.request(`/deny/${token}`, { method: "POST", body: new URLSearchParams({ note: "x".repeat(70 * 1024) }) });
+    expect(res.status).toBe(413);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(service.findTask(task.id)?.status).toBe("waiting_approval");
+  });
+});

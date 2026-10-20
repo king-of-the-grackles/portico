@@ -6,14 +6,15 @@ import type { PermissionRelay } from "../core/permissions";
 import type { BridgeService } from "../core/service";
 import { type BridgeConfig, TASK_STATUSES, type TaskStatus } from "../core/types";
 import { log } from "../log";
-import { jsonBodyLimit } from "../ways-in/limits";
 import type { StreamHub } from "../ways-in/stream";
-import { sendPage } from "./layout";
+import { formBodyLimit, sendPage } from "./layout";
 import {
   hasSession,
+  loginPath,
   LoginLimiter,
   newSessionToken,
   passwordMatches,
+  safeNext,
   SESSION_COOKIE,
   SESSION_DAYS,
   sameOrigin,
@@ -28,6 +29,8 @@ export interface PageDeps {
   now: () => Date;
 }
 
+const WAITING_SHOWN = 100;
+
 const formText = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
 export function pageRoutes(deps: PageDeps): Hono {
@@ -35,7 +38,7 @@ export function pageRoutes(deps: PageDeps): Hono {
   const page = new Hono();
   const limiter = new LoginLimiter(now);
 
-  page.use("*", jsonBodyLimit(config));
+  page.use("*", formBodyLimit(config));
   page.use("*", async (c, next) => {
     if (c.req.method === "POST" && !sameOrigin(c, config)) {
       return sendPage(c, 403, "Not allowed", html`<h1>Form posts from other sites aren't accepted.</h1>`);
@@ -44,21 +47,23 @@ export function pageRoutes(deps: PageDeps): Hono {
   });
 
   page.get("/login", (c) => {
-    if (hasSession(c, config, now())) return c.redirect("/hub", 303);
-    return sendPage(c, 200, "Sign in", loginView(null));
+    const next = safeNext(c.req.query("next"));
+    if (hasSession(c, config, now())) return c.redirect(next, 303);
+    return sendPage(c, 200, "Sign in", loginView(null, next));
   });
 
   page.post("/login", async (c) => {
     // Parse first; then check, compare and record with no await between, so parallel attempts cannot slip past the limiter.
     const form = await c.req.parseBody();
+    const next = safeNext(formText(form.next));
     if (limiter.blocked()) {
       log("warn", "login_locked", {});
-      return sendPage(c, 429, "Sign in", loginView("Too many failed attempts. Try again in 15 minutes."));
+      return sendPage(c, 429, "Sign in", loginView("Too many failed attempts. Try again in 15 minutes.", next));
     }
     if (!passwordMatches(config, formText(form.password) ?? "")) {
       limiter.recordFailure();
       log("warn", "login_failed", {});
-      return sendPage(c, 401, "Sign in", loginView("Wrong password."));
+      return sendPage(c, 401, "Sign in", loginView("Wrong password.", next));
     }
     setCookie(c, SESSION_COOKIE, newSessionToken(config, now()), {
       httpOnly: true,
@@ -68,7 +73,7 @@ export function pageRoutes(deps: PageDeps): Hono {
       maxAge: SESSION_DAYS * 86_400,
     });
     log("info", "login", {});
-    return c.redirect("/hub", 303);
+    return c.redirect(next, 303);
   });
 
   page.post("/logout", (c) => {
@@ -79,20 +84,20 @@ export function pageRoutes(deps: PageDeps): Hono {
   // Everything registered below needs a session.
   page.use("*", async (c, next) => {
     if (hasSession(c, config, now())) return next();
-    if (c.req.method === "GET") return c.redirect("/hub/login", 303);
+    if (c.req.method === "GET" || c.req.method === "HEAD") return c.redirect(loginPath(c.req.url), 303);
     return sendPage(c, 403, "Signed out", html`<h1>Signed out.</h1><p><a href="/hub/login">Sign in</a> and try again.</p>`);
   });
 
   page.get("/", (c) => {
-    const waiting = service
-      .listTasks({ status: "waiting_approval", limit: 100 })
-      .map((task) => ({ task, chain: service.chainOf(task) }));
+    // One more than shown, to know whether to say that more are waiting.
+    const rows = service.listTasks({ status: "waiting_approval", limit: WAITING_SHOWN + 1, oldestFirst: true });
+    const waiting = rows.slice(0, WAITING_SHOWN).map((task) => ({ task, chain: service.chainOf(task) }));
     const agents = config.agents.map((agent) => ({
       agent,
       lastCheckIn: service.lastCheckIn(agent.name),
       connected: streams.isConnected(agent.name),
     }));
-    return sendPage(c, 200, "Waiting", homeView(waiting, relay.pending(), agents), { nav: true });
+    return sendPage(c, 200, "Waiting", homeView(waiting, relay.pending(), agents, rows.length > WAITING_SHOWN), { nav: true });
   });
 
   page.get("/history", (c) => {

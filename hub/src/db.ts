@@ -246,8 +246,8 @@ export class Store {
       .changes;
   }
 
-  /** Newest first. With an agent, the tasks it sent or received. */
-  listTasks(filter: { agent?: string; status?: TaskStatus; limit: number }): Task[] {
+  /** Newest first, or oldest first with `oldestFirst`. With an agent, the tasks it sent or received. */
+  listTasks(filter: { agent?: string; status?: TaskStatus; limit: number; oldestFirst?: boolean }): Task[] {
     const clauses: string[] = [];
     const bindings: Bindings = { limit: filter.limit };
     if (filter.agent) {
@@ -259,8 +259,9 @@ export class Store {
       bindings.status = filter.status;
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const order = filter.oldestFirst ? "created_at ASC, rowid ASC" : "created_at DESC, rowid DESC";
     const rows = this.db
-      .query(`SELECT * FROM tasks ${where} ORDER BY created_at DESC, rowid DESC LIMIT $limit`)
+      .query(`SELECT * FROM tasks ${where} ORDER BY ${order} LIMIT $limit`)
       .all(bindings) as TaskRow[];
     return rows.map(toTask);
   }

@@ -10,6 +10,34 @@ const DAY_MS = 86_400_000;
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest();
 
+const NEXT_PATH = /^\/hub(\/[A-Za-z0-9._~%-]+)*\/?(\?[A-Za-z0-9._~%=&+-]*)?$/;
+
+/**
+ * The page to return to after sign-in. Only paths under /hub are allowed, so a crafted link can't send anyone
+ * elsewhere. Anything else, including dot segments (plain or percent-encoded) and the sign-in page, becomes /hub.
+ */
+export function safeNext(value: unknown): string {
+  if (typeof value !== "string" || !NEXT_PATH.test(value)) return "/hub";
+  const path = value.split("?")[0]!;
+  if (path.startsWith("/hub/login")) return "/hub";
+  const unsafe = path.split("/").some((segment) => {
+    try {
+      const decoded = decodeURIComponent(segment);
+      return decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\");
+    } catch {
+      return true;
+    }
+  });
+  return unsafe ? "/hub" : value;
+}
+
+/** The sign-in page for a signed-out visit, carrying the page to return to. */
+export function loginPath(requestUrl: string): string {
+  const url = new URL(requestUrl);
+  const next = safeNext(url.pathname + url.search);
+  return next === "/hub" ? "/hub/login" : `/hub/login?next=${encodeURIComponent(next)}`;
+}
+
 /** Constant-time comparison of fixed-length digests. */
 export function passwordMatches(config: BridgeConfig, given: string): boolean {
   return timingSafeEqual(sha256(given), sha256(config.adminPassword));

@@ -6,8 +6,7 @@ import type { PermissionRelay, PermissionRequest } from "../core/permissions";
 import type { BridgeService } from "../core/service";
 import type { BridgeConfig, Task } from "../core/types";
 import { log } from "../log";
-import { formatTime, type Html, sendPage, STATUS_WORDS } from "../page/layout";
-import { jsonBodyLimit } from "../ways-in/limits";
+import { formatTime, formBodyLimit, type Html, sendPage, STATUS_WORDS } from "../page/layout";
 import { type LinkClaims, verifyLink } from "./links";
 
 type Action = "approve" | "deny";
@@ -119,10 +118,26 @@ export function approvalRoutes(deps: ApprovalRouteDeps): Hono {
     return claims && claims.action === action ? claims : null;
   };
 
+  /**
+   * What a link that fails verification shows. A link signed for this action but past its expiry is told apart
+   * from a tampered one: a permission prompt is gone by then (spec §9.5), and a task has moved on.
+   */
+  const unverifiedLink = (c: Context, action: Action): Response | Promise<Response> => {
+    // Checked against the epoch, any expiry passes, so only the signature and the claims' shape count here.
+    const old = verifyLink(config.signingSecret, c.req.param("token") ?? "", new Date(0));
+    if (old && old.action === action) {
+      if (old.subject === "permission") return sendPage(c, 404, "No longer pending", gonePermission);
+      const task = service.findTask(old.id);
+      // Still waiting means the sweep hasn't expired it yet; "no longer waiting" would be wrong, so it stays invalid.
+      if (task && task.status !== "waiting_approval") return sendPage(c, 200, "Already decided", alreadyDecided(task));
+    }
+    return sendPage(c, 404, "Link not valid", invalidLink);
+  };
+
   for (const action of ["approve", "deny"] as const) {
     routes.get(`/${action}/:token`, (c) => {
       const claims = claimsFor(c, action);
-      if (!claims) return sendPage(c, 404, "Link not valid", invalidLink);
+      if (!claims) return unverifiedLink(c, action);
       if (claims.subject === "task") {
         const task = service.findTask(claims.id);
         if (!task) return sendPage(c, 404, "Link not valid", invalidLink);
@@ -135,9 +150,9 @@ export function approvalRoutes(deps: ApprovalRouteDeps): Hono {
       return sendPage(c, 200, "Permission prompt", confirmPermission(request, action));
     });
 
-    routes.post(`/${action}/:token`, jsonBodyLimit(config), async (c) => {
+    routes.post(`/${action}/:token`, formBodyLimit(config), async (c) => {
       const claims = claimsFor(c, action);
-      if (!claims) return sendPage(c, 404, "Link not valid", invalidLink);
+      if (!claims) return unverifiedLink(c, action);
       log("info", "approval_link_used", { subject: claims.subject, action, id: claims.id });
       if (claims.subject === "permission") return answerPermission(c, relay, claims.agent!, claims.id, action);
       const form = await c.req.parseBody();
