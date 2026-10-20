@@ -24,7 +24,9 @@ export interface PermissionRelayDeps {
  * A prompt counts as waiting only once the hub has accepted it; answers that arrive while the relay is still in
  * flight are dropped. Claude Code can reuse a request_id: if one is relayed again while still waiting or in flight,
  * the plugin forgets it and relays nothing, so no answer applies to either prompt and both stay answerable in the
- * terminal. Once an ID is no longer waiting or in flight, a prompt reusing it is relayed normally.
+ * terminal. The hub merges an unanswered repeat into the earlier prompt, so a prompt is armed only when the hub's
+ * response echoes exactly the content sent (tool, description, preview) with no answer; otherwise it stays
+ * terminal-only and `permission_id_reused` is logged.
  */
 export class PermissionRelayClient {
   /** request_id → when to forget it (ms since the epoch). */
@@ -58,9 +60,13 @@ export class PermissionRelayClient {
     this.inflight.set(id, token);
     for (let attempt = 0; ; attempt++) {
       try {
-        await this.deps.client.relayPermission(prompt);
+        const response: unknown = await this.deps.client.relayPermission(prompt);
         if (this.inflight.get(id) !== token) return; // the ID was reused meanwhile; stay out of the way
         this.inflight.delete(id);
+        if (!confirms(response, prompt)) {
+          this.deps.log("warn", "permission_id_reused", { request_id: id });
+          return;
+        }
         this.waiting.set(id, this.now() + PERMISSION_TTL_MS);
         this.deps.log("info", "permission_relayed", { request_id: prompt.request_id, tool: prompt.tool_name.slice(0, 60) });
         return;
@@ -100,4 +106,16 @@ export class PermissionRelayClient {
     const now = this.now();
     for (const [requestId, forgetAt] of this.waiting) if (forgetAt <= now) this.waiting.delete(requestId);
   }
+}
+
+/** True when the hub's response is this very prompt, unanswered. Checked at runtime: the body is not trusted. */
+function confirms(response: unknown, prompt: PermissionPrompt): boolean {
+  const request = (response as { request?: unknown } | null)?.request as Record<string, unknown> | null | undefined;
+  if (typeof request !== "object" || request === null) return false;
+  return (
+    request.tool_name === prompt.tool_name &&
+    request.description === prompt.description &&
+    request.input_preview === prompt.input_preview &&
+    request.answer === null
+  );
 }

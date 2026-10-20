@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { HubClient, HubError, type PermissionPrompt } from "../src/hub-client";
+import { HubClient, HubError, type PermissionPrompt, type PermissionView } from "../src/hub-client";
 import { PERMISSION_TTL_MS, PermissionRelayClient } from "../src/permissions";
 import { createBridgePlugin } from "../src/plugin";
 import { captureLog, fakeHost, startHub, type TestHub, TOKENS, waitFor } from "./helpers";
@@ -90,7 +90,7 @@ describe("permission relay", () => {
   test("retries a relay when the hub can't be reached", async () => {
     class Flaky extends HubClient {
       failures = 2;
-      override async relayPermission(p: PermissionPrompt): Promise<unknown> {
+      override async relayPermission(p: PermissionPrompt): Promise<{ request: PermissionView }> {
         if (this.failures-- > 0) throw new HubError(0, "unreachable", "down");
         return super.relayPermission(p);
       }
@@ -103,7 +103,7 @@ describe("permission relay", () => {
   test("gives up at once on a refusal, and then ignores answers for that prompt", async () => {
     let calls = 0;
     class Refused extends HubClient {
-      override async relayPermission(): Promise<unknown> {
+      override async relayPermission(): Promise<{ request: PermissionView }> {
         calls++;
         throw new HubError(429, "rate_limited", "too many");
       }
@@ -139,7 +139,7 @@ describe("reused request IDs", () => {
     const gate = new Promise<void>((resolve) => (release = resolve));
     class Gated extends HubClient {
       calls = 0;
-      override async relayPermission(p: PermissionPrompt): Promise<unknown> {
+      override async relayPermission(p: PermissionPrompt): Promise<{ request: PermissionView }> {
         if (this.calls++ === 1) await gate;
         return super.relayPermission(p);
       }
@@ -167,6 +167,41 @@ describe("reused request IDs", () => {
     await waitFor(() => logs.lines.some((line) => line.msg === "permission_id_reused"));
     expect(hub.relay.pending().length).toBe(1);
     expect(hub.pushes.length).toBe(1);
+    expect(logs.lines.filter((line) => line.msg === "permission_relayed").length).toBe(1);
+    hub.relay.answer("claude-code", "abcde", "allow");
+    await Bun.sleep(100);
+    expect(host.verdicts).toEqual([]);
+  });
+
+  test("a third prompt reusing the ID is not armed, because the hub still holds the first", async () => {
+    const host = await connect();
+    await ask(host, "abcde", "A: ls");
+    await waitFor(() => hub.relay.pending().length === 1);
+    await ask(host, "abcde", "B");
+    await waitFor(() => logs.lines.filter((line) => line.msg === "permission_id_reused").length === 1);
+    await ask(host, "abcde", "C");
+    await waitFor(() => logs.lines.filter((line) => line.msg === "permission_id_reused").length === 2);
+    expect(hub.relay.pending().length).toBe(1);
+    hub.relay.answer("claude-code", "abcde", "allow");
+    await Bun.sleep(100);
+    expect(host.verdicts).toEqual([]);
+  });
+
+  test("a reuse while the first relay is in flight leaves the ID not waiting", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    class Gated extends HubClient {
+      override async relayPermission(p: PermissionPrompt) {
+        await gate;
+        return super.relayPermission(p);
+      }
+    }
+    const host = await connect({ client: new Gated({ url: hub.url, token: TOKENS["claude-code"] }) });
+    await ask(host, "abcde", "first");
+    await ask(host, "abcde", "second");
+    await waitFor(() => logs.lines.some((line) => line.msg === "permission_id_reused"));
+    release();
+    await waitFor(() => hub.relay.pending().length === 1);
     hub.relay.answer("claude-code", "abcde", "allow");
     await Bun.sleep(100);
     expect(host.verdicts).toEqual([]);
@@ -191,7 +226,7 @@ describe("PermissionRelayClient", () => {
     let now = 1_000_000;
     const verdicts: string[] = [];
     const relay = new PermissionRelayClient({
-      client: { relayPermission: async () => ({}) } as unknown as HubClient,
+      client: { relayPermission: async (p: PermissionPrompt) => ({ request: { ...p, answer: null } }) } as unknown as HubClient,
       sendVerdict: async (requestId) => {
         verdicts.push(requestId);
       },
@@ -209,7 +244,7 @@ describe("PermissionRelayClient", () => {
   test("ignores malformed answers", async () => {
     const verdicts: string[] = [];
     const relay = new PermissionRelayClient({
-      client: { relayPermission: async () => ({}) } as unknown as HubClient,
+      client: { relayPermission: async (p: PermissionPrompt) => ({ request: { ...p, answer: null } }) } as unknown as HubClient,
       sendVerdict: async (requestId) => {
         verdicts.push(requestId);
       },
@@ -221,5 +256,31 @@ describe("PermissionRelayClient", () => {
     relay.answer({ request_id: 5, behavior: "allow" });
     expect(verdicts).toEqual([]);
     expect(relay.pending).toBe(1);
+  });
+
+  test("does not arm a prompt when the hub's response is a different record", async () => {
+    const lines: string[] = [];
+    const relay = new PermissionRelayClient({
+      client: {
+        relayPermission: async (p: PermissionPrompt) => ({ request: { ...p, description: "OTHER", answer: null } }),
+      } as unknown as HubClient,
+      sendVerdict: async () => {},
+      log: (_level, msg) => {
+        lines.push(msg);
+      },
+    });
+    await relay.relay(prompt("abcde"));
+    expect(relay.pending).toBe(0);
+    expect(lines).toContain("permission_id_reused");
+  });
+
+  test("does not arm a prompt when the response has an unexpected shape", async () => {
+    const relay = new PermissionRelayClient({
+      client: { relayPermission: async () => ({}) } as unknown as HubClient,
+      sendVerdict: async () => {},
+      log: captureLog().log,
+    });
+    await relay.relay(prompt("abcde"));
+    expect(relay.pending).toBe(0);
   });
 });

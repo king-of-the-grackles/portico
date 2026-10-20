@@ -38,6 +38,18 @@ export interface PermissionPrompt {
   input_preview: string;
 }
 
+/** A permission request as the hub returns it. */
+export interface PermissionView {
+  agent: string;
+  request_id: string;
+  tool_name: string;
+  description: string;
+  input_preview: string;
+  created_at: string;
+  expires_at: string;
+  answer: string | null;
+}
+
 /** A failed hub call. `status` 0 means the hub couldn't be reached. */
 export class HubError extends Error {
   constructor(
@@ -92,7 +104,7 @@ export class HubClient {
     return this.call("POST", "/api/events", body);
   }
 
-  relayPermission(prompt: PermissionPrompt): Promise<unknown> {
+  relayPermission(prompt: PermissionPrompt): Promise<{ request: PermissionView }> {
     return this.call("POST", "/api/permission-requests", prompt);
   }
 
