@@ -1,7 +1,9 @@
 import type { Database } from "bun:sqlite";
 import type { Hono } from "hono";
 import { buildApp } from "./app";
+import { permissionPush } from "./approvals/messages";
 import { makePusher, type Pusher } from "./approvals/ntfy";
+import { PermissionRelay, type PermissionRequest } from "./core/permissions";
 import { BridgeService } from "./core/service";
 import type { BridgeConfig, Notice } from "./core/types";
 import { Store } from "./db";
@@ -24,6 +26,7 @@ export interface Hub {
   store: Store;
   service: BridgeService;
   streams: StreamHub;
+  relay: PermissionRelay;
   push: Pusher;
   app: Hono;
 }
@@ -45,6 +48,19 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
     },
     log: (msg, fields) => log("info", msg, fields),
   });
-  const app = buildApp({ service, config, streams, heartbeatMs: opts.heartbeatMs });
-  return { store, service, streams, push, app };
+  const relay = new PermissionRelay({
+    maxTextKb: config.limits.maxTextKb,
+    now: opts.now,
+    deliver: (agent, requestId, behavior) => streams.sendPermissionAnswer(agent, requestId, behavior),
+  });
+  const onPermissionRequest = (request: PermissionRequest) => {
+    void push(permissionPush(config, request)).then((ok) =>
+      log(ok ? "info" : "warn", ok ? "permission_pushed" : "permission_push_failed", {
+        agent: request.agent,
+        request_id: request.requestId,
+      }),
+    );
+  };
+  const app = buildApp({ service, config, streams, relay, onPermissionRequest, heartbeatMs: opts.heartbeatMs });
+  return { store, service, streams, relay, push, app };
 }

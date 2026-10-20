@@ -1,3 +1,4 @@
+import type { PermissionRequest } from "../core/permissions";
 import type { BridgeConfig, Task } from "../core/types";
 import { linkUrl, signLink } from "./links";
 import type { PushMessage } from "./ntfy";
@@ -25,6 +26,35 @@ export function approvalPush(config: BridgeConfig, task: Task): PushMessage {
     tags: ["inbox_tray"],
     actions: [
       { action: "http", label: "Approve", url: link("approve"), method: "POST", clear: true },
+      { action: "http", label: "Deny", url: link("deny"), method: "POST", clear: true },
+      { action: "view", label: "Open", url: open },
+    ],
+  };
+}
+
+export function permissionPush(config: BridgeConfig, request: PermissionRequest): PushMessage {
+  const link = (action: "approve" | "deny") =>
+    linkUrl(
+      config.publicUrl,
+      signLink(config.signingSecret, {
+        subject: "permission",
+        id: request.requestId,
+        agent: request.agent,
+        action,
+        expiresAt: request.expiresAt,
+      }),
+      action,
+    );
+  const open = `${config.publicUrl}/hub`;
+  const parts = [request.description, request.inputPreview].filter((part) => part.trim() !== "").map(previewText);
+  return {
+    title: `${request.agent} wants to use ${request.toolName}`,
+    message: parts.join("\n\n") || request.toolName,
+    click: open,
+    priority: 4,
+    tags: ["lock"],
+    actions: [
+      { action: "http", label: "Allow", url: link("approve"), method: "POST", clear: true },
       { action: "http", label: "Deny", url: link("deny"), method: "POST", clear: true },
       { action: "view", label: "Open", url: open },
     ],

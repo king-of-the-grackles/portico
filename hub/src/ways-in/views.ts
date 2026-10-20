@@ -1,4 +1,5 @@
 import { frameTask } from "../core/framing";
+import type { PermissionRequest } from "../core/permissions";
 import type { AgentConfig, BridgeEvent, Task, TaskStatus } from "../core/types";
 
 export interface TaskView {
@@ -47,4 +48,17 @@ export function eventView(event: BridgeEvent) {
 
 export function agentView(agent: AgentConfig) {
   return { name: agent.name, description: agent.description, delivery: agent.delivery };
+}
+
+export function permissionView(request: PermissionRequest) {
+  return {
+    agent: request.agent,
+    request_id: request.requestId,
+    tool_name: request.toolName,
+    description: request.description,
+    input_preview: request.inputPreview,
+    created_at: request.createdAt,
+    expires_at: request.expiresAt,
+    answer: request.answer,
+  };
 }

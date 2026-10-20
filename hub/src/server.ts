@@ -30,6 +30,7 @@ export function startServer(config: BridgeConfig, opts: { port?: number; push?: 
     try {
       const expired = service.expireDue();
       if (expired.length > 0) log("info", "tasks_expired", { count: expired.length });
+      hub.relay.sweep();
     } catch (err) {
       log("error", "expiry_sweep_failed", { error: errorName(err) });
     }
