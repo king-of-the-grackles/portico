@@ -98,8 +98,11 @@ export class BridgeService {
     return updated;
   }
 
-  getTask(caller: string, taskId: string): Task {
+  getTask(caller: string, taskId: string, opts?: { expectedReceiver?: string }): Task {
     const task = this.requireTask(taskId);
+    if (opts?.expectedReceiver !== undefined && task.toAgent !== opts.expectedReceiver) {
+      throw new BridgeError("not_found", `No task ${taskId}.`);
+    }
     if (task.fromAgent !== caller && task.toAgent !== caller) {
       throw new BridgeError("not_allowed", "Only the sender or receiver can read this task.");
     }

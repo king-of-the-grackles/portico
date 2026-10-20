@@ -120,14 +120,13 @@ function handle(service: BridgeService, caller: string, target: string, req: Jso
       if (typeof params.id !== "string") return rpcError(id, -32602, "params.id is required.");
       let task: Task;
       try {
-        task = service.getTask(caller, params.id);
+        task = service.getTask(caller, params.id, { expectedReceiver: target });
       } catch (err) {
         if (err instanceof BridgeError && (err.code === "not_found" || err.code === "not_allowed")) {
           return rpcError(id, TASK_NOT_FOUND, "Task not found.");
         }
         throw err;
       }
-      if (task.toAgent !== target) return rpcError(id, TASK_NOT_FOUND, "Task not found.");
       return rpcResult(id, toA2ATask(task));
     }
     if (UNSUPPORTED_METHODS.has(req.method)) {

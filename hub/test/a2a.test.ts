@@ -150,4 +150,14 @@ describe("A2A JSON-RPC", () => {
     const wrongDoor = await (await rpc(ctx, "grok-bot", "muse", "tasks/get", { id: sent.result.id })).json();
     expect(wrongDoor.error.code).toBe(-32001);
   });
+
+  test("reading a finished task through the wrong endpoint doesn't mark the sender's result seen", async () => {
+    const ctx = makeApp();
+    const sent = await (await rpc(ctx, "grok-bot", "claude-code", "message/send", message("x"))).json();
+    ctx.service.checkInbox("claude-code");
+    ctx.service.finishTask("claude-code", { taskId: sent.result.id, result: "ok" });
+    const wrongDoor = await (await rpc(ctx, "grok-bot", "muse", "tasks/get", { id: sent.result.id })).json();
+    expect(wrongDoor.error.code).toBe(-32001);
+    expect(ctx.service.checkInbox("grok-bot").results.map((t) => t.id)).toEqual([sent.result.id]);
+  });
 });

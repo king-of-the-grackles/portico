@@ -192,6 +192,18 @@ describe("getTask", () => {
   });
 });
 
+describe("getTask with expectedReceiver", () => {
+  test("a mismatched receiver is not_found and does not mark the result seen", () => {
+    const { service } = makeService();
+    const sent = service.sendTask("grok-bot", { to: "claude-code", instructions: "x" });
+    service.checkInbox("claude-code");
+    service.finishTask("claude-code", { taskId: sent.id, result: "ok" });
+    expect(errorCode(() => service.getTask("grok-bot", sent.id, { expectedReceiver: "someone-else" }))).toBe("not_found");
+    expect(service.getTask("claude-code", sent.id).senderNotifiedAt).toBeNull();
+    expect(service.getTask("grok-bot", sent.id, { expectedReceiver: "claude-code" }).senderNotifiedAt).not.toBeNull();
+  });
+});
+
 describe("chains", () => {
   test("a task sent while working on another is denied by default", () => {
     const { service } = makeService();
