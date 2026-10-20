@@ -9,6 +9,16 @@ export type TaskStatus =
   | "denied"
   | "expired";
 
+export const TASK_STATUSES: readonly TaskStatus[] = [
+  "waiting_approval",
+  "queued",
+  "working",
+  "done",
+  "failed",
+  "denied",
+  "expired",
+];
+
 export const FINAL_STATUSES: readonly TaskStatus[] = ["done", "failed", "denied", "expired"];
 
 export function isFinal(status: TaskStatus): boolean {

@@ -210,6 +210,12 @@ export class BridgeService {
     return { tasks: this.store.deleteFinishedBefore(cutoff), events: this.store.deleteEventsBefore(cutoff) };
   }
 
+  // ---- reads for the owner's own views (approval pages, the hub page): no caller check, no side effects ----
+
+  findTask(taskId: string): Task | null {
+    return this.store.getTask(taskId);
+  }
+
   // ---- helpers ----
 
   private iso(offsetMs = 0): string {

@@ -61,6 +61,14 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
       }),
     );
   };
-  const app = buildApp({ service, config, streams, relay, onPermissionRequest, heartbeatMs: opts.heartbeatMs });
+  const app = buildApp({
+    service,
+    config,
+    streams,
+    relay,
+    onPermissionRequest,
+    now: opts.now ?? (() => new Date()),
+    heartbeatMs: opts.heartbeatMs,
+  });
   return { store, service, streams, relay, push, app };
 }
