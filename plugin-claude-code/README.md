@@ -24,7 +24,7 @@ Answer the two startup dialogs: pick **Use this MCP server**, then **I am using 
 
 | Variable | Meaning |
 |---|---|
-| `BRIDGE_URL` | The hub's address. Must be https, except for `localhost`. |
+| `BRIDGE_URL` | The hub's address. Must be https, except for `localhost` and `127.0.0.1`. |
 | `BRIDGE_TOKEN` | The token of the agent this session acts as. The agent must have `delivery: push` in `bridge.yaml`. |
 | `BRIDGE_PERMISSION_RELAY` | `on` (default) or `off`. Relay only happens in manual permission mode, not auto mode. |
 

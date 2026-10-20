@@ -7,24 +7,17 @@ Design: [docs/superpowers/specs/2026-10-19-agent-bridge-design.md](docs/superpow
 ## Run it locally
 
 1. Install dependencies: `bun install`
-2. Copy the example config: `cp bridge.example.yaml bridge.yaml`
-3. Create `.env` with the public URL, a signing secret, an admin password for the hub page, and one token per agent. Generate each secret and token with `openssl rand -hex 24`:
+2. Generate a starter config and every secret: `bun hub/src/cli.ts init`. This writes `bridge.yaml` (if missing) and `.env` (mode 600). With `--shell`, it writes `bridge-secrets.sh` as `export` lines instead.
+3. Edit `bridge.yaml`: agents, rules and triggers.
+4. Check the setup: `bun hub/src/cli.ts doctor` (add `--no-push` to skip the test push).
+5. Start the hub: `bun hub/src/cli.ts serve`
+6. Try it. Bun loads `.env` only into the hub process, not your shell, so export a token first (the same value as in `.env`):
    ```
-   BRIDGE_PUBLIC_URL=http://localhost:8790
-   BRIDGE_SIGNING_SECRET=...
-   BRIDGE_ADMIN_PASSWORD=...
-   BRIDGE_TOKEN_CLAUDE_CODE=...
-   BRIDGE_TOKEN_GROK_BOT=...
-   BRIDGE_TOKEN_MUSE=...
-   BRIDGE_TOKEN_CODEX=...
-   ```
-4. Start the hub: `bun hub/src/cli.ts serve`
-5. Try it. Bun loads `.env` only into the hub process, not your shell, so export the token first (`export BRIDGE_TOKEN_GROK_BOT=...`, the same value as in `.env`):
-   ```
+   export BRIDGE_TOKEN_GROK_BOT=...
    curl -H "Authorization: Bearer $BRIDGE_TOKEN_GROK_BOT" http://localhost:8790/api/agents
    ```
 
-`BRIDGE_PUBLIC_URL` must be the public https address agents will use. Agent cards and the OpenAPI `servers` entry embed it. `http://localhost:8790` is only for local testing.
+`BRIDGE_PUBLIC_URL` must be the public https address agents will use. Agent cards, the OpenAPI `servers` entry and approval links embed it. `http://localhost:8790` is only for local testing.
 
 ## Environment
 
@@ -71,6 +64,24 @@ Signing out clears the cookie but doesn't revoke a copied one. To sign out every
 | Live stream | `GET /api/stream` (server-sent events) | Push agents (the Claude Code plugin): nudges when work arrives, and answers to permission prompts |
 | Permission relay | `POST /api/permission-requests` | Push agents: forwards Claude Code permission prompts to the push and the hub page |
 
+## Connect your agents
+
+| Agent | Guide |
+|---|---|
+| Claude Code | [docs/agents/claude-code.md](docs/agents/claude-code.md): the agent-bridge plugin (tools, live task delivery, permission relay) |
+| Grok Bot | [docs/agents/grok-bot.md](docs/agents/grok-bot.md): MCP, added by asking in chat |
+| Meta Muse | [docs/agents/muse.md](docs/agents/muse.md): a Custom Connector from the OpenAPI document (needs a regular domain) |
+| Codex | [docs/agents/codex.md](docs/agents/codex.md): three lines in `~/.codex/config.toml` |
+
+After connecting, run the [smoke-test checklist](docs/smoke-test.md).
+
+## Build and deploy
+
+- `bun run build` writes single-file executables for macOS arm64, Linux x64 and Linux arm64 to `dist/` (`bun run build host` for this machine only).
+- `docker build -t agent-bridge .` builds the image. Its data lives in `/data` and its config at `/config/bridge.yaml`.
+- [docs/deploy/cloud.md](docs/deploy/cloud.md): Render (with `render.yaml`) or Fly, on your own domain. This is the recommended setup.
+- [docs/deploy/mac.md](docs/deploy/mac.md): launchd plus Tailscale Funnel. Works for every agent except Muse.
+
 ## Tests
 
-`bun test`
+`bun test`. `bun run typecheck` checks both packages (hub and plugin).
