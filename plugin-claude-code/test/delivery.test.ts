@@ -108,6 +108,8 @@ describe("channel delivery", () => {
     try {
       await waitFor(() => host.channel.length === 1);
       expect(host.channel[0]).toEqual({ content: stopNotice({ reason: "replaced" }), meta: { kind: "notice" } });
+      // Relay is off in this setup, so there is nothing to switch off and nothing to warn about.
+      expect(logs.lines.some((line) => line.msg === "permission_relay_off")).toBe(false);
     } finally {
       await other.body?.cancel();
     }

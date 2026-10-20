@@ -80,7 +80,7 @@ export function createBridgePlugin(deps: BridgePluginDeps): BridgePlugin {
       else if (event === "permission" && config.permissionRelay) permissions.answer(data);
     },
     onStop: (stop) => {
-      permissions.disable(stop.reason === "replaced" ? "replaced" : `rejected_${stop.status}`);
+      if (config.permissionRelay) permissions.disable(stop.reason === "replaced" ? "replaced" : `rejected_${stop.status}`);
       send(stopNotice(stop), { kind: "notice" }).catch((err) => log("warn", "notice_failed", { error: errorName(err) }));
     },
     log,

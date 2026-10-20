@@ -88,7 +88,7 @@ function parseNtfy(env: Env, problems: string[]): NtfyConfig | null {
       const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
       // BRIDGE_NTFY_TOKEN would travel in clear over plain http.
       if (parsed.protocol !== "https:" && !local) {
-        problems.push("BRIDGE_NTFY_URL must start with https:// (http:// is allowed only for localhost)");
+        problems.push("BRIDGE_NTFY_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)");
       }
     }
   } catch {
@@ -176,7 +176,7 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
       const url = new URL(publicUrl);
       const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
       if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
-        problems.push("BRIDGE_PUBLIC_URL must start with https:// (http:// is allowed only for localhost)");
+        problems.push("BRIDGE_PUBLIC_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)");
       }
     } catch {
       problems.push(`BRIDGE_PUBLIC_URL "${publicUrl}" is not a valid URL`);

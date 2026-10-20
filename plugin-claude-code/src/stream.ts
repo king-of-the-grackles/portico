@@ -29,7 +29,8 @@ export const HEALTHY_MS = 30_000;
 /**
  * Holds the hub's live stream open (spec §9.4–§9.5). It reconnects with backoff when the stream fails or ends,
  * and when it goes silent: a half-open connection can look alive for a long time. It stops for good on
- * `replaced`, so two sessions sharing a token don't fight, and when the hub refuses the stream (401, 403) or has no stream at that address (404).
+ * `replaced`, so two sessions sharing a token don't fight, and when the hub refuses the stream (401, 403) or answers that it has no stream at that address (a 404 carrying the hub's own `not_found` error).
+ * Any other 404 may come from a proxy in front of the hub, say during a redeploy, so it is retried like a 5xx.
  */
 export class StreamClient {
   private running = false;
@@ -83,12 +84,15 @@ export class StreamClient {
     try {
       arm(); // the hub must answer within the window too
       const res = await this.opts.open(controller.signal);
-      // 404: BRIDGE_URL points at the wrong path (e.g. ends in /mcp), and retrying can't fix that.
+      // 401 and 403 are final. A 404 is final only when the hub itself sent it ({"error":"not_found"}): BRIDGE_URL then
+      // points at the wrong path (e.g. ends in /mcp). A proxy may answer 404 briefly during a redeploy, and that is retried.
       if (res.status === 401 || res.status === 403 || res.status === 404) {
-        const message = await errorMessage(res);
-        this.opts.log("error", "stream_refused", { status: res.status });
-        this.opts.onStop({ reason: "rejected", status: res.status, message });
-        return "stopped";
+        const { code, message } = await readError(res);
+        if (res.status !== 404 || code === "not_found") {
+          this.opts.log("error", "stream_refused", { status: res.status });
+          this.opts.onStop({ reason: "rejected", status: res.status, message });
+          return "stopped";
+        }
       }
       if (!res.ok || !res.body) {
         this.opts.log("warn", "stream_failed", { status: res.status });
@@ -160,11 +164,15 @@ export class StreamClient {
   }
 }
 
-async function errorMessage(res: Response): Promise<string> {
+/** Reads the error body once: the hub's error code and message, with the message falling back to `HTTP <status>`. */
+async function readError(res: Response): Promise<{ code: string | undefined; message: string }> {
   try {
-    const body = (await res.json()) as { message?: unknown };
-    return typeof body.message === "string" ? body.message : `HTTP ${res.status}`;
+    const body = (await res.json()) as { error?: unknown; message?: unknown };
+    return {
+      code: typeof body.error === "string" ? body.error : undefined,
+      message: typeof body.message === "string" ? body.message : `HTTP ${res.status}`,
+    };
   } catch {
-    return `HTTP ${res.status}`;
+    return { code: undefined, message: `HTTP ${res.status}` };
   }
 }

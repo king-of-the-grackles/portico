@@ -49,7 +49,7 @@ export function parsePluginConfig(env: Env): PluginConfig | null {
         problems.push("BRIDGE_URL must not contain a user name or password.");
       } else if (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) {
         problems.push(
-          "BRIDGE_URL must start with https:// (http:// is allowed only for localhost), because the token travels with every request.",
+          "BRIDGE_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1), because the token travels with every request.",
         );
       } else {
         url = `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");

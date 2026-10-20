@@ -132,7 +132,7 @@ triggers:
 
   test("requires https except for localhost", () => {
     expect(problems(YAML, { ...ENV, BRIDGE_PUBLIC_URL: "http://bridge.example.com" })).toContain(
-      "BRIDGE_PUBLIC_URL must start with https:// (http:// is allowed only for localhost)",
+      "BRIDGE_PUBLIC_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)",
     );
     expect(problems(YAML, { ...ENV, BRIDGE_PUBLIC_URL: "http://localhost:8787" })).toEqual([]);
     expect(problems(YAML, { ...ENV, BRIDGE_PUBLIC_URL: undefined })).toContain("missing BRIDGE_PUBLIC_URL");
@@ -165,7 +165,7 @@ describe("parseConfig: secrets, ntfy and strictness", () => {
     const topic = "t".repeat(24);
     const withUrl = (url: string) => problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: topic, BRIDGE_NTFY_URL: url });
     expect(withUrl("http://ntfy.example.com")).toContain(
-      "BRIDGE_NTFY_URL must start with https:// (http:// is allowed only for localhost)",
+      "BRIDGE_NTFY_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)",
     );
     expect(withUrl("http://127.0.0.1:9999")).toEqual([]);
     expect(withUrl("http://localhost:9999")).toEqual([]);

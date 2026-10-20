@@ -75,14 +75,45 @@ describe("StreamClient against the hub", () => {
     expect(unknown.opens()).toBe(1);
   });
 
-  test("stops for good on a 404, which means BRIDGE_URL points at the wrong path", async () => {
-    const server = Bun.serve({ port: 0, fetch: () => new Response("not found", { status: 404 }) });
+  test("stops for good on a 404, which means BRIDGE_URL points at the wrong path (the hub answered not_found)", async () => {
+    const server = Bun.serve({ port: 0, fetch: () => Response.json({ error: "not_found", message: "No such endpoint." }, { status: 404 }) });
     try {
       const watched = watch((signal) => fetch(`http://127.0.0.1:${server.port}/api/stream`, { signal }));
       await waitFor(() => watched.stops.length === 1);
       expect(watched.stops[0]).toMatchObject({ reason: "rejected", status: 404 });
       await Bun.sleep(100);
       expect(watched.opens()).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("retries a 404 that did not come from the hub, such as a proxy page during a redeploy", async () => {
+    let calls = 0;
+    const server = Bun.serve({
+      port: 0,
+      idleTimeout: 0,
+      fetch: () => {
+        calls++;
+        if (calls === 1) {
+          return new Response("<html>not found</html>", { status: 404, headers: { "content-type": "text/html" } });
+        }
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(": connected\n\n"));
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+    try {
+      const watched = watch((signal) => fetch(`http://127.0.0.1:${server.port}/api/stream`, { signal }));
+      await waitFor(() => watched.opens() >= 2);
+      await waitFor(() => watched.logs.lines.some((line) => line.msg === "stream_connected"));
+      expect(watched.stops).toEqual([]);
+      expect(watched.logs.lines).toContainEqual({ level: "warn", msg: "stream_failed", fields: { status: 404 } });
     } finally {
       server.stop(true);
     }
