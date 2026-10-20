@@ -8,3 +8,4 @@ node_modules/
 bridge.yaml
 bridge-secrets.sh
 dist/
+fly.toml
