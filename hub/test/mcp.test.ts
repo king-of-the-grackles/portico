@@ -85,6 +85,35 @@ describe("MCP with the official SDK client", () => {
     expect(text(res)).toStartWith("unknown_agent:");
     await client.close();
   });
+
+  test("list_agents, report_event and get_task through tool calls", async () => {
+    const muse = await connect("muse");
+    const codex = await connect("codex");
+    try {
+      const listed = JSON.parse(text(await muse.callTool({ name: "list_agents", arguments: {} })));
+      expect(listed.agents.map((agent: { name: string }) => agent.name).sort()).toEqual(["claude-code", "codex", "grok-bot"]);
+
+      const reported = await muse.callTool({
+        name: "report_event",
+        arguments: { name: "bug_report_received", details: "Login fails" },
+      });
+      expect(reported.isError).toBe(false);
+      const { event, tasks } = JSON.parse(text(reported));
+      expect(event.name).toBe("bug_report_received");
+      expect(tasks.map((task: { to_agent: string }) => task.to_agent).sort()).toEqual(["claude-code", "grok-bot"]);
+
+      const first = tasks[0].id as string;
+      const read = await muse.callTool({ name: "get_task", arguments: { task_id: first } });
+      expect(JSON.parse(text(read)).task.id).toBe(first);
+
+      const outsider = await codex.callTool({ name: "get_task", arguments: { task_id: first } });
+      expect(outsider.isError).toBe(true);
+      expect(text(outsider)).toStartWith("not_allowed:");
+    } finally {
+      await muse.close();
+      await codex.close();
+    }
+  });
 });
 
 describe("MCP endpoint details", () => {
