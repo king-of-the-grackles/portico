@@ -24,7 +24,8 @@ export function makeNotifier(deps: NotifierDeps): (notice: Notice) => void {
       try {
         // A rolled-back transaction leaves no task, or one in a different state: then there's nothing to do.
         const task = store.getTask(notice.task.id);
-        if (!task || task.status !== notice.task.status) return;
+        // A decision follow-up reports what already happened, so the task having moved on (say to working) doesn't matter.
+        if (!task || (notice.kind !== "approval_decided" && task.status !== notice.task.status)) return;
         switch (notice.kind) {
           case "queued":
             if (isPushAgent(config, task.toAgent)) streams.nudge(task.toAgent);
@@ -44,7 +45,7 @@ export function makeNotifier(deps: NotifierDeps): (notice: Notice) => void {
             break;
           case "approval_decided": {
             const followUp = { approved: taskApprovedPush, denied: taskDeniedPush, expired: taskExpiredPush }[notice.outcome];
-            void push(followUp(task))
+            void push(followUp(notice.task))
               .then((ok) => {
                 if (ok || config.ntfy) {
                   log(ok ? "info" : "warn", ok ? "approval_push_updated" : "approval_push_update_failed", { task_id: task.id });

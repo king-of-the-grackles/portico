@@ -8,6 +8,7 @@ import {
   taskExpiredPush,
 } from "../src/approvals/messages";
 import { makePusher, type PushMessage } from "../src/approvals/ntfy";
+import { PermissionRelay } from "../src/core/permissions";
 import { HOUR, flush, makeApp, makeService, signIn } from "./helpers";
 
 const PRONOUNS = /\b(i|me|my|we|us|our|you|your|it|its|they|them|their)\b/i;
@@ -58,6 +59,32 @@ describe("task push updates", () => {
       tags: ["white_check_mark"],
     });
     expect(ctx.pushes[1]).not.toHaveProperty("click");
+    // Repeating the used link changes nothing and sends nothing.
+    expect((await ctx.app.request(path, { method: "POST" })).status).toBe(200);
+    await flush();
+    expect(ctx.pushes).toHaveLength(2);
+  });
+
+  test("approving via the hub page sends exactly one Approved follow-up", async () => {
+    const ctx = makeApp();
+    const task = await askTask(ctx);
+    const cookie = await signIn(ctx.app);
+    const res = await ctx.app.request(`/hub/tasks/${task.id}/approve`, {
+      method: "POST",
+      headers: { cookie, origin: "https://bridge.test" },
+    });
+    expect(res.status).toBe(200);
+    await flush();
+    expect(ctx.pushes.map((push) => push.title)).toEqual(["grok-bot → muse", "Approved: grok-bot → muse"]);
+  });
+
+  test("the Approved follow-up still goes out when the task moves on before the notifier runs", async () => {
+    const ctx = makeApp();
+    const task = await askTask(ctx);
+    ctx.service.approveTask(task.id);
+    ctx.store.updateTask(task.id, { status: "working", updatedAt: ctx.clock.now().toISOString() });
+    await flush();
+    expect(ctx.pushes.map((push) => push.title)).toEqual(["grok-bot → muse", "Approved: grok-bot → muse"]);
   });
 
   test("denying via the hub page sends the Denied follow-up", async () => {
@@ -138,6 +165,21 @@ describe("permission push updates", () => {
     await ctx.app.request(denyPath, { method: "POST" });
     await flush();
     expect(ctx.pushes[1]).toMatchObject({ sequenceId: `perm-${row.id}`, title: "Denied: Bash", tags: ["x"] });
+  });
+});
+
+describe("permission answer hook", () => {
+  test("a throwing onAnswered still records the answer and returns normally", () => {
+    const relay = new PermissionRelay({
+      maxTextKb: 20,
+      deliver: () => true,
+      onAnswered: () => {
+        throw new Error("boom");
+      },
+    });
+    relay.add("claude-code", { requestId: "abcde", toolName: "Bash" });
+    expect(relay.answer("claude-code", "abcde", "allow").answer).toBe("allow");
+    expect(relay.get("claude-code", "abcde")?.answer).toBe("allow");
   });
 });
 

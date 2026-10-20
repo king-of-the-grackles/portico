@@ -1,3 +1,4 @@
+import { errorName, log } from "../log";
 import { BridgeError } from "./errors";
 
 export type PermissionBehavior = "allow" | "deny";
@@ -102,7 +103,12 @@ export class PermissionRelay {
     request.answeredAt = this.now().toISOString();
     request.delivered = this.deps.deliver(agent, requestId, behavior);
     const answered = { ...request };
-    this.deps.onAnswered?.(answered, behavior);
+    try {
+      this.deps.onAnswered?.(answered, behavior);
+    } catch (err) {
+      // The answer is recorded; a failing hook must not turn it into an error.
+      log("warn", "permission_answer_hook_failed", { error: errorName(err) });
+    }
     return answered;
   }
 
