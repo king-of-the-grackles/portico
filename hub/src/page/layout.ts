@@ -72,7 +72,9 @@ export function sendPage(
   opts: { nav?: boolean } = {},
 ): Response | Promise<Response> {
   c.header("Cache-Control", "no-store");
-  c.header("Referrer-Policy", "no-referrer");
+  // same-origin keeps signed links out of other sites' logs. Not no-referrer: under it, browsers send
+  // `Origin: null` even on the page's own form posts, and sameOrigin() refuses them.
+  c.header("Referrer-Policy", "same-origin");
   c.header("X-Frame-Options", "DENY");
   c.header("Content-Security-Policy", CSP);
   return c.html(layout(title, body, opts), status);

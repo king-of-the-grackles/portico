@@ -31,7 +31,8 @@ describe("approval links", () => {
     const { approvePath } = await askTask(ctx);
     const res = await ctx.app.request(approvePath);
     expect(res.headers.get("cache-control")).toBe("no-store");
-    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    // Not "no-referrer": under it, browsers send `Origin: null` on the page's own form posts, which the hub page refuses.
+    expect(res.headers.get("referrer-policy")).toBe("same-origin");
     expect(res.headers.get("x-frame-options")).toBe("DENY");
     expect(res.headers.get("content-security-policy")).toContain("default-src 'none'");
   });
