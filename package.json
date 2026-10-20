@@ -1,9 +1,13 @@
 {
   "name": "agent-bridge",
   "private": true,
-  "workspaces": ["hub"],
+  "workspaces": ["hub", "plugin-claude-code"],
   "scripts": {
     "test": "bun test",
-    "typecheck": "bun run --cwd hub typecheck"
+    "typecheck": "bun run --cwd hub typecheck && tsc --noEmit -p plugin-claude-code"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2"
   }
 }

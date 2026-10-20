@@ -4,6 +4,10 @@
   "workspaces": {
     "": {
       "name": "agent-bridge",
+      "devDependencies": {
+        "@types/bun": "^1.4.3",
+        "typescript": "^7.0.2",
+      },
     },
     "hub": {
       "name": "@agent-bridge/hub",
@@ -23,9 +27,19 @@
         "typescript": "^7.0.2",
       },
     },
+    "plugin-claude-code": {
+      "name": "@agent-bridge/plugin-claude-code",
+      "version": "0.1.0",
+      "dependencies": {
+        "@modelcontextprotocol/sdk": "1.32.1",
+        "zod": "4.6.7",
+      },
+    },
   },
   "packages": {
     "@agent-bridge/hub": ["@agent-bridge/hub@workspace:hub"],
+
+    "@agent-bridge/plugin-claude-code": ["@agent-bridge/plugin-claude-code@workspace:plugin-claude-code"],
 
     "@apidevtools/json-schema-ref-parser": ["@apidevtools/json-schema-ref-parser@16.0.5", "", { "dependencies": { "js-yaml": "^5.4.2" }, "peerDependencies": { "@types/json-schema": "^7.0.15" } }, "sha512-z3LiEMqTP2FNu6u8bdUgBYErVuwMSZReOJy1MCEIB0BDHMoNgBtkciby32HOlcrfWwrOSzRU8YIsZ0CogYRuYQ=="],
 
