@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -251,12 +251,21 @@ describe("loadConfig", () => {
 
   // Root can read any file, so the check only means something for an unprivileged test process.
   test.skipIf(process.getuid?.() === 0)("explains a config file that cannot be read", async () => {
-    const path = join(mkdtempSync(join(tmpdir(), "bridge-cfg-")), "bridge.yaml");
-    writeFileSync(path, YAML);
-    chmodSync(path, 0o000);
-    const err = await loadConfig({ ...ENV, BRIDGE_CONFIG: path }).catch((e) => e);
-    expect(err).toBeInstanceOf(ConfigError);
-    expect(err.problems.join("\n")).toContain(path);
-    expect(err.problems.join("\n")).toContain("can't be read");
+    const dir = mkdtempSync(join(tmpdir(), "bridge-cfg-"));
+    const path = join(dir, "bridge.yaml");
+    try {
+      writeFileSync(path, YAML);
+      chmodSync(path, 0o000);
+      const err = await loadConfig({ ...ENV, BRIDGE_CONFIG: path }).catch((e) => e);
+      expect(err).toBeInstanceOf(ConfigError);
+      const text = err.problems.join("\n");
+      expect(text).toContain(path);
+      expect(text).toContain("can't be read");
+      // The path is removed first: a temp path could contain a pronoun-like segment.
+      expect(text.split(path).join("")).not.toMatch(/\b(i|me|my|we|us|our|you|your|it|its|they|them|their)\b/i);
+    } finally {
+      chmodSync(path, 0o600);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

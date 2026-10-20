@@ -228,7 +228,7 @@ export async function loadConfig(env: Env = process.env): Promise<BridgeConfig> 
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code ?? "unknown error";
     throw new ConfigError([
-      `config file ${path} can't be read (${code}). The hub runs as an unprivileged user in the Docker image; make the file readable to it.`,
+      `config file ${path} can't be read (${code}). The hub runs as an unprivileged user in the Docker image; make the file readable to that user.`,
     ]);
   }
   return parseConfig(text, env);
