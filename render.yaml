@@ -1,0 +1,24 @@
+# Render Blueprint for the hub (docs/deploy/cloud.md). A persistent disk needs a paid instance type.
+services:
+  - type: web
+    name: agent-bridge
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    disk:
+      name: bridge-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      # bridge.yaml is added as a Secret File named bridge.yaml, which Render mounts here.
+      - key: BRIDGE_CONFIG
+        value: /etc/secrets/bridge.yaml
+      - key: BRIDGE_PUBLIC_URL
+        sync: false
+      - key: BRIDGE_SIGNING_SECRET
+        sync: false
+      - key: BRIDGE_ADMIN_PASSWORD
+        sync: false
+      - key: BRIDGE_NTFY_TOPIC
+        sync: false
+      # Add one BRIDGE_TOKEN_<NAME> per agent in bridge.yaml in the dashboard.

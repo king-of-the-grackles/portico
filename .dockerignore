@@ -1,0 +1,13 @@
+**/node_modules
+dist
+docs
+logs
+.superpowers
+.git
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+bridge.yaml
+bridge-secrets.sh

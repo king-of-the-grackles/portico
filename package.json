@@ -4,6 +4,7 @@
   "workspaces": ["hub", "plugin-claude-code"],
   "scripts": {
     "test": "bun test",
+    "build": "bun scripts/build.ts",
     "typecheck": "bun run --cwd hub typecheck && tsc --noEmit -p plugin-claude-code"
   },
   "devDependencies": {
