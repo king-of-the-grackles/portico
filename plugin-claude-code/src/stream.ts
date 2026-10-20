@@ -11,6 +11,8 @@ export interface StreamClientOptions {
   /** Called once, when the client stops for good: another session took over, or the hub refused the stream. */
   onStop: (stop: StreamStop) => void;
   log: Logger;
+  /** A connection open this long counts as healthy, and the backoff starts over. Default 30 s, longer than the hub's 25 s heartbeat. */
+  healthyMs?: number;
   /** Reconnect after this long with no bytes at all. The hub sends a comment every 25 s. Default 60 s. */
   silenceMs?: number;
   /** First pause between attempts; it doubles after each failure. Default 1 s. */
@@ -22,6 +24,7 @@ export interface StreamClientOptions {
 }
 
 export const SILENCE_MS = 60_000;
+export const HEALTHY_MS = 30_000;
 
 /**
  * Holds the hub's live stream open (spec §9.4–§9.5). It reconnects with backoff when the stream fails or ends,
@@ -92,13 +95,19 @@ export class StreamClient {
         return "retry";
       }
       this.opts.log("info", "stream_connected", {});
+      const opened = Date.now();
+      const healthyMs = this.opts.healthyMs ?? HEALTHY_MS;
+      let healthy = false;
       const parser = new SseParser();
       const reader = res.body.getReader();
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         arm();
-        this.attempt = 0; // bytes arrived, so the next failure starts the backoff over
+        if (!healthy && Date.now() - opened >= healthyMs) {
+          healthy = true;
+          this.attempt = 0; // the connection stayed up, so the next failure starts the backoff over
+        }
         for (const message of parser.push(value)) {
           let data: unknown = null;
           try {

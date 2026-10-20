@@ -144,6 +144,59 @@ describe("StreamClient reconnects", () => {
     expect(gaps[3]!).toBeLessThan(200); // still capped
   });
 
+  test("keeps backing off when connections end right after opening", async () => {
+    const fake = fakeSse("end");
+    try {
+      const times: number[] = [];
+      const watched = watch(
+        (signal) => {
+          times.push(Date.now());
+          return fake.open(signal);
+        },
+        { initialBackoffMs: 40, random: () => 0.5 },
+      );
+      await waitFor(() => times.length >= 4, 3000);
+      await watched.client.stop();
+      const gaps = times.slice(1).map((t, i) => t - times[i]!);
+      expect(gaps[0]!).toBeGreaterThanOrEqual(35); // 40
+      expect(gaps[1]!).toBeGreaterThanOrEqual(75); // 80
+      expect(gaps[2]!).toBeGreaterThanOrEqual(155); // 160
+    } finally {
+      fake.stop();
+    }
+  });
+
+  test("starts the backoff over after a healthy connection", async () => {
+    const hub = startHub();
+    try {
+      const times: number[] = [];
+      const watched = watch(
+        (signal) => {
+          times.push(Date.now());
+          return hubClient(hub, "claude-code").openStream(signal);
+        },
+        { healthyMs: 100, initialBackoffMs: 40, random: () => 0.5 },
+      );
+      await waitFor(() => times.length === 1);
+      await Bun.sleep(20);
+      watched.client.reconnect(); // pause 40
+      await waitFor(() => times.length === 2);
+      await Bun.sleep(20);
+      watched.client.reconnect(); // pause 80
+      await waitFor(() => times.length === 3);
+      await Bun.sleep(300); // healthy: backoff resets
+      watched.client.reconnect(); // pause 40, not 160
+      await waitFor(() => times.length === 4);
+      await watched.client.stop();
+      const gaps = times.slice(1).map((t, i) => t - times[i]!);
+      const pauseBefore = gaps[1]! - 20;
+      const lastPause = gaps[2]! - 300;
+      expect(lastPause).toBeLessThan(pauseBefore);
+    } finally {
+      hub.stop();
+    }
+  });
+
   test("stop() ends the loop, even during a long pause", async () => {
     const watched = watch(
       async () => {
