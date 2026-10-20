@@ -87,3 +87,20 @@ export function permissionAnsweredPush(request: PermissionRequest, behavior: Per
   const allowed = behavior === "allow";
   return followUp(permissionSequenceId(request), `${allowed ? "Allowed" : "Denied"}: ${request.toolName}`, "Answered.", allowed);
 }
+
+/** What a tap on an old Approve / Deny button gets back: iOS can't remove the delivered push, so each tap answers. */
+export function taskRepeatPush(task: Task): PushMessage {
+  const approved = task.status === "queued" || task.status === "working" || task.status === "done" || task.status === "failed";
+  const message = approved ? "Approved earlier." : task.status === "denied" ? "Denied earlier." : "Expired earlier.";
+  return followUp(taskSequenceId(task), `Already decided: ${task.fromAgent} → ${task.toAgent}`, message, approved);
+}
+
+export function permissionRepeatPush(request: PermissionRequest): PushMessage {
+  const allowed = request.answer === "allow";
+  return followUp(permissionSequenceId(request), `Already answered: ${request.toolName}`, allowed ? "Allowed earlier." : "Denied earlier.", allowed);
+}
+
+/** The prompt is gone, so no sequence ID is known. */
+export function permissionNoLongerWaitingPush(): PushMessage {
+  return { title: "No longer waiting", message: "This prompt was answered or expired.", priority: 3, tags: ["x"], actions: [] };
+}

@@ -3,6 +3,7 @@ import { pageRoutes } from "./page/routes";
 import { approvalRoutes } from "./approvals/routes";
 import type { PermissionRelay, PermissionRequest } from "./core/permissions";
 import type { BridgeService } from "./core/service";
+import type { Pusher } from "./approvals/ntfy";
 import type { BridgeConfig } from "./core/types";
 import { a2aRoutes } from "./ways-in/a2a";
 import { makeAgentResolver } from "./ways-in/auth";
@@ -17,6 +18,7 @@ export interface AppDeps {
   config: BridgeConfig;
   streams: StreamHub;
   relay: PermissionRelay;
+  push: Pusher;
   onPermissionRequest: (request: PermissionRequest) => void;
   now: () => Date;
   heartbeatMs?: number;
@@ -54,7 +56,7 @@ export function buildApp(deps: AppDeps): Hono {
 
   app.get("/hub/", (c) => c.redirect("/hub", 303));
   app.route("/hub", pageRoutes({ service, relay, streams, config, now: deps.now }));
-  app.route("/", approvalRoutes({ service, relay, config, now: deps.now }));
+  app.route("/", approvalRoutes({ service, relay, config, push: deps.push, now: deps.now }));
 
   app.notFound((c) => c.json({ error: "not_found", message: "No such endpoint." }, 404));
   app.onError(handleError);

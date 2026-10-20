@@ -5,9 +5,11 @@ import { BridgeError } from "../core/errors";
 import type { PermissionRelay, PermissionRequest } from "../core/permissions";
 import type { BridgeService } from "../core/service";
 import type { BridgeConfig, Task } from "../core/types";
-import { log } from "../log";
+import { errorName, log } from "../log";
 import { formatTime, formBodyLimit, type Html, sendPage, STATUS_WORDS } from "../page/layout";
 import { type LinkClaims, verifyLink } from "./links";
+import { permissionNoLongerWaitingPush, permissionRepeatPush, taskRepeatPush } from "./messages";
+import type { Pusher, PushMessage } from "./ntfy";
 
 type Action = "approve" | "deny";
 
@@ -15,6 +17,7 @@ export interface ApprovalRouteDeps {
   service: BridgeService;
   relay: PermissionRelay;
   config: BridgeConfig;
+  push: Pusher;
   now: () => Date;
 }
 
@@ -110,7 +113,7 @@ export function answerPermission(
 
 /** `/approve/:token` and `/deny/:token`: a GET shows a confirm form, and only a POST acts (spec §11). */
 export function approvalRoutes(deps: ApprovalRouteDeps): Hono {
-  const { service, relay, config, now } = deps;
+  const { service, relay, config, push, now } = deps;
   const routes = new Hono();
 
   const claimsFor = (c: Context, action: Action): LinkClaims | null => {
@@ -134,6 +137,16 @@ export function approvalRoutes(deps: ApprovalRouteDeps): Hono {
     return sendPage(c, 404, "Link not valid", invalidLink);
   };
 
+  /** iOS keeps the old buttons, so a tap on a decided prompt gets a short push. Failures are logged, never thrown. */
+  const pushRepeat = (kind: "approval" | "permission", message: PushMessage, fields: Record<string, string>) => {
+    const name = kind === "approval" ? "approval_push_repeat" : "permission_push_repeat";
+    void push(message)
+      .then((ok) => {
+        if (ok || config.ntfy) log(ok ? "info" : "warn", ok ? name : `${name}_failed`, fields);
+      })
+      .catch((err) => log("error", `${name}_failed`, { ...fields, error: errorName(err) }));
+  };
+
   for (const action of ["approve", "deny"] as const) {
     routes.get(`/${action}/:token`, (c) => {
       const claims = claimsFor(c, action);
@@ -154,7 +167,16 @@ export function approvalRoutes(deps: ApprovalRouteDeps): Hono {
       const claims = claimsFor(c, action);
       if (!claims) return unverifiedLink(c, action);
       log("info", "approval_link_used", { subject: claims.subject, action, id: claims.id });
-      if (claims.subject === "permission") return answerPermission(c, relay, claims.agent!, claims.id, action);
+      if (claims.subject === "permission") {
+        const request = relay.get(claims.agent!, claims.id);
+        if (!request) pushRepeat("permission", permissionNoLongerWaitingPush(), { agent: claims.agent! });
+        else if (request.answer) {
+          pushRepeat("permission", permissionRepeatPush(request), { agent: request.agent, request_id: request.requestId });
+        }
+        return answerPermission(c, relay, claims.agent!, claims.id, action);
+      }
+      const decided = service.findTask(claims.id);
+      if (decided && decided.status !== "waiting_approval") pushRepeat("approval", taskRepeatPush(decided), { task_id: decided.id });
       const form = await c.req.parseBody();
       return decideTask(c, service, claims.id, action, typeof form.note === "string" ? form.note : undefined);
     });

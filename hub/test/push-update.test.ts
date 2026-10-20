@@ -2,10 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
   approvalPush,
   permissionAnsweredPush,
+  permissionNoLongerWaitingPush,
+  permissionRepeatPush,
   permissionPush,
   taskApprovedPush,
   taskDeniedPush,
   taskExpiredPush,
+  taskRepeatPush,
 } from "../src/approvals/messages";
 import { makePusher, type PushMessage } from "../src/approvals/ntfy";
 import { PermissionRelay } from "../src/core/permissions";
@@ -59,10 +62,10 @@ describe("task push updates", () => {
       tags: ["white_check_mark"],
     });
     expect(ctx.pushes[1]).not.toHaveProperty("click");
-    // Repeating the used link changes nothing and sends nothing.
+    // Repeating the used link changes nothing; the only extra push is the "Already decided" one (tested below).
     expect((await ctx.app.request(path, { method: "POST" })).status).toBe(200);
     await flush();
-    expect(ctx.pushes).toHaveLength(2);
+    expect(ctx.pushes.slice(0, 2).map((push) => push.title)).toEqual(["grok-bot → muse", "Approved: grok-bot → muse"]);
   });
 
   test("approving via the hub page sends exactly one Approved follow-up", async () => {
@@ -183,6 +186,163 @@ describe("permission answer hook", () => {
   });
 });
 
+describe("taps on an already-decided push", () => {
+  const post = (ctx: ReturnType<typeof makeApp>, path: string) => ctx.app.request(path, { method: "POST" });
+
+  test("repeating an approve link sends Already decided with the same sequence id; the page is unchanged", async () => {
+    const ctx = makeApp();
+    const task = await askTask(ctx);
+    const path = new URL(ctx.pushes[0]!.actions[0]!.url).pathname;
+    await post(ctx, path);
+    await flush();
+    expect(ctx.pushes).toHaveLength(2);
+    const again = await post(ctx, path);
+    await flush();
+    expect(again.status).toBe(200);
+    expect(await again.text()).toContain("This task is no longer waiting for approval.");
+    expect(ctx.pushes).toHaveLength(3);
+    expect(ctx.pushes[2]).toMatchObject({
+      sequenceId: `task-${task.id}`,
+      title: "Already decided: grok-bot → muse",
+      message: "Approved earlier.",
+      priority: 3,
+      actions: [],
+      tags: ["white_check_mark"],
+    });
+    expect(ctx.pushes[2]).not.toHaveProperty("click");
+  });
+
+  test("approve link after a deny says Denied earlier", async () => {
+    const ctx = makeApp();
+    const task = await askTask(ctx);
+    const approve = new URL(ctx.pushes[0]!.actions[0]!.url).pathname;
+    const deny = new URL(ctx.pushes[0]!.actions[1]!.url).pathname;
+    await post(ctx, deny);
+    await flush();
+    await post(ctx, approve);
+    await flush();
+    expect(ctx.pushes).toHaveLength(3);
+    expect(ctx.pushes[2]).toMatchObject({
+      sequenceId: `task-${task.id}`,
+      title: "Already decided: grok-bot → muse",
+      message: "Denied earlier.",
+      tags: ["x"],
+    });
+  });
+
+  test("a task that expired while the link was still valid says Expired earlier", async () => {
+    const ctx = makeApp();
+    const task = await askTask(ctx);
+    const path = new URL(ctx.pushes[0]!.actions[0]!.url).pathname;
+    ctx.store.updateTask(task.id, { status: "expired", updatedAt: ctx.clock.now().toISOString() });
+    await post(ctx, path);
+    await flush();
+    expect(ctx.pushes).toHaveLength(2);
+    expect(ctx.pushes[1]).toMatchObject({ title: "Already decided: grok-bot → muse", message: "Expired earlier.", tags: ["x"] });
+  });
+
+  test("a link past its own expiry gets the page but no push", async () => {
+    const ctx = makeApp();
+    await askTask(ctx);
+    const path = new URL(ctx.pushes[0]!.actions[0]!.url).pathname;
+    ctx.clock.advance(100 * HOUR);
+    ctx.service.expireDue();
+    await flush();
+    expect(ctx.pushes).toHaveLength(2);
+    await post(ctx, path);
+    await flush();
+    expect(ctx.pushes).toHaveLength(2);
+  });
+
+  test("a tampered or invalid link sends no push", async () => {
+    const ctx = makeApp();
+    await askTask(ctx);
+    const path = new URL(ctx.pushes[0]!.actions[0]!.url).pathname;
+    await post(ctx, path);
+    await flush();
+    const before = ctx.pushes.length;
+    await post(ctx, `${path.slice(0, -2)}xx`);
+    await post(ctx, "/approve/not-a-token");
+    await flush();
+    expect(ctx.pushes).toHaveLength(before);
+  });
+
+  test("repeating a permission link sends Already answered with the same sequence id", async () => {
+    const ctx = makeApp();
+    await ctx.call("claude-code", "POST", "/api/permission-requests", PROMPT);
+    await flush();
+    const row = ctx.relay.get("claude-code", "abcde")!;
+    const path = new URL(ctx.pushes[0]!.actions[0]!.url).pathname;
+    await post(ctx, path);
+    await flush();
+    expect(ctx.pushes).toHaveLength(2);
+    const again = await post(ctx, path);
+    await flush();
+    expect(again.status).toBe(200);
+    expect(await again.text()).toContain("Already answered: allowed.");
+    expect(ctx.pushes).toHaveLength(3);
+    expect(ctx.pushes[2]).toMatchObject({
+      sequenceId: `perm-${row.id}`,
+      title: "Already answered: Bash",
+      message: "Allowed earlier.",
+      priority: 3,
+      actions: [],
+      tags: ["white_check_mark"],
+    });
+    expect(ctx.pushes[2]).not.toHaveProperty("click");
+    // The opposite button after an allow reports the standing answer.
+    await post(ctx, new URL(ctx.pushes[0]!.actions[1]!.url).pathname);
+    await flush();
+    expect(ctx.pushes[3]).toMatchObject({ message: "Allowed earlier." });
+  });
+
+  test("a denied permission says Denied earlier", async () => {
+    const ctx = makeApp();
+    await ctx.call("claude-code", "POST", "/api/permission-requests", PROMPT);
+    await flush();
+    const deny = new URL(ctx.pushes[0]!.actions[1]!.url).pathname;
+    await post(ctx, deny);
+    await flush();
+    await post(ctx, deny);
+    await flush();
+    expect(ctx.pushes[2]).toMatchObject({ title: "Already answered: Bash", message: "Denied earlier.", tags: ["x"] });
+  });
+
+  test("a permission no longer pending sends No longer waiting, without a sequence id", async () => {
+    const ctx = makeApp();
+    await ctx.call("claude-code", "POST", "/api/permission-requests", PROMPT);
+    await flush();
+    const path = new URL(ctx.pushes[0]!.actions[0]!.url).pathname;
+    ctx.clock.advance(HOUR / 2);
+    // Drop the prompt without passing the link's expiry.
+    (ctx.relay as unknown as { requests: Map<string, unknown> }).requests.clear();
+    const res = await post(ctx, path);
+    await flush();
+    expect(res.status).toBe(404);
+    expect(ctx.pushes).toHaveLength(2);
+    expect(ctx.pushes[1]).toMatchObject({
+      title: "No longer waiting",
+      message: "This prompt was answered or expired.",
+      priority: 3,
+      actions: [],
+      tags: ["x"],
+    });
+    expect(ctx.pushes[1]).not.toHaveProperty("sequenceId");
+    expect(ctx.pushes[1]).not.toHaveProperty("click");
+  });
+
+  test("the hub page does not send repeat pushes", async () => {
+    const ctx = makeApp();
+    const task = await askTask(ctx);
+    const cookie = await signIn(ctx.app);
+    const origin = "https://bridge.test";
+    await ctx.app.request(`/hub/tasks/${task.id}/approve`, { method: "POST", headers: { cookie, origin } });
+    await ctx.app.request(`/hub/tasks/${task.id}/approve`, { method: "POST", headers: { cookie, origin } });
+    await flush();
+    expect(ctx.pushes).toHaveLength(2);
+  });
+});
+
 describe("follow-up copy", () => {
   test("no push text uses a pronoun", () => {
     const { service, config } = makeService();
@@ -197,6 +357,10 @@ describe("follow-up copy", () => {
       taskExpiredPush(task),
       permissionAnsweredPush(request, "allow"),
       permissionAnsweredPush(request, "deny"),
+      ...(["queued", "working", "done", "failed", "denied", "expired"] as const).map((status) => taskRepeatPush({ ...task, status })),
+      permissionRepeatPush({ ...request, answer: "allow" }),
+      permissionRepeatPush({ ...request, answer: "deny" }),
+      permissionNoLongerWaitingPush(),
     ];
     for (const push of pushes) {
       expect(`${push.title}\n${push.message}`).not.toMatch(PRONOUNS);

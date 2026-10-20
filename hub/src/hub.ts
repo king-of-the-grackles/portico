@@ -80,6 +80,7 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
     config,
     streams,
     relay,
+    push,
     onPermissionRequest,
     now: opts.now ?? (() => new Date()),
     heartbeatMs: opts.heartbeatMs,

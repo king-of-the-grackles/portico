@@ -135,7 +135,7 @@ describe("permission links", () => {
     });
     expect((await ctx.app.request(`/approve/${otherAgent}`, { method: "POST" })).status).toBe(404);
     await flush();
-    const allowPath = new URL(ctx.pushes.at(-1)!.actions[0]!.url).pathname;
+    const allowPath = new URL(ctx.pushes[0]!.actions[0]!.url).pathname;
     const restarted = makeApp(ctx.config); // same secret, empty in-memory relay
     expect((await restarted.app.request(allowPath, { method: "POST" })).status).toBe(404);
     expect(ctx.relay.get("claude-code", "abcde")?.answer).toBeNull();
