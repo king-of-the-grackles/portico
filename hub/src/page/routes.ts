@@ -49,11 +49,12 @@ export function pageRoutes(deps: PageDeps): Hono {
   });
 
   page.post("/login", async (c) => {
+    // Parse first; then check, compare and record with no await between, so parallel attempts cannot slip past the limiter.
+    const form = await c.req.parseBody();
     if (limiter.blocked()) {
       log("warn", "login_locked", {});
       return sendPage(c, 429, "Sign in", loginView("Too many failed attempts. Try again in 15 minutes."));
     }
-    const form = await c.req.parseBody();
     if (!passwordMatches(config, formText(form.password) ?? "")) {
       limiter.recordFailure();
       log("warn", "login_failed", {});
@@ -83,13 +84,15 @@ export function pageRoutes(deps: PageDeps): Hono {
   });
 
   page.get("/", (c) => {
-    const tasks = service.listTasks({ status: "waiting_approval", limit: 100 });
+    const waiting = service
+      .listTasks({ status: "waiting_approval", limit: 100 })
+      .map((task) => ({ task, chain: service.chainOf(task) }));
     const agents = config.agents.map((agent) => ({
       agent,
       lastCheckIn: service.lastCheckIn(agent.name),
       connected: streams.isConnected(agent.name),
     }));
-    return sendPage(c, 200, "Waiting", homeView(tasks, relay.pending(), agents), { nav: true });
+    return sendPage(c, 200, "Waiting", homeView(waiting, relay.pending(), agents), { nav: true });
   });
 
   page.get("/history", (c) => {

@@ -23,11 +23,20 @@ function decisionForms(task: Task): Html {
 </div>`;
 }
 
-function waitingTask(task: Task): Html {
+function chainBlock(chain: Task[]): Html {
+  return chain.length > 0
+    ? html`<h2>Chain</h2><p class="meta">Each task below was being worked on when the next one was sent.</p>${chain.map(
+        (link) =>
+          html`<div class="card"><div class="meta">${link.fromAgent} → ${link.toAgent} · ${STATUS_WORDS[link.status]} · <a href="${taskPath(link)}">details</a></div><pre>${clipText(link.instructions, 300)}</pre></div>`,
+      )}`
+    : html``;
+}
+
+function waitingTask({ task, chain }: { task: Task; chain: Task[] }): Html {
   return html`<div class="card"><div class="meta">${task.fromAgent} → ${task.toAgent}${task.chainLength > 1 ? " · chained" : ""}${
     task.triggerName ? html` · trigger ${task.triggerName}` : ""
   } · expires ${formatTime(task.expiresAt)} · <a href="${taskPath(task)}">details</a></div>
-<pre>${task.instructions}</pre>${decisionForms(task)}</div>`;
+<pre>${task.instructions}</pre>${chainBlock(chain)}${decisionForms(task)}</div>`;
 }
 
 function waitingPermission(request: PermissionRequest): Html {
@@ -43,11 +52,11 @@ export interface AgentRow {
   connected: boolean;
 }
 
-export function homeView(tasks: Task[], permissions: PermissionRequest[], agents: AgentRow[]): Html {
+export function homeView(waiting: { task: Task; chain: Task[] }[], permissions: PermissionRequest[], agents: AgentRow[]): Html {
   return html`<h1>Waiting</h1>
-${tasks.length === 0 && permissions.length === 0 ? html`<p class="meta">Nothing waiting.</p>` : ""}
+${waiting.length === 0 && permissions.length === 0 ? html`<p class="meta">Nothing waiting.</p>` : ""}
 ${permissions.length > 0 ? html`<h2>Permission prompts</h2>${permissions.map(waitingPermission)}` : ""}
-${tasks.length > 0 ? html`<h2>Tasks waiting for approval</h2>${tasks.map(waitingTask)}` : ""}
+${waiting.length > 0 ? html`<h2>Tasks waiting for approval</h2>${waiting.map(waitingTask)}` : ""}
 <h2>Agents</h2>
 <table><thead><tr><th>Agent</th><th>Delivery</th><th>Last checked in</th><th>Description</th></tr></thead><tbody>
 ${agents.map(
@@ -104,12 +113,5 @@ export function taskDetailView(task: Task, chain: Task[]): Html {
 ${task.result !== null ? html`<h2>Result</h2><pre>${task.result}</pre>` : ""}
 ${task.reason !== null ? html`<h2>Reason</h2><p>${task.reason}</p>` : ""}
 ${task.status === "waiting_approval" ? decisionForms(task) : ""}</div>
-${
-  chain.length > 0
-    ? html`<h2>Chain</h2><p class="meta">Each task below was being worked on when the next one was sent.</p>${chain.map(
-        (link) =>
-          html`<div class="card"><div class="meta">${link.fromAgent} → ${link.toAgent} · ${STATUS_WORDS[link.status]} · <a href="${taskPath(link)}">details</a></div><pre>${clipText(link.instructions, 300)}</pre></div>`,
-      )}`
-    : ""
-}`;
+${chainBlock(chain)}`;
 }

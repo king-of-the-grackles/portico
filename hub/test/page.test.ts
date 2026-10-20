@@ -46,6 +46,16 @@ describe("hub page sign-in", () => {
     expect((await app.request("/hub", { headers: { cookie } })).status).toBe(303);
   });
 
+  test("parallel wrong attempts cannot get past the limiter", async () => {
+    const { app } = makeApp();
+    const statuses = (await Promise.all(Array.from({ length: 15 }, () => app.request("/hub/login", login("nope"))))).map(
+      (r) => r.status,
+    );
+    expect(statuses.filter((s) => s === 401)).toHaveLength(10);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(5);
+    expect((await app.request("/hub/login", login(ADMIN_PASSWORD))).status).toBe(429);
+  });
+
   test("signing out clears the cookie", async () => {
     const { app } = makeApp();
     const cookie = await signIn(app);
@@ -147,6 +157,16 @@ describe("hub page", () => {
     expect(denied).toContain("Research: gamma-details");
     expect(denied).not.toContain("alpha-task");
     expect(await get("?status=bogus&agent=nobody")).toContain("alpha-task");
+  });
+
+  test("waiting cards show the chain", async () => {
+    const ctx = makeApp(testConfig(`${BASE_YAML}\nlimits:\n  max_chain_length: 2\n`));
+    const cookie = await signIn(ctx.app);
+    ctx.service.sendTask("grok-bot", { to: "claude-code", instructions: "parent-task" });
+    ctx.service.checkInbox("claude-code");
+    ctx.service.sendTask("claude-code", { to: "muse", instructions: "child-task" });
+    const page = await (await ctx.app.request("/hub", { headers: { cookie } })).text();
+    for (const text of ["child-task", "Chain", "parent-task"]) expect(page).toContain(text);
   });
 
   test("task detail shows the chain that led to the task", async () => {
