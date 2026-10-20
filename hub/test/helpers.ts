@@ -1,4 +1,5 @@
-import { buildApp } from "../src/app";
+import type { PushMessage } from "../src/approvals/ntfy";
+import { createHub } from "../src/hub";
 import { parseConfig } from "../src/config";
 import { BridgeError } from "../src/core/errors";
 import { BridgeService } from "../src/core/service";
@@ -94,8 +95,22 @@ export function errorCode(fn: () => unknown): string | null {
 }
 
 export function makeApp(config: BridgeConfig = testConfig()) {
-  const ctx = makeService(config);
-  const app = buildApp(ctx.service, ctx.config);
+  const clock = testClock();
+  const notices: Notice[] = [];
+  const pushes: PushMessage[] = [];
+  let counter = 0;
+  const hub = createHub(config, {
+    db: openDb(":memory:"),
+    now: clock.now,
+    newId: () => `id-${++counter}`,
+    push: async (message) => {
+      pushes.push(message);
+      return true;
+    },
+    heartbeatMs: 50,
+    onNotice: (notice) => notices.push(notice),
+  });
+  const { app } = hub;
   async function call(agent: TestAgent | null, method: string, path: string, body?: unknown): Promise<Response> {
     const headers: Record<string, string> = {};
     if (agent) headers.authorization = `Bearer ${TOKENS[agent]}`;
@@ -106,5 +121,55 @@ export function makeApp(config: BridgeConfig = testConfig()) {
     }
     return await app.request(path, { method, headers, body: payload });
   }
-  return { ...ctx, app, call };
+  return { ...hub, config, clock, notices, pushes, call };
+}
+
+/** Lets queued microtasks and zero-delay timers run, e.g. the notifier's work after a transaction. */
+export function flush(): Promise<void> {
+  return Bun.sleep(1);
+}
+
+export interface SseEvent {
+  event: string;
+  data: unknown;
+}
+
+/** Reads server-sent events from a streaming response, skipping heartbeat comments. */
+export function sseReader(res: Response) {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  // Kept across calls: a read that loses a timeout race still owns the next chunk.
+  let pending: ReturnType<typeof reader.read> | null = null;
+  return {
+    async next(timeoutMs = 2000): Promise<SseEvent> {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const boundary = buffer.indexOf("\n\n");
+        if (boundary >= 0) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const lines = block.split("\n").filter((line) => line !== "" && !line.startsWith(":"));
+          if (lines.length === 0) continue; // a heartbeat comment
+          const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim() ?? "message";
+          const data = lines
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trim())
+            .join("\n");
+          return { event, data: data ? JSON.parse(data) : null };
+        }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error("timed out waiting for a stream event");
+        pending ??= reader.read();
+        const chunk = await Promise.race([pending, Bun.sleep(remaining).then(() => null)]);
+        if (chunk === null) throw new Error("timed out waiting for a stream event");
+        pending = null;
+        if (chunk.done) throw new Error("stream ended");
+        buffer += decoder.decode(chunk.value, { stream: true });
+      }
+    },
+    async cancel(): Promise<void> {
+      await reader.cancel().catch(() => {});
+    },
+  };
 }

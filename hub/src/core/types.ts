@@ -95,8 +95,12 @@ export interface BridgeEvent {
   createdAt: string;
 }
 
-/** Things the outside world may need to act on. Plan 2 turns these into nudges and pushes. */
+/** Things the outside world may need to act on. notifier.ts turns these into nudges and pushes. */
 export type Notice =
   | { kind: "queued"; task: Task }
   | { kind: "approval_needed"; task: Task }
   | { kind: "result_ready"; task: Task };
+
+export function isPushAgent(config: BridgeConfig, name: string): boolean {
+  return config.agents.some((agent) => agent.name === name && agent.delivery === "push");
+}

@@ -203,6 +203,20 @@ export class Store {
     return rows.map(toTask);
   }
 
+  /** True if the agent has queued tasks, or finished results it sent and hasn't seen. */
+  hasWaitingFor(agent: string): boolean {
+    const row = this.db
+      .query(
+        `SELECT EXISTS (
+           SELECT 1 FROM tasks
+           WHERE (to_agent = $agent AND status = 'queued')
+              OR (from_agent = $agent AND status IN ${FINAL} AND sender_notified_at IS NULL)
+         ) AS waiting`,
+      )
+      .get({ agent }) as { waiting: number };
+    return row.waiting === 1;
+  }
+
   latestWorkingFor(agent: string): Task | null {
     const row = this.db
       .query(

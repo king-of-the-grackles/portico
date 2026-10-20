@@ -1,7 +1,8 @@
-import { buildApp } from "./app";
-import { BridgeService } from "./core/service";
-import type { BridgeConfig, Notice } from "./core/types";
-import { openDb, Store } from "./db";
+import type { Pusher } from "./approvals/ntfy";
+import type { BridgeService } from "./core/service";
+import type { BridgeConfig } from "./core/types";
+import { openDb } from "./db";
+import { createHub } from "./hub";
 import { errorName, log } from "./log";
 
 export interface RunningServer {
@@ -13,21 +14,16 @@ export interface RunningServer {
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
-export function startServer(
-  config: BridgeConfig,
-  opts: { port?: number; notify?: (notice: Notice) => void } = {},
-): RunningServer {
+export function startServer(config: BridgeConfig, opts: { port?: number; push?: Pusher } = {}): RunningServer {
   const db = openDb(config.dbPath);
-  const service = new BridgeService({
-    store: new Store(db),
-    config,
-    notify: opts.notify,
-    log: (msg, fields) => log("info", msg, fields),
-  });
+  const hub = createHub(config, { db, push: opts.push });
+  const service: BridgeService = hub.service;
   const server = Bun.serve({
     port: opts.port ?? config.port,
-    fetch: buildApp(service, config).fetch,
+    fetch: hub.app.fetch,
     maxRequestBodySize: config.limits.maxTextKb * 1024 * 4,
+    // Above the stream heartbeat (25 s), so quiet live streams aren't cut. Bun's default is 10 s.
+    idleTimeout: 60,
   });
 
   const expireSweep = () => {
@@ -54,8 +50,8 @@ export function startServer(
   const port = server.port as number;
   log("info", "bridge_started", { port, agents: config.agents.length, public_url: config.publicUrl });
   if (!config.ntfy) {
-         log("warn", "ntfy_disabled", { note: "BRIDGE_NTFY_TOPIC is not set; approvals happen on the hub page only" });
-       }
+    log("warn", "ntfy_disabled", { note: "BRIDGE_NTFY_TOPIC is not set; approvals happen on the hub page only" });
+  }
 
   return {
     port,

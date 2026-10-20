@@ -6,17 +6,15 @@ import { BridgeError, HTTP_STATUS } from "../core/errors";
 import type { BridgeService } from "../core/service";
 import type { BridgeConfig } from "../core/types";
 import { clip, errorName, log } from "../log";
-import type { AgentResolver } from "./auth";
+import { type AgentEnv, type AgentResolver, requireAgent } from "./auth";
 import { jsonBodyLimit } from "./limits";
 import { agentView, eventView, inboxTaskView, taskView } from "./views";
-
-type Env = { Variables: { agent: string } };
 
 const SendTaskBody = z.object({ to: z.string(), instructions: z.string(), idempotency_key: z.string().optional() });
 const FinishBody = z.object({ result: z.string().optional(), failed_reason: z.string().optional() });
 const EventBody = z.object({ name: z.string(), details: z.string().optional() });
 
-async function readJson(c: Context): Promise<unknown> {
+export async function readJson(c: Context): Promise<unknown> {
   try {
     return await c.req.json();
   } catch {
@@ -36,21 +34,12 @@ export function handleError(err: unknown, c: Context): Response {
   return c.json({ error: "internal", message: "Something went wrong." }, 500);
 }
 
-export function restRoutes(service: BridgeService, config: BridgeConfig, resolveAgent: AgentResolver): Hono<Env> {
-  const api = new Hono<Env>();
+export function restRoutes(service: BridgeService, config: BridgeConfig, resolveAgent: AgentResolver): Hono<AgentEnv> {
+  const api = new Hono<AgentEnv>();
 
   api.use("*", jsonBodyLimit(config));
 
-  api.use("*", async (c, next) => {
-    const agent = resolveAgent(c.req.header("authorization"));
-    if (!agent) {
-      return c.json({ error: "unauthorized", message: "Missing or invalid bearer token." }, 401, {
-        "WWW-Authenticate": "Bearer",
-      });
-    }
-    c.set("agent", agent);
-    await next();
-  });
+  api.use("*", requireAgent(resolveAgent));
 
   api.get("/agents", (c) => c.json({ agents: service.listAgents(c.get("agent")).map(agentView) }));
 

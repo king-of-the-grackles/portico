@@ -49,6 +49,10 @@ export class BridgeService {
     return this.lastCheckIns.get(agent) ?? null;
   }
 
+  hasWaiting(agent: string): boolean {
+    return this.store.hasWaitingFor(agent);
+  }
+
   sendTask(caller: string, input: { to: string; instructions: string; idempotencyKey?: string }): Task {
     this.requireText("instructions", input.instructions);
     const key = this.optionalIdempotencyKey(input.idempotencyKey);

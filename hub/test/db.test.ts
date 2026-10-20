@@ -34,6 +34,18 @@ beforeEach(() => {
 });
 
 describe("Store: tasks", () => {
+  test("hasWaitingFor sees queued tasks for the agent and unseen results it sent", () => {
+    expect(store.hasWaitingFor("claude-code")).toBe(false);
+    store.insertTask(task());
+    expect(store.hasWaitingFor("claude-code")).toBe(true);
+    expect(store.hasWaitingFor("grok-bot")).toBe(false);
+    store.updateTask("t1", { status: "done", result: "ok" });
+    expect(store.hasWaitingFor("claude-code")).toBe(false);
+    expect(store.hasWaitingFor("grok-bot")).toBe(true);
+    store.updateTask("t1", { senderNotifiedAt: "2026-10-20T13:00:00.000Z" });
+    expect(store.hasWaitingFor("grok-bot")).toBe(false);
+  });
+
   test("round-trips a task", () => {
     const t = task({ parentTaskId: "p1", chainLength: 2, eventId: "e1", triggerName: "trig" });
     store.insertTask(t);
