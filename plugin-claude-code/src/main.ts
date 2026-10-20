@@ -21,7 +21,7 @@ function setUp(): { server: Server; stop: () => Promise<void> } {
     log("info", "plugin_idle", { note: "BRIDGE_URL and BRIDGE_TOKEN are not set; no tools and no channel in this session" });
     return { server: createIdleServer(), stop: async () => {} };
   }
-  log("info", "plugin_started", { url: config.url, permission_relay: config.permissionRelay });
+  log("info", "plugin_started", { origin: new URL(config.url).origin, permission_relay: config.permissionRelay });
   return createBridgePlugin({ config, client: new HubClient({ url: config.url, token: config.token }), log });
 }
 

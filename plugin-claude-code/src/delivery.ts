@@ -75,6 +75,12 @@ export function stopNotice(stop: StreamStop): string {
       "agent now go there. Restart this session to take delivery back. The bridge tools still work."
     );
   }
+  if (stop.status === 404) {
+    return (
+      "Bridge delivery is off: the hub address BRIDGE_URL has no live stream (404). Set BRIDGE_URL to the hub's base " +
+      "address, e.g. https://bridge.example.com, without /mcp or /api, and restart this session."
+    );
+  }
   if (stop.status === 403) {
     return (
       `Bridge delivery is off: the hub refused the live stream (${stop.message}). Set this agent to delivery: push ` +

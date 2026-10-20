@@ -56,6 +56,34 @@ describe("permission relay", () => {
     expect(hub.pushes[0]!.title).toBe("claude-code wants to use Bash");
   });
 
+  test("relays a prompt that arrives without a description", async () => {
+    const host = await connect();
+    const { description: _omitted, ...bare } = prompt("abcde");
+    await host.askPermission(bare as unknown as Parameters<typeof host.askPermission>[0]);
+    await waitFor(() => hub.relay.pending().length === 1);
+    expect(hub.relay.pending()[0]).toMatchObject({ requestId: "abcde", toolName: "Bash" });
+  });
+
+  test("stops relaying once delivery has stopped for good", async () => {
+    const host = await connect();
+    // A second stream for the same token replaces the plugin's stream.
+    const other = await fetch(`${hub.url}/api/stream`, { headers: { authorization: `Bearer ${TOKENS["claude-code"]}` } });
+    try {
+      await waitFor(() => host.channel.some((m) => m.meta.kind === "notice"));
+      await host.askPermission(prompt("abcde"));
+      await waitFor(() => logs.lines.some((line) => line.msg === "permission_relay_off"));
+      await Bun.sleep(50);
+      expect(hub.relay.pending()).toEqual([]);
+      await host.askPermission(prompt("fghij"));
+      await Bun.sleep(50);
+      expect(hub.relay.pending()).toEqual([]);
+      expect(logs.lines.filter((line) => line.msg === "permission_relay_off")).toHaveLength(1);
+      expect(logs.lines.find((line) => line.msg === "permission_relay_off")?.level).toBe("warn");
+    } finally {
+      await other.body?.cancel();
+    }
+  });
+
   test("forwards an answer once, and drops repeats and answers for prompts it didn't relay", async () => {
     const host = await connect();
     await host.askPermission(prompt("abcde"));

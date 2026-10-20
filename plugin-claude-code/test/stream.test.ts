@@ -75,6 +75,19 @@ describe("StreamClient against the hub", () => {
     expect(unknown.opens()).toBe(1);
   });
 
+  test("stops for good on a 404, which means BRIDGE_URL points at the wrong path", async () => {
+    const server = Bun.serve({ port: 0, fetch: () => new Response("not found", { status: 404 }) });
+    try {
+      const watched = watch((signal) => fetch(`http://127.0.0.1:${server.port}/api/stream`, { signal }));
+      await waitFor(() => watched.stops.length === 1);
+      expect(watched.stops[0]).toMatchObject({ reason: "rejected", status: 404 });
+      await Bun.sleep(100);
+      expect(watched.opens()).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("heartbeats keep a quiet stream open", async () => {
     const quiet = watch(openAs("claude-code"), { silenceMs: 300 });
     await Bun.sleep(800);

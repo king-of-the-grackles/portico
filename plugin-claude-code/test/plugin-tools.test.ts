@@ -78,7 +78,9 @@ describe("the plugin's MCP server", () => {
   });
 
   test("tool calls pass through to the hub", async () => {
-    const { host } = await connected();
+    const p = plugin();
+    const { host } = await fakeHost(p);
+    cleanup.push(() => host.close());
     const sent = await host.callTool({ name: "send_task", arguments: { to: "grok-bot", instructions: "Look this up" } });
     expect(sent.isError).toBeFalsy();
     const { task } = JSON.parse(text(sent)) as { task: { id: string; status: string } };
@@ -87,6 +89,8 @@ describe("the plugin's MCP server", () => {
     const read = await host.callTool({ name: "get_task", arguments: { task_id: task.id } });
     expect(JSON.parse(text(read)).task.id).toBe(task.id);
 
+    // Stop the plugin's own delivery, so only the explicit check_inbox below claims the task.
+    await p.stop();
     hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Write the changelog" });
     const inbox = await host.callTool({ name: "check_inbox", arguments: {} });
     expect(text(inbox)).toContain("New tasks (1):");

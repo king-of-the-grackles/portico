@@ -19,8 +19,9 @@ const PermissionRequestNotification = z.object({
   params: z.object({
     request_id: z.string(),
     tool_name: z.string(),
-    description: z.string(),
-    input_preview: z.string(),
+    // Relayed even when a field is missing: the hub stores "" and echoes it back.
+    description: z.string().default(""),
+    input_preview: z.string().default(""),
   }),
 });
 
@@ -79,6 +80,7 @@ export function createBridgePlugin(deps: BridgePluginDeps): BridgePlugin {
       else if (event === "permission" && config.permissionRelay) permissions.answer(data);
     },
     onStop: (stop) => {
+      permissions.disable(stop.reason === "replaced" ? "replaced" : `rejected_${stop.status}`);
       send(stopNotice(stop), { kind: "notice" }).catch((err) => log("warn", "notice_failed", { error: errorName(err) }));
     },
     log,

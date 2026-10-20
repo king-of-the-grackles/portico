@@ -29,7 +29,7 @@ export const HEALTHY_MS = 30_000;
 /**
  * Holds the hub's live stream open (spec §9.4–§9.5). It reconnects with backoff when the stream fails or ends,
  * and when it goes silent: a half-open connection can look alive for a long time. It stops for good on
- * `replaced`, so two sessions sharing a token don't fight, and when the hub refuses the stream (401 or 403).
+ * `replaced`, so two sessions sharing a token don't fight, and when the hub refuses the stream (401, 403) or has no stream at that address (404).
  */
 export class StreamClient {
   private running = false;
@@ -83,7 +83,8 @@ export class StreamClient {
     try {
       arm(); // the hub must answer within the window too
       const res = await this.opts.open(controller.signal);
-      if (res.status === 401 || res.status === 403) {
+      // 404: BRIDGE_URL points at the wrong path (e.g. ends in /mcp), and retrying can't fix that.
+      if (res.status === 401 || res.status === 403 || res.status === 404) {
         const message = await errorMessage(res);
         this.opts.log("error", "stream_refused", { status: res.status });
         this.opts.onStop({ reason: "rejected", status: res.status, message });

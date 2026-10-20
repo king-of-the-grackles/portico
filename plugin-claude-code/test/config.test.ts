@@ -50,7 +50,21 @@ describe("parsePluginConfig", () => {
       "http://127.0.0.1:8790",
     );
     expect(problems({ BRIDGE_URL: "http://bridge.example.com", BRIDGE_TOKEN: token })[0]).toContain("https://");
-    expect(problems({ BRIDGE_URL: "not a url", BRIDGE_TOKEN: token })[0]).toContain("is not a valid URL");
+    expect(problems({ BRIDGE_URL: "not a url", BRIDGE_TOKEN: token })).toEqual(["BRIDGE_URL is not a valid URL."]);
+  });
+
+  test("refuses a user name or password in the address, without repeating it", () => {
+    const token = "token-0123456789";
+    const found = problems({ BRIDGE_URL: "https://alice:hunter2@bridge.example.com", BRIDGE_TOKEN: token });
+    expect(found).toEqual(["BRIDGE_URL must not contain a user name or password."]);
+    expect(problems({ BRIDGE_URL: "https://alice@bridge.example.com", BRIDGE_TOKEN: token })).toEqual(found);
+  });
+
+  test("keeps the origin and path, without a trailing slash", () => {
+    const token = "token-0123456789";
+    expect(parsePluginConfig({ BRIDGE_URL: "https://bridge.example.com:8443/hub/", BRIDGE_TOKEN: token })?.url).toBe(
+      "https://bridge.example.com:8443/hub",
+    );
   });
 
   test("never repeats the token in an error", () => {

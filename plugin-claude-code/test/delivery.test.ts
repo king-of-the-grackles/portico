@@ -162,6 +162,7 @@ describe("message text", () => {
     expect(stopNotice({ reason: "rejected", status: 403, message: "Only push agents can open the live stream." })).toContain(
       "delivery: push",
     );
+    expect(stopNotice({ reason: "rejected", status: 404, message: "HTTP 404" })).toContain("BRIDGE_URL has no live stream (404)");
     expect(stopNotice({ reason: "rejected", status: 401, message: "Missing or invalid token." })).toContain("BRIDGE_TOKEN");
   });
 });

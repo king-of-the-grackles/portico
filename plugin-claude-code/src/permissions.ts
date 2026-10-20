@@ -33,6 +33,7 @@ export class PermissionRelayClient {
   private readonly waiting = new Map<string, number>();
   /** request_id → token of the relay in flight. Replaced or removed when the ID is reused, which cancels it. */
   private readonly inflight = new Map<string, object>();
+  private disabled = false;
   private readonly now: () => number;
   private readonly retryMs: number[];
 
@@ -47,7 +48,17 @@ export class PermissionRelayClient {
     return this.waiting.size;
   }
 
+  /** Stops relaying for good, because answers can no longer reach this session. Logs once. */
+  disable(reason: string): void {
+    if (this.disabled) return;
+    this.disabled = true;
+    this.waiting.clear();
+    this.inflight.clear();
+    this.deps.log("warn", "permission_relay_off", { reason });
+  }
+
   async relay(prompt: PermissionPrompt): Promise<void> {
+    if (this.disabled) return;
     this.sweep();
     const id = prompt.request_id;
     if (this.waiting.has(id) || this.inflight.has(id)) {

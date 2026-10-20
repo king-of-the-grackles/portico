@@ -25,27 +25,35 @@ function read(env: Env, name: string): string {
  * in every session, and sessions not on the bridge should see nothing. Throws when the settings are half there or wrong.
  */
 export function parsePluginConfig(env: Env): PluginConfig | null {
-  const url = read(env, "BRIDGE_URL").replace(/\/+$/, "");
+  const rawUrl = read(env, "BRIDGE_URL");
+  let url = rawUrl;
   const token = read(env, "BRIDGE_TOKEN");
   const relay = (read(env, "BRIDGE_PERMISSION_RELAY") || "on").toLowerCase();
-  if (!url && !token) return null;
+  if (!rawUrl && !token) return null;
 
   const problems: string[] = [];
-  if (!url) {
+  if (!rawUrl) {
     problems.push(
       "BRIDGE_URL is not set. Set it to the hub's public address, e.g. https://bridge.example.com, in the environment Claude Code starts from.",
     );
   } else {
+    let parsed: URL | null = null;
     try {
-      const parsed = new URL(url);
+      parsed = new URL(rawUrl);
+    } catch {
+      problems.push("BRIDGE_URL is not a valid URL.");
+    }
+    if (parsed) {
       const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-      if (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) {
+      if (parsed.username || parsed.password) {
+        problems.push("BRIDGE_URL must not contain a user name or password.");
+      } else if (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) {
         problems.push(
           "BRIDGE_URL must start with https:// (http:// is allowed only for localhost), because the token travels with every request.",
         );
+      } else {
+        url = `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
       }
-    } catch {
-      problems.push(`BRIDGE_URL "${url}" is not a valid URL.`);
     }
   }
   if (!token) {
