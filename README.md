@@ -1,6 +1,6 @@
 # agent-bridge (working name)
 
-A small self-hosted hub that lets personal AI agents from different companies (Claude Code, Grok Bot, Meta Muse, ChatGPT/Codex) hand each other tasks, with rules you control. Pairs of agents you haven't allowed are blocked; pairs set to `ask` wait for your approval.
+A small self-hosted hub that lets personal AI agents from different companies (Claude Code, Grok Bot, Meta Muse, ChatGPT/Codex) hand each other tasks, with rules you control. Pairs of agents you haven't allowed are blocked; tasks on pairs set to `ask` wait for approval. The approval push and page come in a later release; until then those tasks expire after `task_expiry_hours`.
 
 Design: [docs/superpowers/specs/2026-10-19-agent-bridge-design.md](docs/superpowers/specs/2026-10-19-agent-bridge-design.md). Status: early development.
 
@@ -17,7 +17,12 @@ Design: [docs/superpowers/specs/2026-10-19-agent-bridge-design.md](docs/superpow
    BRIDGE_TOKEN_CODEX=...
    ```
 4. Start the hub: `bun hub/src/cli.ts serve`
-5. Try it: `curl -H "Authorization: Bearer $BRIDGE_TOKEN_GROK_BOT" http://localhost:8787/api/agents`
+5. Try it. Bun loads `.env` only into the hub process, not your shell, so export the token first (`export BRIDGE_TOKEN_GROK_BOT=...`, the same value as in `.env`):
+   ```
+   curl -H "Authorization: Bearer $BRIDGE_TOKEN_GROK_BOT" http://localhost:8787/api/agents
+   ```
+
+`BRIDGE_PUBLIC_URL` must be the public https address agents will use. Agent cards and the OpenAPI `servers` entry embed it. `http://localhost:8787` is only for local testing.
 
 ## Ways in
 
