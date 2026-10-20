@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ConfigError, parseConfig, tokenEnvName } from "../src/config";
+import { ConfigError, loadConfig, parseConfig, tokenEnvName } from "../src/config";
 
 const YAML = `
 agents:
@@ -21,6 +21,8 @@ triggers:
 const ENV: Record<string, string | undefined> = {
   BRIDGE_PUBLIC_URL: "https://bridge.example.com/",
   BRIDGE_TOKEN_GROK_BOT: "g".repeat(32),
+  BRIDGE_SIGNING_SECRET: "s".repeat(32),
+  BRIDGE_ADMIN_PASSWORD: "correct horse battery",
   BRIDGE_TOKEN_CLAUDE_CODE_WINGMAN: "c".repeat(32),
 };
 
@@ -56,7 +58,10 @@ describe("parseConfig", () => {
       maxChainLength: 1,
       historyDays: 30,
     });
-    expect(config.port).toBe(8787);
+    expect(config.port).toBe(8790);
+    expect(config.signingSecret).toBe("s".repeat(32));
+    expect(config.adminPassword).toBe("correct horse battery");
+    expect(config.ntfy).toBeNull();
     expect(config.dbPath).toBe("./bridge.db");
   });
 
@@ -138,5 +143,86 @@ triggers:
 
   test("rejects a file that isn't YAML", () => {
     expect(problems("agents: [unclosed")[0]).toStartWith("bridge.yaml is not valid YAML");
+  });
+});
+
+describe("parseConfig: secrets, ntfy and strictness", () => {
+  test("requires a signing secret and an admin password of a minimum length", () => {
+    expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: undefined })).toContain("missing BRIDGE_SIGNING_SECRET");
+    expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: "short" })).toContain(
+      "BRIDGE_SIGNING_SECRET must be at least 32 characters",
+    );
+    expect(problems(YAML, { ...ENV, BRIDGE_ADMIN_PASSWORD: undefined })).toContain("missing BRIDGE_ADMIN_PASSWORD");
+    expect(problems(YAML, { ...ENV, BRIDGE_ADMIN_PASSWORD: "short" })).toContain(
+      "BRIDGE_ADMIN_PASSWORD must be at least 12 characters",
+    );
+  });
+
+  test("ntfy is on only when a topic is set", () => {
+    const topic = "t".repeat(24);
+    expect(parseConfig(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: topic }).ntfy).toEqual({
+      url: "https://ntfy.sh",
+      topic,
+      token: null,
+    });
+    expect(
+      parseConfig(YAML, {
+        ...ENV,
+        BRIDGE_NTFY_TOPIC: topic,
+        BRIDGE_NTFY_URL: "https://ntfy.example.com/",
+        BRIDGE_NTFY_TOKEN: "tk_abc",
+      }).ntfy,
+    ).toEqual({ url: "https://ntfy.example.com", topic, token: "tk_abc" });
+  });
+
+  test("rejects a short or oddly formed ntfy topic and a bad ntfy URL", () => {
+    const message =
+      "BRIDGE_NTFY_TOPIC must be 20–64 letters, digits, - or _, because anyone who knows a public topic can read it";
+    expect(problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: "mytopic" })).toContain(message);
+    expect(problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: `${"t".repeat(24)}/x` })).toContain(message);
+    expect(problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: "t".repeat(24), BRIDGE_NTFY_URL: "not a url" })).toContain(
+      'BRIDGE_NTFY_URL "not a url" is not a valid http(s) URL',
+    );
+  });
+
+  test("rejects unknown keys, so typos aren't silently ignored", () => {
+    expect(problems(`${YAML}\nlimits:\n  max_chain_lenght: 2\n`)).toContain('limits: Unrecognized key: "max_chain_lenght"');
+    expect(problems(`${YAML}\nrulez: []\n`)).toContain('(root): Unrecognized key: "rulez"');
+  });
+
+  test("defaults PORT to 8790 and rejects a bad PORT", () => {
+    expect(parseConfig(YAML, ENV).port).toBe(8790);
+    expect(problems(YAML, { ...ENV, PORT: "99999" })).toContain('PORT "99999" is not a valid port');
+  });
+
+  test("rejects triggers that send to their own agent or share a name", () => {
+    const yaml = `
+agents:
+  - { name: grok-bot, description: x, delivery: pull }
+  - { name: muse, description: y, delivery: pull }
+triggers:
+  - { name: t, when: { agent: muse, event: e }, send: { to: muse, instructions: hi } }
+  - { name: t, when: { agent: muse, event: f }, send: { to: grok-bot, instructions: hi } }
+`;
+    const p = problems(yaml, { ...ENV, BRIDGE_TOKEN_MUSE: "m".repeat(32) });
+    expect(p).toContain(`trigger "t": an agent can't send a task to itself`);
+    expect(p).toContain(`trigger "t" is defined more than once`);
+  });
+
+  test("flags placeholders it can't render, including filters", () => {
+    const p = problems(YAML.replace("{{ event.details }}", "{{ event.details | upper }}"));
+    expect(p).toContain('trigger "bug-to-claude": unknown placeholder {{event.details | upper}}');
+  });
+
+  test("an empty file names the missing agents list", () => {
+    expect(problems("").join("\n")).toContain("agents");
+  });
+});
+
+describe("loadConfig", () => {
+  test("names a missing config file", async () => {
+    await expect(loadConfig({ ...ENV, BRIDGE_CONFIG: "/nonexistent/bridge.yaml" })).rejects.toThrow(
+      "config file not found: /nonexistent/bridge.yaml",
+    );
   });
 });

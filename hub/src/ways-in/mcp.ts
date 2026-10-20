@@ -3,7 +3,7 @@ import { BridgeError } from "../core/errors";
 import { frameTask } from "../core/framing";
 import type { BridgeService } from "../core/service";
 import type { BridgeConfig, Task } from "../core/types";
-import { clip, log } from "../log";
+import { clip, errorName, log } from "../log";
 import type { AgentResolver } from "./auth";
 import { jsonBodyLimit } from "./limits";
 import { type JsonRpcRequest, parseRequest, rpcError, rpcResult } from "./jsonrpc";
@@ -227,7 +227,7 @@ export function mcpRoutes(service: BridgeService, config: BridgeConfig, resolveA
     try {
       return c.json(handle(service, agent, req));
     } catch (err) {
-      log("error", "mcp_internal_error", { error: err instanceof Error ? err.message : String(err) });
+      log("error", "mcp_internal_error", { error: errorName(err) });
       return c.json(rpcError(req.id, -32603, "Internal error"));
     }
   });

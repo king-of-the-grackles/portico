@@ -57,6 +57,8 @@ export function testEnv(extra: Record<string, string> = {}): Record<string, stri
     BRIDGE_TOKEN_CLAUDE_CODE: TOKENS["claude-code"],
     BRIDGE_TOKEN_MUSE: TOKENS.muse,
     BRIDGE_TOKEN_CODEX: TOKENS.codex,
+    BRIDGE_SIGNING_SECRET: "test-signing-secret-0123456789abcdef",
+    BRIDGE_ADMIN_PASSWORD: "test-admin-password",
     ...extra,
   };
 }

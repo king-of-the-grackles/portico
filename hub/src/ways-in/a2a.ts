@@ -3,7 +3,7 @@ import type { Context } from "hono";
 import { BridgeError } from "../core/errors";
 import type { BridgeService } from "../core/service";
 import type { AgentConfig, BridgeConfig, Task, TaskStatus } from "../core/types";
-import { clip, log } from "../log";
+import { clip, errorName, log } from "../log";
 import type { AgentResolver } from "./auth";
 import { jsonBodyLimit } from "./limits";
 import { type JsonRpcId, type JsonRpcRequest, parseRequest, rpcError, rpcResult } from "./jsonrpc";
@@ -181,7 +181,7 @@ export function a2aRoutes(service: BridgeService, config: BridgeConfig, resolveA
     try {
       return c.json(handle(service, caller, target.name, req));
     } catch (err) {
-      log("error", "a2a_internal_error", { error: err instanceof Error ? err.message : String(err) });
+      log("error", "a2a_internal_error", { error: errorName(err) });
       return c.json(rpcError(req.id ?? null, -32603, "Internal error"));
     }
   });

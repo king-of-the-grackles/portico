@@ -42,6 +42,13 @@ export interface Limits {
   historyDays: number;
 }
 
+export interface NtfyConfig {
+  /** ntfy server base URL, without a trailing slash. */
+  url: string;
+  topic: string;
+  token: string | null;
+}
+
 export interface BridgeConfig {
   agents: AgentConfig[];
   rules: RuleConfig[];
@@ -53,6 +60,11 @@ export interface BridgeConfig {
   tokens: Record<string, string>;
   dbPath: string;
   port: number;
+  /** HMAC key for approval links and hub page sessions. */
+  signingSecret: string;
+  adminPassword: string;
+  /** Null when BRIDGE_NTFY_TOPIC isn't set: no pushes are sent. */
+  ntfy: NtfyConfig | null;
 }
 
 export interface Task {

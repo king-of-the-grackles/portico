@@ -11,6 +11,8 @@ export function buildApp(service: BridgeService, config: BridgeConfig): Hono {
   const app = new Hono();
   const resolveAgent = makeAgentResolver(config);
 
+  // Clients and proxies that probe the root get a 200, not a 404. Reveals no version, agents or tasks.
+  app.get("/", (c) => c.json({ openapi: "/api/openapi.json", health: "/healthz" }));
   app.get("/healthz", (c) => c.json({ ok: true }));
   const openApi = openApiDocument(config);
   app.get("/api/openapi.json", (c) => c.json(openApi));

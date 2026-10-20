@@ -2,7 +2,7 @@ import { buildApp } from "./app";
 import { BridgeService } from "./core/service";
 import type { BridgeConfig, Notice } from "./core/types";
 import { openDb, Store } from "./db";
-import { log } from "./log";
+import { errorName, log } from "./log";
 
 export interface RunningServer {
   port: number;
@@ -35,7 +35,7 @@ export function startServer(
       const expired = service.expireDue();
       if (expired.length > 0) log("info", "tasks_expired", { count: expired.length });
     } catch (err) {
-      log("error", "expiry_sweep_failed", { error: err instanceof Error ? err.message : String(err) });
+      log("error", "expiry_sweep_failed", { error: errorName(err) });
     }
   };
   const historySweep = () => {
@@ -43,7 +43,7 @@ export function startServer(
       const deleted = service.deleteOldHistory();
       if (deleted.tasks > 0 || deleted.events > 0) log("info", "history_pruned", deleted);
     } catch (err) {
-      log("error", "history_prune_failed", { error: err instanceof Error ? err.message : String(err) });
+      log("error", "history_prune_failed", { error: errorName(err) });
     }
   };
   expireSweep();
@@ -53,6 +53,9 @@ export function startServer(
 
   const port = server.port as number;
   log("info", "bridge_started", { port, agents: config.agents.length, public_url: config.publicUrl });
+  if (!config.ntfy) {
+         log("warn", "ntfy_disabled", { note: "BRIDGE_NTFY_TOPIC is not set; approvals happen on the hub page only" });
+       }
 
   return {
     port,

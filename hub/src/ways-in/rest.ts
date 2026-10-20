@@ -5,7 +5,7 @@ import { z } from "zod";
 import { BridgeError, HTTP_STATUS } from "../core/errors";
 import type { BridgeService } from "../core/service";
 import type { BridgeConfig } from "../core/types";
-import { log } from "../log";
+import { clip, errorName, log } from "../log";
 import type { AgentResolver } from "./auth";
 import { jsonBodyLimit } from "./limits";
 import { agentView, eventView, inboxTaskView, taskView } from "./views";
@@ -32,7 +32,7 @@ export function handleError(err: unknown, c: Context): Response {
     const message = err.issues.map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`).join("; ");
     return c.json({ error: "bad_request", message }, 400);
   }
-  log("error", "unhandled_error", { error: err instanceof Error ? err.message : String(err) });
+  log("error", "unhandled_error", { error: errorName(err), path: clip(c.req.path) });
   return c.json({ error: "internal", message: "Something went wrong." }, 500);
 }
 

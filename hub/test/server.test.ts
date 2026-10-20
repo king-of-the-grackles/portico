@@ -51,6 +51,8 @@ describe("example config", () => {
       BRIDGE_TOKEN_GROK_BOT: "g".repeat(48),
       BRIDGE_TOKEN_MUSE: "m".repeat(48),
       BRIDGE_TOKEN_CODEX: "x".repeat(48),
+      BRIDGE_SIGNING_SECRET: "s".repeat(48),
+      BRIDGE_ADMIN_PASSWORD: "a".repeat(16),
     };
     expect(parseConfig(yaml, env).agents).toHaveLength(4);
   });

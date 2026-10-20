@@ -1,7 +1,7 @@
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { unknownPlaceholders } from "./core/templates";
-import type { BridgeConfig, Limits } from "./core/types";
+import type { BridgeConfig, Limits, NtfyConfig } from "./core/types";
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {
@@ -19,15 +19,22 @@ export const DEFAULT_LIMITS: Limits = {
   historyDays: 30,
 };
 
+/** Not 8787 (Claude Code's fakechat channel demo) or 8788 (the Channels webhook example). */
+export const DEFAULT_PORT = 8790;
+
 const AGENT_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const MIN_TOKEN_LENGTH = 24;
+const MIN_SECRET_LENGTH = 32;
+const MIN_PASSWORD_LENGTH = 12;
+const NTFY_TOPIC = /^[A-Za-z0-9_-]{20,64}$/;
 
 const positiveInt = z.number().int().positive();
 
-const FileSchema = z.object({
+// Strict objects everywhere: an unknown key (usually a typo) is an error, not silently ignored.
+const FileSchema = z.strictObject({
   agents: z
     .array(
-      z.object({
+      z.strictObject({
         name: z.string(),
         description: z.string(),
         delivery: z.enum(["push", "pull"]),
@@ -35,19 +42,19 @@ const FileSchema = z.object({
     )
     .min(1, "at least one agent is required"),
   rules: z
-    .array(z.object({ from: z.string(), to: z.string(), action: z.enum(["allow", "ask", "block"]) }))
+    .array(z.strictObject({ from: z.string(), to: z.string(), action: z.enum(["allow", "ask", "block"]) }))
     .default([]),
   triggers: z
     .array(
-      z.object({
+      z.strictObject({
         name: z.string().min(1),
-        when: z.object({ agent: z.string(), event: z.string().min(1) }),
-        send: z.object({ to: z.string(), instructions: z.string().min(1) }),
+        when: z.strictObject({ agent: z.string(), event: z.string().min(1) }),
+        send: z.strictObject({ to: z.string(), instructions: z.string().min(1) }),
       }),
     )
     .default([]),
   limits: z
-    .object({
+    .strictObject({
       task_expiry_hours: positiveInt.optional(),
       tasks_per_hour_per_agent: positiveInt.optional(),
       events_per_hour_per_agent: positiveInt.optional(),
@@ -62,6 +69,32 @@ type Env = Record<string, string | undefined>;
 
 export function tokenEnvName(agent: string): string {
   return `BRIDGE_TOKEN_${agent.toUpperCase().replace(/-/g, "_")}`;
+}
+
+function parseNtfy(env: Env, problems: string[]): NtfyConfig | null {
+  const topic = env.BRIDGE_NTFY_TOPIC?.trim();
+  if (!topic) return null;
+  if (!NTFY_TOPIC.test(topic)) {
+    problems.push(
+      "BRIDGE_NTFY_TOPIC must be 20–64 letters, digits, - or _, because anyone who knows a public topic can read it",
+    );
+  }
+  const url = (env.BRIDGE_NTFY_URL?.trim() || "https://ntfy.sh").replace(/\/+$/, "");
+  let validUrl = false;
+  try {
+    validUrl = ["http:", "https:"].includes(new URL(url).protocol);
+  } catch {
+    validUrl = false;
+  }
+  if (!validUrl) problems.push(`BRIDGE_NTFY_URL "${url}" is not a valid http(s) URL`);
+  return { url, topic, token: env.BRIDGE_NTFY_TOKEN?.trim() || null };
+}
+
+function requireSecret(env: Env, name: string, minLength: number, problems: string[]): string {
+  const value = env[name]?.trim() ?? "";
+  if (!value) problems.push(`missing ${name}`);
+  else if (value.length < minLength) problems.push(`${name} must be at least ${minLength} characters`);
+  return value;
 }
 
 export function parseConfig(yamlText: string, env: Env): BridgeConfig {
@@ -143,8 +176,12 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
     }
   }
 
-  const port = env.PORT ? Number(env.PORT) : 8787;
+  const port = env.PORT ? Number(env.PORT) : DEFAULT_PORT;
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push(`PORT "${env.PORT}" is not a valid port`);
+
+  const signingSecret = requireSecret(env, "BRIDGE_SIGNING_SECRET", MIN_SECRET_LENGTH, problems);
+  const adminPassword = requireSecret(env, "BRIDGE_ADMIN_PASSWORD", MIN_PASSWORD_LENGTH, problems);
+  const ntfy = parseNtfy(env, problems);
 
   if (problems.length > 0) throw new ConfigError(problems);
 
@@ -165,6 +202,9 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
     tokens,
     dbPath: env.BRIDGE_DB_PATH?.trim() || "./bridge.db",
     port,
+    signingSecret,
+    adminPassword,
+    ntfy,
   };
 }
 
