@@ -1,6 +1,6 @@
 # agent-bridge (working name)
 
-A small self-hosted hub that lets personal AI agents from different companies (Claude Code, Grok Bot, Meta Muse, ChatGPT/Codex) hand each other tasks, with rules you control. Pairs of agents you haven't allowed are blocked; tasks on pairs set to `ask` wait for approval. The approval push and page come in a later release; until then those tasks expire after `task_expiry_hours`.
+A small self-hosted hub that lets personal AI agents from different companies (Claude Code, Grok Bot, Meta Muse, ChatGPT/Codex) hand each other tasks, with rules you control. Pairs of agents you haven't allowed are blocked. Tasks on pairs set to `ask` wait for your approval, which arrives as a phone push with Approve and Deny buttons, and on the hub page.
 
 Design: [docs/superpowers/specs/2026-10-19-agent-bridge-design.md](docs/superpowers/specs/2026-10-19-agent-bridge-design.md). Status: early development.
 
@@ -26,13 +26,44 @@ Design: [docs/superpowers/specs/2026-10-19-agent-bridge-design.md](docs/superpow
 
 `BRIDGE_PUBLIC_URL` must be the public https address agents will use. Agent cards and the OpenAPI `servers` entry embed it. `http://localhost:8790` is only for local testing.
 
+## Environment
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `BRIDGE_PUBLIC_URL` | yes | The hub's public https address. Agent cards, the OpenAPI document and approval links use it. |
+| `BRIDGE_TOKEN_<NAME>` | one per agent | The agent's bearer token, at least 24 characters. `<NAME>` is the agent name in upper case with `-` turned into `_`. |
+| `BRIDGE_SIGNING_SECRET` | yes | Signs approval links and hub page sessions; at least 32 characters. Changing it signs everyone out and voids open links. |
+| `BRIDGE_ADMIN_PASSWORD` | yes | The hub page password; at least 12 characters. |
+| `BRIDGE_NTFY_TOPIC` | no | Turns on phone pushes. Use 20–64 random letters, digits, `-` or `_`: anyone who knows a public topic can read it. |
+| `BRIDGE_NTFY_URL` | no | The ntfy server. Default `https://ntfy.sh`. |
+| `BRIDGE_NTFY_TOKEN` | no | An ntfy access token, for a protected topic or your own server. |
+| `BRIDGE_DB_PATH` | no | Default `./bridge.db`. |
+| `BRIDGE_CONFIG` | no | Default `./bridge.yaml`. |
+| `PORT` | no | Default `8790`. |
+
+## Approvals
+
+When a task is sent between a pair set to `ask`, the hub pushes it to your ntfy topic with Approve, Deny and Open buttons. To get the pushes, install the ntfy app (iOS, Android or web) and subscribe to your topic; if you set `BRIDGE_NTFY_URL`, subscribe on that server. Tapping a button answers the hub directly. Opening a link in a browser shows the task and a confirm button, and only that button acts.
+
+Without `BRIDGE_NTFY_TOPIC`, no pushes are sent; approve tasks on the hub page instead.
+
+## Hub page
+
+Open `<BRIDGE_PUBLIC_URL>/hub` and sign in with `BRIDGE_ADMIN_PASSWORD`. The page shows:
+- tasks waiting for approval
+- Claude Code permission prompts relayed by the plugin
+- each agent's last check-in
+- history, filterable by agent and status
+
 ## Ways in
 
 | Way in | Where | For |
 |---|---|---|
 | Web API | `/api/*`, described at `/api/openapi.json` | Any agent that can make web requests (Muse's Custom Connector, Grok Bot's computer) |
-| MCP | `/mcp` | MCP clients (Claude Code, Codex, Cursor) |
-| A2A | `/a2a/<agent>/.well-known/agent-card.json` | A2A clients (Grok Bot) |
+| MCP | `/mcp` | MCP clients (Claude Code, Codex, Cursor, Grok Bot) |
+| A2A | `/a2a/<agent>/.well-known/agent-card.json` | A2A clients |
+| Live stream | `GET /api/stream` (server-sent events) | Push agents (the Claude Code plugin): nudges when work arrives, and answers to permission prompts |
+| Permission relay | `POST /api/permission-requests` | Push agents: forwards Claude Code permission prompts to the push and the hub page |
 
 ## Tests
 

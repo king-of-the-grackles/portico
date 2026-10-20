@@ -104,6 +104,8 @@ export function streamRoutes(deps: StreamRouteDeps): Hono<AgentEnv> {
       const disconnect = streams.connect(agent, conn);
       log("info", "stream_opened", { agent });
       try {
+        // Flushes the response headers now; otherwise a client's fetch() waits for the first event or heartbeat.
+        await stream.write(": connected\n\n");
         if (service.hasWaiting(agent)) conn.send("nudge", {});
         deps.onConnect?.(agent);
         while (open) {
