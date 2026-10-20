@@ -17,7 +17,7 @@ describe("OpenAPI document", () => {
     expect(doc.servers).toEqual([{ url: "https://bridge.test" }]);
   });
 
-  test("every documented operation exists and requires a token", async () => {
+  test("every documented operation requires a token", async () => {
     const { app, config } = makeApp();
     const doc = openApiDocument(config);
     const seen: string[] = [];
@@ -36,5 +36,25 @@ describe("OpenAPI document", () => {
       "POST /api/tasks",
       "POST /api/tasks/{id}/finish",
     ]);
+  });
+
+  test("every documented operation is a real route", async () => {
+    const { call, config } = makeApp();
+    const doc = openApiDocument(config);
+    for (const [path, operations] of Object.entries(doc.paths)) {
+      for (const method of Object.keys(operations)) {
+        const res = await call("grok-bot", method.toUpperCase(), path.replace("{id}", "some-id"), method === "post" ? {} : undefined);
+        const body = (await res.json()) as { message?: string };
+        expect(`${method} ${path}: ${body.message}`).not.toBe(`${method} ${path}: No such endpoint.`);
+      }
+    }
+  });
+
+  test("documents the idempotency key on sendTask", () => {
+    const doc = openApiDocument(testConfig()) as unknown as {
+      paths: { "/api/tasks": { post: { requestBody: { content: { "application/json": { schema: { properties: Record<string, { maxLength?: number }> } } } } } } };
+    };
+    const props = doc.paths["/api/tasks"].post.requestBody.content["application/json"].schema.properties;
+    expect(props.idempotency_key?.maxLength).toBe(100);
   });
 });

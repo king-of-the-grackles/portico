@@ -36,6 +36,9 @@ export const TOOLS = [
       properties: {
         to: str("Name of the receiving agent (from list_agents)."),
         instructions: str("What the receiving agent should do, in plain text."),
+        idempotency_key: str(
+          "Optional. A key you choose, new for each task. Send the same key when retrying, so a retry doesn't create a second task.",
+        ),
       },
       required: ["to", "instructions"],
       additionalProperties: false,
@@ -113,7 +116,13 @@ function callTool(service: BridgeService, agent: string, name: string, args: Rec
       return json({ agents: service.listAgents(agent).map(agentView) });
     case "send_task":
       return json({
-        task: taskView(service.sendTask(agent, { to: arg("to") ?? "", instructions: arg("instructions") ?? "" })),
+        task: taskView(
+          service.sendTask(agent, {
+            to: arg("to") ?? "",
+            instructions: arg("instructions") ?? "",
+            idempotencyKey: arg("idempotency_key"),
+          }),
+        ),
       });
     case "check_inbox": {
       const { tasks, results } = service.checkInbox(agent);

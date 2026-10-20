@@ -140,4 +140,12 @@ describe("MCP endpoint details", () => {
   test("doesn't offer a server-to-client stream", async () => {
     expect((await ctx.app.request("/mcp")).status).toBe(405);
   });
+
+  test("send_task accepts an idempotency key", async () => {
+    const client = await connect("codex");
+    const args = { to: "grok-bot", instructions: "Look this up", idempotency_key: "mcp-retry-1" };
+    const first = JSON.parse(text(await client.callTool({ name: "send_task", arguments: args })));
+    const second = JSON.parse(text(await client.callTool({ name: "send_task", arguments: args })));
+    expect(second.task.id).toBe(first.task.id);
+  });
 });

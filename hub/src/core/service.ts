@@ -49,26 +49,44 @@ export class BridgeService {
     return this.lastCheckIns.get(agent) ?? null;
   }
 
-  sendTask(caller: string, input: { to: string; instructions: string }): Task {
+  sendTask(caller: string, input: { to: string; instructions: string; idempotencyKey?: string }): Task {
     this.requireText("instructions", input.instructions);
+    const key = this.optionalIdempotencyKey(input.idempotencyKey);
+    if (key !== null) {
+      const existing = this.store.findByIdempotencyKey(caller, key);
+      if (existing) {
+        if (existing.toAgent !== input.to || existing.instructions !== input.instructions) {
+          throw new BridgeError(
+            "bad_request",
+            "idempotency_key was already used for a different task. Use a new key for a new task.",
+          );
+        }
+        return existing; // a retry: no new task, and it doesn't count against the rate limit
+      }
+    }
     this.requireReceiver(caller, input.to);
     this.requireTaskBudget(caller, 1);
-    return this.createTask(caller, input.to, input.instructions, { eventId: null, triggerName: null });
+    return this.createTask(caller, input.to, input.instructions, {
+      eventId: null,
+      triggerName: null,
+      idempotencyKey: key,
+    });
   }
 
   checkInbox(caller: string): { tasks: Task[]; results: Task[] } {
     const at = this.iso();
-    this.lastCheckIns.set(caller, at);
-    return this.store.transaction(() => {
-      const tasks = this.store.listQueuedFor(caller).map((task) => {
-        this.log("task_status", { task_id: task.id, status: "working" });
-        return this.store.updateTask(task.id, { status: "working", updatedAt: at });
-      });
+    const outcome = this.store.transaction(() => {
+      const tasks = this.store
+        .listQueuedFor(caller)
+        .map((task) => this.store.updateTask(task.id, { status: "working", updatedAt: at }));
       const results = this.store
         .listUnseenResultsFor(caller)
         .map((task) => this.store.updateTask(task.id, { senderNotifiedAt: at }));
       return { tasks, results };
     });
+    this.lastCheckIns.set(caller, at);
+    for (const task of outcome.tasks) this.log("task_status", { task_id: task.id, status: "working" });
+    return outcome;
   }
 
   finishTask(caller: string, input: { taskId: string; result?: string; failedReason?: string }): Task {
@@ -139,7 +157,7 @@ export class BridgeService {
       this.store.insertEvent(event);
       this.log("event_reported", { event_id: event.id, agent: caller, name: event.name, triggers: planned.length });
       const tasks = planned.map(({ trigger, instructions }) =>
-        this.createTask(caller, trigger.send.to, instructions, { eventId: event.id, triggerName: trigger.name }),
+        this.createTask(caller, trigger.send.to, instructions, { eventId: event.id, triggerName: trigger.name, idempotencyKey: null }),
       );
       return { event, tasks };
     });
@@ -182,12 +200,13 @@ export class BridgeService {
     );
   }
 
+  // Deletes finished tasks even if the sender never read the result: history_days bounds what the hub keeps.
   deleteOldHistory(): { tasks: number; events: number } {
     const cutoff = this.iso(-this.config.limits.historyDays * DAY_MS);
     return { tasks: this.store.deleteFinishedBefore(cutoff), events: this.store.deleteEventsBefore(cutoff) };
   }
 
-  // ---- helpers (also used by the event, approval and expiry methods in Task 5) ----
+  // ---- helpers ----
 
   private iso(offsetMs = 0): string {
     return new Date(this.now().getTime() + offsetMs).toISOString();
@@ -198,6 +217,14 @@ export class BridgeService {
       throw new BridgeError("bad_request", `${field} must be a non-empty string.`);
     }
     this.requireSize(field, value);
+  }
+
+  private optionalIdempotencyKey(value: unknown): string | null {
+    if (value === undefined || value === null || value === "") return null;
+    if (typeof value !== "string" || value.length > 100 || /[\u0000-\u001f\u007f]/.test(value)) {
+      throw new BridgeError("bad_request", "idempotency_key must be a string of up to 100 printable characters.");
+    }
+    return value;
   }
 
   private requireSize(field: string, value: string): void {
@@ -237,7 +264,7 @@ export class BridgeService {
     from: string,
     to: string,
     instructions: string,
-    origin: { eventId: string | null; triggerName: string | null },
+    origin: { eventId: string | null; triggerName: string | null; idempotencyKey: string | null },
   ): Task {
     const at = this.iso();
     const parent = this.store.latestWorkingFor(from);
@@ -281,6 +308,7 @@ export class BridgeService {
       createdAt: at,
       updatedAt: at,
       expiresAt: this.iso(this.config.limits.taskExpiryHours * HOUR_MS),
+      idempotencyKey: origin.idempotencyKey,
     };
     this.store.insertTask(task);
     this.log("task_created", {

@@ -17,7 +17,8 @@ const SCHEMA = [
     sender_notified_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
+    expires_at TEXT NOT NULL,
+    idempotency_key TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS tasks_to_status ON tasks (to_agent, status)`,
   `CREATE INDEX IF NOT EXISTS tasks_from_created ON tasks (from_agent, created_at)`,
@@ -32,12 +33,24 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS events_agent_created ON events (agent, created_at)`,
 ];
 
+// Created after addMissingColumns, because older databases get the column added there.
+const IDEMPOTENCY_INDEX = `CREATE UNIQUE INDEX IF NOT EXISTS tasks_idempotency
+  ON tasks (from_agent, idempotency_key) WHERE idempotency_key IS NOT NULL`;
+
+/** Databases created before a column existed get it added here. */
+function addMissingColumns(db: Database): void {
+  const columns = (db.query("PRAGMA table_info(tasks)").all() as { name: string }[]).map((column) => column.name);
+  if (!columns.includes("idempotency_key")) db.run("ALTER TABLE tasks ADD COLUMN idempotency_key TEXT");
+}
+
 export function openDb(path: string): Database {
   // strict: true lets us bind { id } to $id without writing the "$" prefix in JS.
   const db = new Database(path, { create: true, strict: true });
   db.run("PRAGMA journal_mode = WAL");
   db.run("PRAGMA busy_timeout = 5000");
   for (const statement of SCHEMA) db.run(statement);
+  addMissingColumns(db);
+  db.run(IDEMPOTENCY_INDEX);
   return db;
 }
 
@@ -57,6 +70,7 @@ interface TaskRow {
   created_at: string;
   updated_at: string;
   expires_at: string;
+  idempotency_key: string | null;
 }
 
 interface EventRow {
@@ -86,6 +100,7 @@ function toTask(row: TaskRow): Task {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at,
+    idempotencyKey: row.idempotency_key,
   };
 }
 
@@ -110,6 +125,7 @@ function taskBindings(t: Task): Bindings {
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     expiresAt: t.expiresAt,
+    idempotencyKey: t.idempotencyKey,
   };
 }
 
@@ -137,9 +153,9 @@ export class Store {
     this.db
       .query(
         `INSERT INTO tasks (id, from_agent, to_agent, instructions, status, result, reason, parent_task_id,
-           chain_length, event_id, trigger_name, sender_notified_at, created_at, updated_at, expires_at)
+           chain_length, event_id, trigger_name, sender_notified_at, created_at, updated_at, expires_at, idempotency_key)
          VALUES ($id, $fromAgent, $toAgent, $instructions, $status, $result, $reason, $parentTaskId,
-           $chainLength, $eventId, $triggerName, $senderNotifiedAt, $createdAt, $updatedAt, $expiresAt)`,
+           $chainLength, $eventId, $triggerName, $senderNotifiedAt, $createdAt, $updatedAt, $expiresAt, $idempotencyKey)`,
       )
       .run(taskBindings(task));
   }
@@ -150,7 +166,8 @@ export class Store {
   }
 
   updateTask(id: string, changes: TaskChanges): Task {
-    const keys = Object.keys(changes) as (keyof TaskChanges)[];
+    // Skip undefined values: an optional field left out must not clear the column.
+    const keys = (Object.keys(changes) as (keyof TaskChanges)[]).filter((key) => changes[key] !== undefined);
     if (keys.length > 0) {
       const assignments = keys.map((key) => `${CHANGE_COLUMNS[key]} = $${key}`).join(", ");
       const bindings: Bindings = { id };
@@ -160,6 +177,13 @@ export class Store {
     const task = this.getTask(id);
     if (!task) throw new Error(`task ${id} not found`);
     return task;
+  }
+
+  findByIdempotencyKey(fromAgent: string, key: string): Task | null {
+    const row = this.db
+      .query("SELECT * FROM tasks WHERE from_agent = $fromAgent AND idempotency_key = $key")
+      .get({ fromAgent, key }) as TaskRow | null;
+    return row ? toTask(row) : null;
   }
 
   listQueuedFor(agent: string): Task[] {

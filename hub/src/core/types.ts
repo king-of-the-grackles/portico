@@ -83,6 +83,8 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   expiresAt: string;
+  /** Optional key from the sender; a repeat send with the same key returns this task (spec §8). */
+  idempotencyKey: string | null;
 }
 
 export interface BridgeEvent {

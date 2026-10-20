@@ -137,6 +137,12 @@ export function openApiDocument(config: BridgeConfig): OpenApiDocument {
             properties: {
               to: { type: "string", description: "The receiving agent's name (from listAgents)." },
               instructions: { type: "string", description: "What the receiving agent should do." },
+              idempotency_key: {
+                type: "string",
+                maxLength: 100,
+                description:
+                  "Optional. A new key for each task; send the same key when retrying, so a retry doesn't create a second task.",
+              },
             },
           }),
           responses: {

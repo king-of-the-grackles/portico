@@ -241,3 +241,57 @@ describe("chains", () => {
     });
   });
 });
+
+describe("sendTask with an idempotency key", () => {
+  const send = (key?: string, to = "claude-code", instructions = "Add rate limiting") => ({
+    to,
+    instructions,
+    idempotencyKey: key,
+  });
+
+  test("a retry with the same key returns the first task and creates nothing", () => {
+    const { service, notices } = makeService();
+    const first = service.sendTask("grok-bot", send("k-1"));
+    const again = service.sendTask("grok-bot", send("k-1"));
+    expect(again).toEqual(first);
+    expect(first.idempotencyKey).toBe("k-1");
+    expect(notices).toHaveLength(1);
+  });
+
+  test("the same key for a different task is refused", () => {
+    const { service } = makeService();
+    service.sendTask("grok-bot", send("k-1", "claude-code", "one"));
+    expect(errorCode(() => service.sendTask("grok-bot", send("k-1", "claude-code", "two")))).toBe("bad_request");
+    expect(errorCode(() => service.sendTask("grok-bot", send("k-1", "muse", "one")))).toBe("bad_request");
+  });
+
+  test("keys are per sender", () => {
+    const { service } = makeService();
+    const a = service.sendTask("grok-bot", send("k-1"));
+    const b = service.sendTask("muse", send("k-1"));
+    expect(a.id).not.toBe(b.id);
+  });
+
+  test("a retry doesn't count against the rate limit", () => {
+    const { service } = makeService(testConfig(`${BASE_YAML}\nlimits:\n  tasks_per_hour_per_agent: 1\n`));
+    const first = service.sendTask("grok-bot", send("k-1"));
+    expect(service.sendTask("grok-bot", send("k-1")).id).toBe(first.id);
+    expect(errorCode(() => service.sendTask("grok-bot", send(undefined, "claude-code", "another")))).toBe(
+      "rate_limited",
+    );
+  });
+
+  test("rejects a key that is too long or holds control characters", () => {
+    const { service } = makeService();
+    expect(errorCode(() => service.sendTask("grok-bot", send("k".repeat(101))))).toBe("bad_request");
+    expect(errorCode(() => service.sendTask("grok-bot", send("bad\nkey")))).toBe("bad_request");
+    expect(errorCode(() => service.sendTask("grok-bot", send("k".repeat(100))))).toBeNull();
+  });
+
+  test("tasks sent without a key, or created by triggers, have no key", () => {
+    const { service } = makeService();
+    expect(service.sendTask("grok-bot", send()).idempotencyKey).toBeNull();
+    const { tasks } = service.reportEvent("muse", { name: "bug_report_received", details: "d" });
+    expect(tasks[0]?.idempotencyKey).toBeNull();
+  });
+});

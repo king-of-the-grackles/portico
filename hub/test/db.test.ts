@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +23,7 @@ function task(overrides: Partial<Task> = {}): Task {
     createdAt: "2026-10-20T12:00:00.000Z",
     updatedAt: "2026-10-20T12:00:00.000Z",
     expiresAt: "2026-10-21T12:00:00.000Z",
+    idempotencyKey: null,
     ...overrides,
   };
 }
@@ -130,5 +132,59 @@ describe("openDb on a file", () => {
     new Store(openDb(path)).insertTask(task());
     const reopened = new Store(openDb(path));
     expect(reopened.getTask("t1")?.instructions).toBe("do it");
+  });
+});
+
+describe("Store: idempotency keys and updates", () => {
+  test("finds a task by sender and idempotency key", () => {
+    store.insertTask(task({ idempotencyKey: "k1" }));
+    expect(store.findByIdempotencyKey("grok-bot", "k1")?.id).toBe("t1");
+    expect(store.findByIdempotencyKey("muse", "k1")).toBeNull();
+    expect(store.findByIdempotencyKey("grok-bot", "k2")).toBeNull();
+  });
+
+  test("an idempotency key is unique per sender, and tasks without a key don't collide", () => {
+    store.insertTask(task({ idempotencyKey: "k1" }));
+    expect(() => store.insertTask(task({ id: "t2", idempotencyKey: "k1" }))).toThrow();
+    store.insertTask(task({ id: "t3", fromAgent: "muse", idempotencyKey: "k1" }));
+    store.insertTask(task({ id: "t4" }));
+    store.insertTask(task({ id: "t5" }));
+    expect(store.getTask("t5")?.idempotencyKey).toBeNull();
+  });
+
+  test("updateTask ignores undefined values instead of clearing the column", () => {
+    store.insertTask(task({ reason: "original reason" }));
+    const updated = store.updateTask("t1", { reason: undefined, status: "failed" });
+    expect(updated.reason).toBe("original reason");
+    expect(updated.status).toBe("failed");
+  });
+
+  test("updateTask on a missing task throws", () => {
+    expect(() => store.updateTask("missing", { status: "done" })).toThrow("task missing not found");
+  });
+});
+
+describe("openDb migration", () => {
+  test("adds idempotency_key to a database created before it existed", () => {
+    const path = join(tmpdir(), `bridge-migrate-${crypto.randomUUID()}.db`);
+    const old = new Database(path, { create: true, strict: true });
+    old.run(`CREATE TABLE tasks (
+      id TEXT PRIMARY KEY, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL, instructions TEXT NOT NULL,
+      status TEXT NOT NULL, result TEXT, reason TEXT, parent_task_id TEXT, chain_length INTEGER NOT NULL,
+      event_id TEXT, trigger_name TEXT, sender_notified_at TEXT, created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL, expires_at TEXT NOT NULL)`);
+    old.run(`INSERT INTO tasks VALUES ('old', 'grok-bot', 'claude-code', 'hi', 'queued', NULL, NULL, NULL, 1,
+      NULL, NULL, NULL, '2026-10-20T12:00:00.000Z', '2026-10-20T12:00:00.000Z', '2026-10-21T12:00:00.000Z')`);
+    old.close();
+    const db = openDb(path);
+    try {
+      const migrated = new Store(db);
+      expect(migrated.getTask("old")?.idempotencyKey).toBeNull();
+      migrated.insertTask(task({ id: "new", idempotencyKey: "k" }));
+      expect(migrated.findByIdempotencyKey("grok-bot", "k")?.id).toBe("new");
+    } finally {
+      db.close();
+      for (const suffix of ["", "-wal", "-shm"]) rmSync(`${path}${suffix}`, { force: true });
+    }
   });
 });

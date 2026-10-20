@@ -12,7 +12,7 @@ import { agentView, eventView, inboxTaskView, taskView } from "./views";
 
 type Env = { Variables: { agent: string } };
 
-const SendTaskBody = z.object({ to: z.string(), instructions: z.string() });
+const SendTaskBody = z.object({ to: z.string(), instructions: z.string(), idempotency_key: z.string().optional() });
 const FinishBody = z.object({ result: z.string().optional(), failed_reason: z.string().optional() });
 const EventBody = z.object({ name: z.string(), details: z.string().optional() });
 
@@ -56,7 +56,11 @@ export function restRoutes(service: BridgeService, config: BridgeConfig, resolve
 
   api.post("/tasks", async (c) => {
     const body = SendTaskBody.parse(await readJson(c));
-    const task = service.sendTask(c.get("agent"), { to: body.to, instructions: body.instructions });
+    const task = service.sendTask(c.get("agent"), {
+      to: body.to,
+      instructions: body.instructions,
+      idempotencyKey: body.idempotency_key,
+    });
     return c.json({ task: taskView(task) }, 201);
   });
 

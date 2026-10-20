@@ -112,4 +112,15 @@ describe("web API", () => {
     expect((await missing.json()).error).toBe("not_found");
     expect((await app.request("/healthz")).status).toBe(200);
   });
+
+  test("an idempotency key makes a retried send harmless", async () => {
+    const { call } = makeApp();
+    const body = { to: "claude-code", instructions: "Add rate limiting", idempotency_key: "retry-1" };
+    const first = await (await call("grok-bot", "POST", "/api/tasks", body)).json();
+    const second = await call("grok-bot", "POST", "/api/tasks", body);
+    expect(second.status).toBe(201);
+    expect((await second.json()).task.id).toBe(first.task.id);
+    const inbox = await (await call("claude-code", "GET", "/api/inbox")).json();
+    expect(inbox.tasks).toHaveLength(1);
+  });
 });
