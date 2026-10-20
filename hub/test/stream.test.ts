@@ -199,4 +199,24 @@ describe("GET /api/stream", () => {
       await second.cancel();
     }
   });
+
+  test("opens with a ': connected' comment, then sends ': ping' heartbeats", async () => {
+    const { call } = makeApp();
+    const res = await call("claude-code", "GET", "/api/stream");
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    try {
+      const deadline = Date.now() + 1000;
+      while (!text.includes(": ping") && Date.now() < deadline) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+    expect(text.startsWith(": connected\n\n")).toBe(true);
+    expect(text).toContain(": ping\n\n");
+  });
 });

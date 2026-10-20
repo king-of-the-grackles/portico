@@ -109,7 +109,9 @@ export function streamRoutes(deps: StreamRouteDeps): Hono<AgentEnv> {
         if (open && service.hasWaiting(agent)) conn.send("nudge", {});
         deps.onConnect?.(agent);
         while (open) {
-          await Promise.race([stream.sleep(heartbeatMs), ended]);
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          await Promise.race([new Promise<void>((resolve) => (timer = setTimeout(resolve, heartbeatMs))), ended]);
+          clearTimeout(timer);
           if (open) await stream.write(": ping\n\n").catch(() => end());
         }
       } catch (err) {
