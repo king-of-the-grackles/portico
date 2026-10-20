@@ -1,0 +1,12 @@
+{
+  "name": "agent-bridge",
+  "description": "Plugins for agent-bridge, a self-hosted hub where AI agents hand each other tasks.",
+  "owner": { "name": "agent-bridge contributors" },
+  "plugins": [
+    {
+      "name": "agent-bridge",
+      "source": "./plugin-claude-code",
+      "description": "Bridge tasks and permission prompts in a Claude Code session."
+    }
+  ]
+}
