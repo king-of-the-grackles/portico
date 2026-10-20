@@ -222,5 +222,14 @@ export async function loadConfig(env: Env = process.env): Promise<BridgeConfig> 
   const path = env.BRIDGE_CONFIG?.trim() || "./bridge.yaml";
   const file = Bun.file(path);
   if (!(await file.exists())) throw new ConfigError([`config file not found: ${path}`]);
-  return parseConfig(await file.text(), env);
+  let text: string;
+  try {
+    text = await file.text();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? "unknown error";
+    throw new ConfigError([
+      `config file ${path} can't be read (${code}). The hub runs as an unprivileged user in the Docker image; make the file readable to it.`,
+    ]);
+  }
+  return parseConfig(text, env);
 }
