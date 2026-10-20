@@ -175,6 +175,7 @@ export class BridgeService {
     const updated = this.store.updateTask(task.id, { status: "queued", updatedAt: this.iso() });
     this.log("task_status", { task_id: task.id, status: "queued", by: "approval" });
     this.notify({ kind: "queued", task: updated });
+    this.notify({ kind: "approval_decided", task: updated, outcome: "approved" });
     return updated;
   }
 
@@ -188,6 +189,7 @@ export class BridgeService {
     const updated = this.store.updateTask(task.id, { status: "denied", reason, updatedAt: this.iso() });
     this.log("task_status", { task_id: task.id, status: "denied", by: "approval" });
     this.notify({ kind: "result_ready", task: updated });
+    this.notify({ kind: "approval_decided", task: updated, outcome: "denied" });
     return updated;
   }
 
@@ -199,6 +201,7 @@ export class BridgeService {
         const updated = this.store.updateTask(task.id, { status: "expired", reason, updatedAt: at });
         this.log("task_status", { task_id: task.id, status: "expired", was: task.status });
         this.notify({ kind: "result_ready", task: updated });
+        if (task.status === "waiting_approval") this.notify({ kind: "approval_decided", task: updated, outcome: "expired" });
         return updated;
       }),
     );

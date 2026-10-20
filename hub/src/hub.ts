@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { Hono } from "hono";
 import { buildApp } from "./app";
-import { permissionPush } from "./approvals/messages";
+import { permissionAnsweredPush, permissionPush } from "./approvals/messages";
 import { makePusher, type Pusher } from "./approvals/ntfy";
 import { PermissionRelay, type PermissionRequest } from "./core/permissions";
 import { BridgeService } from "./core/service";
@@ -51,6 +51,17 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
   const relay = new PermissionRelay({
     maxTextKb: config.limits.maxTextKb,
     now: opts.now,
+    newId: opts.newId,
+    onAnswered: (request, behavior) => {
+      const fields = { agent: request.agent, request_id: request.requestId };
+      void push(permissionAnsweredPush(request, behavior))
+        .then((ok) => {
+          if (ok || config.ntfy) {
+            log(ok ? "info" : "warn", ok ? "permission_push_updated" : "permission_push_update_failed", fields);
+          }
+        })
+        .catch((err) => log("error", "permission_push_update_failed", { ...fields, error: errorName(err) }));
+    },
     deliver: (agent, requestId, behavior) => streams.sendPermissionAnswer(agent, requestId, behavior),
   });
   const onPermissionRequest = (request: PermissionRequest) => {

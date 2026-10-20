@@ -109,7 +109,9 @@ export interface BridgeEvent {
 export type Notice =
   | { kind: "queued"; task: Task }
   | { kind: "approval_needed"; task: Task }
-  | { kind: "result_ready"; task: Task };
+  | { kind: "result_ready"; task: Task }
+  /** A task that was waiting_approval got its outcome (by link, hub page or expiry). */
+  | { kind: "approval_decided"; task: Task; outcome: "approved" | "denied" | "expired" };
 
 export function isPushAgent(config: BridgeConfig, name: string): boolean {
   return config.agents.some((agent) => agent.name === name && agent.delivery === "push");

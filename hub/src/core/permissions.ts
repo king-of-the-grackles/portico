@@ -3,6 +3,8 @@ import { BridgeError } from "./errors";
 export type PermissionBehavior = "allow" | "deny";
 
 export interface PermissionRequest {
+  /** The hub's own unique ID for this prompt. Unlike requestId, which Claude Code can reuse, it never repeats. */
+  id: string;
   agent: string;
   requestId: string;
   toolName: string;
@@ -21,6 +23,9 @@ export interface PermissionRelayDeps {
   /** Sends an answer down the agent's live stream. Returns false if the agent isn't connected. */
   deliver: (agent: string, requestId: string, behavior: PermissionBehavior) => boolean;
   now?: () => Date;
+  newId?: () => string;
+  /** Called after the hub records an answer, whichever route it came from. */
+  onAnswered?: (request: PermissionRequest, behavior: PermissionBehavior) => void;
 }
 
 export const PERMISSION_TTL_MS = 3_600_000;
@@ -70,6 +75,7 @@ export class PermissionRelay {
     }
     const at = this.now();
     const request: PermissionRequest = {
+      id: (this.deps.newId ?? (() => crypto.randomUUID()))(),
       agent,
       requestId,
       toolName,
@@ -95,7 +101,9 @@ export class PermissionRelay {
     request.answer = behavior;
     request.answeredAt = this.now().toISOString();
     request.delivered = this.deps.deliver(agent, requestId, behavior);
-    return { ...request };
+    const answered = { ...request };
+    this.deps.onAnswered?.(answered, behavior);
+    return answered;
   }
 
   /**

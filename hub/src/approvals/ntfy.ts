@@ -18,6 +18,8 @@ export interface PushMessage {
   priority: 3 | 4;
   tags: string[];
   actions: PushAction[];
+  /** Messages sharing a sequence ID replace each other on clients that support updates. */
+  sequenceId?: string;
 }
 
 /** Sends a push. Resolves true when ntfy accepted it; never rejects. */
@@ -39,7 +41,12 @@ export function makePusher(
 
   return async (message) => {
     // JSON publishing to the server root carries UTF-8 titles (like "→") that header publishing can't.
-    const body = JSON.stringify({ topic: ntfy.topic, ...message });
+    const { sequenceId, ...fields } = message;
+    const body = JSON.stringify({
+      topic: ntfy.topic,
+      ...fields,
+      ...(sequenceId !== undefined ? { sequence_id: sequenceId } : {}),
+    });
     for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
       if (attempt > 0) await sleep(RETRY_DELAYS_MS[attempt - 1]!);
       try {

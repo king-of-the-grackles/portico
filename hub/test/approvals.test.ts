@@ -44,7 +44,7 @@ describe("approval links", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("Approved.");
     expect(ctx.service.findTask(task.id)?.status).toBe("queued");
-    expect(ctx.notices.at(-1)).toMatchObject({ kind: "queued" });
+    expect(ctx.notices.at(-2)).toMatchObject({ kind: "queued" });
     const again = await ctx.app.request(approvePath, { method: "POST" });
     expect(again.status).toBe(200);
     expect(await again.text()).toContain("no longer waiting for approval");

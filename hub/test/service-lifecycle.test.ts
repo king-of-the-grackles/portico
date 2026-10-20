@@ -65,7 +65,10 @@ describe("approveTask and denyTask", () => {
     notices.length = 0;
     const approved = service.approveTask(sent.id);
     expect(approved.status).toBe("queued");
-    expect(notices).toEqual([{ kind: "queued", task: approved }]);
+    expect(notices).toEqual([
+      { kind: "queued", task: approved },
+      { kind: "approval_decided", task: approved, outcome: "approved" },
+    ]);
     expect(service.checkInbox("muse").tasks.map((t) => t.id)).toEqual([sent.id]);
   });
 
@@ -75,7 +78,10 @@ describe("approveTask and denyTask", () => {
     notices.length = 0;
     const denied = service.denyTask(sent.id, "  Not today.  ");
     expect(denied).toMatchObject({ status: "denied", reason: "Not today." });
-    expect(notices).toEqual([{ kind: "result_ready", task: denied }]);
+    expect(notices).toEqual([
+      { kind: "result_ready", task: denied },
+      { kind: "approval_decided", task: denied, outcome: "denied" },
+    ]);
     expect(service.checkInbox("grok-bot").results.map((t) => t.reason)).toEqual(["Not today."]);
   });
 
@@ -126,7 +132,7 @@ describe("expireDue", () => {
       [working.id]: "expired: not finished in time",
       [queued.id]: "expired: never picked up",
     });
-    expect(notices.map((n) => n.kind)).toEqual(["result_ready", "result_ready", "result_ready"]);
+    expect(notices.map((n) => n.kind)).toEqual(["result_ready", "approval_decided", "result_ready", "result_ready"]);
   });
 
   test("finished tasks are never expired, and the sender sees expiries in the inbox", () => {

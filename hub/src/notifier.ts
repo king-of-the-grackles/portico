@@ -1,4 +1,4 @@
-import { approvalPush } from "./approvals/messages";
+import { approvalPush, taskApprovedPush, taskDeniedPush, taskExpiredPush } from "./approvals/messages";
 import type { Pusher } from "./approvals/ntfy";
 import { type BridgeConfig, isPushAgent, type Notice } from "./core/types";
 import type { Store } from "./db";
@@ -42,6 +42,17 @@ export function makeNotifier(deps: NotifierDeps): (notice: Notice) => void {
               })
               .catch((err) => log("error", "approval_push_failed", { task_id: task.id, error: errorName(err) }));
             break;
+          case "approval_decided": {
+            const followUp = { approved: taskApprovedPush, denied: taskDeniedPush, expired: taskExpiredPush }[notice.outcome];
+            void push(followUp(task))
+              .then((ok) => {
+                if (ok || config.ntfy) {
+                  log(ok ? "info" : "warn", ok ? "approval_push_updated" : "approval_push_update_failed", { task_id: task.id });
+                }
+              })
+              .catch((err) => log("error", "approval_push_update_failed", { task_id: task.id, error: errorName(err) }));
+            break;
+          }
         }
       } catch (err) {
         log("error", "notify_failed", { kind: notice.kind, error: errorName(err) });
