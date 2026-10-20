@@ -1,0 +1,129 @@
+import { Hono } from "hono";
+import { deleteCookie, setCookie } from "hono/cookie";
+import { html } from "hono/html";
+import { answerPermission, decideTask } from "../approvals/routes";
+import type { PermissionRelay } from "../core/permissions";
+import type { BridgeService } from "../core/service";
+import { type BridgeConfig, TASK_STATUSES, type TaskStatus } from "../core/types";
+import { log } from "../log";
+import { jsonBodyLimit } from "../ways-in/limits";
+import type { StreamHub } from "../ways-in/stream";
+import { sendPage } from "./layout";
+import {
+  hasSession,
+  LoginLimiter,
+  newSessionToken,
+  passwordMatches,
+  SESSION_COOKIE,
+  SESSION_DAYS,
+  sameOrigin,
+} from "./session";
+import { historyView, homeView, loginView, taskDetailView } from "./views";
+
+export interface PageDeps {
+  service: BridgeService;
+  relay: PermissionRelay;
+  streams: StreamHub;
+  config: BridgeConfig;
+  now: () => Date;
+}
+
+const formText = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
+
+export function pageRoutes(deps: PageDeps): Hono {
+  const { service, relay, streams, config, now } = deps;
+  const page = new Hono();
+  const limiter = new LoginLimiter(now);
+
+  page.use("*", jsonBodyLimit(config));
+  page.use("*", async (c, next) => {
+    if (c.req.method === "POST" && !sameOrigin(c, config)) {
+      return sendPage(c, 403, "Not allowed", html`<h1>Form posts from other sites aren't accepted.</h1>`);
+    }
+    await next();
+  });
+
+  page.get("/login", (c) => {
+    if (hasSession(c, config, now())) return c.redirect("/hub", 303);
+    return sendPage(c, 200, "Sign in", loginView(null));
+  });
+
+  page.post("/login", async (c) => {
+    if (limiter.blocked()) {
+      log("warn", "login_locked", {});
+      return sendPage(c, 429, "Sign in", loginView("Too many failed attempts. Try again in 15 minutes."));
+    }
+    const form = await c.req.parseBody();
+    if (!passwordMatches(config, formText(form.password) ?? "")) {
+      limiter.recordFailure();
+      log("warn", "login_failed", {});
+      return sendPage(c, 401, "Sign in", loginView("Wrong password."));
+    }
+    setCookie(c, SESSION_COOKIE, newSessionToken(config, now()), {
+      httpOnly: true,
+      secure: true,
+      sameSite: "Strict",
+      path: "/hub",
+      maxAge: SESSION_DAYS * 86_400,
+    });
+    log("info", "login", {});
+    return c.redirect("/hub", 303);
+  });
+
+  page.post("/logout", (c) => {
+    deleteCookie(c, SESSION_COOKIE, { path: "/hub", secure: true });
+    return c.redirect("/hub/login", 303);
+  });
+
+  // Everything registered below needs a session.
+  page.use("*", async (c, next) => {
+    if (hasSession(c, config, now())) return next();
+    if (c.req.method === "GET") return c.redirect("/hub/login", 303);
+    return sendPage(c, 403, "Signed out", html`<h1>Signed out.</h1><p><a href="/hub/login">Sign in</a> and try again.</p>`);
+  });
+
+  page.get("/", (c) => {
+    const tasks = service.listTasks({ status: "waiting_approval", limit: 100 });
+    const agents = config.agents.map((agent) => ({
+      agent,
+      lastCheckIn: service.lastCheckIn(agent.name),
+      connected: streams.isConnected(agent.name),
+    }));
+    return sendPage(c, 200, "Waiting", homeView(tasks, relay.pending(), agents), { nav: true });
+  });
+
+  page.get("/history", (c) => {
+    const agentParam = c.req.query("agent");
+    const statusParam = c.req.query("status");
+    const agent = config.agents.some((a) => a.name === agentParam) ? agentParam : undefined;
+    const status = TASK_STATUSES.find((s) => s === statusParam) as TaskStatus | undefined;
+    const tasks = service.listTasks({ agent, status, limit: 100 });
+    const events = service.listEvents({ agent, limit: 50 });
+    const names = config.agents.map((a) => a.name);
+    return sendPage(c, 200, "History", historyView(tasks, events, { agent, status }, names), { nav: true });
+  });
+
+  page.get("/tasks/:id", (c) => {
+    const task = service.findTask(c.req.param("id"));
+    if (!task) return sendPage(c, 404, "Not found", html`<h1>No such task.</h1>`, { nav: true });
+    return sendPage(c, 200, "Task", taskDetailView(task, service.chainOf(task)), { nav: true });
+  });
+
+  page.post("/tasks/:id/approve", (c) => decideTask(c, service, c.req.param("id"), "approve", undefined, true));
+
+  page.post("/tasks/:id/deny", async (c) => {
+    const form = await c.req.parseBody();
+    return decideTask(c, service, c.req.param("id"), "deny", formText(form.note), true);
+  });
+
+  for (const [path, action] of [
+    ["allow", "approve"],
+    ["deny", "deny"],
+  ] as const) {
+    page.post(`/permissions/:agent/:requestId/${path}`, (c) =>
+      answerPermission(c, relay, c.req.param("agent"), c.req.param("requestId"), action, true),
+    );
+  }
+
+  return page;
+}

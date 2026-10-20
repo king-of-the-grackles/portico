@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { pageRoutes } from "./page/routes";
 import { approvalRoutes } from "./approvals/routes";
 import type { PermissionRelay, PermissionRequest } from "./core/permissions";
 import type { BridgeService } from "./core/service";
@@ -51,6 +52,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/mcp", mcpRoutes(service, config, resolveAgent));
   app.route("/a2a", a2aRoutes(service, config, resolveAgent));
 
+  app.route("/hub", pageRoutes({ service, relay, streams, config, now: deps.now }));
   app.route("/", approvalRoutes({ service, relay, config, now: deps.now }));
 
   app.notFound((c) => c.json({ error: "not_found", message: "No such endpoint." }, 404));

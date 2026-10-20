@@ -200,3 +200,24 @@ describe("openDb migration", () => {
     }
   });
 });
+
+describe("Store: lists for the hub page", () => {
+  test("listTasks filters by agent and status, newest first", () => {
+    store.insertTask(task({ id: "a", createdAt: "2026-10-20T12:00:00.000Z" }));
+    store.insertTask(
+      task({ id: "b", fromAgent: "muse", toAgent: "codex", status: "done", createdAt: "2026-10-20T12:01:00.000Z" }),
+    );
+    store.insertTask(task({ id: "c", createdAt: "2026-10-20T12:02:00.000Z" }));
+    expect(store.listTasks({ limit: 10 }).map((t) => t.id)).toEqual(["c", "b", "a"]);
+    expect(store.listTasks({ agent: "codex", limit: 10 }).map((t) => t.id)).toEqual(["b"]);
+    expect(store.listTasks({ status: "queued", limit: 10 }).map((t) => t.id)).toEqual(["c", "a"]);
+    expect(store.listTasks({ agent: "grok-bot", status: "queued", limit: 1 }).map((t) => t.id)).toEqual(["c"]);
+  });
+
+  test("listEvents filters by agent, newest first", () => {
+    store.insertEvent({ id: "e1", agent: "muse", name: "a", details: "", createdAt: "2026-10-20T12:00:00.000Z" });
+    store.insertEvent({ id: "e2", agent: "grok-bot", name: "b", details: "", createdAt: "2026-10-20T12:01:00.000Z" });
+    expect(store.listEvents({ limit: 10 }).map((e) => e.id)).toEqual(["e2", "e1"]);
+    expect(store.listEvents({ agent: "muse", limit: 10 }).map((e) => e.id)).toEqual(["e1"]);
+  });
+});

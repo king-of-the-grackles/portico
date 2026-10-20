@@ -1,3 +1,4 @@
+import type { Hono } from "hono";
 import type { PushMessage } from "../src/approvals/ntfy";
 import { createHub } from "../src/hub";
 import { parseConfig } from "../src/config";
@@ -172,4 +173,14 @@ export function sseReader(res: Response) {
       await reader.cancel().catch(() => {});
     },
   };
+}
+
+export const ADMIN_PASSWORD = "test-admin-password";
+
+/** Signs in to the hub page and returns the Cookie header value to send. */
+export async function signIn(app: Hono, password = ADMIN_PASSWORD): Promise<string> {
+  const res = await app.request("/hub/login", { method: "POST", body: new URLSearchParams({ password }) });
+  const setCookie = res.headers.get("set-cookie");
+  if (res.status !== 303 || !setCookie) throw new Error(`sign-in failed with ${res.status}`);
+  return setCookie.split(";")[0]!;
 }

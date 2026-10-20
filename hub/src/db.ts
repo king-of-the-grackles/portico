@@ -246,6 +246,25 @@ export class Store {
       .changes;
   }
 
+  /** Newest first. With an agent, the tasks it sent or received. */
+  listTasks(filter: { agent?: string; status?: TaskStatus; limit: number }): Task[] {
+    const clauses: string[] = [];
+    const bindings: Bindings = { limit: filter.limit };
+    if (filter.agent) {
+      clauses.push("(from_agent = $agent OR to_agent = $agent)");
+      bindings.agent = filter.agent;
+    }
+    if (filter.status) {
+      clauses.push("status = $status");
+      bindings.status = filter.status;
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db
+      .query(`SELECT * FROM tasks ${where} ORDER BY created_at DESC, rowid DESC LIMIT $limit`)
+      .all(bindings) as TaskRow[];
+    return rows.map(toTask);
+  }
+
   insertEvent(event: BridgeEvent): void {
     this.db
       .query("INSERT INTO events (id, agent, name, details, created_at) VALUES ($id, $agent, $name, $details, $createdAt)")
@@ -255,6 +274,16 @@ export class Store {
   getEvent(id: string): BridgeEvent | null {
     const row = this.db.query("SELECT * FROM events WHERE id = $id").get({ id }) as EventRow | null;
     return row ? toEvent(row) : null;
+  }
+
+  /** Newest first. */
+  listEvents(filter: { agent?: string; limit: number }): BridgeEvent[] {
+    const where = filter.agent ? "WHERE agent = $agent" : "";
+    const bindings: Bindings = filter.agent ? { agent: filter.agent, limit: filter.limit } : { limit: filter.limit };
+    const rows = this.db
+      .query(`SELECT * FROM events ${where} ORDER BY created_at DESC, rowid DESC LIMIT $limit`)
+      .all(bindings) as EventRow[];
+    return rows.map(toEvent);
   }
 
   countEventsFromSince(agent: string, since: string): number {

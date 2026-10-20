@@ -216,6 +216,27 @@ export class BridgeService {
     return this.store.getTask(taskId);
   }
 
+  listTasks(filter: { agent?: string; status?: TaskStatus; limit: number }): Task[] {
+    return this.store.listTasks(filter);
+  }
+
+  listEvents(filter: { agent?: string; limit: number }): BridgeEvent[] {
+    return this.store.listEvents(filter);
+  }
+
+  /** The tasks that led to this one, oldest first: each was being worked on when the next was sent. */
+  chainOf(task: Task): Task[] {
+    const chain: Task[] = [];
+    let parentId = task.parentTaskId;
+    while (parentId && chain.length < 20) {
+      const parent = this.store.getTask(parentId);
+      if (!parent) break;
+      chain.unshift(parent);
+      parentId = parent.parentTaskId;
+    }
+    return chain;
+  }
+
   // ---- helpers ----
 
   private iso(offsetMs = 0): string {
