@@ -20,10 +20,17 @@ export interface PermissionRelayDeps {
  * Relays Claude Code's permission prompts to the hub, and forwards the answers back (spec §9.5). The hub re-sends
  * every answer from the last hour on each reconnect, so an answer is forwarded only for a prompt this session
  * relayed and is still waiting on, and only once.
+ *
+ * A prompt counts as waiting only once the hub has accepted it; answers that arrive while the relay is still in
+ * flight are dropped. Claude Code can reuse a request_id: if one is relayed again while still waiting or in flight,
+ * the plugin forgets it and relays nothing, so no answer applies to either prompt and both stay answerable in the
+ * terminal. Once an ID is no longer waiting or in flight, a prompt reusing it is relayed normally.
  */
 export class PermissionRelayClient {
   /** request_id → when to forget it (ms since the epoch). */
   private readonly waiting = new Map<string, number>();
+  /** request_id → token of the relay in flight. Replaced or removed when the ID is reused, which cancels it. */
+  private readonly inflight = new Map<string, object>();
   private readonly now: () => number;
   private readonly retryMs: number[];
 
@@ -40,10 +47,21 @@ export class PermissionRelayClient {
 
   async relay(prompt: PermissionPrompt): Promise<void> {
     this.sweep();
-    this.waiting.set(prompt.request_id, this.now() + PERMISSION_TTL_MS);
+    const id = prompt.request_id;
+    if (this.waiting.has(id) || this.inflight.has(id)) {
+      this.waiting.delete(id);
+      this.inflight.delete(id);
+      this.deps.log("warn", "permission_id_reused", { request_id: id });
+      return;
+    }
+    const token = {};
+    this.inflight.set(id, token);
     for (let attempt = 0; ; attempt++) {
       try {
         await this.deps.client.relayPermission(prompt);
+        if (this.inflight.get(id) !== token) return; // the ID was reused meanwhile; stay out of the way
+        this.inflight.delete(id);
+        this.waiting.set(id, this.now() + PERMISSION_TTL_MS);
         this.deps.log("info", "permission_relayed", { request_id: prompt.request_id, tool: prompt.tool_name.slice(0, 60) });
         return;
       } catch (err) {
@@ -52,7 +70,7 @@ export class PermissionRelayClient {
         const retryable = status === 0 || status >= 500;
         const pause = this.retryMs[attempt];
         if (!retryable || pause === undefined) {
-          this.waiting.delete(prompt.request_id);
+          if (this.inflight.get(id) === token) this.inflight.delete(id);
           this.deps.log("warn", "permission_relay_failed", {
             request_id: prompt.request_id,
             status,
@@ -61,6 +79,7 @@ export class PermissionRelayClient {
           return;
         }
         await Bun.sleep(pause);
+        if (this.inflight.get(id) !== token) return;
       }
     }
   }

@@ -130,6 +130,62 @@ describe("permission relay", () => {
   });
 });
 
+describe("reused request IDs", () => {
+  const ask = (host: Awaited<ReturnType<typeof connect>>, id: string, description: string) =>
+    host.askPermission({ ...prompt(id), description });
+
+  test("an old answer replayed while a reused ID is being relayed is not forwarded", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    class Gated extends HubClient {
+      calls = 0;
+      override async relayPermission(p: PermissionPrompt): Promise<unknown> {
+        if (this.calls++ === 1) await gate;
+        return super.relayPermission(p);
+      }
+    }
+    const host = await connect({ client: new Gated({ url: hub.url, token: TOKENS["claude-code"] }) });
+    await ask(host, "abcde", "first");
+    await waitFor(() => hub.relay.pending().length === 1);
+    hub.relay.answer("claude-code", "abcde", "allow");
+    await waitFor(() => host.verdicts.length === 1);
+
+    await ask(host, "abcde", "second");
+    hub.streams.sendPermissionAnswer("claude-code", "abcde", "allow");
+    await Bun.sleep(100);
+    expect(host.verdicts.length).toBe(1);
+    release();
+    await waitFor(() => hub.relay.pending().length === 1);
+  });
+
+  test("a reused ID that is still waiting is not relayed again, and its answers are dropped", async () => {
+    const host = await connect();
+    await ask(host, "abcde", "ls");
+    await waitFor(() => hub.relay.pending().length === 1);
+    await waitFor(() => hub.pushes.length === 1);
+    await ask(host, "abcde", "rm");
+    await waitFor(() => logs.lines.some((line) => line.msg === "permission_id_reused"));
+    expect(hub.relay.pending().length).toBe(1);
+    expect(hub.pushes.length).toBe(1);
+    hub.relay.answer("claude-code", "abcde", "allow");
+    await Bun.sleep(100);
+    expect(host.verdicts).toEqual([]);
+  });
+
+  test("an ID can be reused once its answer was forwarded", async () => {
+    const host = await connect();
+    await ask(host, "abcde", "first");
+    await waitFor(() => hub.relay.pending().length === 1);
+    hub.relay.answer("claude-code", "abcde", "allow");
+    await waitFor(() => host.verdicts.length === 1);
+    await ask(host, "abcde", "second");
+    await waitFor(() => hub.relay.pending().length === 1);
+    hub.relay.answer("claude-code", "abcde", "deny");
+    await waitFor(() => host.verdicts.length === 2);
+    expect(host.verdicts[1]).toEqual({ request_id: "abcde", behavior: "deny" });
+  });
+});
+
 describe("PermissionRelayClient", () => {
   test("forgets a prompt after an hour, as the hub does", async () => {
     let now = 1_000_000;
