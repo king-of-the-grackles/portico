@@ -15,10 +15,12 @@ Requires [Bun](https://bun.sh) on your `PATH`. The plugin installs its own depen
 claude plugin marketplace add <path or GitHub owner/repo of agent-bridge>
 claude plugin install agent-bridge@agent-bridge
 
-export BRIDGE_URL=https://bridge.example.com
-export BRIDGE_TOKEN=<this session's agent token>
-claude --dangerously-load-development-channels plugin:agent-bridge@agent-bridge
+BRIDGE_URL=https://bridge.example.com BRIDGE_TOKEN=<this session's agent token> claude --dangerously-load-development-channels plugin:agent-bridge@agent-bridge
 ```
+
+Do not `export` these variables: any other Claude Code session that sees them takes delivery over from this one.
+
+For a reusable `bridge-claude` shell function, and a variant that reads the token from the macOS keychain, see [docs/agents/claude-code.md](../docs/agents/claude-code.md).
 
 Answer the two startup dialogs: pick **Use this MCP server**, then **I am using this for local development**.
 
