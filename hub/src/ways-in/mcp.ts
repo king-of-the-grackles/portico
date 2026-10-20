@@ -2,9 +2,10 @@ import { Hono } from "hono";
 import { BridgeError } from "../core/errors";
 import { frameTask } from "../core/framing";
 import type { BridgeService } from "../core/service";
-import type { Task } from "../core/types";
-import { log } from "../log";
+import type { BridgeConfig, Task } from "../core/types";
+import { clip, log } from "../log";
 import type { AgentResolver } from "./auth";
+import { jsonBodyLimit } from "./limits";
 import { type JsonRpcRequest, parseRequest, rpcError, rpcResult } from "./jsonrpc";
 import { agentView, eventView, inboxTaskView, taskView } from "./views";
 
@@ -135,7 +136,7 @@ function callTool(service: BridgeService, agent: string, name: string, args: Rec
       return json({ event: eventView(event), tasks: tasks.map(taskView) });
     }
     default:
-      throw new BridgeError("bad_request", `Unknown tool ${name}.`);
+      throw new BridgeError("bad_request", "Unknown tool.");
   }
 }
 
@@ -162,7 +163,7 @@ function handle(service: BridgeService, agent: string, req: JsonRpcRequest) {
     case "tools/call": {
       const name = params.name;
       if (typeof name !== "string" || !TOOLS.some((tool) => tool.name === name)) {
-        return rpcError(id, -32602, `Unknown tool: ${String(name)}`);
+        return rpcError(id, -32602, "Unknown tool.");
       }
       const args = (params.arguments ?? {}) as Record<string, unknown>;
       try {
@@ -175,11 +176,18 @@ function handle(service: BridgeService, agent: string, req: JsonRpcRequest) {
       }
     }
     default:
-      return rpcError(id, -32601, `Method not found: ${req.method}`);
+      return rpcError(id, -32601, "Method not found.");
   }
 }
 
-export function mcpRoutes(service: BridgeService, resolveAgent: AgentResolver): Hono {
+const KNOWN_METHODS = new Set(["initialize", "ping", "tools/list", "tools/call", "notifications/initialized"]);
+
+function loggedMethod(method: string): string {
+  if (KNOWN_METHODS.has(method)) return method;
+  return method.startsWith("notifications/") ? "notification" : "other";
+}
+
+export function mcpRoutes(service: BridgeService, config: BridgeConfig, resolveAgent: AgentResolver): Hono {
   const mcp = new Hono();
 
   mcp.get("/", (c) =>
@@ -189,7 +197,7 @@ export function mcpRoutes(service: BridgeService, resolveAgent: AgentResolver): 
   );
   mcp.delete("/", (c) => c.body(null, 405, { Allow: "POST" }));
 
-  mcp.post("/", async (c) => {
+  mcp.post("/", jsonBodyLimit(config), async (c) => {
     const agent = resolveAgent(c.req.header("authorization"));
     if (!agent) {
       return c.json({ error: "unauthorized", message: "Missing or invalid bearer token." }, 401, {
@@ -205,8 +213,14 @@ export function mcpRoutes(service: BridgeService, resolveAgent: AgentResolver): 
     const req = parseRequest(body);
     if (!req) return c.json(rpcError(null, -32600, "Invalid request"), 400);
 
-    const fields: Record<string, unknown> = { agent, method: req.method, user_agent: c.req.header("user-agent") ?? null };
-    if (req.method === "initialize") fields.protocol_version = (req.params as { protocolVersion?: unknown })?.protocolVersion;
+    const fields: Record<string, unknown> = {
+      agent,
+      method: loggedMethod(req.method),
+      user_agent: clip(c.req.header("user-agent")),
+    };
+    if (req.method === "initialize") {
+      fields.protocol_version = clip((req.params as { protocolVersion?: unknown } | undefined)?.protocolVersion);
+    }
     log("info", "mcp_request", fields);
 
     if (req.id === undefined || req.id === null) return c.body(null, 202); // a notification: nothing to answer

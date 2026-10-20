@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import { BridgeError, HTTP_STATUS } from "../core/errors";
@@ -8,6 +7,7 @@ import type { BridgeService } from "../core/service";
 import type { BridgeConfig } from "../core/types";
 import { log } from "../log";
 import type { AgentResolver } from "./auth";
+import { jsonBodyLimit } from "./limits";
 import { agentView, eventView, inboxTaskView, taskView } from "./views";
 
 type Env = { Variables: { agent: string } };
@@ -38,16 +38,8 @@ export function handleError(err: unknown, c: Context): Response {
 
 export function restRoutes(service: BridgeService, config: BridgeConfig, resolveAgent: AgentResolver): Hono<Env> {
   const api = new Hono<Env>();
-  const maxBodyBytes = config.limits.maxTextKb * 1024 * 3;
 
-  api.use(
-    "*",
-    bodyLimit({
-      maxSize: maxBodyBytes,
-      onError: (c) =>
-        c.json({ error: "too_large", message: `Request body is larger than ${maxBodyBytes / 1024} KB.` }, 413),
-    }),
-  );
+  api.use("*", jsonBodyLimit(config));
 
   api.use("*", async (c, next) => {
     const agent = resolveAgent(c.req.header("authorization"));

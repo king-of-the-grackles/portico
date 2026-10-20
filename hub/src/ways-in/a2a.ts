@@ -3,8 +3,9 @@ import type { Context } from "hono";
 import { BridgeError } from "../core/errors";
 import type { BridgeService } from "../core/service";
 import type { AgentConfig, BridgeConfig, Task, TaskStatus } from "../core/types";
-import { log } from "../log";
+import { clip, log } from "../log";
 import type { AgentResolver } from "./auth";
+import { jsonBodyLimit } from "./limits";
 import { type JsonRpcId, type JsonRpcRequest, parseRequest, rpcError, rpcResult } from "./jsonrpc";
 
 const A2A_PROTOCOL_VERSION = "0.3.0";
@@ -132,7 +133,7 @@ function handle(service: BridgeService, caller: string, target: string, req: Jso
     if (UNSUPPORTED_METHODS.has(req.method)) {
       return rpcError(id, UNSUPPORTED_OPERATION, `${req.method} isn't supported by this bridge.`);
     }
-    return rpcError(id, -32601, `Method not found: ${req.method}`);
+    return rpcError(id, -32601, "Method not found.");
   } catch (err) {
     if (err instanceof BridgeError) {
       return rpcError(id, err.code === "rate_limited" ? -32000 : -32602, `${err.code}: ${err.message}`);
@@ -153,7 +154,7 @@ export function a2aRoutes(service: BridgeService, config: BridgeConfig, resolveA
   a2a.get("/:agent/.well-known/agent-card.json", cardHandler);
   a2a.get("/:agent/.well-known/agent.json", cardHandler);
 
-  a2a.post("/:agent", async (c) => {
+  a2a.post("/:agent", jsonBodyLimit(config), async (c) => {
     const target = findAgent(c.req.param("agent"));
     if (!target) return c.json({ error: "not_found", message: "No such agent." }, 404);
     const caller = resolveAgent(c.req.header("authorization"));
@@ -173,9 +174,9 @@ export function a2aRoutes(service: BridgeService, config: BridgeConfig, resolveA
     log("info", "a2a_request", {
       agent: caller,
       target: target.name,
-      method: req.method,
-      a2a_version: c.req.header("a2a-version") ?? null,
-      user_agent: c.req.header("user-agent") ?? null,
+      method: req.method === "message/send" || req.method === "tasks/get" || UNSUPPORTED_METHODS.has(req.method) ? req.method : "other",
+      a2a_version: clip(c.req.header("a2a-version")),
+      user_agent: clip(c.req.header("user-agent")),
     });
     try {
       return c.json(handle(service, caller, target.name, req));

@@ -15,7 +15,7 @@ export function buildApp(service: BridgeService, config: BridgeConfig): Hono {
   const openApi = openApiDocument(config);
   app.get("/api/openapi.json", (c) => c.json(openApi));
   app.route("/api", restRoutes(service, config, resolveAgent));
-  app.route("/mcp", mcpRoutes(service, resolveAgent));
+  app.route("/mcp", mcpRoutes(service, config, resolveAgent));
   app.route("/a2a", a2aRoutes(service, config, resolveAgent));
 
   app.notFound((c) => c.json({ error: "not_found", message: "No such endpoint." }, 404));

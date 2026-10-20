@@ -24,7 +24,11 @@ export function startServer(
     notify: opts.notify,
     log: (msg, fields) => log("info", msg, fields),
   });
-  const server = Bun.serve({ port: opts.port ?? config.port, fetch: buildApp(service, config).fetch });
+  const server = Bun.serve({
+    port: opts.port ?? config.port,
+    fetch: buildApp(service, config).fetch,
+    maxRequestBodySize: config.limits.maxTextKb * 1024 * 4,
+  });
 
   const expireSweep = () => {
     try {
