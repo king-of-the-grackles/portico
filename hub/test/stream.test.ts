@@ -3,6 +3,7 @@ import type { PushMessage } from "../src/approvals/ntfy";
 import type { Task } from "../src/core/types";
 import { makeNotifier } from "../src/notifier";
 import { type StreamConnection, StreamHub } from "../src/ways-in/stream";
+import { captureLogs } from "../src/log";
 import { T0, flush, makeApp, sseReader } from "./helpers";
 
 function fakeConnection() {
@@ -100,6 +101,54 @@ describe("notifier", () => {
     notify({ kind: "approval_needed", task: ghost });
     await flush();
     expect(pushes).toEqual([]);
+  });
+});
+
+describe("push failures", () => {
+  test("a push that rejects is logged as an error and causes no unhandled rejection", async () => {
+    const ctx = makeApp();
+    const task = ctx.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
+    const notify = makeNotifier({
+      store: ctx.store, config: ctx.config, streams: ctx.streams,
+      push: async () => {
+        throw new TypeError("boom SECRET");
+      },
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    try {
+      notify({ kind: "approval_needed", task: ctx.store.getTask(task.id)! });
+      await flush();
+      await flush();
+    } finally {
+      captureLogs(null);
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
+    const entries = lines.map((line) => JSON.parse(line));
+    expect(entries).toContainEqual(
+      expect.objectContaining({ level: "error", msg: "approval_push_failed", task_id: task.id, error: "TypeError" }),
+    );
+    expect(lines.join("\n")).not.toContain("SECRET");
+  });
+
+  test("with ntfy off, a push that sends nothing logs no failure", async () => {
+    const ctx = makeApp();
+    expect(ctx.config.ntfy).toBeNull();
+    const task = ctx.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
+    const notify = makeNotifier({ store: ctx.store, config: ctx.config, streams: ctx.streams, push: async () => false });
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    try {
+      notify({ kind: "approval_needed", task: ctx.store.getTask(task.id)! });
+      await flush();
+    } finally {
+      captureLogs(null);
+    }
+    expect(lines.filter((line) => line.includes("push_failed"))).toEqual([]);
   });
 });
 

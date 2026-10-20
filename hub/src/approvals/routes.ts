@@ -34,7 +34,7 @@ function confirmTask(task: Task, action: Action): Html {
 
 function alreadyDecided(task: Task): Html {
   return html`<h1>This task is no longer waiting for approval.</h1>
-<div class="card"><div class="meta">${task.fromAgent} → ${task.toAgent}</div><p>Status: <strong>${STATUS_WORDS[task.status]}</strong>${task.reason ? html` (${task.reason})` : ""}</p></div>
+<div class="card"><div class="meta">${task.fromAgent} → ${task.toAgent}</div><p>Status: <strong>${STATUS_WORDS[task.status]}</strong>${task.reason && (task.status === "denied" || task.status === "expired") ? html` (${task.reason})` : ""}</p></div>
 <p class="meta">Nothing was changed.</p>`;
 }
 

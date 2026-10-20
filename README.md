@@ -47,6 +47,8 @@ When a task is sent between a pair set to `ask`, the hub pushes it to your ntfy 
 
 Without `BRIDGE_NTFY_TOPIC`, no pushes are sent; approve tasks on the hub page instead.
 
+Approval links carry their signed token in the URL path, so a host's access logs contain them. Keep those logs private. Links stop working once the task is decided or expires.
+
 ## Hub page
 
 Open `<BRIDGE_PUBLIC_URL>/hub` and sign in with `BRIDGE_ADMIN_PASSWORD`. The page shows:
@@ -54,6 +56,10 @@ Open `<BRIDGE_PUBLIC_URL>/hub` and sign in with `BRIDGE_ADMIN_PASSWORD`. The pag
 - Claude Code permission prompts relayed by the plugin
 - each agent's last check-in
 - history, filterable by agent and status
+
+Sign-in locks for everyone for 15 minutes after 10 failed attempts; existing sessions and the push buttons keep working.
+
+Signing out clears the cookie but doesn't revoke a copied one. To sign out everywhere, change `BRIDGE_SIGNING_SECRET` (this also voids open approval links).
 
 ## Ways in
 

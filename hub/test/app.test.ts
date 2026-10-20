@@ -49,4 +49,36 @@ describe("app shell", () => {
     expect(lines.length).toBeGreaterThan(0);
     expect(lines.join("\n")).not.toMatch(/SECRET-/);
   });
+
+  test("notes, failure reasons and permission prompt text never reach the logs", async () => {
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    try {
+      const { call, pushes, app } = makeApp();
+      const pathOf = (label: string) =>
+        new URL(pushes.at(-1)!.actions.find((action) => action.label === label)!.url).pathname;
+
+      await call("grok-bot", "POST", "/api/tasks", { to: "muse", instructions: "to be denied" });
+      await flush();
+      await app.request(pathOf("Deny"), { method: "POST", body: new URLSearchParams({ note: "SECRET-NOTE" }) });
+
+      const sent = await (await call("grok-bot", "POST", "/api/tasks", { to: "claude-code", instructions: "fails" })).json();
+      await call("claude-code", "GET", "/api/inbox");
+      await call("claude-code", "POST", `/api/tasks/${sent.task.id}/finish`, { failed_reason: "SECRET-FAILURE" });
+
+      await call("claude-code", "POST", "/api/permission-requests", {
+        request_id: "abcde",
+        tool_name: "Bash",
+        description: "SECRET-DESCRIPTION",
+        input_preview: "SECRET-PREVIEW",
+      });
+      await flush();
+      await app.request(pathOf("Allow"), { method: "POST" });
+      await flush();
+    } finally {
+      captureLogs(null);
+    }
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.join("\n")).not.toMatch(/SECRET-/);
+  });
 });

@@ -52,6 +52,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/mcp", mcpRoutes(service, config, resolveAgent));
   app.route("/a2a", a2aRoutes(service, config, resolveAgent));
 
+  app.get("/hub/", (c) => c.redirect("/hub", 303));
   app.route("/hub", pageRoutes({ service, relay, streams, config, now: deps.now }));
   app.route("/", approvalRoutes({ service, relay, config, now: deps.now }));
 

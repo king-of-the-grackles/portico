@@ -50,6 +50,20 @@ describe("approval links", () => {
     expect(ctx.service.findTask(task.id)?.status).toBe("queued");
   });
 
+  test("an old link never shows a failed task's reason", async () => {
+    const ctx = makeApp();
+    const { task, approvePath } = await askTask(ctx);
+    await ctx.app.request(approvePath, { method: "POST" });
+    expect(ctx.service.checkInbox("muse").tasks.map((t) => t.id)).toContain(task.id);
+    ctx.service.finishTask("muse", { taskId: task.id, failedReason: "SECRET-FAILURE" });
+    expect(ctx.service.findTask(task.id)?.status).toBe("failed");
+    for (const res of [await ctx.app.request(approvePath), await ctx.app.request(approvePath, { method: "POST" })]) {
+      const page = await res.text();
+      expect(page).toContain("no longer waiting for approval");
+      expect(page).not.toContain("SECRET-FAILURE");
+    }
+  });
+
   test("deny takes an optional note from the confirm form", async () => {
     const ctx = makeApp();
     const { task, denyPath } = await askTask(ctx);

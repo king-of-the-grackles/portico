@@ -33,9 +33,14 @@ export function makeNotifier(deps: NotifierDeps): (notice: Notice) => void {
             if (isPushAgent(config, task.fromAgent)) streams.nudge(task.fromAgent);
             break;
           case "approval_needed":
-            void push(approvalPush(config, task)).then((ok) =>
-              log(ok ? "info" : "warn", ok ? "approval_pushed" : "approval_push_failed", { task_id: task.id }),
-            );
+            void push(approvalPush(config, task))
+              .then((ok) => {
+                // With ntfy off nothing was attempted (startup already logged ntfy_disabled).
+                if (ok || config.ntfy) {
+                  log(ok ? "info" : "warn", ok ? "approval_pushed" : "approval_push_failed", { task_id: task.id });
+                }
+              })
+              .catch((err) => log("error", "approval_push_failed", { task_id: task.id, error: errorName(err) }));
             break;
         }
       } catch (err) {

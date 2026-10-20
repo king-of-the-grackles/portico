@@ -61,7 +61,10 @@ export class PermissionRelay {
     const inputPreview = this.optionalText("input_preview", input.inputPreview);
 
     const existing = this.requests.get(key(agent, requestId));
-    if (existing) return { request: { ...existing }, created: false };
+    // An unanswered repeat is the same prompt. An answered one is treated as a new prompt: answers are re-sent on
+    // every reconnect (see redeliver), so an old answer must never apply to a new prompt that reuses a short
+    // request ID. At worst the owner is asked twice.
+    if (existing && existing.answer === null) return { request: { ...existing }, created: false };
     if (this.unansweredFor(agent) >= MAX_PENDING_PER_AGENT) {
       throw new BridgeError("rate_limited", `${agent} already has ${MAX_PENDING_PER_AGENT} permission prompts waiting.`);
     }
@@ -95,12 +98,16 @@ export class PermissionRelay {
     return { ...request };
   }
 
-  /** Re-sends answers given while the agent's stream was down. Returns how many went out. */
+  /**
+   * Re-sends every answered, unexpired prompt for the agent, whether or not it was marked delivered. A write to
+   * a stalled stream (e.g. a half-open connection) looks like success, so "delivered" can't be trusted. The
+   * plugin ignores answers for requests it isn't waiting on, so duplicates are harmless. Returns how many went out.
+   */
   redeliver(agent: string): number {
     this.sweep();
     let sent = 0;
     for (const request of this.requests.values()) {
-      if (request.agent !== agent || request.answer === null || request.delivered) continue;
+      if (request.agent !== agent || request.answer === null) continue;
       request.delivered = this.deps.deliver(agent, request.requestId, request.answer);
       if (request.delivered) sent++;
     }

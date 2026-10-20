@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { BridgeService } from "../core/service";
 import { type BridgeConfig, isPushAgent } from "../core/types";
-import { log } from "../log";
+import { errorName, log } from "../log";
 import { type AgentEnv, type AgentResolver, requireAgent } from "./auth";
 
 export type StreamEvent = "nudge" | "permission" | "replaced";
@@ -106,12 +106,14 @@ export function streamRoutes(deps: StreamRouteDeps): Hono<AgentEnv> {
       try {
         // Flushes the response headers now; otherwise a client's fetch() waits for the first event or heartbeat.
         await stream.write(": connected\n\n");
-        if (service.hasWaiting(agent)) conn.send("nudge", {});
+        if (open && service.hasWaiting(agent)) conn.send("nudge", {});
         deps.onConnect?.(agent);
         while (open) {
           await Promise.race([stream.sleep(heartbeatMs), ended]);
           if (open) await stream.write(": ping\n\n").catch(() => end());
         }
+      } catch (err) {
+        log("error", "stream_failed", { agent, error: errorName(err) });
       } finally {
         disconnect();
         log("info", "stream_closed", { agent });

@@ -13,6 +13,14 @@ describe("hub page sign-in", () => {
     }
   });
 
+  test("a trailing slash on /hub redirects to /hub", async () => {
+    const { app } = makeApp();
+    const cookie = await signIn(app);
+    const res = await app.request("/hub/", { headers: { cookie } });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/hub");
+  });
+
   test("a wrong password is refused; the right one sets a strict session cookie", async () => {
     const { app } = makeApp();
     const wrong = await app.request("/hub/login", login("nope"));

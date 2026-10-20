@@ -158,6 +158,26 @@ describe("parseConfig: secrets, ntfy and strictness", () => {
     );
   });
 
+  test("BRIDGE_NTFY_URL must be https, except http for localhost", () => {
+    const topic = "t".repeat(24);
+    const withUrl = (url: string) => problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: topic, BRIDGE_NTFY_URL: url });
+    expect(withUrl("http://ntfy.example.com")).toContain(
+      "BRIDGE_NTFY_URL must start with https:// (http:// is allowed only for localhost)",
+    );
+    expect(withUrl("http://127.0.0.1:9999")).toEqual([]);
+    expect(withUrl("http://localhost:9999")).toEqual([]);
+    expect(withUrl("not a url")).toEqual(['BRIDGE_NTFY_URL "not a url" is not a valid http(s) URL']);
+  });
+
+  test("the signing secret must differ from every agent token and the admin password", () => {
+    const message = "BRIDGE_SIGNING_SECRET must differ from every agent token and from BRIDGE_ADMIN_PASSWORD";
+    expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: ENV.BRIDGE_TOKEN_GROK_BOT })).toContain(message);
+    expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: "p".repeat(32), BRIDGE_ADMIN_PASSWORD: "p".repeat(32) })).toContain(
+      message,
+    );
+    expect(problems(YAML)).not.toContain(message);
+  });
+
   test("ntfy is on only when a topic is set", () => {
     const topic = "t".repeat(24);
     expect(parseConfig(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: topic }).ntfy).toEqual({

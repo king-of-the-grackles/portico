@@ -73,8 +73,33 @@ describe("PermissionRelay", () => {
     expect(relay.answer("claude-code", "abcde", "deny").delivered).toBe(false);
     setConnected(true);
     expect(relay.redeliver("claude-code")).toBe(1);
+    expect(relay.redeliver("claude-code")).toBe(1);
+    expect(delivered).toEqual([
+      { agent: "claude-code", requestId: "abcde", behavior: "deny" },
+      { agent: "claude-code", requestId: "abcde", behavior: "deny" },
+    ]);
+  });
+
+  test("an answer marked delivered is sent again on reconnect, because a stalled stream swallows writes", () => {
+    const { relay, delivered } = makeRelay();
+    relay.add("claude-code", PROMPT);
+    expect(relay.answer("claude-code", "abcde", "allow").delivered).toBe(true);
+    expect(relay.redeliver("claude-code")).toBe(1);
+    expect(delivered).toHaveLength(2);
+    expect(relay.redeliver("claude-code-dialog")).toBe(0);
+  });
+
+  test("a repeat prompt for an answered request ID is a new prompt, so the old answer isn't re-sent for it", () => {
+    const { relay, delivered } = makeRelay();
+    relay.add("claude-code", PROMPT);
+    relay.answer("claude-code", "abcde", "allow");
+    const again = relay.add("claude-code", PROMPT);
+    expect(again.created).toBe(true);
+    expect(again.request).toMatchObject({ answer: null, delivered: false });
+    expect(relay.pending()).toHaveLength(1);
+    delivered.length = 0;
     expect(relay.redeliver("claude-code")).toBe(0);
-    expect(delivered).toEqual([{ agent: "claude-code", requestId: "abcde", behavior: "deny" }]);
+    expect(delivered).toEqual([]);
   });
 
   test("prompts are forgotten after an hour", () => {
@@ -158,6 +183,21 @@ describe("POST /api/permission-requests", () => {
     expect(
       (await call("claude-code", "POST", "/api/permission-requests", { ...body, request_id: "no spaces" })).status,
     ).toBe(400);
+  });
+
+  test("an answer sent into a stream that never reached the client is sent again on the next stream", async () => {
+    const { call, relay } = makeApp();
+    await call("claude-code", "POST", "/api/permission-requests", body);
+    const first = sseReader(await call("claude-code", "GET", "/api/stream"));
+    await flush();
+    expect(relay.answer("claude-code", "abcde", "allow").delivered).toBe(true); // first is never read
+    await first.cancel();
+    const second = sseReader(await call("claude-code", "GET", "/api/stream"));
+    try {
+      expect(await second.next()).toEqual({ event: "permission", data: { request_id: "abcde", behavior: "allow" } });
+    } finally {
+      await second.cancel();
+    }
   });
 
   test("answers reach the agent's stream, including one given while it was disconnected", async () => {

@@ -80,13 +80,20 @@ function parseNtfy(env: Env, problems: string[]): NtfyConfig | null {
     );
   }
   const url = (env.BRIDGE_NTFY_URL?.trim() || "https://ntfy.sh").replace(/\/+$/, "");
-  let validUrl = false;
   try {
-    validUrl = ["http:", "https:"].includes(new URL(url).protocol);
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      problems.push(`BRIDGE_NTFY_URL "${url}" is not a valid http(s) URL`);
+    } else {
+      const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+      // BRIDGE_NTFY_TOKEN would travel in clear over plain http.
+      if (parsed.protocol !== "https:" && !local) {
+        problems.push("BRIDGE_NTFY_URL must start with https:// (http:// is allowed only for localhost)");
+      }
+    }
   } catch {
-    validUrl = false;
+    problems.push(`BRIDGE_NTFY_URL "${url}" is not a valid http(s) URL`);
   }
-  if (!validUrl) problems.push(`BRIDGE_NTFY_URL "${url}" is not a valid http(s) URL`);
   return { url, topic, token: env.BRIDGE_NTFY_TOKEN?.trim() || null };
 }
 
@@ -182,6 +189,9 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
   const signingSecret = requireSecret(env, "BRIDGE_SIGNING_SECRET", MIN_SECRET_LENGTH, problems);
   const adminPassword = requireSecret(env, "BRIDGE_ADMIN_PASSWORD", MIN_PASSWORD_LENGTH, problems);
   const ntfy = parseNtfy(env, problems);
+  if (signingSecret && (Object.values(tokens).includes(signingSecret) || signingSecret === adminPassword)) {
+    problems.push("BRIDGE_SIGNING_SECRET must differ from every agent token and from BRIDGE_ADMIN_PASSWORD");
+  }
 
   if (problems.length > 0) throw new ConfigError(problems);
 

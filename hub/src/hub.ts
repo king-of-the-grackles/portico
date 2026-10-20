@@ -7,7 +7,7 @@ import { PermissionRelay, type PermissionRequest } from "./core/permissions";
 import { BridgeService } from "./core/service";
 import type { BridgeConfig, Notice } from "./core/types";
 import { Store } from "./db";
-import { log } from "./log";
+import { errorName, log } from "./log";
 import { makeNotifier } from "./notifier";
 import { StreamHub } from "./ways-in/stream";
 
@@ -54,12 +54,15 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
     deliver: (agent, requestId, behavior) => streams.sendPermissionAnswer(agent, requestId, behavior),
   });
   const onPermissionRequest = (request: PermissionRequest) => {
-    void push(permissionPush(config, request)).then((ok) =>
-      log(ok ? "info" : "warn", ok ? "permission_pushed" : "permission_push_failed", {
-        agent: request.agent,
-        request_id: request.requestId,
-      }),
-    );
+    const fields = { agent: request.agent, request_id: request.requestId };
+    void push(permissionPush(config, request))
+      .then((ok) => {
+        // With ntfy off nothing was attempted (startup already logged ntfy_disabled).
+        if (ok || config.ntfy) {
+          log(ok ? "info" : "warn", ok ? "permission_pushed" : "permission_push_failed", fields);
+        }
+      })
+      .catch((err) => log("error", "permission_push_failed", { ...fields, error: errorName(err) }));
   };
   const app = buildApp({
     service,
