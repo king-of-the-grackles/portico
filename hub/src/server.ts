@@ -18,13 +18,20 @@ export function startServer(config: BridgeConfig, opts: { port?: number; push?: 
   const db = openDb(config.dbPath);
   const hub = createHub(config, { db, push: opts.push });
   const service: BridgeService = hub.service;
-  const server = Bun.serve({
-    port: opts.port ?? config.port,
-    fetch: hub.app.fetch,
-    maxRequestBodySize: config.limits.maxTextKb * 1024 * 4,
-    // Above the stream heartbeat (25 s), so quiet live streams aren't cut. Bun's default is 10 s.
-    idleTimeout: 60,
-  });
+  let server: ReturnType<typeof Bun.serve>;
+  try {
+    server = Bun.serve({
+      port: opts.port ?? config.port,
+      fetch: hub.app.fetch,
+      maxRequestBodySize: config.limits.maxTextKb * 1024 * 4,
+      // Above the stream heartbeat (25 s), so quiet live streams aren't cut. Bun's default is 10 s.
+      idleTimeout: 60,
+    });
+  } catch (err) {
+    // E.g. the port is in use: release the database before the error reaches the CLI.
+    db.close();
+    throw err;
+  }
 
   const expireSweep = () => {
     try {

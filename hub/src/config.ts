@@ -22,7 +22,7 @@ export const DEFAULT_LIMITS: Limits = {
 /** Not 8787 (Claude Code's fakechat channel demo) or 8788 (the Channels webhook example). */
 export const DEFAULT_PORT = 8790;
 
-const AGENT_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+export const AGENT_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const MIN_TOKEN_LENGTH = 24;
 const MIN_SECRET_LENGTH = 32;
 const MIN_PASSWORD_LENGTH = 12;

@@ -1,37 +1,43 @@
 #!/usr/bin/env bun
-import { ConfigError, loadConfig } from "./config";
-import { startServer } from "./server";
+import { initCommand } from "./commands/init";
+import type { CliIo } from "./commands/io";
+import { serveCommand } from "./commands/serve";
 
 const USAGE = `Usage: bridge <command>
 
 Commands:
-  serve    Run the hub. Reads bridge.yaml from BRIDGE_CONFIG (default ./bridge.yaml)
-           and secrets from the environment (Bun also loads ./.env).
-  help     Show this message.
+  serve             Run the hub. Reads bridge.yaml from BRIDGE_CONFIG (default ./bridge.yaml)
+                    and secrets from the environment (./.env is loaded too).
+  init [--shell]    Write a starter bridge.yaml if there is none, and generate every secret
+                    into ./.env, or with --shell into ./bridge-secrets.sh as export lines.
+  help              Show this message.
 `;
 
+const io: CliIo = {
+  env: process.env,
+  cwd: process.cwd(),
+  out: (line) => console.log(line),
+  err: (line) => console.error(line),
+};
+
 async function main(argv: string[]): Promise<number | "running"> {
-  const [command] = argv;
-  if (command === "serve") {
-    try {
-      const running = startServer(await loadConfig(process.env));
-      const shutdown = () => {
-        running.stop();
-        process.exit(0);
-      };
-      process.on("SIGINT", shutdown);
-      process.on("SIGTERM", shutdown);
-      return "running";
-    } catch (err) {
-      if (err instanceof ConfigError) {
-        console.error(err.message);
-        return 1;
-      }
-      throw err;
-    }
+  const [command, ...args] = argv;
+  switch (command) {
+    case "serve":
+      return serveCommand(io);
+    case "init":
+      return initCommand(args, io);
+    case undefined:
+    case "help":
+    case "--help":
+    case "-h":
+      io.out(USAGE);
+      return 0;
+    default:
+      io.err(`Unknown command: ${command}\n`);
+      io.err(USAGE);
+      return 1;
   }
-  console.log(USAGE);
-  return command === undefined || command === "help" || command === "--help" ? 0 : 1;
 }
 
 const outcome = await main(process.argv.slice(2));
