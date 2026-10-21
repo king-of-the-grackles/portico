@@ -6,7 +6,7 @@ import type { BridgeConfig } from "../core/types";
 import type { StreamHub } from "../ways-in/stream";
 import { connectGuide } from "./connect";
 import { sendPage } from "./layout";
-import { assistantCreatedView, joinLineView, networkView } from "./network-views";
+import { type AssistantForm, assistantCreatedView, joinLineView, networkView } from "./network-views";
 
 export interface NetworkRouteDeps {
   network: NetworkService;
@@ -17,6 +17,8 @@ export interface NetworkRouteDeps {
 
 const NETWORK_PATH = "/hub/network";
 
+const formText = (value: unknown): string => (typeof value === "string" ? value : "");
+
 /**
  * /hub/network: add machines, connect assistants, and remove either. Mounted behind the page's session and
  * same-origin checks. Join lines and tokens appear only in the answer to the post that made them.
@@ -25,7 +27,7 @@ export function networkRoutes(deps: NetworkRouteDeps): Hono {
   const { network, presence, streams, config } = deps;
   const app = new Hono();
 
-  const view = (error: string | null = null) =>
+  const view = (error: string | null = null, form: AssistantForm | null = null) =>
     networkView({
       machines: network.listMachines(),
       assistants: network
@@ -33,6 +35,7 @@ export function networkRoutes(deps: NetworkRouteDeps): Hono {
         .map((assistant) => ({ ...assistant, lastCheckIn: presence.lastCheckIn(assistant.name) })),
       configAgents: config.agents,
       error,
+      form,
     });
 
   app.get("/", (c) => sendPage(c, 200, "Network", view(), { nav: true }));
@@ -50,13 +53,18 @@ export function networkRoutes(deps: NetworkRouteDeps): Hono {
       const guide = connectGuide(assistant.kind, { publicUrl: config.publicUrl, name: assistant.name, token });
       return sendPage(c, 200, "Assistant connected", assistantCreatedView(assistant, guide), { nav: true });
     } catch (err) {
-      if (err instanceof BridgeError) return sendPage(c, 400, "Network", view(err.message), { nav: true });
+      if (err instanceof BridgeError) {
+        const typed = { kind: formText(form.kind), name: formText(name), description: formText(form.description) };
+        return sendPage(c, 400, "Network", view(err.message, typed), { nav: true });
+      }
       throw err;
     }
   });
 
   app.post("/assistants/:name/remove", (c) => {
-    network.removeAssistant(c.req.param("name"));
+    const name = c.req.param("name");
+    // A later assistant with the same name starts with no check-in.
+    if (network.removeAssistant(name)) presence.forget(name);
     return c.redirect(NETWORK_PATH, 303);
   });
 

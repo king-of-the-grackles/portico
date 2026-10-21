@@ -20,6 +20,8 @@ export const ASSISTANT_DESCRIPTIONS: Record<AssistantKind, string> = {
 const HOUR_MS = 3_600_000;
 const JOIN_CODE = /^[A-Za-z0-9_-]{16,64}$/;
 const MAX_DESCRIPTION = 500;
+/** The longest assistant name, the same cap slugify puts on machine and session names. */
+export const MAX_NAME_LENGTH = 40;
 const MAX_DEDUPE = 99;
 const INVALID_CODE = "The join code is invalid, expired or already used. Ask for a new join line.";
 
@@ -114,6 +116,9 @@ export class NetworkService {
     const { name, kind } = input;
     if (typeof name !== "string" || !AGENT_NAME.test(name)) {
       throw new BridgeError("bad_request", "name must be lowercase letters, digits and hyphens.");
+    }
+    if (name.length > MAX_NAME_LENGTH) {
+      throw new BridgeError("bad_request", `name must be at most ${MAX_NAME_LENGTH} characters.`);
     }
     if (!ASSISTANT_KINDS.some((known) => known === kind)) {
       throw new BridgeError("bad_request", `kind must be one of: ${ASSISTANT_KINDS.join(", ")}.`);

@@ -50,4 +50,10 @@ export class Presence {
   lastCheckIn(address: string): string | null {
     return this.checkIns.get(address) ?? null;
   }
+
+  /** Drops everything known about the address, e.g. once its assistant is removed. */
+  forget(address: string): void {
+    this.reports.delete(address);
+    this.checkIns.delete(address);
+  }
 }

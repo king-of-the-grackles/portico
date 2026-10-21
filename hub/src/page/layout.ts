@@ -32,10 +32,18 @@ textarea{width:100%;min-height:60px;margin-bottom:8px}
 label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
 table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top;font-size:14px}
+td{overflow-wrap:anywhere}
+td summary{overflow-wrap:normal}
 .status{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
 .status.live{border-color:var(--accent);color:var(--accent)}
 .paste{width:100%;min-height:72px;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
 .full{width:100%}
+.spaced{margin-bottom:12px}
+.fields{align-items:flex-start}
+.fields select{height:calc(1.5em + 18px)}
+details.confirm summary{cursor:pointer;font-weight:600;color:var(--danger)}
+details.confirm form{margin-top:6px}
+details.confirm button{padding:6px 8px;font-size:13px}
 .error{border-left:3px solid var(--danger)}
 @media (max-width:600px){.narrow-hide{display:none}}
 `;

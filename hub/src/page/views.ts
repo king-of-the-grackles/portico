@@ -1,6 +1,7 @@
 import { html } from "hono/html";
 import type { PermissionRequest } from "../core/permissions";
 import { type BridgeEvent, type DirectoryEntry, TASK_STATUSES, type Task, type TaskStatus } from "../core/types";
+import { kindLabel } from "./connect";
 import { formatTime, type Html, STATUS_WORDS } from "./layout";
 
 const clipText = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
@@ -61,11 +62,11 @@ function statusPill(entry: DirectoryEntry): Html {
 
 /** The live directory: every member, connected ones first (Directory.entries decides the order). */
 export function directoryTable(entries: DirectoryEntry[]): Html {
-  return html`<table><thead><tr><th>Agent</th><th>Kind</th><th>Where</th><th>Status</th><th class="narrow-hide">Doing</th><th>Last seen</th></tr></thead><tbody>
+  return html`<table><thead><tr><th>Agent</th><th class="narrow-hide">Kind</th><th>Where</th><th>Status</th><th class="narrow-hide">Doing</th><th>Last seen</th></tr></thead><tbody>
 ${entries.map(
   (entry) =>
-    html`<tr><td>${entry.display}${entry.display !== entry.address ? html`<div class="meta">${entry.address}</div>` : ""}</td><td>${
-      entry.kind
+    html`<tr><td>${entry.display}${entry.display !== entry.address ? html`<div class="meta">${entry.address}</div>` : ""}</td><td class="narrow-hide">${
+      kindLabel(entry.kind)
     }</td><td>${whereOf(entry)}</td><td>${statusPill(entry)}</td><td class="narrow-hide">${entry.doing ?? ""}</td><td>${
       entry.lastSeen ? formatTime(entry.lastSeen) : "Not since the last restart"
     }</td></tr>`,

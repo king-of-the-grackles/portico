@@ -98,8 +98,31 @@ describe("hub page", () => {
     expect(page).toContain("2026-10-20 12:00 UTC"); // codex's check-in
     expect(page).toContain("Not since the last restart");
     // claude-code is a push agent with no stream open; the others are pull agents.
-    expect(page).toMatch(/<td>claude-code<\/td><td>claude-code<\/td><td><\/td><td><span class="status">offline<\/span>/);
-    expect(page).toMatch(/<td>codex<\/td><td>codex<\/td><td><\/td><td><span class="status">checks in<\/span>/);
+    expect(page).toContain('<td>claude-code</td><td class="narrow-hide">Claude Code</td><td></td><td><span class="status">offline</span>');
+    expect(page).toContain('<td>codex</td><td class="narrow-hide">Codex</td><td></td><td><span class="status">checks in</span>');
+  });
+
+  test("on a phone, table cells wrap long names, the directory drops Kind and Doing, and the Network forms line up", async () => {
+    const ctx = makeApp();
+    const cookie = await signIn(ctx.app);
+    addSession(ctx, { name: "personal-finance-dashboard-claude", machine: "macbook" });
+    const home = await (await ctx.app.request("/hub", { headers: { cookie } })).text();
+    const style = home.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? "";
+    // Without this, a session row with long repo and branch names pushes the table past a 375 px screen.
+    expect(style).toContain("td{overflow-wrap:anywhere}");
+    // A Remove step stays readable in a narrow column: the summary never splits, and the button is compact.
+    expect(style).toContain("td summary{overflow-wrap:normal}");
+    expect(style).toContain("details.confirm button{padding:6px 8px;font-size:13px}");
+    expect(style).toContain("@media (max-width:600px){.narrow-hide{display:none}}");
+    expect(home).toContain('<th class="narrow-hide">Kind</th>');
+    expect(home).toContain('<th class="narrow-hide">Doing</th>');
+    // The Add a machine button keeps a gap above the table, and the Kind and Name fields share a height.
+    expect(style).toContain(".spaced{margin-bottom:12px}");
+    expect(style).toContain(".fields{align-items:flex-start}");
+    expect(style).toContain(".fields select{height:calc(1.5em + 18px)}");
+    const network = await (await ctx.app.request("/hub/network", { headers: { cookie } })).text();
+    expect(network).toContain('<form method="post" action="/hub/network/join-codes" class="spaced">');
+    expect(network).toContain('<div class="actions fields">');
   });
 
   test("approve and deny from the page", async () => {

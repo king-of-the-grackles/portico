@@ -22,6 +22,13 @@ export const KIND_LABELS: Record<AssistantKind, string> = {
   other: "Other MCP client",
 };
 
+const MEMBER_KIND_LABELS: Record<string, string> = { "claude-code": "Claude Code", ...KIND_LABELS };
+
+/** A member's kind as a reader would name it; a kind with no friendly name shows as itself. */
+export function kindLabel(kind: string): string {
+  return Object.hasOwn(MEMBER_KIND_LABELS, kind) ? MEMBER_KIND_LABELS[kind]! : kind;
+}
+
 /** How to connect a new assistant of this kind. The token is in the blocks, so the guide is shown once. */
 export function connectGuide(
   kind: AssistantKind,

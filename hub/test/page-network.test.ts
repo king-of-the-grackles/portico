@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { captureLogs } from "../src/log";
-import { callAs, joinMachine, makeApp, mintAssistant, openSessionStream, signIn, T0 } from "./helpers";
+import { BASE_YAML, callAs, joinMachine, makeApp, mintAssistant, openSessionStream, signIn, T0, testConfig } from "./helpers";
 
 const TOKEN = /ba_[A-Za-z0-9_-]{43}/;
 
@@ -55,6 +55,37 @@ describe("the live directory on the hub page", () => {
       expect(page).toMatch(/helper<\/td>[\s\S]*?checks in[\s\S]*?2026-10-20 11:30 UTC/);
       // The short name is shown, with the full address beside it when they differ.
       expect(page).toContain("dialog-claude@macbook");
+      // Kinds read as names, and the Kind column is hidden on narrow screens.
+      expect(page).toContain('dialog-claude@macbook</div></td><td class="narrow-hide">Claude Code</td>');
+      expect(page).toContain('<td>helper</td><td class="narrow-hide">Muse</td>');
+    } finally {
+      await events.cancel();
+    }
+  });
+
+  test("a kind with no friendly name shows as itself", async () => {
+    const yaml = BASE_YAML.replace("agents:\n", "agents:\n  - { name: notes, description: Notes, delivery: pull, kind: notes-bot }\n");
+    const ctx = makeApp(testConfig(yaml, { BRIDGE_TOKEN_NOTES: "notes-token-0123456789abcdef" }));
+    const cookie = await signIn(ctx.app);
+    const page = await getPage(ctx, "/hub", cookie);
+    expect(page).toContain('<td>notes</td><td class="narrow-hide">notes-bot</td>');
+    expect(page).toContain('<td>codex</td><td class="narrow-hide">Codex</td>');
+    expect(page).toContain('<td>grok-bot</td><td class="narrow-hide">Grok Bot</td>');
+  });
+
+  test("a session's doing, repo and branch are escaped in the directory", async () => {
+    const ctx = makeApp();
+    const cookie = await signIn(ctx.app);
+    const { token } = joinMachine(ctx, "macbook");
+    const { events } = await openSessionStream(ctx, token, { key: "key-aaaaaaaa", repo: "dialog" });
+    const hostile = "<img src=x onerror=alert(1)>";
+    ctx.presence.report("dialog-claude@macbook", { status: "busy", doing: hostile, repo: hostile, branch: hostile }, T0.toISOString());
+    try {
+      const page = await getPage(ctx, "/hub", cookie);
+      expect(page).not.toContain("<img");
+      const escaped = "&lt;img src=x onerror=alert(1)&gt;";
+      expect(page).toContain(`<td>macbook · ${escaped}@${escaped}</td>`);
+      expect(page).toContain(`<td class="narrow-hide">${escaped}</td>`);
     } finally {
       await events.cancel();
     }
@@ -88,8 +119,13 @@ describe("the network page", () => {
         expect(page).toContain(heading);
       }
       expect(page).not.toContain("<th>Connected</th>");
-      expect(page).toMatch(/<td>helper<\/td><td>codex<\/td><td><time[^>]*>2026-10-20 12:30 UTC<\/time><\/td><td>Not since the last restart<\/td>/);
+      expect(page).toMatch(/<td>helper<\/td><td>Codex<\/td><td><time[^>]*>2026-10-20 12:30 UTC<\/time><\/td><td>Not since the last restart<\/td>/);
       expect(page).toContain("Connect an assistant");
+      // The browser checks the name with the server's rule before posting.
+      const nameInput = page.match(/<input id="name"[^>]*>/)?.[0] ?? "";
+      expect(nameInput).toContain('pattern="[a-z0-9]+(-[a-z0-9]+)*"');
+      expect(nameInput).toContain('maxlength="40"');
+      expect(nameInput).toContain("required");
       for (const label of ["Muse", "Grok Bot", "ChatGPT", "Codex", "Other MCP client"]) expect(page).toContain(`>${label}</option>`);
       expect(page).toContain("From bridge.yaml");
       expect(page).toContain("Set in bridge.yaml. Changes need a hub restart.");
@@ -205,6 +241,58 @@ describe("the network page", () => {
       expect(page).not.toMatch(TOKEN);
     }
     expect(ctx.networkService.listAssistants().map((assistant) => assistant.name)).toEqual(["helper"]);
+  });
+
+  test("a 400 keeps what was typed in the form", async () => {
+    const ctx = makeApp();
+    const cookie = await signIn(ctx.app);
+    const res = await post(ctx, "/hub/network/assistants", cookie, {
+      kind: "codex",
+      name: "Bad Name",
+      description: 'Reads "the docs" <b>',
+    });
+    expect(res.status).toBe(400);
+    const page = await res.text();
+    expect(page).toContain('<option value="codex" selected>Codex</option>');
+    expect(page.match(/ selected>/g)).toHaveLength(1);
+    expect(page.match(/<input id="name"[^>]*>/)?.[0]).toContain('value="Bad Name"');
+    expect(page.match(/<input id="description"[^>]*>/)?.[0]).toContain('value="Reads &quot;the docs&quot; &lt;b&gt;"');
+    const fresh = await getPage(ctx, "/hub/network", cookie);
+    expect(fresh).not.toContain(" selected>");
+    expect(fresh.match(/<input id="name"[^>]*>/)?.[0]).toContain('value=""');
+  });
+
+  test("Remove takes a second tap, and says what removal does", async () => {
+    const ctx = makeApp();
+    const cookie = await signIn(ctx.app);
+    joinMachine(ctx, "macbook");
+    mintAssistant(ctx, "helper", "muse");
+    const page = await getPage(ctx, "/hub/network", cookie);
+    expect(page).toContain(
+      '<details class="confirm"><summary>Remove</summary><p class="meta">The sessions on macbook leave the network, and adding macbook back needs a new join line.</p><form method="post" action="/hub/network/machines/macbook/remove"><button type="submit" class="danger">Remove macbook</button></form></details>',
+    );
+    expect(page).toContain(
+      '<details class="confirm"><summary>Remove</summary><p class="meta">The token for helper stops working at once.</p><form method="post" action="/hub/network/assistants/helper/remove"><button type="submit" class="danger">Remove helper</button></form></details>',
+    );
+    // No Remove button sits outside a confirm step.
+    expect(page.match(/class="danger">Remove/g)).toHaveLength(2);
+  });
+
+  test("removing an assistant forgets its last check-in, so one connected again under the name starts fresh", async () => {
+    const ctx = makeApp();
+    const cookie = await signIn(ctx.app);
+    mintAssistant(ctx, "helper", "muse");
+    ctx.presence.checkedIn("helper", T0.toISOString());
+    expect(await getPage(ctx, "/hub/network", cookie)).toMatch(/<td>helper<\/td><td>Muse<\/td><td><time[^>]*>[^<]*<\/time><\/td><td><time/);
+    expect((await post(ctx, "/hub/network/assistants/helper/remove", cookie)).status).toBe(303);
+    expect(ctx.presence.lastCheckIn("helper")).toBeNull();
+    expect((await post(ctx, "/hub/network/assistants", cookie, { kind: "muse", name: "helper" })).status).toBe(200);
+    expect(await getPage(ctx, "/hub/network", cookie)).toMatch(
+      /<td>helper<\/td><td>Muse<\/td><td><time[^>]*>[^<]*<\/time><\/td><td>Not since the last restart<\/td>/,
+    );
+    expect(await getPage(ctx, "/hub", cookie)).toContain(
+      '<td>helper</td><td class="narrow-hide">Muse</td><td></td><td><span class="status">checks in</span></td><td class="narrow-hide"></td><td>Not since the last restart</td>',
+    );
   });
 
   test("removing an assistant stops its token at once", async () => {

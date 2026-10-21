@@ -4,7 +4,7 @@ import { hashSecret } from "../src/core/tokens";
 import { ASSISTANT_KINDS } from "../src/core/types";
 import { openDb } from "../src/db";
 import { NetworkStore } from "../src/network-store";
-import { addSession, errorCode, HOUR, testClock, testConfig } from "./helpers";
+import { addSession, errorCode, HOUR, PRONOUNS, testClock, testConfig } from "./helpers";
 
 function makeNetwork() {
   const db = openDb(":memory:");
@@ -108,6 +108,23 @@ describe("assistants", () => {
     networkService.createAssistant({ name: "chatgpt", kind: "chatgpt" });
     expect(errorCode(() => networkService.createAssistant({ name: "chatgpt", kind: "chatgpt" }))).toBe("bad_request");
     expect(networkService.listAssistants().map((a) => a.name)).toEqual(["chatgpt"]);
+  });
+
+  test("names are at most 40 characters", () => {
+    const { networkService } = makeNetwork();
+    const longest = `a${"-b".repeat(19)}c`;
+    expect(longest).toHaveLength(40);
+    expect(networkService.createAssistant({ name: longest, kind: "other" }).assistant.name).toBe(longest);
+    let message = "";
+    try {
+      networkService.createAssistant({ name: `${longest}d`, kind: "other" });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(errorCode(() => networkService.createAssistant({ name: `${longest}d`, kind: "other" }))).toBe("bad_request");
+    expect(message).toBe("name must be at most 40 characters.");
+    expect(message).not.toMatch(PRONOUNS);
+    expect(networkService.listAssistants().map((a) => a.name)).toEqual([longest]);
   });
 
   test("kind must be one of the assistant kinds", () => {
