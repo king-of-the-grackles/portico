@@ -51,3 +51,39 @@ test("plugin source imports nothing from outside the plugin folder, which is all
     }
   }
 });
+
+test("the slash commands run the plugin's CLI from the plugin folder", () => {
+  for (const name of ["join", "off", "on"]) {
+    const text = readFileSync(join(PLUGIN, "commands", `${name}.md`), "utf8");
+    expect(text).toContain("allowed-tools: Bash(bun:*)");
+    expect(text).toContain(`bun "\${CLAUDE_PLUGIN_ROOT}/src/cli.ts" ${name}`);
+  }
+  // The join line is passed in single quotes, and a line with a quote in it is refused.
+  const joinText = readFileSync(join(PLUGIN, "commands", "join.md"), "utf8");
+  expect(joinText).toContain(`join '$ARGUMENTS'`);
+  expect(joinText).toMatch(/quote character/);
+});
+
+/** Every module specifier in the source: `from "x"`, `import "x"`, `import(x)` and `require(x)`. */
+function importSpecs(text: string): string[] {
+  const IMPORT = /\bfrom\s+["']([^"']+)["']|\bimport\s+["']([^"']+)["']|\b(?:import|require)\s*\(\s*([^)]*)\)/g;
+  return [...text.matchAll(IMPORT)].map((match) => {
+    if (match[1] !== undefined || match[2] !== undefined) return (match[1] ?? match[2])!;
+    const argument = match[3]!.trim();
+    // A string literal is checked by its value; anything else stays as written, and fails the check.
+    return /^["']([^"']+)["']$/.exec(argument)?.[1] ?? argument;
+  });
+}
+
+test("the import check finds every form of import", () => {
+  const sample = `import a from "a";\nimport "b";\nconst c = await import("c");\nconst d = require('d');\nexport * from "e";\nimport(name);`;
+  expect(importSpecs(sample)).toEqual(["a", "b", "c", "d", "e", "name"]);
+});
+
+test("cli.ts, cli-run.ts, join.ts and machine.ts import only node built-ins and each other, so they run before bun install", () => {
+  for (const file of ["cli.ts", "cli-run.ts", "join.ts", "machine.ts"]) {
+    const imports = importSpecs(readFileSync(join(PLUGIN, "src", file), "utf8"));
+    expect(imports.length).toBeGreaterThan(0);
+    for (const spec of imports) expect(spec).toMatch(/^(node:[a-z_/]+|\.\/(cli-run|join|machine))$/);
+  }
+});
