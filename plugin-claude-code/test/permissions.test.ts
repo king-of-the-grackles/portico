@@ -2,19 +2,22 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { HubClient, HubError, type PermissionPrompt, type PermissionView } from "../src/hub-client";
 import { PERMISSION_TTL_MS, PermissionRelayClient } from "../src/permissions";
 import { createBridgePlugin } from "../src/plugin";
-import { captureLog, fakeHost, startHub, type TestHub, TOKENS, waitFor } from "./helpers";
+import { captureLog, fakeHost, fakeInboxSocket, type FakeInboxSocket, startHub, type TestHub, TOKENS, waitFor } from "./helpers";
 
 let hub: TestHub;
 let logs: ReturnType<typeof captureLog>;
+let sock: FakeInboxSocket;
 const cleanup: (() => Promise<void>)[] = [];
 
-beforeEach(() => {
+beforeEach(async () => {
   hub = startHub();
   logs = captureLog();
+  sock = await fakeInboxSocket();
 });
 afterEach(async () => {
   for (const fn of cleanup.splice(0)) await fn();
   hub.stop();
+  await sock.close();
 });
 
 const prompt = (request_id: string) => ({
@@ -29,6 +32,7 @@ async function connect(opts: { relay?: boolean; client?: HubClient } = {}) {
     config: { url: hub.url, token: TOKENS["claude-code"], permissionRelay: opts.relay ?? true },
     client: opts.client ?? new HubClient({ url: hub.url, token: TOKENS["claude-code"] }),
     log: logs.log,
+    socket: sock.socket,
     stream: { initialBackoffMs: 10 },
     relayRetryMs: [5, 5],
   });
@@ -69,7 +73,7 @@ describe("permission relay", () => {
     // A second stream for the same token replaces the plugin's stream.
     const other = await fetch(`${hub.url}/api/stream`, { headers: { authorization: `Bearer ${TOKENS["claude-code"]}` } });
     try {
-      await waitFor(() => host.channel.some((m) => m.meta.kind === "notice"));
+      await waitFor(() => sock.posts.some((post) => post.content.startsWith("<bridge-notice>")));
       await host.askPermission(prompt("abcde"));
       await waitFor(() => logs.lines.some((line) => line.msg === "permission_relay_off"));
       await Bun.sleep(50);
@@ -107,7 +111,7 @@ describe("permission relay", () => {
 
   test("with relay off, prompts stay in the terminal and answers are ignored", async () => {
     const host = await connect({ relay: false });
-    expect(host.host.getServerCapabilities()?.experimental).toEqual({ "claude/channel": {} });
+    expect(host.host.getServerCapabilities()?.experimental).toBeUndefined();
     await host.askPermission(prompt("abcde"));
     hub.streams.sendPermissionAnswer("claude-code", "abcde", "allow");
     await Bun.sleep(100);

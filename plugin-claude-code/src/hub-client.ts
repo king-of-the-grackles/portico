@@ -31,6 +31,37 @@ export interface Inbox {
   results: TaskView[];
 }
 
+export interface ResultDelivery extends TaskView {
+  /** The result wrapped in the hub's `<bridge-result>` frame. */
+  framed_message: string;
+}
+
+export interface MessageDelivery {
+  id: string;
+  from_agent: string;
+  to_agent: string;
+  text: string;
+  reply_to: string | null;
+  created_at: string;
+  expires_at: string;
+  delivered_at: string | null;
+  framed_message: string;
+}
+
+/** What `GET /api/deliveries` returns: everything waiting for this session, unclaimed. */
+export interface Deliveries {
+  tasks: InboxTask[];
+  results: ResultDelivery[];
+  messages: MessageDelivery[];
+}
+
+/** The IDs this session delivered, for `POST /api/deliveries/ack`. */
+export interface DeliveryAck {
+  tasks: string[];
+  results: string[];
+  messages: string[];
+}
+
 export interface PermissionPrompt {
   request_id: string;
   tool_name: string;
@@ -90,6 +121,16 @@ export class HubClient {
 
   checkInbox(): Promise<Inbox> {
     return this.call("GET", "/api/inbox");
+  }
+
+  /** Peeks at what is waiting, changing nothing. Push agents only. */
+  pendingDeliveries(): Promise<Deliveries> {
+    return this.call("GET", "/api/deliveries");
+  }
+
+  /** Claims the delivered tasks and marks the delivered results and messages seen. */
+  ackDeliveries(ack: DeliveryAck): Promise<{ acked: Record<keyof DeliveryAck, number> }> {
+    return this.call("POST", "/api/deliveries/ack", ack);
   }
 
   finishTask(taskId: string, body: { result?: string; failed_reason?: string }): Promise<{ task: TaskView }> {

@@ -2,11 +2,12 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { PluginConfig } from "./config";
-import { InboxDelivery, type SendChannel, stopNotice } from "./delivery";
+import { frameNotice, InboxDelivery, stopNotice } from "./delivery";
 import type { HubClient } from "./hub-client";
 import { INSTRUCTIONS } from "./instructions";
 import { errorName, type Logger } from "./log";
 import { PermissionRelayClient } from "./permissions";
+import { type InboxSocket, SocketError } from "./socket";
 import { StreamClient, type StreamClientOptions } from "./stream";
 import { runTool, TOOLS } from "./tools";
 
@@ -29,6 +30,10 @@ export interface BridgePluginDeps {
   config: PluginConfig;
   client: HubClient;
   log: Logger;
+  /** Claude Code's inbox socket, where tasks, results and notices are posted. */
+  socket: Pick<InboxSocket, "post">;
+  /** Test override for the pauses before retrying a post the socket didn't take. */
+  deliveryRetryMs?: number[];
   /** Test overrides for the live stream. */
   stream?: Partial<Pick<StreamClientOptions, "silenceMs" | "initialBackoffMs" | "maxBackoffMs" | "random">>;
   /** Test override for the pauses between permission relay attempts. */
@@ -42,21 +47,26 @@ export interface BridgePlugin {
   stop(): Promise<void>;
 }
 
-/** The plugin's MCP server: the six bridge tools, the Claude Code channel, and permission relay (spec §9.5). */
+/**
+ * The plugin's MCP server: the six bridge tools, delivery through Claude Code's inbox socket, and permission relay
+ * (spec §9.5). The Claude Code channel is declared only for permission relay.
+ */
 export function createBridgePlugin(deps: BridgePluginDeps): BridgePlugin {
-  const { config, client, log } = deps;
-  const experimental: Record<string, object> = { "claude/channel": {} };
+  const { config, client, log, socket } = deps;
   // Omitted rather than set to false when off: Claude Code before 2.1.234 treated false as declared.
-  if (config.permissionRelay) experimental["claude/channel/permission"] = {};
-  const server = new Server(
-    { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: {}, experimental }, instructions: INSTRUCTIONS },
-  );
+  const capabilities = config.permissionRelay
+    ? { tools: {}, experimental: { "claude/channel": {}, "claude/channel/permission": {} } }
+    : { tools: {} };
+  const server = new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities, instructions: INSTRUCTIONS });
   addTools(server, client);
 
-  const send: SendChannel = (content, meta) =>
-    server.notification({ method: "notifications/claude/channel", params: { content, meta } });
-  const delivery = new InboxDelivery({ client, send, log, onFailure: () => stream.reconnect() });
+  const delivery = new InboxDelivery({
+    client,
+    socket,
+    log,
+    retryMs: deps.deliveryRetryMs,
+    onFailure: () => stream.reconnect(),
+  });
   const permissions = new PermissionRelayClient({
     client,
     log,
@@ -81,15 +91,27 @@ export function createBridgePlugin(deps: BridgePluginDeps): BridgePlugin {
     },
     onStop: (stop) => {
       if (config.permissionRelay) permissions.disable(stop.reason === "replaced" ? "replaced" : `rejected_${stop.status}`);
-      send(stopNotice(stop), { kind: "notice" }).catch((err) => log("warn", "notice_failed", { error: errorName(err) }));
+      socket
+        .post(frameNotice(stopNotice(stop)))
+        .catch((err) =>
+          log("warn", "notice_failed", err instanceof SocketError ? { code: err.code } : { error: errorName(err) }),
+        );
     },
     log,
     ...deps.stream,
   });
-  // Claude Code drops channel messages sent before the handshake completes, so the stream waits for it.
+  // The stream waits for the MCP handshake: Claude Code drops channel notifications (permission verdicts) sent
+  // before it, and the session should be up before anything is posted into its inbox.
   server.oninitialized = () => stream.start();
 
-  return { server, start: () => stream.start(), stop: () => stream.stop() };
+  return {
+    server,
+    start: () => stream.start(),
+    stop: async () => {
+      delivery.stop();
+      await stream.stop();
+    },
+  };
 }
 
 /** For sessions not on the bridge (BRIDGE_URL and BRIDGE_TOKEN both unset): no tools, no channel. */

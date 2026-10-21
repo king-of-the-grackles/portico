@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -5,6 +9,7 @@ import { z } from "zod";
 import { makeApp, TOKENS, type TestAgent } from "../../hub/test/helpers";
 import { HubClient } from "../src/hub-client";
 import type { Logger } from "../src/log";
+import { InboxSocket } from "../src/socket";
 
 export { TOKENS };
 
@@ -91,4 +96,79 @@ export async function waitFor(check: () => boolean, timeoutMs = 2000): Promise<v
     if (Date.now() > deadline) throw new Error("timed out waiting");
     await Bun.sleep(10);
   }
+}
+
+const tempDirs: string[] = [];
+process.on("exit", () => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
+
+/** A new empty folder under the system temp folder, removed when the test run exits. Short, so socket paths fit. */
+export function tempDir(prefix = "ab-"): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+/** Writes `<dir>/<pid>.json` the way Claude Code's session registry does. */
+export function writeSessionFile(
+  dir: string,
+  pid: number,
+  fields: Partial<{ sessionId: string; cwd: string; status: string; name: string; messagingSocketPath: string }>,
+): string {
+  const path = join(dir, `${pid}.json`);
+  const record = {
+    pid,
+    sessionId: fields.sessionId ?? `session-${pid}`,
+    cwd: fields.cwd ?? "/work",
+    status: fields.status ?? "idle",
+    kind: "interactive",
+    name: fields.name,
+    messagingSocketPath: fields.messagingSocketPath,
+    updatedAt: Date.now(),
+  };
+  writeFileSync(path, JSON.stringify(record));
+  return path;
+}
+
+export interface FakeInboxSocket {
+  path: string;
+  /** Each accepted post, with the auth token sent before it (null when none was). */
+  posts: { auth: string | null; content: string }[];
+  /** "error" answers every post with an error line instead of accepting it. */
+  mode: "accept" | "error";
+  /** An InboxSocket pointed at this fake. */
+  socket: InboxSocket;
+  close(): Promise<void>;
+}
+
+/** Stands in for Claude Code's inbox socket: reads the auth and user lines, records the post, and closes. */
+export async function fakeInboxSocket(opts: { token?: string | null; settleMs?: number } = {}): Promise<FakeInboxSocket> {
+  const path = join(tempDir(), "s.sock");
+  const posts: { auth: string | null; content: string }[] = [];
+  const fake = { path, posts, mode: "accept" as "accept" | "error" } as FakeInboxSocket;
+  const server = createServer((conn) => {
+    let buffer = "";
+    let auth: string | null = null;
+    conn.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      for (let i = buffer.indexOf("\n"); i >= 0; i = buffer.indexOf("\n")) {
+        const line = JSON.parse(buffer.slice(0, i));
+        buffer = buffer.slice(i + 1);
+        if (line.type === "auth") auth = line.token;
+        else if (line.type === "user") {
+          if (fake.mode === "error") conn.end(`${JSON.stringify({ type: "error", error: "refused" })}\n`);
+          else {
+            posts.push({ auth, content: line.message.content });
+            conn.end();
+          }
+        }
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(path, resolve));
+  const token = opts.token === undefined ? "inbox-token" : opts.token;
+  fake.socket = new InboxSocket({ path: () => path, token: () => token, settleMs: opts.settleMs ?? 20 });
+  fake.close = () => new Promise<void>((resolve) => server.close(() => resolve()));
+  return fake;
 }

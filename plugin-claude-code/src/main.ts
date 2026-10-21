@@ -1,10 +1,14 @@
 #!/usr/bin/env bun
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { type PluginConfig, PluginConfigError, parsePluginConfig } from "./config";
 import { HubClient } from "./hub-client";
 import { errorName, stderrLog as log } from "./log";
 import { createBridgePlugin, createIdleServer } from "./plugin";
+import { SessionLocator } from "./registry";
+import { InboxSocket, socketTarget } from "./socket";
 
 function setUp(): { server: Server; stop: () => Promise<void> } {
   let config: PluginConfig | null;
@@ -22,7 +26,15 @@ function setUp(): { server: Server; stop: () => Promise<void> } {
     return { server: createIdleServer(), stop: async () => {} };
   }
   log("info", "plugin_started", { origin: new URL(config.url).origin, permission_relay: config.permissionRelay });
-  return createBridgePlugin({ config, client: new HubClient({ url: config.url, token: config.token }), log });
+  // CLAUDE_CODE_MESSAGING_SOCKET names the inbox socket; without it, the session's registry file does.
+  const claudeHome = process.env.BRIDGE_CLAUDE_HOME?.trim() || join(homedir(), ".claude");
+  const locator = new SessionLocator({ sessionsDir: join(claudeHome, "sessions") });
+  return createBridgePlugin({
+    config,
+    client: new HubClient({ url: config.url, token: config.token }),
+    log,
+    socket: new InboxSocket(socketTarget(process.env, () => locator.current())),
+  });
 }
 
 const plugin = setUp();
