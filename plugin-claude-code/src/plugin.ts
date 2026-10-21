@@ -53,7 +53,7 @@ export interface BridgePlugin {
 }
 
 /**
- * The plugin's MCP server: the six bridge tools, delivery through Claude Code's inbox socket, and permission relay
+ * The plugin's MCP server: the seven bridge tools, delivery through Claude Code's inbox socket, and permission relay
  * (spec §9.5). The Claude Code channel is declared only for permission relay.
  */
 export function createBridgePlugin(deps: BridgePluginDeps): BridgePlugin {

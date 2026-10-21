@@ -69,7 +69,7 @@ describe("the plugin's MCP server", () => {
     }
   });
 
-  test("lists the six bridge tools", async () => {
+  test("lists the seven bridge tools", async () => {
     const { host } = await connected();
     const { tools } = await host.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
@@ -78,8 +78,28 @@ describe("the plugin's MCP server", () => {
       "get_task",
       "list_agents",
       "report_event",
+      "send_message",
       "send_task",
     ]);
+  });
+
+  test("send_message passes through and returns the tier", async () => {
+    const { host } = await connected();
+    const sent = await host.callTool({ name: "send_message", arguments: { to: "grok-bot", text: "Ready when you are" } });
+    expect(sent.isError).toBeFalsy();
+    const { message, delivery } = JSON.parse(text(sent)) as { message: { id: string; to_agent: string }; delivery: string };
+    expect(message.to_agent).toBe("grok-bot");
+    expect(delivery).toBe("queued");
+    expect(hub.store.getMessage(message.id)?.text).toBe("Ready when you are");
+
+    // A reply needs only reply_to and text.
+    const { message: question } = hub.service.sendMessage("muse", { to: "claude-code", text: "Which branch?" });
+    const reply = await host.callTool({ name: "send_message", arguments: { reply_to: question.id, text: "main" } });
+    expect(JSON.parse(text(reply))).toMatchObject({ message: { to_agent: "muse", reply_to: question.id }, delivery: "queued" });
+
+    const missing = await host.callTool({ name: "send_message", arguments: { to: "grok-bot" } });
+    expect(missing.isError).toBe(true);
+    expect(text(missing)).toBe("bad_request: text is required.");
   });
 
   test("tool calls pass through to the hub", async () => {

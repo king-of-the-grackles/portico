@@ -87,7 +87,7 @@ describe("the plugin over stdio", () => {
     });
     const { host, channel, errors } = await launch(env);
     try {
-      expect((await host.listTools()).tools).toHaveLength(6);
+      expect((await host.listTools()).tools).toHaveLength(7);
       await waitFor(() => hub!.streams.isConnected("claude-code"), 5000);
       const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Over stdio" });
       await waitFor(() => sock!.posts.length === 1, 5000);
@@ -179,7 +179,7 @@ describe("the plugin over stdio", () => {
     const address = `${sessionBaseName(basename(project))}@macbook`;
     const { host, errors, stderr } = await launch(env);
     try {
-      expect((await host.listTools()).tools).toHaveLength(6);
+      expect((await host.listTools()).tools).toHaveLength(7);
       await waitFor(() => hub!.streams.isConnected(address), 5000);
       await waitFor(() => hub!.presence.get(address)?.status === "busy", 5000);
       // Outside git, the repo is the folder's basename; never the path.

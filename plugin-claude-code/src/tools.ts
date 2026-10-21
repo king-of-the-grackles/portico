@@ -8,7 +8,9 @@ const str = (description: string) => ({ type: "string", description });
 export const TOOLS: Tool[] = [
   {
     name: "list_agents",
-    description: "List the other agents you can hand work to, with what each one is good at.",
+    description:
+      "List the other agents on the network, live: the name to address each by, its kind, machine, repo@branch, status " +
+      "(busy, idle, waiting or offline) and what it's doing.",
     inputSchema: noArgs,
   },
   {
@@ -30,8 +32,26 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "send_message",
+    description:
+      "Send a message to another agent, for back-and-forth that doesn't need a task. Messages between the owner's agents are " +
+      "always allowed. Returns the message and how it will arrive: pushed (a live session), queued (until the agent checks its " +
+      "inbox) or offline (held until the session returns).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: str("Who to send to: a name from list_agents. Optional with reply_to, which answers the other side of that message."),
+        text: str("The message, in plain text. Up to 64 KB."),
+        reply_to: str("Optional. The ID of the message this answers."),
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "check_inbox",
-    description: "Pick up new tasks sent to you (they move to working) and results of tasks you sent.",
+    description:
+      "Pick up new tasks sent to you (they move to working), messages sent to you, and results of tasks you sent.",
     inputSchema: noArgs,
   },
   {
@@ -93,6 +113,8 @@ const failure = (text: string): CallToolResult => ({ content: [{ type: "text", t
 export function inboxText(inbox: Inbox): string {
   const lines: string[] = [inbox.tasks.length ? `New tasks (${inbox.tasks.length}):` : "No new tasks."];
   for (const task of inbox.tasks) lines.push("---", task.framed_message);
+  lines.push("", inbox.messages.length ? `Messages (${inbox.messages.length}):` : "No new messages.");
+  for (const message of inbox.messages) lines.push("---", message.framed_message);
   lines.push("", inbox.results.length ? `Results of tasks you sent (${inbox.results.length}):` : "No new results.");
   for (const task of inbox.results) {
     lines.push(`- Task ${task.id} to ${task.to_agent}: ${task.status}`);
@@ -101,7 +123,7 @@ export function inboxText(inbox: Inbox): string {
   return lines.join("\n");
 }
 
-/** Runs one of the six tools against the hub. Hub errors become tool errors, as on the hub's /mcp. */
+/** Runs one of the seven tools against the hub. Hub errors become tool errors, as on the hub's /mcp. */
 export async function runTool(client: HubClient, name: string, args: Args): Promise<CallToolResult> {
   try {
     switch (name) {
@@ -114,6 +136,17 @@ export async function runTool(client: HubClient, name: string, args: Args): Prom
             to: required(args, "to"),
             instructions: required(args, "instructions"),
             ...(key !== undefined ? { idempotency_key: key } : {}),
+          }),
+        );
+      }
+      case "send_message": {
+        const to = optional(args, "to");
+        const replyTo = optional(args, "reply_to");
+        return json(
+          await client.sendMessage({
+            text: required(args, "text"),
+            ...(to !== undefined ? { to } : {}),
+            ...(replyTo !== undefined ? { reply_to: replyTo } : {}),
           }),
         );
       }

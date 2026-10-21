@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
 import { TOOLS as HUB_TOOLS } from "../../hub/src/ways-in/mcp";
+import { makeApp } from "../../hub/test/helpers";
+import type { Inbox } from "../src/hub-client";
 import { inboxText, TOOLS } from "../src/tools";
 
 test("the plugin's tools match the hub's /mcp tools exactly", () => {
   expect(TOOLS).toEqual(HUB_TOOLS as unknown as typeof TOOLS);
 });
 
-test("inboxText shows framed tasks and results", () => {
+test("inboxText shows framed tasks, messages and results", () => {
   const task = {
     id: "t1",
     from_agent: "grok-bot",
@@ -23,14 +25,59 @@ test("inboxText shows framed tasks and results", () => {
     updated_at: "2026-10-20T12:00:00.000Z",
     expires_at: "2026-10-21T12:00:00.000Z",
   };
+  const message = {
+    id: "m1",
+    from_agent: "muse",
+    to_agent: "claude-code",
+    text: "Hi",
+    reply_to: null,
+    created_at: "2026-10-20T12:00:00.000Z",
+    expires_at: "2026-10-21T12:00:00.000Z",
+    delivered_at: "2026-10-20T12:00:00.000Z",
+    framed_message: "FRAMED m1",
+  };
   const text = inboxText({
     tasks: [{ ...task, framed_message: "FRAMED t1" }],
     results: [{ ...task, id: "t2", to_agent: "muse", status: "done", result: "42" }],
+    messages: [message],
   });
   expect(text).toBe(
-    ["New tasks (1):", "---", "FRAMED t1", "", "Results of tasks you sent (1):", "- Task t2 to muse: done", "  Result: 42"].join(
-      "\n",
-    ),
+    [
+      "New tasks (1):",
+      "---",
+      "FRAMED t1",
+      "",
+      "Messages (1):",
+      "---",
+      "FRAMED m1",
+      "",
+      "Results of tasks you sent (1):",
+      "- Task t2 to muse: done",
+      "  Result: 42",
+    ].join("\n"),
   );
-  expect(inboxText({ tasks: [], results: [] })).toBe("No new tasks.\n\nNo new results.");
+  expect(inboxText({ tasks: [], results: [], messages: [] })).toBe("No new tasks.\n\nNo new messages.\n\nNo new results.");
+});
+
+test("inboxText writes what the hub's check_inbox writes", async () => {
+  // Two hubs in the same state (fixed clock, counted IDs): one answers MCP check_inbox, the other the REST inbox.
+  const seeded = () => {
+    const ctx = makeApp();
+    const sent = ctx.service.sendTask("claude-code", { to: "grok-bot", instructions: "Look it up" });
+    ctx.service.checkInbox("grok-bot");
+    ctx.service.finishTask("grok-bot", { taskId: sent.id, result: "Friday" });
+    ctx.service.sendTask("grok-bot", { to: "claude-code", instructions: "Write the changelog" });
+    ctx.service.sendMessage("muse", { to: "claude-code", text: "Which branch?" });
+    return ctx;
+  };
+  const mcp = await seeded().call("claude-code", "POST", "/mcp", {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "check_inbox", arguments: {} },
+  });
+  const hubText = ((await mcp.json()) as { result: { content: { text: string }[] } }).result.content[0]!.text;
+  const inbox = (await (await seeded().call("claude-code", "GET", "/api/inbox")).json()) as Inbox;
+  expect(hubText).toContain("Messages (1):");
+  expect(inboxText(inbox)).toBe(hubText);
 });

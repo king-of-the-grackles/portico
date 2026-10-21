@@ -60,7 +60,22 @@ describe("inbox socket delivery", () => {
     expect(instructions).toContain("list_agents");
     expect(instructions).toContain("<bridge-task");
     expect(instructions).toContain("<bridge-result");
+    expect(instructions).toContain("<bridge-message");
+    expect(instructions).toContain("send_message");
     expect(instructions).toContain("Act once per ID");
+  });
+
+  test("posts messages through the socket, framed by the hub, and acks them", async () => {
+    const { sock, channel } = await connect();
+    await waitFor(() => hub.streams.isConnected("claude-code"));
+    const { message } = hub.service.sendMessage("muse", { to: "claude-code", text: "Which branch is the release on?" });
+    await waitFor(() => sock.posts.length === 1);
+    expect(sock.posts[0]!.content).toStartWith(`<bridge-message id="${message.id}" from="muse">`);
+    expect(sock.posts[0]!.content).toEndWith("Which branch is the release on?\n</bridge-message>");
+    await waitFor(() => hub.store.getMessage(message.id)?.deliveredAt != null);
+    expect(logs.lines.find((line) => line.msg === "message_delivered")?.fields).toEqual({ message_id: message.id });
+    expect(JSON.stringify(logs.lines)).not.toContain("Which branch");
+    expect(channel).toEqual([]);
   });
 
   test("posts a new task through the inbox socket, framed by the hub, then claims it", async () => {

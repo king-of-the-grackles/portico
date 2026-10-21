@@ -26,17 +26,10 @@ export interface InboxTask extends TaskView {
   framed_message: string;
 }
 
-export interface Inbox {
-  tasks: InboxTask[];
-  results: TaskView[];
-}
+/** How a message or a queued task will arrive. */
+export type DeliveryTier = "pushed" | "queued" | "offline";
 
-export interface ResultDelivery extends TaskView {
-  /** The result wrapped in the hub's `<bridge-result>` frame. */
-  framed_message: string;
-}
-
-export interface MessageDelivery {
+export interface MessageView {
   id: string;
   from_agent: string;
   to_agent: string;
@@ -45,6 +38,21 @@ export interface MessageDelivery {
   created_at: string;
   expires_at: string;
   delivered_at: string | null;
+}
+
+export interface Inbox {
+  tasks: InboxTask[];
+  results: TaskView[];
+  messages: MessageDelivery[];
+}
+
+export interface ResultDelivery extends TaskView {
+  /** The result wrapped in the hub's `<bridge-result>` frame. */
+  framed_message: string;
+}
+
+export interface MessageDelivery extends MessageView {
+  /** The message wrapped in the hub's `<bridge-message>` frame. */
   framed_message: string;
 }
 
@@ -133,8 +141,20 @@ export class HubClient {
     return this.call("GET", "/api/agents");
   }
 
-  sendTask(body: { to: string; instructions: string; idempotency_key?: string }): Promise<{ task: TaskView }> {
+  sendTask(body: {
+    to: string;
+    instructions: string;
+    idempotency_key?: string;
+  }): Promise<{ task: TaskView; delivery: DeliveryTier | null }> {
     return this.call("POST", "/api/tasks", body);
+  }
+
+  sendMessage(body: {
+    to?: string;
+    text: string;
+    reply_to?: string;
+  }): Promise<{ message: MessageView; delivery: DeliveryTier }> {
+    return this.call("POST", "/api/messages", body);
   }
 
   checkInbox(): Promise<Inbox> {
