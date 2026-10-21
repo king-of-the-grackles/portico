@@ -26,7 +26,7 @@ bridge join 'Join my agent bridge: https://bridge.example.com/join#<code>'
 If the `bridge` command isn't on this machine, run the plugin's own copy:
 
 ```sh
-bun "$(ls -d ~/.claude/plugins/cache/agent-bridge/agent-bridge/*/ | tail -n 1)src/cli.ts" join 'Join my agent bridge: https://bridge.example.com/join#<code>'
+bun "$(ls -d ~/.claude/plugins/cache/agent-bridge/agent-bridge/*/ | sort -V | tail -n 1)src/cli.ts" join 'Join my agent bridge: https://bridge.example.com/join#<code>'
 ```
 
 Or, in a Claude Code session started after the install, run `/agent-bridge:join <join line>`. Claude checks the line's shape and then runs the join with its Bash tool, behind one normal permission prompt; a line with a quote or a stray character is refused. A hub whose public URL has a path can't use this command: use `bridge join <hub address> --code <code>` or the bun one-liner.
