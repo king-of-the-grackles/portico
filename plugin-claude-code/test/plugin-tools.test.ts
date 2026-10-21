@@ -100,6 +100,10 @@ describe("the plugin's MCP server", () => {
     const missing = await host.callTool({ name: "send_message", arguments: { to: "grok-bot" } });
     expect(missing.isError).toBe(true);
     expect(text(missing)).toBe("bad_request: text is required.");
+
+    // The question went to this plugin's own live session: let that delivery finish, post and ack, before teardown.
+    await waitFor(() => sock.posts.length === 1);
+    await waitFor(() => hub.store.getMessage(question.id)?.deliveredAt != null);
   });
 
   test("tool calls pass through to the hub", async () => {

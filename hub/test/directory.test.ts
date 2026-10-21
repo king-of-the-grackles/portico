@@ -132,7 +132,7 @@ test("an assistant named like a bridge.yaml agent is shadowed by it", () => {
 
 const at = (ms: number) => new Date(T0.getTime() + ms).toISOString();
 
-test("entries show status, doing, repo and branch for connected sessions; offline sessions show only offline and last seen", () => {
+test("entries show status, doing, repo and branch for connected sessions; offline sessions show offline with no doing, their last repo and branch, and when last seen", () => {
   const ctx = makeService();
   addSession(ctx, { name: "dialog-claude", machine: "macbook" });
   addSession(ctx, { name: "wingman-claude", machine: "macbook" });
@@ -162,8 +162,15 @@ test("entries show status, doing, repo and branch for connected sessions; offlin
   });
   // Connected with no report yet: idle, with the folder it registered from as its repo.
   expect(entry("wingman-claude@macbook")).toMatchObject({ status: "idle", doing: null, repo: "wingman", branch: null, lastSeen: at(0) });
-  // Offline: the last report's status and doing aren't shown, and last seen is when its stream closed.
-  expect(entry("scenes-claude@studio")).toMatchObject({ status: "offline", doing: null, lastSeen: at(60_000) });
+  // Offline: the last report's status and doing aren't shown, its repo and branch are the last known, and last seen is
+  // when its stream closed.
+  expect(entry("scenes-claude@studio")).toMatchObject({
+    status: "offline",
+    doing: null,
+    repo: "scenes",
+    branch: "dev",
+    lastSeen: at(60_000),
+  });
   // A bridge.yaml push agent with no stream and no report is offline, never seen.
   expect(entry("claude-code")).toMatchObject({ status: "offline", doing: null, repo: null, branch: null, lastSeen: null });
 });

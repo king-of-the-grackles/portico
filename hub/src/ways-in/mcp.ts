@@ -22,93 +22,100 @@ const SERVER_INSTRUCTIONS =
 const noArgs = { type: "object", properties: {}, additionalProperties: false };
 const str = (description: string) => ({ type: "string", description });
 
-export const TOOLS = [
-  {
-    name: "list_agents",
-    description:
-      "List the other agents on the network, live: the name to address each by, its kind, machine, repo@branch, status " +
-      "(busy, idle, waiting or offline) and what it's doing.",
-    inputSchema: noArgs,
-  },
-  {
-    name: "send_task",
-    description:
-      "Hand a task to another agent. Returns the task, whose status says whether it was queued, " +
-      "is waiting for the user's approval, or was denied (with a reason).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        to: str("Name of the receiving agent (from list_agents)."),
-        instructions: str("What the receiving agent should do, in plain text."),
-        idempotency_key: str(
-          "Optional. A key you choose, new for each task. Send the same key when retrying, so a retry doesn't create a second task.",
-        ),
+/**
+ * The tools, with send_message's size note from max_message_kb. Without a limit the note names no number. The plugin
+ * can't know the hub's limit, so its tool list matches this one built without it.
+ */
+export function mcpTools(maxMessageKb?: number) {
+  const sizeNote = maxMessageKb === undefined ? "" : ` Up to ${maxMessageKb} KB.`;
+  return [
+    {
+      name: "list_agents",
+      description:
+        "List the other agents on the network, live: the name to address each by, its kind, machine, repo@branch, status " +
+        "(busy, idle, waiting or offline) and what it's doing.",
+      inputSchema: noArgs,
+    },
+    {
+      name: "send_task",
+      description:
+        "Hand a task to another agent. Returns the task, whose status says whether it was queued, " +
+        "is waiting for the user's approval, or was denied (with a reason).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          to: str("Name of the receiving agent (from list_agents)."),
+          instructions: str("What the receiving agent should do, in plain text."),
+          idempotency_key: str(
+            "Optional. A key you choose, new for each task. Send the same key when retrying, so a retry doesn't create a second task.",
+          ),
+        },
+        required: ["to", "instructions"],
+        additionalProperties: false,
       },
-      required: ["to", "instructions"],
-      additionalProperties: false,
     },
-  },
-  {
-    name: "send_message",
-    description:
-      "Send a message to another agent, for back-and-forth that doesn't need a task. Messages between the owner's agents are " +
-      "always allowed. Returns the message and how it will arrive: pushed (a live session), queued (until the agent checks its " +
-      "inbox) or offline (held until the session returns).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        to: str("Who to send to: a name from list_agents. Optional with reply_to, which answers the other side of that message."),
-        text: str("The message, in plain text. Up to 64 KB."),
-        reply_to: str("Optional. The ID of the message this answers."),
+    {
+      name: "send_message",
+      description:
+        "Send a message to another agent, for back-and-forth that doesn't need a task. Messages between the owner's agents are " +
+        "always allowed. Returns the message and how it will arrive: pushed (a live session), queued (until the agent checks its " +
+        "inbox) or offline (held until the session returns).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          to: str("Who to send to: a name from list_agents. Optional with reply_to, which answers the other side of that message."),
+          text: str(`The message, in plain text.${sizeNote}`),
+          reply_to: str("Optional. The ID of the message this answers."),
+        },
+        required: ["text"],
+        additionalProperties: false,
       },
-      required: ["text"],
-      additionalProperties: false,
     },
-  },
-  {
-    name: "check_inbox",
-    description:
-      "Pick up new tasks sent to you (they move to working), messages sent to you, and results of tasks you sent.",
-    inputSchema: noArgs,
-  },
-  {
-    name: "finish_task",
-    description: "Finish a task you picked up. Give either result (you completed it) or failed_reason (you couldn't).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        task_id: str("The task ID."),
-        result: str("Your answer, if you completed the task."),
-        failed_reason: str("Why you couldn't complete it."),
+    {
+      name: "check_inbox",
+      description:
+        "Pick up new tasks sent to you (they move to working), messages sent to you, and results of tasks you sent.",
+      inputSchema: noArgs,
+    },
+    {
+      name: "finish_task",
+      description: "Finish a task you picked up. Give either result (you completed it) or failed_reason (you couldn't).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          task_id: str("The task ID."),
+          result: str("Your answer, if you completed the task."),
+          failed_reason: str("Why you couldn't complete it."),
+        },
+        required: ["task_id"],
+        additionalProperties: false,
       },
-      required: ["task_id"],
-      additionalProperties: false,
     },
-  },
-  {
-    name: "get_task",
-    description: "Get the status and result of a task you sent or received.",
-    inputSchema: {
-      type: "object",
-      properties: { task_id: str("The task ID.") },
-      required: ["task_id"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "report_event",
-    description: "Report that something happened, e.g. bug_report_received. Matching triggers may create tasks.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: str("Event name: letters, digits, _ . -"),
-        details: str("Free-text details."),
+    {
+      name: "get_task",
+      description: "Get the status and result of a task you sent or received.",
+      inputSchema: {
+        type: "object",
+        properties: { task_id: str("The task ID.") },
+        required: ["task_id"],
+        additionalProperties: false,
       },
-      required: ["name"],
-      additionalProperties: false,
     },
-  },
-];
+    {
+      name: "report_event",
+      description: "Report that something happened, e.g. bug_report_received. Matching triggers may create tasks.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: str("Event name: letters, digits, _ . -"),
+          details: str("Free-text details."),
+        },
+        required: ["name"],
+        additionalProperties: false,
+      },
+    },
+  ];
+}
 
 type TextContent = { type: "text"; text: string }[];
 
@@ -190,7 +197,15 @@ function unreadLine(service: BridgeService, directory: Directory, agent: string,
   return unread > 0 ? [{ type: "text", text: `${unread} unread on the bridge: call check_inbox.` }] : [];
 }
 
-function handle(service: BridgeService, directory: Directory, agent: string, req: JsonRpcRequest) {
+type Tool = ReturnType<typeof mcpTools>[number];
+
+function handle(
+  service: BridgeService,
+  directory: Directory,
+  tools: Tool[],
+  agent: string,
+  req: JsonRpcRequest,
+) {
   const id = req.id ?? null;
   const params = (req.params ?? {}) as Record<string, unknown>;
   switch (req.method) {
@@ -209,10 +224,10 @@ function handle(service: BridgeService, directory: Directory, agent: string, req
     case "ping":
       return rpcResult(id, {});
     case "tools/list":
-      return rpcResult(id, { tools: TOOLS });
+      return rpcResult(id, { tools });
     case "tools/call": {
       const name = params.name;
-      if (typeof name !== "string" || !TOOLS.some((tool) => tool.name === name)) {
+      if (typeof name !== "string" || !tools.some((tool) => tool.name === name)) {
         return rpcError(id, -32602, "Unknown tool.");
       }
       const args = (params.arguments ?? {}) as Record<string, unknown>;
@@ -246,6 +261,7 @@ export function mcpRoutes(
   directory: Directory,
 ): Hono {
   const mcp = new Hono();
+  const tools = mcpTools(config.limits.maxMessageKb);
 
   mcp.get("/", (c) =>
     c.json({ error: "method_not_allowed", message: "This server doesn't offer a server-to-client stream." }, 405, {
@@ -282,7 +298,7 @@ export function mcpRoutes(
 
     if (req.id === undefined || req.id === null) return c.body(null, 202); // a notification: nothing to answer
     try {
-      return c.json(handle(service, directory, agent, req));
+      return c.json(handle(service, directory, tools, agent, req));
     } catch (err) {
       log("error", "mcp_internal_error", { error: errorName(err) });
       return c.json(rpcError(req.id, -32603, "Internal error"));

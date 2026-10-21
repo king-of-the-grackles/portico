@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import Ajv from "ajv";
-import { addSession, makeApp } from "./helpers";
+import { addSession, makeApp, TOKENS } from "./helpers";
 
 // The official A2A 0.3.0 JSON schema (spec §16: "the A2A agent cards validate against the A2A schema").
 const schema = JSON.parse(readFileSync(join(import.meta.dir, "fixtures/a2a-v0.3.0.json"), "utf8"));
@@ -33,7 +33,9 @@ describe("A2A 0.3.0 contract", () => {
   test("a session's card matches AgentCard", async () => {
     const ctx = makeApp();
     addSession(ctx, { name: "dialog-claude", machine: "macbook" });
-    const res = await ctx.call(null, "GET", "/a2a/dialog-claude@macbook/.well-known/agent-card.json");
+    const res = await ctx.app.request("/a2a/dialog-claude@macbook/.well-known/agent-card.json", {
+      headers: { authorization: `Bearer ${TOKENS["grok-bot"]}` },
+    });
     expect(res.status).toBe(200);
     expect(violations("AgentCard", await res.json())).toEqual([]);
   });

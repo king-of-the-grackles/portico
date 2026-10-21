@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { TOKENS, type TestAgent, makeApp } from "./helpers";
+import { BASE_YAML, TOKENS, type TestAgent, makeApp, testConfig } from "./helpers";
 
 let ctx: ReturnType<typeof makeApp>;
 let server: ReturnType<typeof Bun.serve>;
@@ -189,6 +189,17 @@ describe("messages, the live directory and the unread line", () => {
   }
 
   const UNREAD = "1 unread on the bridge: call check_inbox.";
+
+  test("send_message's size note follows max_message_kb", async () => {
+    const textNote = async (app: ReturnType<typeof makeApp>) => {
+      const res = await app.call("muse", "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" });
+      const { tools } = ((await res.json()) as { result: { tools: { name: string; inputSchema: any }[] } }).result;
+      return tools.find((tool) => tool.name === "send_message")!.inputSchema.properties.text.description;
+    };
+    expect(await textNote(makeApp())).toBe("The message, in plain text. Up to 64 KB.");
+    const small = makeApp(testConfig(BASE_YAML.replace("triggers:", "limits:\n  max_message_kb: 32\ntriggers:")));
+    expect(await textNote(small)).toBe("The message, in plain text. Up to 32 KB.");
+  });
 
   test("send_message returns the message and how it will arrive", async () => {
     const app = makeApp();

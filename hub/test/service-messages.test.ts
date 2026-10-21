@@ -91,6 +91,20 @@ test("the loop guard's refusal says when the window frees up", () => {
   );
 });
 
+test("the loop guard's retry time rounds up to the next minute, never down", () => {
+  const { service, clock } = makeService();
+  clock.advance(30_000);
+  service.sendMessage("muse", { to: "grok-bot", text: "first" }); // at 12:00:30
+  clock.advance(3 * 60_000);
+  for (let i = 0; i < 11; i++) service.sendMessage("grok-bot", { to: "muse", text: `m${i}` }); // at 12:03:30
+  // The window frees up at 12:10:30, so the advice names 12:11, not 12:10.
+  expect(errorMessage(() => service.sendMessage("muse", { to: "grok-bot", text: "13th" }))).toMatch(
+    /try again after 2026-10-20 12:11 UTC/i,
+  );
+  clock.advance(Date.parse("2026-10-20T12:11:00.000Z") - clock.now().getTime());
+  expect(service.sendMessage("muse", { to: "grok-bot", text: "at 12:11" }).message).toBeDefined();
+});
+
 test("the per-sender hourly limit applies", () => {
   const { service } = makeService(testConfig(BASE_YAML.replace("triggers:", "limits:\n  messages_per_hour_per_agent: 3\ntriggers:")));
   for (const to of ["codex", "grok-bot", "claude-code"]) service.sendMessage("muse", { to, text: "x" });

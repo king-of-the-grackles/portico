@@ -1,7 +1,8 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { type HubClient, HubError, type Inbox } from "./hub-client";
 
-// The same tools as the hub's /mcp (hub/src/ways-in/mcp.ts). test/tools.test.ts fails if they drift apart.
+// The same tools as the hub's /mcp (hub/src/ways-in/mcp.ts), as the hub writes them without a known message size
+// limit: the plugin can't know its hub's max_message_kb. test/tools.test.ts fails if they drift apart.
 const noArgs: Tool["inputSchema"] = { type: "object", properties: {}, additionalProperties: false };
 const str = (description: string) => ({ type: "string", description });
 
@@ -41,7 +42,7 @@ export const TOOLS: Tool[] = [
       type: "object",
       properties: {
         to: str("Who to send to: a name from list_agents. Optional with reply_to, which answers the other side of that message."),
-        text: str("The message, in plain text. Up to 64 KB."),
+        text: str("The message, in plain text."),
         reply_to: str("Optional. The ID of the message this answers."),
       },
       required: ["text"],

@@ -60,7 +60,7 @@ export function buildApp(deps: AppDeps): Hono {
   );
   app.route("/api", restRoutes(service, config, resolveAgent, directory, { presence, sessions, now: deps.now }));
   app.route("/mcp", mcpRoutes(service, config, resolveAgent, directory));
-  app.route("/a2a", a2aRoutes(service, config, resolveAgent, directory));
+  app.route("/a2a", a2aRoutes(service, config, resolveAgent, directory, deps.resolvers.principal));
 
   app.get("/hub/", (c) => c.redirect("/hub", 303));
   app.route("/hub", pageRoutes({ service, relay, streams, presence, config, now: deps.now }));

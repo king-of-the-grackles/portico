@@ -33,6 +33,7 @@ export interface ServiceDeps {
 /** The most of each kind one deliveries list holds, and one ack may name, so a single ack always covers a list. */
 export const DELIVERY_BATCH_MAX = 500;
 
+const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 const EVENT_NAME = /^[A-Za-z0-9_.-]{1,100}$/;
@@ -138,10 +139,12 @@ export class BridgeService {
     }
     const retryAt = loopGuardRetryAt(this.store.messageTimesBetween(caller, receiver.address, this.iso(-LOOP_WINDOW_MS)));
     if (retryAt) {
+      // Rounded up to the minute, so a retry at the time named is never refused again.
+      const retryMinute = new Date(Math.ceil(Date.parse(retryAt) / MINUTE_MS) * MINUTE_MS).toISOString();
       throw new BridgeError(
         "rate_limited",
         `Loop guard: ${LOOP_LIMIT} messages between ${caller} and ${receiver.address} in 10 minutes. ` +
-          `Try again after ${retryAt.slice(0, 16).replace("T", " ")} UTC.`,
+          `Try again after ${retryMinute.slice(0, 16).replace("T", " ")} UTC.`,
       );
     }
     const message: Message = {

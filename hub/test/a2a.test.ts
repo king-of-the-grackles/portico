@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addSession, BASE_YAML, mintAssistant, TOKENS, type TestAgent, makeApp, testConfig } from "./helpers";
+import { addSession, BASE_YAML, joinMachine, mintAssistant, TOKENS, type TestAgent, makeApp, testConfig } from "./helpers";
 
 type Ctx = ReturnType<typeof makeApp>;
 
@@ -59,18 +59,39 @@ describe("A2A agent cards", () => {
 describe("A2A for network members", () => {
   const yaml = BASE_YAML.replace("rules:\n", 'rules:\n  - { from: grok-bot, to: "kind:claude-code", action: allow }\n');
 
-  test("a session has a card at its full address", async () => {
+  const card = (ctx: ReturnType<typeof makeApp>, path: string, token?: string) =>
+    ctx.app.request(path, token ? { headers: { authorization: `Bearer ${token}` } } : {});
+
+  test("a session has a card at its full address, for a caller with a bridge token", async () => {
     const ctx = makeApp();
     addSession(ctx, { name: "dialog-claude", machine: "macbook" });
-    const res = await ctx.app.request("/a2a/dialog-claude@macbook/.well-known/agent-card.json");
+    const res = await card(ctx, "/a2a/dialog-claude@macbook/.well-known/agent-card.json", TOKENS["grok-bot"]);
     expect(res.status).toBe(200);
-    const card = await res.json();
-    expect(card).toMatchObject({ name: "dialog-claude@macbook", description: "Claude Code in dialog on macbook" });
-    expect(card.url).toEndWith("/a2a/dialog-claude@macbook");
-    expect((await ctx.app.request("/a2a/dialog-claude@studio/.well-known/agent-card.json")).status).toBe(404);
+    const body = await res.json();
+    expect(body).toMatchObject({ name: "dialog-claude@macbook", description: "Claude Code in dialog on macbook" });
+    expect(body.url).toEndWith("/a2a/dialog-claude@macbook");
+    expect((await card(ctx, "/a2a/dialog-claude@studio/.well-known/agent-card.json", TOKENS["grok-bot"])).status).toBe(404);
+    // Any token the hub accepts will do, a machine token without a session key included.
+    const { token } = joinMachine(ctx, "studio");
+    expect((await card(ctx, "/a2a/dialog-claude@macbook/.well-known/agent.json", token)).status).toBe(200);
   });
 
-  test("an assistant has a card too", async () => {
+  test("without a valid token, a session's card is a 404 like an unknown name's, so a guess can't confirm it exists", async () => {
+    const ctx = makeApp();
+    addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+    const unknown = await card(ctx, "/a2a/nobody@macbook/.well-known/agent-card.json");
+    expect(unknown.status).toBe(404);
+    const unknownBody = await unknown.json();
+    for (const path of ["/a2a/dialog-claude@macbook/.well-known/agent-card.json", "/a2a/dialog-claude@macbook/.well-known/agent.json"]) {
+      for (const token of [undefined, "not-a-real-token-123456789"]) {
+        const res = await card(ctx, path, token);
+        expect(res.status).toBe(404);
+        expect(await res.json()).toEqual(unknownBody);
+      }
+    }
+  });
+
+  test("an assistant's card stays public, as bridge.yaml agents' cards are", async () => {
     const ctx = makeApp();
     mintAssistant(ctx, "chatgpt", "chatgpt");
     const res = await ctx.app.request("/a2a/chatgpt/.well-known/agent-card.json");

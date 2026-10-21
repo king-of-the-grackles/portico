@@ -1,7 +1,18 @@
+/** One entry of the hub's live directory, as `GET /api/agents` returns it. */
 export interface AgentView {
+  /** The name to address the agent by: a session's short name when unique, otherwise its full address. */
   name: string;
+  address: string;
+  kind: string;
   description: string;
   delivery: "push" | "pull";
+  machine: string | null;
+  repo: string | null;
+  branch: string | null;
+  /** Null for pull agents. */
+  status: "busy" | "idle" | "waiting" | "offline" | null;
+  doing: string | null;
+  last_seen: string | null;
 }
 
 export interface TaskView {

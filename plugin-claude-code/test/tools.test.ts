@@ -1,11 +1,17 @@
 import { expect, test } from "bun:test";
-import { TOOLS as HUB_TOOLS } from "../../hub/src/ways-in/mcp";
+import { mcpTools } from "../../hub/src/ways-in/mcp";
 import { makeApp } from "../../hub/test/helpers";
 import type { Inbox } from "../src/hub-client";
 import { inboxText, TOOLS } from "../src/tools";
 
-test("the plugin's tools match the hub's /mcp tools exactly", () => {
-  expect(TOOLS).toEqual(HUB_TOOLS as unknown as typeof TOOLS);
+test("the plugin's tools match the hub's /mcp tools exactly, as the hub writes them without a known size limit", () => {
+  expect(TOOLS).toEqual(mcpTools() as unknown as typeof TOOLS);
+});
+
+test("the plugin doesn't know the hub's message size limit, so its send_message names no number", () => {
+  const text = (TOOLS.find((tool) => tool.name === "send_message")!.inputSchema.properties as Record<string, { description: string }>)
+    .text!.description;
+  expect(text).toBe("The message, in plain text.");
 });
 
 test("inboxText shows framed tasks, messages and results", () => {

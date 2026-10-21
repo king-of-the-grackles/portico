@@ -5,7 +5,7 @@ import { BridgeError } from "../core/errors";
 import type { BridgeService } from "../core/service";
 import type { BridgeConfig, Member, Task, TaskStatus } from "../core/types";
 import { clip, errorName, log } from "../log";
-import type { AgentResolver } from "./auth";
+import type { AgentResolver, PrincipalResolver } from "./auth";
 import { jsonBodyLimit } from "./limits";
 import { type JsonRpcId, type JsonRpcRequest, parseRequest, rpcError, rpcResult } from "./jsonrpc";
 
@@ -149,12 +149,16 @@ export function a2aRoutes(
   config: BridgeConfig,
   resolveAgent: AgentResolver,
   directory: Directory,
+  resolvePrincipal: PrincipalResolver,
 ): Hono {
   const a2a = new Hono();
 
   const cardHandler = (c: Context) => {
     const member = directory.find(c.req.param("agent") ?? "");
-    if (!member) return c.json({ error: "not_found", message: "No such agent." }, 404);
+    // A session's card names its repo and machine. Only a caller with a token the hub accepts sees it; to anyone else
+    // it's a 404 like an unknown name's, so a guessed address can't be confirmed.
+    const hidden = member?.source === "session" && !resolvePrincipal(c.req.header("authorization"));
+    if (!member || hidden) return c.json({ error: "not_found", message: "No such agent." }, 404);
     return c.json(agentCard(config, member));
   };
   a2a.get("/:agent/.well-known/agent-card.json", cardHandler);
