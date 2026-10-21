@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import type { BridgeEvent, Task, TaskStatus } from "./core/types";
+import type { BridgeEvent, Message, Task, TaskStatus } from "./core/types";
 
 // v1's schema, as deployed. Every statement is idempotent, because deployed v1 databases are at user_version 0
 // with these tables already there.
@@ -179,6 +179,17 @@ interface EventRow {
   created_at: string;
 }
 
+interface MessageRow {
+  id: string;
+  from_agent: string;
+  to_agent: string;
+  text: string;
+  reply_to: string | null;
+  created_at: string;
+  expires_at: string;
+  delivered_at: string | null;
+}
+
 type Bindings = Record<string, string | number | null>;
 
 function toTask(row: TaskRow): Task {
@@ -204,6 +215,19 @@ function toTask(row: TaskRow): Task {
 
 function toEvent(row: EventRow): BridgeEvent {
   return { id: row.id, agent: row.agent, name: row.name, details: row.details, createdAt: row.created_at };
+}
+
+function toMessage(row: MessageRow): Message {
+  return {
+    id: row.id,
+    fromAgent: row.from_agent,
+    toAgent: row.to_agent,
+    text: row.text,
+    replyTo: row.reply_to,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    deliveredAt: row.delivered_at,
+  };
 }
 
 function taskBindings(t: Task): Bindings {
@@ -239,6 +263,8 @@ const CHANGE_COLUMNS: Record<keyof TaskChanges, string> = {
 
 const FINAL = "('done', 'failed', 'denied', 'expired')";
 const ACTIVE = "('waiting_approval', 'queued', 'working')";
+/** A message to $agent not yet delivered and not expired at $now. */
+const PENDING_MESSAGE = "to_agent = $agent AND delivered_at IS NULL AND expires_at > $now";
 
 export class Store {
   constructor(private readonly db: Database) {}
@@ -337,18 +363,30 @@ export class Store {
     return rows.map(toTask);
   }
 
-  /** True if the agent has queued tasks, or finished results it sent and hasn't seen. */
-  hasWaitingFor(agent: string): boolean {
+  /** True if the agent has queued tasks, finished results it sent and hasn't seen, or pending messages. */
+  hasWaitingFor(agent: string, now: string): boolean {
     const row = this.db
       .query(
         `SELECT EXISTS (
            SELECT 1 FROM tasks
            WHERE (to_agent = $agent AND status = 'queued')
               OR (from_agent = $agent AND status IN ${FINAL} AND sender_notified_at IS NULL)
-         ) AS waiting`,
+         ) OR EXISTS (SELECT 1 FROM messages WHERE ${PENDING_MESSAGE}) AS waiting`,
       )
-      .get({ agent }) as { waiting: number };
+      .get({ agent, now }) as { waiting: number };
     return row.waiting === 1;
+  }
+
+  /** Queued tasks for the agent, unseen results it sent, and its pending messages: its unread count. */
+  countWaitingFor(agent: string, now: string): number {
+    const row = this.db
+      .query(
+        `SELECT (SELECT COUNT(*) FROM tasks WHERE to_agent = $agent AND status = 'queued')
+              + (SELECT COUNT(*) FROM tasks WHERE from_agent = $agent AND status IN ${FINAL} AND sender_notified_at IS NULL)
+              + (SELECT COUNT(*) FROM messages WHERE ${PENDING_MESSAGE}) AS n`,
+      )
+      .get({ agent, now }) as { n: number };
+    return row.n;
   }
 
   latestWorkingFor(agent: string): Task | null {
@@ -430,5 +468,74 @@ export class Store {
 
   deleteEventsBefore(cutoff: string): number {
     return this.db.query("DELETE FROM events WHERE created_at < $cutoff").run({ cutoff }).changes;
+  }
+
+  insertMessage(m: Message): void {
+    this.db
+      .query(
+        `INSERT INTO messages (id, from_agent, to_agent, text, reply_to, created_at, expires_at, delivered_at)
+         VALUES ($id, $fromAgent, $toAgent, $text, $replyTo, $createdAt, $expiresAt, $deliveredAt)`,
+      )
+      .run({
+        id: m.id,
+        fromAgent: m.fromAgent,
+        toAgent: m.toAgent,
+        text: m.text,
+        replyTo: m.replyTo,
+        createdAt: m.createdAt,
+        expiresAt: m.expiresAt,
+        deliveredAt: m.deliveredAt,
+      });
+  }
+
+  getMessage(id: string): Message | null {
+    const row = this.db.query("SELECT * FROM messages WHERE id = $id").get({ id }) as MessageRow | null;
+    return row ? toMessage(row) : null;
+  }
+
+  /** Undelivered, unexpired messages to the address, oldest first. The default `limit` of -1 means no limit. */
+  listPendingMessagesFor(address: string, now: string, limit = -1): Message[] {
+    const rows = this.db
+      .query(`SELECT * FROM messages WHERE ${PENDING_MESSAGE} ORDER BY created_at, rowid LIMIT $limit`)
+      .all({ agent: address, now, limit }) as MessageRow[];
+    return rows.map(toMessage);
+  }
+
+  /**
+   * Marks each listed message to the address delivered, if it's still undelivered and unexpired. Run inside the
+   * caller's transaction.
+   */
+  markMessagesDelivered(address: string, ids: string[], at: string): number {
+    const mark = this.db.query(
+      `UPDATE messages SET delivered_at = $at
+       WHERE id = $id AND to_agent = $address AND delivered_at IS NULL AND expires_at > $at`,
+    );
+    let marked = 0;
+    for (const id of ids) marked += mark.run({ id, address, at }).changes;
+    return marked;
+  }
+
+  /** When each message between the two was sent, either way, after `since`: oldest first. For the loop guard's window. */
+  messageTimesBetween(a: string, b: string, since: string): string[] {
+    const rows = this.db
+      .query(
+        `SELECT created_at FROM messages
+         WHERE ((from_agent = $a AND to_agent = $b) OR (from_agent = $b AND to_agent = $a)) AND created_at > $since
+         ORDER BY created_at, rowid`,
+      )
+      .all({ a, b, since }) as { created_at: string }[];
+    return rows.map((row) => row.created_at);
+  }
+
+  countMessagesFromSince(address: string, since: string): number {
+    const row = this.db
+      .query("SELECT COUNT(*) AS n FROM messages WHERE from_agent = $address AND created_at >= $since")
+      .get({ address, since }) as { n: number };
+    return row.n;
+  }
+
+  /** Deletes messages sent before the cutoff, delivered or not. */
+  deleteMessagesBefore(cutoff: string): number {
+    return this.db.query("DELETE FROM messages WHERE created_at < $cutoff").run({ cutoff }).changes;
   }
 }

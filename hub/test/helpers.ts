@@ -76,13 +76,21 @@ export function testConfig(yaml: string = BASE_YAML, extraEnv: Record<string, st
   return parseConfig(yaml, testEnv(extraEnv));
 }
 
+/** A service over an in-memory database. Add an address to `connected` to give it an open stream. */
 export function makeService(config: BridgeConfig = testConfig()) {
   const db = openDb(":memory:");
   const store = new Store(db);
   const network = new NetworkStore(db);
   const clock = testClock();
   const presence = new Presence();
-  const directory = new Directory({ config, network, presence, now: clock.now });
+  const connected = new Set<string>();
+  const directory = new Directory({
+    config,
+    network,
+    presence,
+    isConnected: (address) => connected.has(address),
+    now: clock.now,
+  });
   const notices: Notice[] = [];
   let counter = 0;
   const service = new BridgeService({
@@ -94,7 +102,7 @@ export function makeService(config: BridgeConfig = testConfig()) {
     newId: () => `id-${++counter}`,
     notify: (notice) => notices.push(notice),
   });
-  return { service, store, network, directory, presence, config, clock, notices };
+  return { service, store, network, directory, presence, connected, config, clock, notices };
 }
 
 /**

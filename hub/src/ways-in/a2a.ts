@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
+import type { Directory } from "../core/directory";
 import { BridgeError } from "../core/errors";
 import type { BridgeService } from "../core/service";
-import type { AgentConfig, BridgeConfig, Task, TaskStatus } from "../core/types";
+import type { BridgeConfig, Member, Task, TaskStatus } from "../core/types";
 import { clip, errorName, log } from "../log";
 import type { AgentResolver } from "./auth";
 import { jsonBodyLimit } from "./limits";
@@ -33,12 +34,13 @@ const UNSUPPORTED_METHODS = new Set([
   "agent/getAuthenticatedExtendedCard",
 ]);
 
-export function agentCard(config: BridgeConfig, agent: AgentConfig): Record<string, unknown> {
+/** Every member has a card at its full address: bridge.yaml agents, assistants and sessions. */
+export function agentCard(config: BridgeConfig, member: Member): Record<string, unknown> {
   return {
     protocolVersion: A2A_PROTOCOL_VERSION,
-    name: agent.name,
-    description: agent.description,
-    url: `${config.publicUrl}/a2a/${agent.name}`,
+    name: member.address,
+    description: member.description,
+    url: `${config.publicUrl}/a2a/${member.address}`,
     preferredTransport: "JSONRPC",
     version: "0.1.0",
     provider: { organization: "agent-bridge", url: config.publicUrl },
@@ -52,8 +54,8 @@ export function agentCard(config: BridgeConfig, agent: AgentConfig): Record<stri
     skills: [
       {
         id: "handoff",
-        name: `Hand a task to ${agent.name}`,
-        description: agent.description,
+        name: `Hand a task to ${member.address}`,
+        description: member.description,
         tags: ["handoff", "agent-bridge"],
         examples: [],
       },
@@ -142,20 +144,24 @@ function handle(service: BridgeService, caller: string, target: string, req: Jso
   }
 }
 
-export function a2aRoutes(service: BridgeService, config: BridgeConfig, resolveAgent: AgentResolver): Hono {
+export function a2aRoutes(
+  service: BridgeService,
+  config: BridgeConfig,
+  resolveAgent: AgentResolver,
+  directory: Directory,
+): Hono {
   const a2a = new Hono();
-  const findAgent = (name: string) => config.agents.find((agent) => agent.name === name);
 
   const cardHandler = (c: Context) => {
-    const agent = findAgent(c.req.param("agent") ?? "");
-    if (!agent) return c.json({ error: "not_found", message: "No such agent." }, 404);
-    return c.json(agentCard(config, agent));
+    const member = directory.find(c.req.param("agent") ?? "");
+    if (!member) return c.json({ error: "not_found", message: "No such agent." }, 404);
+    return c.json(agentCard(config, member));
   };
   a2a.get("/:agent/.well-known/agent-card.json", cardHandler);
   a2a.get("/:agent/.well-known/agent.json", cardHandler);
 
   a2a.post("/:agent", jsonBodyLimit(config), async (c) => {
-    const target = findAgent(c.req.param("agent"));
+    const target = directory.find(c.req.param("agent"));
     if (!target) return c.json({ error: "not_found", message: "No such agent." }, 404);
     const caller = resolveAgent(c.req.header("authorization"), c.req.header("x-bridge-session"));
     if (!caller) {
@@ -173,13 +179,13 @@ export function a2aRoutes(service: BridgeService, config: BridgeConfig, resolveA
     if (!req) return c.json(rpcError(null, -32600, "Invalid request"));
     log("info", "a2a_request", {
       agent: caller,
-      target: target.name,
+      target: target.address,
       method: req.method === "message/send" || req.method === "tasks/get" || UNSUPPORTED_METHODS.has(req.method) ? req.method : "other",
       a2a_version: clip(c.req.header("a2a-version")),
       user_agent: clip(c.req.header("user-agent")),
     });
     try {
-      return c.json(handle(service, caller, target.name, req));
+      return c.json(handle(service, caller, target.address, req));
     } catch (err) {
       log("error", "a2a_internal_error", { error: errorName(err) });
       return c.json(rpcError(req.id ?? null, -32603, "Internal error"));

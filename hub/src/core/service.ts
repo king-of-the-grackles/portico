@@ -1,11 +1,21 @@
 import type { Store } from "../db";
 import type { Directory } from "./directory";
 import { BridgeError } from "./errors";
+import { LOOP_LIMIT, LOOP_WINDOW_MS, loopGuardRetryAt } from "./guards";
 import type { Presence } from "./presence";
 import { resolveRule } from "./rules";
 import { renderTemplate } from "./templates";
 import { isFinal } from "./types";
-import type { AgentConfig, BridgeConfig, BridgeEvent, Notice, Task, TaskStatus } from "./types";
+import type {
+  BridgeConfig,
+  BridgeEvent,
+  DeliveryTier,
+  DirectoryEntry,
+  Message,
+  Notice,
+  Task,
+  TaskStatus,
+} from "./types";
 
 export interface ServiceDeps {
   store: Store;
@@ -53,12 +63,9 @@ export class BridgeService {
     this.log = deps.log ?? (() => {});
   }
 
-  /** Every member but the caller, by full address. */
-  listAgents(caller: string): AgentConfig[] {
-    return this.directory
-      .members()
-      .filter((member) => member.address !== caller)
-      .map(({ address, description, delivery, kind }) => ({ name: address, description, delivery, kind }));
+  /** The live directory: every member but the caller, connected members first. */
+  listAgents(caller: string): DirectoryEntry[] {
+    return this.directory.entries(caller);
   }
 
   lastCheckIn(agent: string): string | null {
@@ -66,7 +73,17 @@ export class BridgeService {
   }
 
   hasWaiting(agent: string): boolean {
-    return this.store.hasWaitingFor(agent);
+    return this.store.hasWaitingFor(agent, this.iso());
+  }
+
+  /** Queued tasks, unseen results and pending messages: what the caller's next check_inbox would pick up. */
+  unreadCount(caller: string): number {
+    return this.store.countWaitingFor(caller, this.iso());
+  }
+
+  /** How a queued task will reach its receiver; null for a task in any other state. */
+  deliveryFor(task: Task): DeliveryTier | null {
+    return task.status === "queued" ? this.directory.tier(task.toAgent) : null;
   }
 
   sendTask(caller: string, input: { to: string; instructions: string; idempotencyKey?: string }): Task {
@@ -93,7 +110,58 @@ export class BridgeService {
     });
   }
 
-  checkInbox(caller: string): { tasks: Task[]; results: Task[] } {
+  /**
+   * A message between the owner's agents. Rules, approvals and the chain check don't apply (spec §7.2); the guards do:
+   * no broadcasts, the size limit, the per-sender hourly limit and the loop guard.
+   */
+  sendMessage(
+    caller: string,
+    input: { to?: string; text: string; replyTo?: string },
+  ): { message: Message; delivery: DeliveryTier } {
+    this.requireMessageText(input.text);
+    let to = typeof input.to === "string" && input.to.trim() !== "" ? input.to : undefined;
+    let replyTo: string | null = null;
+    if (input.replyTo !== undefined && input.replyTo !== null && input.replyTo !== "") {
+      const original = typeof input.replyTo === "string" ? this.store.getMessage(input.replyTo) : null;
+      if (!original || (original.toAgent !== caller && original.fromAgent !== caller)) {
+        throw new BridgeError("bad_request", "reply_to must be the ID of a message sent to or by this agent.");
+      }
+      replyTo = original.id;
+      to ??= original.toAgent === caller ? original.fromAgent : original.toAgent;
+    }
+    if (!to) throw new BridgeError("bad_request", "to is required unless reply_to is given.");
+    const receiver = this.directory.resolve(to, caller); // refuses broadcasts and unknown names
+    if (receiver.address === caller) throw new BridgeError("bad_request", "An agent can't send a message to itself.");
+    const limit = this.config.limits.messagesPerHourPerAgent;
+    if (this.store.countMessagesFromSince(caller, this.iso(-HOUR_MS)) >= limit) {
+      throw new BridgeError("rate_limited", `${caller} has reached the limit of ${limit} messages per hour.`);
+    }
+    const retryAt = loopGuardRetryAt(this.store.messageTimesBetween(caller, receiver.address, this.iso(-LOOP_WINDOW_MS)));
+    if (retryAt) {
+      throw new BridgeError(
+        "rate_limited",
+        `Loop guard: ${LOOP_LIMIT} messages between ${caller} and ${receiver.address} in 10 minutes. ` +
+          `Try again after ${retryAt.slice(0, 16).replace("T", " ")} UTC.`,
+      );
+    }
+    const message: Message = {
+      id: this.newId(),
+      fromAgent: caller,
+      toAgent: receiver.address,
+      text: input.text,
+      replyTo,
+      createdAt: this.iso(),
+      expiresAt: this.iso(this.config.limits.messageExpiryHours * HOUR_MS),
+      deliveredAt: null,
+    };
+    this.store.insertMessage(message);
+    const delivery = this.directory.tier(receiver.address);
+    this.log("message_sent", { message_id: message.id, from: caller, to: receiver.address, delivery });
+    this.notify({ kind: "message_queued", message });
+    return { message, delivery };
+  }
+
+  checkInbox(caller: string): { tasks: Task[]; results: Task[]; messages: Message[] } {
     const at = this.iso();
     const outcome = this.store.transaction(() => {
       const tasks = this.store
@@ -102,7 +170,10 @@ export class BridgeService {
       const results = this.store
         .listUnseenResultsFor(caller)
         .map((task) => this.store.updateTask(task.id, { senderNotifiedAt: at }));
-      return { tasks, results };
+      const pending = this.store.listPendingMessagesFor(caller, at);
+      this.store.markMessagesDelivered(caller, pending.map((message) => message.id), at);
+      const messages = pending.map((message) => ({ ...message, deliveredAt: at }));
+      return { tasks, results, messages };
     });
     this.presence.checkedIn(caller, at);
     for (const task of outcome.tasks) this.log("task_status", { task_id: task.id, status: "working" });
@@ -113,24 +184,33 @@ export class BridgeService {
    * What a push agent's plugin has to deliver, oldest first, at most DELIVERY_BATCH_MAX of each kind. Peeking changes
    * nothing but the check-in time; ackDeliveries claims.
    */
-  pendingDeliveries(caller: string): { tasks: Task[]; results: Task[] } {
+  pendingDeliveries(caller: string): { tasks: Task[]; results: Task[]; messages: Message[] } {
+    const at = this.iso();
     const pending = {
       tasks: this.store.listQueuedFor(caller, DELIVERY_BATCH_MAX),
       results: this.store.listUnseenResultsFor(caller, DELIVERY_BATCH_MAX),
+      messages: this.store.listPendingMessagesFor(caller, at, DELIVERY_BATCH_MAX),
     };
-    this.presence.checkedIn(caller, this.iso());
+    this.presence.checkedIn(caller, at);
     return pending;
   }
 
-  /** Claims delivered tasks and marks delivered results seen: only the caller's own, and only those still in that state. */
-  ackDeliveries(caller: string, ack: { tasks: string[]; results: string[] }): { tasks: number; results: number } {
+  /**
+   * Claims delivered tasks, marks delivered results seen and marks delivered messages delivered: only the caller's own,
+   * and only those still in that state.
+   */
+  ackDeliveries(
+    caller: string,
+    ack: { tasks: string[]; results: string[]; messages: string[] },
+  ): { tasks: number; results: number; messages: number } {
     const at = this.iso();
-    const { claimed, seen } = this.store.transaction(() => ({
+    const { claimed, seen, delivered } = this.store.transaction(() => ({
       claimed: this.store.claimQueued(caller, [...new Set(ack.tasks)], at),
       seen: this.store.markResultsSeen(caller, [...new Set(ack.results)], at),
+      delivered: this.store.markMessagesDelivered(caller, [...new Set(ack.messages)], at),
     }));
     for (const task of claimed) this.log("task_status", { task_id: task.id, status: "working" });
-    return { tasks: claimed.length, results: seen };
+    return { tasks: claimed.length, results: seen, messages: delivered };
   }
 
   finishTask(caller: string, input: { taskId: string; result?: string; failedReason?: string }): Task {
@@ -248,9 +328,13 @@ export class BridgeService {
   }
 
   // Deletes finished tasks even if the sender never read the result: history_days bounds what the hub keeps.
-  deleteOldHistory(): { tasks: number; events: number } {
+  deleteOldHistory(): { tasks: number; events: number; messages: number } {
     const cutoff = this.iso(-this.config.limits.historyDays * DAY_MS);
-    return { tasks: this.store.deleteFinishedBefore(cutoff), events: this.store.deleteEventsBefore(cutoff) };
+    return {
+      tasks: this.store.deleteFinishedBefore(cutoff),
+      events: this.store.deleteEventsBefore(cutoff),
+      messages: this.store.deleteMessagesBefore(cutoff),
+    };
   }
 
   // ---- reads for the owner's own views (approval pages, the hub page): no caller check, no side effects ----
@@ -301,11 +385,18 @@ export class BridgeService {
     return value;
   }
 
-  private requireSize(field: string, value: string): void {
-    const maxKb = this.config.limits.maxTextKb;
+  private requireSize(field: string, value: string, maxKb = this.config.limits.maxTextKb): void {
     if (new TextEncoder().encode(value).length > maxKb * 1024) {
       throw new BridgeError("too_large", `${field} is larger than ${maxKb} KB.`);
     }
+  }
+
+  /** A message's text: non-empty, and within max_message_kb rather than max_text_kb. */
+  private requireMessageText(value: unknown): asserts value is string {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new BridgeError("bad_request", "text must be a non-empty string.");
+    }
+    this.requireSize("text", value, this.config.limits.maxMessageKb);
   }
 
   /** The receiver's full address. A short session name resolves when it's unique. */

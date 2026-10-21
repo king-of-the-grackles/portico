@@ -33,6 +33,7 @@ describe("OpenAPI document", () => {
       "GET /api/inbox",
       "GET /api/tasks/{id}",
       "POST /api/events",
+      "POST /api/messages",
       "POST /api/tasks",
       "POST /api/tasks/{id}/finish",
     ]);
@@ -47,6 +48,29 @@ describe("OpenAPI document", () => {
         const body = (await res.json()) as { message?: string };
         expect(`${method} ${path}: ${body.message}`).not.toBe(`${method} ${path}: No such endpoint.`);
       }
+    }
+  });
+
+  test("documents sendMessage, and live status on listAgents", () => {
+    const doc = openApiDocument(testConfig()) as any;
+    expect(doc.paths["/api/messages"].post.operationId).toBe("sendMessage");
+    const props = doc.paths["/api/messages"].post.requestBody.content["application/json"].schema.properties;
+    expect(Object.keys(props).sort()).toEqual(["reply_to", "text", "to"]);
+    expect(props.text.description).toContain("64 KB");
+    const items = doc.paths["/api/agents"].get.responses["200"].content["application/json"].schema.properties.agents.items;
+    const entry = items.$ref ? doc.components.schemas[items.$ref.split("/").pop()] : items;
+    expect(entry.properties).toHaveProperty("status");
+    expect(entry.properties).toHaveProperty("doing");
+    const sent = doc.paths["/api/tasks"].post.responses["201"].content["application/json"].schema;
+    expect(sent.properties).toHaveProperty("delivery");
+    const inbox = doc.paths["/api/inbox"].get.responses["200"].content["application/json"].schema;
+    expect(inbox.properties).toHaveProperty("messages");
+  });
+
+  test("leaves out the plugin-only routes and the join route", () => {
+    const paths = Object.keys(openApiDocument(testConfig()).paths);
+    for (const path of ["/api/deliveries", "/api/deliveries/ack", "/api/status", "/api/join", "/api/stream"]) {
+      expect(paths).not.toContain(path);
     }
   });
 

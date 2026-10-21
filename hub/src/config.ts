@@ -18,6 +18,9 @@ export const DEFAULT_LIMITS: Limits = {
   maxTextKb: 20,
   maxChainLength: 1,
   historyDays: 30,
+  maxMessageKb: 64,
+  messageExpiryHours: 24,
+  messagesPerHourPerAgent: 120,
 };
 
 /** Not 8787 (Claude Code's fakechat channel demo) or 8788 (the Channels webhook example). */
@@ -63,6 +66,9 @@ const FileSchema = z.strictObject({
       max_text_kb: positiveInt.optional(),
       max_chain_length: positiveInt.optional(),
       history_days: positiveInt.optional(),
+      max_message_kb: positiveInt.optional(),
+      message_expiry_hours: positiveInt.optional(),
+      messages_per_hour_per_agent: positiveInt.optional(),
     })
     .default({}),
 });
@@ -231,6 +237,9 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
       maxTextKb: limits.max_text_kb ?? DEFAULT_LIMITS.maxTextKb,
       maxChainLength: limits.max_chain_length ?? DEFAULT_LIMITS.maxChainLength,
       historyDays: limits.history_days ?? DEFAULT_LIMITS.historyDays,
+      maxMessageKb: limits.max_message_kb ?? DEFAULT_LIMITS.maxMessageKb,
+      messageExpiryHours: limits.message_expiry_hours ?? DEFAULT_LIMITS.messageExpiryHours,
+      messagesPerHourPerAgent: limits.messages_per_hour_per_agent ?? DEFAULT_LIMITS.messagesPerHourPerAgent,
     },
     publicUrl,
     tokens,

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { makeApp } from "./helpers";
+import { BASE_YAML, makeApp, testConfig } from "./helpers";
 
-const BIG = "x".repeat(61 * 1024);
+// Three times the larger text limit (64 KB for messages) is 192 KB.
+const BIG = "x".repeat(193 * 1024);
 const UNKNOWN = "zzz-unknown-method-xyz";
 
 describe("body limits on /mcp and /a2a", () => {
@@ -22,6 +23,21 @@ describe("body limits on /mcp and /a2a", () => {
     });
     expect(res.status).toBe(413);
     expect((await res.json()).error).toBe("too_large");
+  });
+});
+
+describe("the body limit", () => {
+  const ping = (pad: string) => ({ jsonrpc: "2.0", id: 1, method: "ping", params: { pad } });
+
+  test("is three times the larger of max_text_kb and max_message_kb", async () => {
+    const ctx = makeApp();
+    expect((await ctx.call("grok-bot", "POST", "/mcp", ping("x".repeat(150 * 1024)))).status).toBe(200);
+    const small = makeApp(testConfig(BASE_YAML.replace("triggers:", "limits:\n  max_message_kb: 8\ntriggers:")));
+    // max_text_kb (20) is now the larger: 60 KB.
+    expect((await small.call("grok-bot", "POST", "/mcp", ping("x".repeat(59 * 1024)))).status).toBe(200);
+    const res = await small.call("grok-bot", "POST", "/mcp", ping("x".repeat(61 * 1024)));
+    expect(res.status).toBe(413);
+    expect((await res.json()).message).toBe("Request body is larger than 60 KB.");
   });
 });
 

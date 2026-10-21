@@ -104,6 +104,24 @@ describe("notifier", () => {
     ]);
   });
 
+  test("nudges a push receiver when a message is queued, unless it was delivered first", async () => {
+    const { service, streams } = makeApp();
+    const claude = fakeConnection();
+    streams.connect("claude-code", claude.conn);
+    const muse = fakeConnection();
+    streams.connect("muse", muse.conn); // a pull member: never nudged
+    service.sendMessage("grok-bot", { to: "claude-code", text: "x" });
+    service.sendMessage("grok-bot", { to: "muse", text: "y" });
+    await flush();
+    expect(claude.sent).toEqual([{ event: "nudge", data: {} }]);
+    expect(muse.sent).toEqual([]);
+
+    const { message } = service.sendMessage("grok-bot", { to: "claude-code", text: "z" });
+    service.ackDeliveries("claude-code", { tasks: [], results: [], messages: [message.id] });
+    await flush();
+    expect(claude.sent).toHaveLength(1);
+  });
+
   test("sends an approval push for an ask pair", async () => {
     const { service, pushes } = makeApp();
     service.sendTask("grok-bot", { to: "muse", instructions: "Summarize the inbox" });
@@ -199,6 +217,18 @@ describe("GET /api/stream", () => {
       expect(await events.next()).toEqual(AGENT_HELLO);
       expect(await events.next()).toEqual({ event: "nudge", data: {} });
       service.sendTask("grok-bot", { to: "claude-code", instructions: "second" });
+      expect(await events.next()).toEqual({ event: "nudge", data: {} });
+    } finally {
+      await events.cancel();
+    }
+  });
+
+  test("nudges on connect when a message is waiting", async () => {
+    const { call, service } = makeApp();
+    service.sendMessage("muse", { to: "claude-code", text: "While you were out" });
+    const events = sseReader(await call("claude-code", "GET", "/api/stream"));
+    try {
+      expect(await events.next()).toEqual(AGENT_HELLO);
       expect(await events.next()).toEqual({ event: "nudge", data: {} });
     } finally {
       await events.cancel();

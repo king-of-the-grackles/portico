@@ -24,6 +24,12 @@ export function makeNotifier(deps: NotifierDeps): (notice: Notice) => void {
   return (notice) => {
     queueMicrotask(() => {
       try {
+        if (notice.kind === "message_queued") {
+          // Re-read: the message may already be delivered (a pull at the same moment), or gone with a rollback.
+          const message = store.getMessage(notice.message.id);
+          if (message && message.deliveredAt === null && directory.isPush(message.toAgent)) streams.nudge(message.toAgent);
+          return;
+        }
         // A rolled-back transaction leaves no task, or one in a different state: then there's nothing to do.
         const task = store.getTask(notice.task.id);
         // A decision follow-up reports what already happened, so the task having moved on (say to working) doesn't matter.

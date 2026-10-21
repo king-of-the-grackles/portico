@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Directory, SESSION_LIST_HOURS } from "../src/core/directory";
 import { hashSecret } from "../src/core/tokens";
-import { addSession, errorCode, HOUR, makeApp, mintAssistant, T0 } from "./helpers";
+import { addSession, errorCode, HOUR, makeApp, makeService, mintAssistant, T0 } from "./helpers";
 
 test("members are the bridge.yaml agents, the assistants and the recent sessions, each with a kind", () => {
   const ctx = makeApp();
@@ -128,4 +128,104 @@ test("an assistant named like a bridge.yaml agent is shadowed by it", () => {
   ]);
   expect(ctx.directory.find("muse")?.source).toBe("config");
   expect(ctx.directory.resolve("muse", "grok-bot").source).toBe("config");
+});
+
+const at = (ms: number) => new Date(T0.getTime() + ms).toISOString();
+
+test("entries show status, doing, repo and branch for connected sessions; offline sessions show only offline and last seen", () => {
+  const ctx = makeService();
+  addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+  addSession(ctx, { name: "wingman-claude", machine: "macbook" });
+  // Reported busy at 12:00:30, then its stream closed at 12:01, which wrote last_seen_at.
+  addSession(ctx, { name: "scenes-claude", machine: "studio", lastSeenAt: at(60_000) });
+  ctx.presence.report("scenes-claude@studio", { status: "busy", doing: "Old plan · Old step", repo: "scenes", branch: "dev" }, at(30_000));
+  ctx.connected.add("dialog-claude@macbook");
+  ctx.connected.add("wingman-claude@macbook");
+  ctx.clock.advance(120_000);
+  ctx.presence.report("dialog-claude@macbook", { status: "busy", doing: "Fix login · Adding tests", repo: "dialog", branch: "main" }, at(120_000));
+  const entry = (address: string) => ctx.directory.entries("muse").find((e) => e.address === address);
+
+  expect(entry("dialog-claude@macbook")).toEqual({
+    address: "dialog-claude@macbook",
+    name: "dialog-claude",
+    display: "dialog-claude",
+    source: "session",
+    kind: "claude-code",
+    description: "Claude Code in dialog on macbook",
+    delivery: "push",
+    machine: "macbook",
+    status: "busy",
+    doing: "Fix login · Adding tests",
+    repo: "dialog",
+    branch: "main",
+    lastSeen: at(120_000),
+  });
+  // Connected with no report yet: idle, with the folder it registered from as its repo.
+  expect(entry("wingman-claude@macbook")).toMatchObject({ status: "idle", doing: null, repo: "wingman", branch: null, lastSeen: at(0) });
+  // Offline: the last report's status and doing aren't shown, and last seen is when its stream closed.
+  expect(entry("scenes-claude@studio")).toMatchObject({ status: "offline", doing: null, lastSeen: at(60_000) });
+  // A bridge.yaml push agent with no stream and no report is offline, never seen.
+  expect(entry("claude-code")).toMatchObject({ status: "offline", doing: null, repo: null, branch: null, lastSeen: null });
+});
+
+test("pull members show their last check-in and no status", () => {
+  const ctx = makeService();
+  ctx.network.insertAssistant(
+    { id: "a-chatgpt", owner: "owner", name: "chatgpt", kind: "chatgpt", description: "ChatGPT", createdAt: at(0) },
+    hashSecret("ba_chatgpt"),
+  );
+  ctx.clock.advance(60_000);
+  ctx.service.checkInbox("grok-bot");
+  ctx.service.checkInbox("chatgpt");
+  const entries = ctx.directory.entries("muse");
+  const pull = { status: null, doing: null, repo: null, branch: null, machine: null, delivery: "pull" };
+  expect(entries.find((e) => e.address === "grok-bot")).toMatchObject({ ...pull, lastSeen: at(60_000) });
+  expect(entries.find((e) => e.address === "chatgpt")).toMatchObject({ ...pull, kind: "chatgpt", lastSeen: at(60_000) });
+  expect(entries.find((e) => e.address === "codex")).toMatchObject({ ...pull, lastSeen: null });
+});
+
+test("entries go busy, waiting, idle, then pull members, then offline, alphabetical within each", () => {
+  const ctx = makeService();
+  const live = (name: string, machine: string, status: "busy" | "waiting" | "idle" | null) => {
+    const { address } = addSession(ctx, { name, machine });
+    ctx.connected.add(address);
+    if (status) ctx.presence.report(address, { status, doing: null, repo: null, branch: null }, at(0));
+  };
+  live("zeta-claude", "macbook", "busy");
+  live("alpha-claude", "macbook", "busy");
+  live("mid-claude", "studio", "waiting");
+  live("beta-claude", "studio", null); // no report yet: idle
+  live("aaa-claude", "macbook", "idle");
+  addSession(ctx, { name: "old-claude", machine: "studio" });
+  ctx.presence.report("old-claude@studio", { status: "busy", doing: null, repo: null, branch: null }, at(0)); // gone since
+  expect(ctx.directory.entries().map((e) => e.display)).toEqual([
+    "alpha-claude",
+    "zeta-claude",
+    "mid-claude",
+    "aaa-claude",
+    "beta-claude",
+    "codex",
+    "grok-bot",
+    "muse",
+    "claude-code",
+    "old-claude",
+  ]);
+});
+
+test("entries leave out the caller, and name each by its short form when unique", () => {
+  const ctx = makeService();
+  addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+  addSession(ctx, { name: "dialog-claude", machine: "studio" });
+  addSession(ctx, { name: "wingman-claude", machine: "macbook" });
+  const fromWingman = ctx.directory.entries("wingman-claude@macbook");
+  expect(fromWingman.map((e) => e.address)).not.toContain("wingman-claude@macbook");
+  expect(fromWingman.filter((e) => e.source === "session").map((e) => e.display)).toEqual([
+    "dialog-claude@macbook",
+    "dialog-claude@studio",
+  ]);
+  const fromMuse = ctx.directory.entries("muse");
+  expect(fromMuse.map((e) => e.address)).not.toContain("muse");
+  expect(fromMuse.find((e) => e.address === "wingman-claude@macbook")?.display).toBe("wingman-claude");
+  expect(fromMuse.find((e) => e.address === "grok-bot")?.display).toBe("grok-bot");
+  expect(ctx.service.listAgents("muse")).toEqual(fromMuse);
 });

@@ -151,17 +151,21 @@ describe("expireDue", () => {
 });
 
 describe("deleteOldHistory", () => {
-  test("removes finished tasks and events older than history_days and keeps the rest", () => {
+  test("removes finished tasks, events and messages older than history_days and keeps the rest", () => {
     const { service, store, clock } = makeService();
     const old = service.sendTask("codex", { to: "claude-code", instructions: "blocked" }); // denied at once
     const { event } = service.reportEvent("grok-bot", { name: "ping", details: "" });
     const open = service.sendTask("grok-bot", { to: "muse", instructions: "waiting" });
+    const oldMessage = service.sendMessage("grok-bot", { to: "muse", text: "old" }).message;
     clock.advance(31 * 24 * HOUR);
     const recent = service.sendTask("codex", { to: "claude-code", instructions: "blocked again" });
-    expect(service.deleteOldHistory()).toEqual({ tasks: 1, events: 1 });
+    const recentMessage = service.sendMessage("grok-bot", { to: "muse", text: "recent" }).message;
+    expect(service.deleteOldHistory()).toEqual({ tasks: 1, events: 1, messages: 1 });
     expect(store.getTask(old.id)).toBeNull();
     expect(store.getEvent(event.id)).toBeNull();
+    expect(store.getMessage(oldMessage.id)).toBeNull();
     expect(store.getTask(open.id)).not.toBeNull();
     expect(store.getTask(recent.id)).not.toBeNull();
+    expect(store.getMessage(recentMessage.id)).not.toBeNull();
   });
 });

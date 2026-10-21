@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { addSession, BASE_YAML, HOUR, errorCode, makeService, testConfig } from "./helpers";
 
 describe("listAgents", () => {
-  test("lists everyone but the caller", () => {
+  test("lists everyone but the caller, pull members before offline push members", () => {
     const { service } = makeService();
-    expect(service.listAgents("grok-bot").map((a) => a.name)).toEqual(["claude-code", "muse", "codex"]);
+    expect(service.listAgents("grok-bot").map((a) => a.name)).toEqual(["codex", "muse", "claude-code"]);
   });
 });
 

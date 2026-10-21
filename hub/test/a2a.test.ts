@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { TOKENS, type TestAgent, makeApp } from "./helpers";
+import { addSession, BASE_YAML, mintAssistant, TOKENS, type TestAgent, makeApp, testConfig } from "./helpers";
 
 type Ctx = ReturnType<typeof makeApp>;
 
@@ -53,6 +53,41 @@ describe("A2A agent cards", () => {
     const { app } = makeApp();
     expect((await app.request("/a2a/muse/.well-known/agent.json")).status).toBe(200);
     expect((await app.request("/a2a/nobody/.well-known/agent-card.json")).status).toBe(404);
+  });
+});
+
+describe("A2A for network members", () => {
+  const yaml = BASE_YAML.replace("rules:\n", 'rules:\n  - { from: grok-bot, to: "kind:claude-code", action: allow }\n');
+
+  test("a session has a card at its full address", async () => {
+    const ctx = makeApp();
+    addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+    const res = await ctx.app.request("/a2a/dialog-claude@macbook/.well-known/agent-card.json");
+    expect(res.status).toBe(200);
+    const card = await res.json();
+    expect(card).toMatchObject({ name: "dialog-claude@macbook", description: "Claude Code in dialog on macbook" });
+    expect(card.url).toEndWith("/a2a/dialog-claude@macbook");
+    expect((await ctx.app.request("/a2a/dialog-claude@studio/.well-known/agent-card.json")).status).toBe(404);
+  });
+
+  test("an assistant has a card too", async () => {
+    const ctx = makeApp();
+    mintAssistant(ctx, "chatgpt", "chatgpt");
+    const res = await ctx.app.request("/a2a/chatgpt/.well-known/agent-card.json");
+    expect(res.status).toBe(200);
+    expect((await res.json()).url).toBe("https://bridge.test/a2a/chatgpt");
+  });
+
+  test("message/send to a session creates a task under a kind rule", async () => {
+    const ctx = makeApp(testConfig(yaml));
+    addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+    const body = await (await rpc(ctx, "grok-bot", "dialog-claude@macbook", "message/send", message("Fix the login bug"))).json();
+    expect(body.result).toMatchObject({
+      kind: "task",
+      status: { state: "submitted" },
+      metadata: { from_agent: "grok-bot", to_agent: "dialog-claude@macbook", bridge_status: "queued" },
+    });
+    expect(ctx.store.getTask(body.result.id)).toMatchObject({ toAgent: "dialog-claude@macbook", instructions: "Fix the login bug" });
   });
 });
 

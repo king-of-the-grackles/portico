@@ -66,7 +66,7 @@ describe("registration", () => {
     expect(a.address).toBe("dialog-claude@macbook");
     const task = ctx.service.sendTask("grok-bot", { to: "dialog-claude@macbook", instructions: "Look at the login bug" });
     expect(task.status).toBe("queued");
-    ctx.service.ackDeliveries("dialog-claude@macbook", { tasks: [task.id], results: [] });
+    ctx.service.ackDeliveries("dialog-claude@macbook", { tasks: [task.id], results: [], messages: [] });
     expect(ctx.store.getTask(task.id)?.status).toBe("working");
 
     const b = ctx.sessions.register(machine, { key: "key-bbbbbbbb", repo: "dialog", folderId: F1 });

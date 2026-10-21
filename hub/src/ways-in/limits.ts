@@ -1,9 +1,14 @@
 import { bodyLimit } from "hono/body-limit";
 import type { BridgeConfig } from "../core/types";
 
-/** Rejects request bodies larger than three times the text limit with a JSON 413. */
+/** The larger text limit, tasks' or messages', in KB: request bodies are sized from it. */
+export function maxTextOrMessageKb(config: BridgeConfig): number {
+  return Math.max(config.limits.maxTextKb, config.limits.maxMessageKb);
+}
+
+/** Rejects request bodies larger than three times the larger text limit with a JSON 413. */
 export function jsonBodyLimit(config: BridgeConfig) {
-  const maxBodyBytes = config.limits.maxTextKb * 1024 * 3;
+  const maxBodyBytes = maxTextOrMessageKb(config) * 1024 * 3;
   return bodyLimit({
     maxSize: maxBodyBytes,
     onError: (c) =>

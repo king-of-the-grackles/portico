@@ -69,6 +69,15 @@ export interface SessionRecord {
 /** What a push member reports about itself: Claude Code's own status for a session. */
 export type SessionStatus = "busy" | "idle" | "waiting";
 
+/** A push member's status in the directory: its reported status while its stream is open, otherwise offline. */
+export type LiveStatus = SessionStatus | "offline";
+
+/**
+ * How a message or a queued task will reach its receiver: pushed to a live session, queued until a pull member checks
+ * its inbox, or held until an offline session returns.
+ */
+export type DeliveryTier = "pushed" | "queued" | "offline";
+
 /** A push member's live status, kept in memory only. Text fields are defanged, one line and clipped. */
 export interface StatusReport {
   status: SessionStatus;
@@ -110,6 +119,20 @@ export interface Member {
   machine: string | null;
 }
 
+/** One member as the live directory shows it. */
+export interface DirectoryEntry extends Member {
+  /** The short form when unique, otherwise the full address: the name to address it by. */
+  display: string;
+  /** Null for pull members. */
+  status: LiveStatus | null;
+  /** Only while connected. */
+  doing: string | null;
+  repo: string | null;
+  branch: string | null;
+  /** Push members: the last report or stream close. Pull members: the last check-in. */
+  lastSeen: string | null;
+}
+
 /** What rules match on: the member's full address and its kind. */
 export interface MemberRef {
   address: string;
@@ -135,6 +158,9 @@ export interface Limits {
   maxTextKb: number;
   maxChainLength: number;
   historyDays: number;
+  maxMessageKb: number;
+  messageExpiryHours: number;
+  messagesPerHourPerAgent: number;
 }
 
 export interface NtfyConfig {
@@ -182,6 +208,20 @@ export interface Task {
   idempotencyKey: string | null;
 }
 
+/** Free-form text between two agents. Not governed by rules; it has no status beyond delivered. */
+export interface Message {
+  id: string;
+  fromAgent: string;
+  toAgent: string;
+  text: string;
+  /** The message this one answers. */
+  replyTo: string | null;
+  createdAt: string;
+  /** Undelivered messages stop being offered after this. */
+  expiresAt: string;
+  deliveredAt: string | null;
+}
+
 export interface BridgeEvent {
   id: string;
   agent: string;
@@ -196,4 +236,5 @@ export type Notice =
   | { kind: "approval_needed"; task: Task }
   | { kind: "result_ready"; task: Task }
   /** A task that was waiting_approval got its outcome (by link, hub page or expiry). */
-  | { kind: "approval_decided"; task: Task; outcome: "approved" | "denied" | "expired" };
+  | { kind: "approval_decided"; task: Task; outcome: "approved" | "denied" | "expired" }
+  | { kind: "message_queued"; message: Message };

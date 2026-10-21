@@ -36,15 +36,39 @@ beforeEach(() => {
 
 describe("Store: tasks", () => {
   test("hasWaitingFor sees queued tasks for the agent and unseen results it sent", () => {
-    expect(store.hasWaitingFor("claude-code")).toBe(false);
+    const now = "2026-10-20T12:30:00.000Z";
+    expect(store.hasWaitingFor("claude-code", now)).toBe(false);
     store.insertTask(task());
-    expect(store.hasWaitingFor("claude-code")).toBe(true);
-    expect(store.hasWaitingFor("grok-bot")).toBe(false);
+    expect(store.hasWaitingFor("claude-code", now)).toBe(true);
+    expect(store.hasWaitingFor("grok-bot", now)).toBe(false);
     store.updateTask("t1", { status: "done", result: "ok" });
-    expect(store.hasWaitingFor("claude-code")).toBe(false);
-    expect(store.hasWaitingFor("grok-bot")).toBe(true);
+    expect(store.hasWaitingFor("claude-code", now)).toBe(false);
+    expect(store.hasWaitingFor("grok-bot", now)).toBe(true);
     store.updateTask("t1", { senderNotifiedAt: "2026-10-20T13:00:00.000Z" });
-    expect(store.hasWaitingFor("grok-bot")).toBe(false);
+    expect(store.hasWaitingFor("grok-bot", now)).toBe(false);
+  });
+
+  test("hasWaitingFor and countWaitingFor see pending messages until they're delivered or expire", () => {
+    const message = {
+      id: "m1",
+      fromAgent: "muse",
+      toAgent: "claude-code",
+      text: "hi",
+      replyTo: null,
+      createdAt: "2026-10-20T12:00:00.000Z",
+      expiresAt: "2026-10-21T12:00:00.000Z",
+      deliveredAt: null,
+    };
+    store.insertMessage(message);
+    store.insertTask(task());
+    expect(store.getMessage("m1")).toEqual(message);
+    expect(store.countWaitingFor("claude-code", "2026-10-20T12:30:00.000Z")).toBe(2);
+    expect(store.countWaitingFor("claude-code", "2026-10-21T12:00:00.000Z")).toBe(1); // the message expired
+    store.updateTask("t1", { status: "working" });
+    expect(store.hasWaitingFor("claude-code", "2026-10-20T12:30:00.000Z")).toBe(true);
+    expect(store.hasWaitingFor("claude-code", "2026-10-21T12:00:00.000Z")).toBe(false);
+    expect(store.markMessagesDelivered("claude-code", ["m1"], "2026-10-20T12:31:00.000Z")).toBe(1);
+    expect(store.hasWaitingFor("claude-code", "2026-10-20T12:32:00.000Z")).toBe(false);
   });
 
   test("round-trips a task", () => {

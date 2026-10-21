@@ -60,6 +60,9 @@ describe("parseConfig", () => {
       maxTextKb: 20,
       maxChainLength: 1,
       historyDays: 30,
+      maxMessageKb: 64,
+      messageExpiryHours: 24,
+      messagesPerHourPerAgent: 120,
     });
     expect(config.port).toBe(8790);
     expect(config.signingSecret).toBe("s".repeat(32));
@@ -78,6 +81,22 @@ describe("parseConfig", () => {
     expect(config.limits.taskExpiryHours).toBe(2);
     expect(config.port).toBe(9000);
     expect(config.dbPath).toBe("/data/bridge.db");
+  });
+
+  test("reads the message limits, which must be positive integers", () => {
+    const limits = `\nlimits:\n  max_message_kb: 32\n  message_expiry_hours: 6\n  messages_per_hour_per_agent: 40\n`;
+    expect(parseConfig(`${YAML}${limits}`, ENV).limits).toMatchObject({
+      maxMessageKb: 32,
+      messageExpiryHours: 6,
+      messagesPerHourPerAgent: 40,
+    });
+    for (const key of ["max_message_kb", "message_expiry_hours", "messages_per_hour_per_agent"]) {
+      for (const bad of ["0", "-1", "1.5"]) {
+        const found = problems(`${YAML}\nlimits:\n  ${key}: ${bad}\n`);
+        expect(found.length).toBe(1);
+        expect(found[0]).toStartWith(`limits.${key}: `);
+      }
+    }
   });
 
   test("rejects bad and duplicate agent names", () => {

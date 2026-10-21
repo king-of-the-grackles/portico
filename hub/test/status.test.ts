@@ -33,6 +33,8 @@ test("a session's report shows in presence while connected, and offline in the d
     at: ctx.clock.now().toISOString(),
   });
   expect(ctx.streams.isConnected(ADDRESS)).toBe(true);
+  const entry = () => ctx.directory.entries().find((e) => e.address === ADDRESS);
+  expect(entry()).toMatchObject({ status: "busy", doing: "Fix login · Adding tests" });
 
   ctx.clock.advance(120_000);
   await stream.events.cancel();
@@ -40,6 +42,9 @@ test("a session's report shows in presence while connected, and offline in the d
   await waitUntil(() => !ctx.streams.isConnected(ADDRESS));
   expect(ctx.directory.find(ADDRESS)).not.toBeNull();
   expect(ctx.network.sessionByAddress("dialog-claude", "macbook")?.lastSeenAt).toBe(ctx.clock.now().toISOString());
+  // Presence still holds the last report, but the entry shows offline and no longer says what the session was doing.
+  expect(ctx.presence.get(ADDRESS)?.status).toBe("busy");
+  expect(entry()).toMatchObject({ status: "offline", doing: null, lastSeen: ctx.clock.now().toISOString() });
 });
 
 test("doing is defanged, made one line and clipped to 120 code points; repo keeps only its last segment", async () => {

@@ -11,9 +11,18 @@ import type { BridgeConfig } from "../core/types";
 import { errorName, log } from "../log";
 import { type AgentEnv, type AgentResolver, requireAgent } from "./auth";
 import { jsonBodyLimit } from "./limits";
-import { agentView, eventView, inboxTaskView, resultDeliveryView, taskView } from "./views";
+import {
+  directoryEntryView,
+  eventView,
+  inboxTaskView,
+  messageDeliveryView,
+  messageView,
+  resultDeliveryView,
+  taskView,
+} from "./views";
 
 const SendTaskBody = z.object({ to: z.string(), instructions: z.string(), idempotency_key: z.string().optional() });
+const SendMessageBody = z.object({ to: z.string().optional(), text: z.string(), reply_to: z.string().optional() });
 const FinishBody = z.object({ result: z.string().optional(), failed_reason: z.string().optional() });
 const EventBody = z.object({ name: z.string(), details: z.string().optional() });
 const AckIds = z.array(z.string()).max(DELIVERY_BATCH_MAX).default([]);
@@ -52,7 +61,7 @@ export function restRoutes(
 
   api.use("*", requireAgent(resolveAgent));
 
-  api.get("/agents", (c) => c.json({ agents: service.listAgents(c.get("agent")).map(agentView) }));
+  api.get("/agents", (c) => c.json({ agents: service.listAgents(c.get("agent")).map(directoryEntryView) }));
 
   api.post("/tasks", async (c) => {
     const body = SendTaskBody.parse(await readJson(c));
@@ -61,12 +70,22 @@ export function restRoutes(
       instructions: body.instructions,
       idempotencyKey: body.idempotency_key,
     });
-    return c.json({ task: taskView(task) }, 201);
+    return c.json({ task: taskView(task), delivery: service.deliveryFor(task) }, 201);
+  });
+
+  api.post("/messages", async (c) => {
+    const body = SendMessageBody.parse(await readJson(c));
+    const { message, delivery } = service.sendMessage(c.get("agent"), { to: body.to, text: body.text, replyTo: body.reply_to });
+    return c.json({ message: messageView(message), delivery }, 201);
   });
 
   api.get("/inbox", (c) => {
-    const { tasks, results } = service.checkInbox(c.get("agent"));
-    return c.json({ tasks: tasks.map(inboxTaskView), results: results.map(taskView) });
+    const { tasks, results, messages } = service.checkInbox(c.get("agent"));
+    return c.json({
+      tasks: tasks.map(inboxTaskView),
+      results: results.map(taskView),
+      messages: messages.map(messageDeliveryView),
+    });
   });
 
   // Peek and ack, for push agents' plugins: a GET changes nothing, and only the ack claims what was delivered.
@@ -78,16 +97,18 @@ export function restRoutes(
 
   api.get("/deliveries", (c) => {
     requirePush(c.get("agent"));
-    const { tasks, results } = service.pendingDeliveries(c.get("agent"));
-    return c.json({ tasks: tasks.map(inboxTaskView), results: results.map(resultDeliveryView), messages: [] });
+    const { tasks, results, messages } = service.pendingDeliveries(c.get("agent"));
+    return c.json({
+      tasks: tasks.map(inboxTaskView),
+      results: results.map(resultDeliveryView),
+      messages: messages.map(messageDeliveryView),
+    });
   });
 
   api.post("/deliveries/ack", async (c) => {
     requirePush(c.get("agent"));
     const body = AckBody.parse(await readJson(c));
-    // Messages are accepted and ignored until the hub has them.
-    const acked = service.ackDeliveries(c.get("agent"), { tasks: body.tasks, results: body.results });
-    return c.json({ acked: { ...acked, messages: 0 } });
+    return c.json({ acked: service.ackDeliveries(c.get("agent"), body) });
   });
 
   // Push members' live status, kept in memory (spec §5.3). The text is cleaned here; nothing about it is logged.

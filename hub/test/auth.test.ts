@@ -96,5 +96,6 @@ test("REST calls with a machine token act as the session named by X-Bridge-Sessi
   const res = await agents({ "x-bridge-session": "key-12345678" });
   expect(res.status).toBe(200);
   const names = ((await res.json()) as { agents: { name: string }[] }).agents.map((agent) => agent.name);
-  expect(names).toEqual(["grok-bot", "claude-code", "muse", "codex"]);
+  // Everyone but the session itself, in the directory's order: pull agents, then claude-code (offline).
+  expect(names).toEqual(["codex", "grok-bot", "muse", "claude-code"]);
 });

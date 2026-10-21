@@ -35,16 +35,17 @@ function text(result: unknown): string {
 }
 
 describe("MCP with the official SDK client", () => {
-  test("lists the six tools", async () => {
+  test("lists the seven tools, with send_message third", async () => {
     const client = await connect("grok-bot");
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name).sort()).toEqual([
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "list_agents",
+      "send_task",
+      "send_message",
       "check_inbox",
       "finish_task",
       "get_task",
-      "list_agents",
       "report_event",
-      "send_task",
     ]);
     await client.close();
   });
@@ -176,5 +177,96 @@ describe("MCP endpoint details", () => {
     const first = JSON.parse(text(await client.callTool({ name: "send_task", arguments: args })));
     const second = JSON.parse(text(await client.callTool({ name: "send_task", arguments: args })));
     expect(second.task.id).toBe(first.task.id);
+  });
+});
+
+describe("messages, the live directory and the unread line", () => {
+  type ToolResult = { content: { type: string; text: string }[]; isError: boolean };
+
+  async function callTool(app: ReturnType<typeof makeApp>, agent: TestAgent, name: string, args: Record<string, unknown> = {}) {
+    const res = await app.call(agent, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+    return ((await res.json()) as { result: ToolResult }).result;
+  }
+
+  const UNREAD = "1 unread on the bridge: call check_inbox.";
+
+  test("send_message returns the message and how it will arrive", async () => {
+    const app = makeApp();
+    const result = await callTool(app, "grok-bot", "send_message", { to: "muse", text: "Lunch at noon?" });
+    expect(result.isError).toBe(false);
+    expect(result.content).toHaveLength(1);
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({
+      message: { from_agent: "grok-bot", to_agent: "muse", text: "Lunch at noon?", reply_to: null, delivered_at: null },
+      delivery: "queued",
+    });
+  });
+
+  test("send_task returns the delivery tier too", async () => {
+    const app = makeApp();
+    const result = await callTool(app, "grok-bot", "send_task", { to: "claude-code", instructions: "Write the changelog" });
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({ task: { status: "queued" }, delivery: "offline" });
+  });
+
+  test("a pull caller with mail waiting gets the unread line after any tool but check_inbox, errors included", async () => {
+    const app = makeApp();
+    app.service.sendTask("claude-code", { to: "grok-bot", instructions: "Research this" });
+    const listed = await callTool(app, "grok-bot", "list_agents");
+    expect(listed.content).toHaveLength(2);
+    expect(listed.content.at(-1)).toEqual({ type: "text", text: UNREAD });
+    const failed = await callTool(app, "grok-bot", "send_task", { to: "nobody", instructions: "x" });
+    expect(failed.isError).toBe(true);
+    expect(failed.content.at(-1)).toEqual({ type: "text", text: UNREAD });
+
+    const inbox = await callTool(app, "grok-bot", "check_inbox");
+    expect(inbox.content).toHaveLength(2);
+    expect(inbox.content.some((item) => item.text.includes("unread on the bridge"))).toBe(false);
+    // Picked up, so nothing is unread now.
+    expect((await callTool(app, "grok-bot", "list_agents")).content).toHaveLength(1);
+  });
+
+  test("a push caller with waiting work gets no unread line", async () => {
+    const app = makeApp();
+    app.service.sendTask("grok-bot", { to: "claude-code", instructions: "Write the changelog" });
+    app.service.sendMessage("muse", { to: "claude-code", text: "Ping" });
+    expect(app.service.unreadCount("claude-code")).toBe(2);
+    expect((await callTool(app, "claude-code", "list_agents")).content).toHaveLength(1);
+  });
+
+  test("list_agents returns live directory entries", async () => {
+    const app = makeApp();
+    const { agents } = JSON.parse((await callTool(app, "muse", "list_agents")).content[0]!.text);
+    expect(Object.keys(agents[0]).sort()).toEqual([
+      "address",
+      "branch",
+      "delivery",
+      "description",
+      "doing",
+      "kind",
+      "last_seen",
+      "machine",
+      "name",
+      "repo",
+      "status",
+    ]);
+    expect(agents.find((a: { name: string }) => a.name === "claude-code")).toMatchObject({
+      address: "claude-code",
+      kind: "claude-code",
+      delivery: "push",
+      status: "offline",
+    });
+  });
+
+  test("check_inbox shows messages in their frames", async () => {
+    const app = makeApp();
+    const { message } = app.service.sendMessage("grok-bot", { to: "muse", text: "Lunch at noon?" });
+    const inbox = await callTool(app, "muse", "check_inbox");
+    const [readable, data] = inbox.content;
+    expect(readable!.text).toContain("Messages (1):");
+    expect(readable!.text).toContain(`<bridge-message id="${message.id}" from="grok-bot">`);
+    expect(readable!.text).toContain("Lunch at noon?\n</bridge-message>");
+    const parsed = JSON.parse(data!.text);
+    expect(parsed.messages.map((m: { id: string }) => m.id)).toEqual([message.id]);
+    expect(parsed.messages[0].framed_message).toStartWith(`<bridge-message id="${message.id}"`);
+    expect((await callTool(app, "muse", "check_inbox")).content[0]!.text).toContain("No new messages.");
   });
 });

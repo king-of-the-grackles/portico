@@ -5,6 +5,7 @@ import type { BridgeConfig } from "./core/types";
 import { openDb } from "./db";
 import { createHub } from "./hub";
 import { errorName, log } from "./log";
+import { maxTextOrMessageKb } from "./ways-in/limits";
 
 export interface RunningServer {
   port: number;
@@ -26,7 +27,8 @@ export function startServer(config: BridgeConfig, opts: { port?: number; push?: 
     server = Bun.serve({
       port: opts.port ?? config.port,
       fetch: hub.app.fetch,
-      maxRequestBodySize: config.limits.maxTextKb * 1024 * 4,
+      // A backstop above jsonBodyLimit's three times, sized from the same larger text limit.
+      maxRequestBodySize: maxTextOrMessageKb(config) * 1024 * 4,
       // Above the stream heartbeat (25 s), so quiet live streams aren't cut. Bun's default is 10 s.
       idleTimeout: 60,
     });
@@ -48,7 +50,7 @@ export function startServer(config: BridgeConfig, opts: { port?: number; push?: 
   const historySweep = () => {
     try {
       const deleted = service.deleteOldHistory();
-      if (deleted.tasks > 0 || deleted.events > 0) log("info", "history_pruned", deleted);
+      if (deleted.tasks > 0 || deleted.events > 0 || deleted.messages > 0) log("info", "history_pruned", deleted);
     } catch (err) {
       log("error", "history_prune_failed", { error: errorName(err) });
     }
