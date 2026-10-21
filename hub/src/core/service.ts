@@ -14,6 +14,9 @@ export interface ServiceDeps {
   log?: (msg: string, fields: Record<string, unknown>) => void;
 }
 
+/** The most of each kind one deliveries list holds, and one ack may name, so a single ack always covers a list. */
+export const DELIVERY_BATCH_MAX = 500;
+
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 const EVENT_NAME = /^[A-Za-z0-9_.-]{1,100}$/;
@@ -93,9 +96,15 @@ export class BridgeService {
     return outcome;
   }
 
-  /** What a push agent's plugin has to deliver. Peeking changes nothing but the check-in time; ackDeliveries claims. */
+  /**
+   * What a push agent's plugin has to deliver, oldest first, at most DELIVERY_BATCH_MAX of each kind. Peeking changes
+   * nothing but the check-in time; ackDeliveries claims.
+   */
   pendingDeliveries(caller: string): { tasks: Task[]; results: Task[] } {
-    const pending = { tasks: this.store.listQueuedFor(caller), results: this.store.listUnseenResultsFor(caller) };
+    const pending = {
+      tasks: this.store.listQueuedFor(caller, DELIVERY_BATCH_MAX),
+      results: this.store.listUnseenResultsFor(caller, DELIVERY_BATCH_MAX),
+    };
     this.lastCheckIns.set(caller, this.iso());
     return pending;
   }

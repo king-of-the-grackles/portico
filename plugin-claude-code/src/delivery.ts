@@ -113,8 +113,11 @@ export class InboxDelivery {
     }
     if (keys.length > 0) {
       // A HubError here leaves `posted` intact, so the next check acks these again without posting them again.
-      await client.ackDeliveries(ack);
+      const { acked } = await client.ackDeliveries(ack);
       for (const key of keys) this.posted.delete(key);
+      // The hub caps each list, so check again while acks make progress, until nothing is left.
+      const progress = (acked?.tasks ?? 0) + (acked?.results ?? 0) + (acked?.messages ?? 0);
+      if (!failure && progress > 0) this.again = true;
     }
     if (failure) {
       if (failure.code === "no_socket") {

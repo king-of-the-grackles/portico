@@ -1,17 +1,19 @@
 import type { Task } from "./types";
 
-// Order matters: OSC, then CSI, then any other ESC sequence, then control characters, bidi controls, separators,
+// Order matters: OSC, then CSI, then any other ESC sequence, then control characters, format characters, separators,
 // and finally the frame tags.
 const OSC = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g;
 const CSI = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const OTHER_ESC = /\u001b[@-_]?/g;
 const CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g; // keeps \t and \n; drops \r
-const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+// Every format character (Unicode Cf): bidi controls, zero-width characters, word joiners, soft hyphens, BOMs and
+// tag characters. Any of them could split a tag so it still reads as one.
+const FORMAT = /\p{Cf}/gu;
 const SEPARATORS = /[\u2028\u2029]/g;
 const FRAME_TAG = /<(?=\s*\/?\s*(?:bridge-|channel\b|system-reminder\b|command-|local-command-))/gi;
 
 /**
- * Makes another agent's text safe to put inside a frame: no terminal escapes, control characters or bidi controls,
+ * Makes another agent's text safe to put inside a frame: no terminal escapes, control characters or format characters,
  * and no tag that could close the frame or pose as one of Claude Code's own.
  */
 export function defang(text: string): string {
@@ -20,7 +22,7 @@ export function defang(text: string): string {
     .replace(CSI, "")
     .replace(OTHER_ESC, "")
     .replace(CONTROLS, "")
-    .replace(BIDI, "")
+    .replace(FORMAT, "")
     .replace(SEPARATORS, "\n")
     .replace(FRAME_TAG, "‹");
 }

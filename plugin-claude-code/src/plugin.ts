@@ -90,6 +90,8 @@ export function createBridgePlugin(deps: BridgePluginDeps): BridgePlugin {
       else if (event === "permission" && config.permissionRelay) permissions.answer(data);
     },
     onStop: (stop) => {
+      // Delivery is over for good too: a retry armed by an earlier socket failure must not peek, post or ack now.
+      delivery.stop();
       if (config.permissionRelay) permissions.disable(stop.reason === "replaced" ? "replaced" : `rejected_${stop.status}`);
       socket
         .post(frameNotice(stopNotice(stop)))

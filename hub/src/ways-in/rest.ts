@@ -3,7 +3,7 @@ import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import { BridgeError, HTTP_STATUS } from "../core/errors";
-import type { BridgeService } from "../core/service";
+import { type BridgeService, DELIVERY_BATCH_MAX } from "../core/service";
 import { type BridgeConfig, isPushAgent } from "../core/types";
 import { errorName, log } from "../log";
 import { type AgentEnv, type AgentResolver, requireAgent } from "./auth";
@@ -13,7 +13,7 @@ import { agentView, eventView, inboxTaskView, resultDeliveryView, taskView } fro
 const SendTaskBody = z.object({ to: z.string(), instructions: z.string(), idempotency_key: z.string().optional() });
 const FinishBody = z.object({ result: z.string().optional(), failed_reason: z.string().optional() });
 const EventBody = z.object({ name: z.string(), details: z.string().optional() });
-const AckIds = z.array(z.string()).max(500).default([]);
+const AckIds = z.array(z.string()).max(DELIVERY_BATCH_MAX).default([]);
 const AckBody = z.object({ tasks: AckIds, results: AckIds, messages: AckIds });
 
 export async function readJson(c: Context): Promise<unknown> {

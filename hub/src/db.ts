@@ -186,20 +186,22 @@ export class Store {
     return row ? toTask(row) : null;
   }
 
-  listQueuedFor(agent: string): Task[] {
+  /** Oldest first. The default `limit` of -1 means no limit. */
+  listQueuedFor(agent: string, limit = -1): Task[] {
     const rows = this.db
-      .query("SELECT * FROM tasks WHERE to_agent = $agent AND status = 'queued' ORDER BY created_at, rowid")
-      .all({ agent }) as TaskRow[];
+      .query("SELECT * FROM tasks WHERE to_agent = $agent AND status = 'queued' ORDER BY created_at, rowid LIMIT $limit")
+      .all({ agent, limit }) as TaskRow[];
     return rows.map(toTask);
   }
 
-  listUnseenResultsFor(agent: string): Task[] {
+  /** Oldest first. The default `limit` of -1 means no limit. */
+  listUnseenResultsFor(agent: string, limit = -1): Task[] {
     const rows = this.db
       .query(
         `SELECT * FROM tasks WHERE from_agent = $agent AND status IN ${FINAL} AND sender_notified_at IS NULL
-         ORDER BY updated_at, rowid`,
+         ORDER BY updated_at, rowid LIMIT $limit`,
       )
-      .all({ agent }) as TaskRow[];
+      .all({ agent, limit }) as TaskRow[];
     return rows.map(toTask);
   }
 

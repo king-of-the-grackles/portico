@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { stopNotice } from "../src/delivery";
-import { type Deliveries, type DeliveryAck, HubClient, HubError } from "../src/hub-client";
+import { deliveryItems, InboxDelivery, stopNotice } from "../src/delivery";
+import {
+  type Deliveries,
+  type DeliveryAck,
+  HubClient,
+  HubError,
+  type InboxTask,
+  type MessageDelivery,
+  type ResultDelivery,
+} from "../src/hub-client";
 import { createBridgePlugin } from "../src/plugin";
-import { InboxSocket } from "../src/socket";
+import { InboxSocket, SocketError } from "../src/socket";
 import { captureLog, fakeHost, fakeInboxSocket, hubClient, startHub, type TestHub, TOKENS, waitFor } from "./helpers";
 
 type TestAgent = keyof typeof TOKENS;
@@ -163,6 +171,77 @@ describe("inbox socket delivery", () => {
     expect(logs.lines.some((line) => line.msg === "inbox_check_failed")).toBe(true);
   });
 
+  test("checks again after each delivered batch, so a capped delivery list doesn't strand work", async () => {
+    class OneAtATime extends HubClient {
+      override async pendingDeliveries(): Promise<Deliveries> {
+        const d = await super.pendingDeliveries();
+        return { ...d, tasks: d.tasks.slice(0, 1) };
+      }
+    }
+    const ids = [1, 2, 3].map((i) => hub.service.sendTask("grok-bot", { to: "claude-code", instructions: `queued ${i}` }).id);
+    const { sock } = await connect({ client: new OneAtATime({ url: hub.url, token: TOKENS["claude-code"] }) });
+    await waitFor(() => sock.posts.length === 3);
+    for (const id of ids) await waitFor(() => status(id) === "working");
+  });
+
+  test("a permanent stop stops delivery, so an armed retry can't peek, post or ack afterwards", async () => {
+    class Counting extends HubClient {
+      peeks = 0;
+      acks = 0;
+      override async pendingDeliveries(): Promise<Deliveries> {
+        this.peeks++;
+        return super.pendingDeliveries();
+      }
+      override async ackDeliveries(ack: DeliveryAck) {
+        this.acks++;
+        return super.ackDeliveries(ack);
+      }
+    }
+    const client = new Counting({ url: hub.url, token: TOKENS["claude-code"] });
+    const { sock } = await connect({ client, retryMs: [300] });
+    await waitFor(() => hub.streams.isConnected("claude-code"));
+    sock.mode = "error";
+    const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Refused, then replaced" });
+    await waitFor(() => logs.lines.some((line) => line.msg === "inbox_post_failed"));
+    // The retry is now armed. Let the socket accept again, so only a stopped delivery keeps the task from going out.
+    sock.mode = "accept";
+    const peeks = client.peeks;
+    const other = await fetch(`${hub.url}/api/stream`, { headers: { authorization: `Bearer ${TOKENS["claude-code"]}` } });
+    try {
+      await waitFor(() => sock.posts.length === 1);
+      expect(sock.posts[0]!.content).toContain("another Claude Code session");
+      await Bun.sleep(400);
+      expect(client.peeks).toBe(peeks);
+      expect(client.acks).toBe(0);
+      expect(sock.posts).toHaveLength(1);
+      expect(status(task.id)).toBe("queued");
+    } finally {
+      await other.body?.cancel();
+    }
+  });
+
+  test("stop() clears a pending retry", async () => {
+    let peeks = 0;
+    const client = {
+      pendingDeliveries: async () => {
+        peeks++;
+        return { tasks: [{ id: "t1", created_at: "2026-10-21T10:00:00.000Z", framed_message: "T" }], results: [], messages: [] };
+      },
+      ackDeliveries: async () => ({ acked: { tasks: 0, results: 0, messages: 0 } }),
+    } as unknown as HubClient;
+    const socket = {
+      post: async () => {
+        throw new SocketError("refused", "The inbox socket refused the post.");
+      },
+    };
+    const delivery = new InboxDelivery({ client, socket, log: logs.log, onFailure: () => {}, retryMs: [20] });
+    await delivery.run();
+    await waitFor(() => peeks === 2); // the retry fired and armed the next one
+    delivery.stop();
+    await Bun.sleep(80);
+    expect(peeks).toBe(2);
+  });
+
   test("declares the channel only for permission relay", async () => {
     const off = await connect();
     expect(off.host.getServerCapabilities()?.experimental).toBeUndefined();
@@ -202,6 +281,21 @@ describe("inbox socket delivery", () => {
     expect(JSON.stringify(logs.lines)).not.toContain("SECRET-INSTRUCTIONS");
     expect(JSON.stringify(logs.lines)).not.toContain("inbox-token");
     expect(logs.lines.find((line) => line.msg === "task_delivered")?.fields).toEqual({ task_id: task.id });
+  });
+});
+
+describe("deliveryItems", () => {
+  test("orders tasks and messages by created_at, then results", () => {
+    const task = (id: string, created_at: string) => ({ id, created_at, framed_message: `T ${id}` }) as InboxTask;
+    const message = (id: string, created_at: string) => ({ id, created_at, framed_message: `M ${id}` }) as MessageDelivery;
+    const result = (id: string, created_at: string) => ({ id, created_at, framed_message: `R ${id}` }) as ResultDelivery;
+    const items = deliveryItems({
+      tasks: [task("t-late", "2026-10-21T10:00:03.000Z"), task("t-early", "2026-10-21T10:00:00.000Z")],
+      messages: [message("m-mid", "2026-10-21T10:00:01.000Z")],
+      results: [result("r-old", "2026-10-21T09:00:00.000Z")],
+    });
+    expect(items.map((item) => `${item.kind}:${item.id}`)).toEqual(["task:t-early", "message:m-mid", "task:t-late", "result:r-old"]);
+    expect(items.map((item) => item.text)).toEqual(["T t-early", "M m-mid", "T t-late", "R r-old"]);
   });
 });
 

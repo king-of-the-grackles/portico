@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { createServer, type Server } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { InboxSocket, SocketError, socketTarget } from "../src/socket";
-import { fakeInboxSocket, type FakeInboxSocket, tempDir } from "./helpers";
+import { fakeInboxSocket, type FakeInboxSocket, tempDir, waitFor } from "./helpers";
 
 const open: FakeInboxSocket[] = [];
 afterEach(async () => {
@@ -43,6 +43,27 @@ test("a peer that stays open and silent counts as accepted after settleMs", asyn
   await new InboxSocket({ path: () => path, token: () => null, settleMs: 30 }).post("quiet");
   expect(lines.join("")).toBe(`${JSON.stringify({ type: "user", message: { role: "user", content: "quiet" } })}\n`);
   server.close();
+});
+
+test("a peer that accepts but never reads times out during the write, leaving nothing open", async () => {
+  const path = join(tempDir(), "s.sock");
+  const conns: Socket[] = [];
+  let closed = 0;
+  const server: Server = createServer({ pauseOnConnect: true }, (conn) => {
+    conns.push(conn);
+    conn.on("error", () => {});
+    conn.on("close", () => closed++);
+  });
+  await new Promise<void>((r) => server.listen(path, r));
+  const big = "x".repeat(8 * 1024 * 1024); // far more than the socket buffers hold, so the write can't finish
+  const started = Date.now();
+  expect(await code(new InboxSocket({ path: () => path, token: () => null, connectTimeoutMs: 100 }).post(big))).toBe("timeout");
+  expect(Date.now() - started).toBeLessThan(2000);
+  // Reading again lets the peer see the client's end of the connection: it closes only if the client let go of it.
+  for (const conn of conns) conn.resume();
+  await waitFor(() => closed === 1);
+  // server.close() finishes only once every connection is gone.
+  await new Promise<void>((r) => server.close(() => r()));
 });
 
 test("socketTarget prefers CLAUDE_CODE_MESSAGING_SOCKET, then the registry's path", () => {
