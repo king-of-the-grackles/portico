@@ -1,4 +1,4 @@
-import { frameTask } from "../core/framing";
+import { frameResult, frameTask } from "../core/framing";
 import type { PermissionRequest } from "../core/permissions";
 import type { AgentConfig, BridgeEvent, Task, TaskStatus } from "../core/types";
 
@@ -40,6 +40,10 @@ export function taskView(task: Task): TaskView {
 
 export function inboxTaskView(task: Task): TaskView & { framed_message: string } {
   return { ...taskView(task), framed_message: frameTask(task) };
+}
+
+export function resultDeliveryView(task: Task): TaskView & { framed_message: string } {
+  return { ...taskView(task), framed_message: frameResult(task) };
 }
 
 export function eventView(event: BridgeEvent) {

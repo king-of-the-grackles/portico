@@ -93,6 +93,24 @@ export class BridgeService {
     return outcome;
   }
 
+  /** What a push agent's plugin has to deliver. Peeking changes nothing but the check-in time; ackDeliveries claims. */
+  pendingDeliveries(caller: string): { tasks: Task[]; results: Task[] } {
+    const pending = { tasks: this.store.listQueuedFor(caller), results: this.store.listUnseenResultsFor(caller) };
+    this.lastCheckIns.set(caller, this.iso());
+    return pending;
+  }
+
+  /** Claims delivered tasks and marks delivered results seen: only the caller's own, and only those still in that state. */
+  ackDeliveries(caller: string, ack: { tasks: string[]; results: string[] }): { tasks: number; results: number } {
+    const at = this.iso();
+    const { claimed, seen } = this.store.transaction(() => ({
+      claimed: this.store.claimQueued(caller, [...new Set(ack.tasks)], at),
+      seen: this.store.markResultsSeen(caller, [...new Set(ack.results)], at),
+    }));
+    for (const task of claimed) this.log("task_status", { task_id: task.id, status: "working" });
+    return { tasks: claimed.length, results: seen };
+  }
+
   finishTask(caller: string, input: { taskId: string; result?: string; failedReason?: string }): Task {
     const hasResult = typeof input.result === "string" && input.result.trim() !== "";
     const hasReason = typeof input.failedReason === "string" && input.failedReason.trim() !== "";

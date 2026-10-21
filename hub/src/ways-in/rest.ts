@@ -4,15 +4,17 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import { BridgeError, HTTP_STATUS } from "../core/errors";
 import type { BridgeService } from "../core/service";
-import type { BridgeConfig } from "../core/types";
+import { type BridgeConfig, isPushAgent } from "../core/types";
 import { errorName, log } from "../log";
 import { type AgentEnv, type AgentResolver, requireAgent } from "./auth";
 import { jsonBodyLimit } from "./limits";
-import { agentView, eventView, inboxTaskView, taskView } from "./views";
+import { agentView, eventView, inboxTaskView, resultDeliveryView, taskView } from "./views";
 
 const SendTaskBody = z.object({ to: z.string(), instructions: z.string(), idempotency_key: z.string().optional() });
 const FinishBody = z.object({ result: z.string().optional(), failed_reason: z.string().optional() });
 const EventBody = z.object({ name: z.string(), details: z.string().optional() });
+const AckIds = z.array(z.string()).max(500).default([]);
+const AckBody = z.object({ tasks: AckIds, results: AckIds, messages: AckIds });
 
 export async function readJson(c: Context): Promise<unknown> {
   try {
@@ -56,6 +58,27 @@ export function restRoutes(service: BridgeService, config: BridgeConfig, resolve
   api.get("/inbox", (c) => {
     const { tasks, results } = service.checkInbox(c.get("agent"));
     return c.json({ tasks: tasks.map(inboxTaskView), results: results.map(taskView) });
+  });
+
+  // Peek and ack, for push agents' plugins: a GET changes nothing, and only the ack claims what was delivered.
+  const requirePush = (agent: string) => {
+    if (!isPushAgent(config, agent)) {
+      throw new BridgeError("not_allowed", "Only push agents use deliveries; pull agents call check_inbox.");
+    }
+  };
+
+  api.get("/deliveries", (c) => {
+    requirePush(c.get("agent"));
+    const { tasks, results } = service.pendingDeliveries(c.get("agent"));
+    return c.json({ tasks: tasks.map(inboxTaskView), results: results.map(resultDeliveryView), messages: [] });
+  });
+
+  api.post("/deliveries/ack", async (c) => {
+    requirePush(c.get("agent"));
+    const body = AckBody.parse(await readJson(c));
+    // Messages are accepted and ignored until the hub has them.
+    const acked = service.ackDeliveries(c.get("agent"), { tasks: body.tasks, results: body.results });
+    return c.json({ acked: { ...acked, messages: 0 } });
   });
 
   api.post("/tasks/:id/finish", async (c) => {

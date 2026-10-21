@@ -30,8 +30,9 @@ describe("web API", () => {
     const inbox = await (await call("claude-code", "GET", "/api/inbox")).json();
     expect(inbox.tasks).toHaveLength(1);
     expect(inbox.tasks[0].status).toBe("working");
-    expect(inbox.tasks[0].framed_message).toStartWith(`**Task \`${task.id}\` from agent \`grok-bot\` via the bridge.**`);
-    expect(inbox.tasks[0].framed_message).toEndWith("Add rate limiting");
+    expect(inbox.tasks[0].framed_message).toStartWith(`<bridge-task id="${task.id}" from="grok-bot">`);
+    expect(inbox.tasks[0].framed_message).toContain(`**Task \`${task.id}\` from agent \`grok-bot\` via the bridge.**`);
+    expect(inbox.tasks[0].framed_message).toEndWith("Add rate limiting\n</bridge-task>");
 
     const finished = await call("claude-code", "POST", `/api/tasks/${task.id}/finish`, { result: "Done." });
     expect(finished.status).toBe(200);

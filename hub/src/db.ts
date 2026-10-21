@@ -203,6 +203,29 @@ export class Store {
     return rows.map(toTask);
   }
 
+  /** Moves each listed task that is queued for the agent to working, one guarded update per ID. Run inside the caller's transaction. */
+  claimQueued(agent: string, ids: string[], at: string): Task[] {
+    const claim = this.db.query(
+      "UPDATE tasks SET status = 'working', updated_at = $at WHERE id = $id AND to_agent = $agent AND status = 'queued'",
+    );
+    const claimed: Task[] = [];
+    for (const id of ids) {
+      if (claim.run({ id, agent, at }).changes === 1) claimed.push(this.getTask(id)!);
+    }
+    return claimed;
+  }
+
+  /** Marks each listed final task the agent sent, and hasn't seen yet, as seen. Run inside the caller's transaction. */
+  markResultsSeen(agent: string, ids: string[], at: string): number {
+    const mark = this.db.query(
+      `UPDATE tasks SET sender_notified_at = $at
+       WHERE id = $id AND from_agent = $agent AND status IN ${FINAL} AND sender_notified_at IS NULL`,
+    );
+    let marked = 0;
+    for (const id of ids) marked += mark.run({ id, agent, at }).changes;
+    return marked;
+  }
+
   /** True if the agent has queued tasks, or finished results it sent and hasn't seen. */
   hasWaitingFor(agent: string): boolean {
     const row = this.db
