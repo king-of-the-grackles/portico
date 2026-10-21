@@ -279,6 +279,24 @@ export function sseReader(res: Response) {
   };
 }
 
+/** Pronouns that hub pages and CLI output never use. Errs strict: it also flags "i.e.". */
+export const PRONOUNS = /\b(i|me|my|we|us|our|you|your|it|its|they|them|their)\b/i;
+
+/**
+ * The copy a reader sees on a page, for the pronoun and app-name sweep. Paste-ready text is exempt, so <pre>, <code>
+ * and <textarea> are dropped with their content, as are <style>, tags and entities. Attribute text a reader also
+ * sees or hears (placeholder, aria-label, title, alt) is added back.
+ */
+export function visibleCopy(page: string): string {
+  const attributes = [...page.matchAll(/\s(?:placeholder|aria-label|title|alt)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)].map(
+    (match) => match[1] ?? match[2] ?? "",
+  );
+  const text = page
+    .replace(/<(style|pre|code|textarea)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+  return [text, ...attributes].join(" ").replace(/&[a-z0-9#]+;/gi, " ");
+}
+
 export const ADMIN_PASSWORD = "test-admin-password";
 
 /** Signs in to the hub page and returns the Cookie header value to send. */

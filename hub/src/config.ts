@@ -248,6 +248,7 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
     signingSecret,
     adminPassword,
     ntfy,
+    pluginSource: env.BRIDGE_PLUGIN_SOURCE?.trim() || null,
   };
 }
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
 import { doctorCommand } from "./commands/doctor";
 import { initCommand } from "./commands/init";
+import { inviteCommand } from "./commands/invite";
 import type { CliIo } from "./commands/io";
+import { joinCommand } from "./commands/join";
 import { serveCommand } from "./commands/serve";
 
 const USAGE = `Usage: bridge <command>
@@ -14,6 +16,10 @@ Commands:
   doctor [--no-push]
                     Check the config, the public URL, each agent's token on the running hub,
                     and send a test push.
+  invite            Make a one-time join line for a new machine (runs where the hub's
+                    config and database are).
+  join <line> [--name <machine>] [--replace]
+                    Join this machine to a hub with a join line.
   help              Show this message.
 `;
 
@@ -33,6 +39,10 @@ async function main(argv: string[]): Promise<number | "running"> {
       return initCommand(args, io);
     case "doctor":
       return doctorCommand(args, io);
+    case "invite":
+      return inviteCommand(args, io);
+    case "join":
+      return joinCommand(args, io);
     case undefined:
     case "help":
     case "--help":

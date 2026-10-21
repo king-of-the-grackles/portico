@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { pageRoutes } from "./page/routes";
 import { approvalRoutes } from "./approvals/routes";
 import type { Directory } from "./core/directory";
+import type { NetworkService } from "./core/network";
 import type { PermissionRelay, PermissionRequest } from "./core/permissions";
 import type { Presence } from "./core/presence";
 import type { BridgeService } from "./core/service";
@@ -10,6 +11,7 @@ import type { Pusher } from "./approvals/ntfy";
 import type { BridgeConfig } from "./core/types";
 import { a2aRoutes } from "./ways-in/a2a";
 import type { AgentResolver, PrincipalResolver } from "./ways-in/auth";
+import { joinRoutes } from "./ways-in/join";
 import { mcpRoutes } from "./ways-in/mcp";
 import { openApiDocument } from "./ways-in/openapi";
 import { permissionRoutes } from "./ways-in/permissions";
@@ -20,6 +22,7 @@ export interface AppDeps {
   service: BridgeService;
   config: BridgeConfig;
   directory: Directory;
+  networkService: NetworkService;
   resolvers: { principal: PrincipalResolver; agent: AgentResolver };
   presence: Presence;
   sessions: SessionRegistry;
@@ -42,6 +45,7 @@ export function buildApp(deps: AppDeps): Hono {
   const openApi = openApiDocument(config);
   app.get("/api/openapi.json", (c) => c.json(openApi));
   // Routes under /api that aren't part of the web API group are mounted before it, so they answer first.
+  app.route("/", joinRoutes({ network: deps.networkService, config, now: deps.now }));
   app.route(
     "/api/stream",
     streamRoutes({

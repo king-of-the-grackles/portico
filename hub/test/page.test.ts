@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { safeNext } from "../src/page/session";
-import { ADMIN_PASSWORD, BASE_YAML, HOUR, flush, makeApp, signIn, testConfig } from "./helpers";
+import { ADMIN_PASSWORD, BASE_YAML, HOUR, PRONOUNS, flush, makeApp, signIn, testConfig, visibleCopy } from "./helpers";
 
 const login = (password: string) => ({ method: "POST", body: new URLSearchParams({ password }) });
 
@@ -195,12 +195,6 @@ describe("hub page", () => {
   });
 
   test("page copy has no pronouns and never names the app", async () => {
-    const PRONOUNS = /\b(i|me|my|we|us|our|you|your|it|its|they|them|their)\b/i;
-    const visibleText = (page: string) =>
-      page
-        .replace(/<style>[\s\S]*?<\/style>/g, " ")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/&[a-z0-9#]+;/gi, " ");
     const ctx = makeApp();
     const cookie = await signIn(ctx.app);
     const task = ctx.service.sendTask("grok-bot", { to: "muse", instructions: "Summarize the inbox" });
@@ -224,10 +218,21 @@ describe("hub page", () => {
       await (await ctx.app.request("/hub/login", login("nope"))).text(),
     ];
     for (const page of pages) {
-      const text = visibleText(page);
+      const text = visibleCopy(page);
       expect(text).not.toMatch(PRONOUNS);
       expect(text.toLowerCase()).not.toContain("agent-bridge");
     }
+  });
+
+  test("the copy sweep skips paste text and reads attribute text", () => {
+    const page = `<style>p{}</style><p>Shown &amp; read</p><pre>Join my agent bridge</pre><code>your-token</code>
+<textarea readonly class="paste" aria-label="Connect prompt">Use your token</textarea>
+<input placeholder="Name it" title='Their title'><img alt="Our logo" src="x.png">`;
+    const text = visibleCopy(page);
+    expect(text).toContain("Shown");
+    expect(text).toContain("read");
+    for (const hidden of ["p{}", "agent bridge", "your-token", "Use your token", "&amp;"]) expect(text).not.toContain(hidden);
+    for (const shown of ["Connect prompt", "Name it", "Their title", "Our logo"]) expect(text).toContain(shown);
   });
 });
 

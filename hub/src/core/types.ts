@@ -186,6 +186,8 @@ export interface BridgeConfig {
   adminPassword: string;
   /** Null when BRIDGE_NTFY_TOPIC isn't set: no pushes are sent. */
   ntfy: NtfyConfig | null;
+  /** BRIDGE_PLUGIN_SOURCE: the marketplace source the /join page tells machines to install from. Null when unset. */
+  pluginSource: string | null;
 }
 
 export interface Task {

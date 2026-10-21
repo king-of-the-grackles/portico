@@ -114,6 +114,7 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
     service,
     config,
     directory,
+    networkService,
     resolvers,
     presence,
     sessions,

@@ -7,6 +7,8 @@ COPY hub/package.json hub/package.json
 COPY plugin-claude-code/package.json plugin-claude-code/package.json
 RUN bun install --frozen-lockfile
 COPY hub hub
+# bridge join reuses the plugin's join code (plugin-claude-code/src/cli-run.ts), so the bundle needs it too.
+COPY plugin-claude-code/src plugin-claude-code/src
 RUN bun build hub/src/cli.ts --compile --no-compile-autoload-bunfig --outfile /out/bridge
 
 FROM debian:bookworm-slim

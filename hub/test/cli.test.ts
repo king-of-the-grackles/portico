@@ -5,15 +5,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initCommand, generateSecrets, agentNames, InitError } from "../src/commands/init";
 import type { CliIo } from "../src/commands/io";
+import { joinCommand } from "../src/commands/join";
 import { startupProblem } from "../src/commands/serve";
 import { STARTER_YAML } from "../src/commands/starter";
 import { parseConfig } from "../src/config";
 import { SchemaTooNewError } from "../src/db";
 import { startServer } from "../src/server";
-import { BASE_YAML, testConfig, testEnv } from "./helpers";
+import { BASE_YAML, makeApp, PRONOUNS, testConfig, testEnv } from "./helpers";
 
 const CLI = join(import.meta.dir, "../src/cli.ts");
-const PRONOUNS = /\b(i|me|my|we|us|our|you|your|it|its|they|them|their)\b/i;
 const dirs: string[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -210,9 +210,45 @@ describe("bridge CLI dispatch", () => {
     expect(statSync(join(dir, ".env")).mode & 0o777).toBe(0o600);
   });
 
+  test("the usage lists invite and join", async () => {
+    const proc = Bun.spawn(["bun", CLI, "help"], { stdout: "pipe", stderr: "pipe" });
+    expect(await proc.exited).toBe(0);
+    const usage = await new Response(proc.stdout).text();
+    expect(usage).toContain("\n  invite            Make a one-time join line for a new machine");
+    expect(usage).toContain("\n  join <line> [--name <machine>] [--replace]\n");
+    expect(usage).toContain("Join this machine to a hub with a join line.");
+  });
+
   test("an unknown command prints the usage to stderr and exits 1", async () => {
     const proc = Bun.spawn(["bun", CLI, "launch"], { stdout: "pipe", stderr: "pipe" });
     expect(await proc.exited).toBe(1);
     expect(await new Response(proc.stderr).text()).toContain("Unknown command: launch");
+  });
+});
+
+describe("bridge join", () => {
+  test("joins through the plugin's join and writes the machine file", async () => {
+    const ctx = makeApp();
+    const { code } = ctx.networkService.createJoinCode();
+    const dir = tempDir();
+    const path = join(dir, "agent-bridge", "machine.json");
+    const run = io(dir, { BRIDGE_MACHINE_CONFIG: path });
+    const fetch = ((url: string | URL | Request, init?: RequestInit) => ctx.app.request(url, init)) as typeof globalThis.fetch;
+    const line = `Join my agent bridge: https://bridge.test/join#${code}`;
+    expect(await joinCommand([line], run.io, { fetch, hostname: () => "studio.local" })).toBe(0);
+    expect(run.err).toEqual([]);
+    expect(run.out[0]).toBe('Joined https://bridge.test as machine "studio".');
+    expect(run.out).toContain(`Wrote ${path} (mode 600).`);
+    const file = JSON.parse(readFileSync(path, "utf8"));
+    expect(file).toEqual({ hub: "https://bridge.test", machine: "studio", token: expect.stringMatching(/^bm_/), off: [] });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(run.out.join("\n")).not.toContain(file.token);
+    expect(ctx.networkService.listMachines().map((machine) => machine.name)).toEqual(["studio"]);
+
+    // A second join refuses to overwrite the file, and the hub sees no request.
+    const again = io(dir, { BRIDGE_MACHINE_CONFIG: path });
+    expect(await joinCommand([line, "--name", "macbook"], again.io, { fetch })).toBe(1);
+    expect(again.err.join("\n")).toContain("Run again with --replace");
+    expect(ctx.networkService.listMachines()).toHaveLength(1);
   });
 });
