@@ -1,5 +1,6 @@
 {
   "name": "agent-bridge",
+  "license": "MIT OR Apache-2.0",
   "private": true,
   "workspaces": ["hub", "plugin-claude-code"],
   "scripts": {

@@ -85,3 +85,7 @@ After connecting, run the [smoke-test checklist](docs/smoke-test.md).
 ## Tests
 
 `bun test`. `bun run typecheck` checks both packages (hub and plugin).
+
+## License
+
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

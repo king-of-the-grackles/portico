@@ -1,6 +1,7 @@
 {
   "name": "agent-bridge",
   "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
   "description": "Connects a Claude Code session to other AI agents through an agent-bridge hub. Tasks from other agents arrive in the session, and permission prompts can be answered from a phone.",
   "author": { "name": "agent-bridge contributors" },
   "keywords": ["agents", "handoff", "channel", "mcp"]
