@@ -96,7 +96,7 @@ agents:
     expect(p).toContain('agent name "muse" is used more than once');
   });
 
-  test("rejects rules and triggers that name unknown agents", () => {
+  test("rejects triggers that name unknown agents, but rules may name agents that join later", () => {
     const yaml = `
 agents:
   - { name: grok-bot, description: x, delivery: pull }
@@ -108,9 +108,73 @@ triggers:
     send: { to: muse, instructions: hi }
 `;
     const p = problems(yaml, { BRIDGE_PUBLIC_URL: "https://b.test", BRIDGE_TOKEN_GROK_BOT: "g".repeat(32) });
-    expect(p).toContain('rule to "muse" is not a configured agent or "*"');
+    expect(p.filter((problem) => problem.startsWith("rule "))).toEqual([]);
     expect(p).toContain('trigger "t": when.agent "codex" is not a configured agent');
     expect(p).toContain('trigger "t": send.to "muse" is not a configured agent');
+  });
+
+  test("an agent's kind defaults from its delivery and name", () => {
+    const yaml = `
+agents:
+  - { name: claude-code-wingman, description: x, delivery: push }
+  - { name: muse, description: x, delivery: pull }
+  - { name: grok-bot, description: x, delivery: pull }
+  - { name: chatgpt, description: x, delivery: pull }
+  - { name: codex, description: x, delivery: pull }
+  - { name: helper, description: x, delivery: pull }
+`;
+    const env = {
+      ...ENV,
+      BRIDGE_TOKEN_MUSE: "m".repeat(32),
+      BRIDGE_TOKEN_CHATGPT: "h".repeat(32),
+      BRIDGE_TOKEN_CODEX: "x".repeat(32),
+      BRIDGE_TOKEN_HELPER: "e".repeat(32),
+    };
+    const kinds = Object.fromEntries(parseConfig(yaml, env).agents.map((agent) => [agent.name, agent.kind]));
+    expect(kinds).toEqual({
+      "claude-code-wingman": "claude-code",
+      muse: "muse",
+      "grok-bot": "grok-bot",
+      chatgpt: "chatgpt",
+      codex: "codex",
+      helper: "assistant",
+    });
+  });
+
+  test("an explicit kind is used as given, and must be a slug", () => {
+    const yaml = (kind: string) => `
+agents:
+  - { name: grok-bot, description: x, delivery: pull, kind: "${kind}" }
+  - { name: claude-code-wingman, description: x, delivery: push }
+`;
+    expect(parseConfig(yaml("gemini"), ENV).agents[0]?.kind).toBe("gemini");
+    expect(problems(yaml("Kind X"))).toContain('agent "grok-bot": kind "Kind X" must be lowercase letters, digits and hyphens');
+  });
+
+  test("rules accept names, addresses, globs, kind: patterns and *", () => {
+    const yaml = `
+agents:
+  - { name: grok-bot, description: x, delivery: pull }
+  - { name: claude-code-wingman, description: x, delivery: push }
+rules:
+  - { from: grok-bot, to: muse, action: allow }
+  - { from: "kind:claude-code", to: "dialog-*", action: ask }
+  - { from: "*@macbook", to: "dialog-claude@macbook", action: allow }
+  - { from: "*", to: "*", action: block }
+`;
+    expect(parseConfig(yaml, ENV).rules.map((rule) => `${rule.from} -> ${rule.to}`)).toEqual([
+      "grok-bot -> muse",
+      "kind:claude-code -> dialog-*",
+      "*@macbook -> dialog-claude@macbook",
+      "* -> *",
+    ]);
+  });
+
+  test("rejects a rule side that isn't a valid pattern", () => {
+    const yaml = YAML.replace("{ from: grok-bot, to: claude-code-wingman", '{ from: Grok, to: "kind:"');
+    const p = problems(yaml);
+    expect(p).toContain('rule from "Grok" is not a valid name, address, glob, kind:<kind> or "*"');
+    expect(p).toContain('rule to "kind:" is not a valid name, address, glob, kind:<kind> or "*"');
   });
 
   test("rejects unknown template placeholders", () => {

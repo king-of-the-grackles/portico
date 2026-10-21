@@ -3,8 +3,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseConfig } from "../src/config";
+import { hashSecret } from "../src/core/tokens";
+import { openDb } from "../src/db";
+import { captureLogs } from "../src/log";
+import { NetworkStore } from "../src/network-store";
 import { type RunningServer, startServer } from "../src/server";
-import { BASE_YAML, TOKENS, testConfig, testEnv } from "./helpers";
+import { addSession, BASE_YAML, T0, TOKENS, testConfig, testEnv } from "./helpers";
 
 const dirs: string[] = [];
 let running: RunningServer | null = null;
@@ -39,6 +43,58 @@ describe("startServer", () => {
     running.stop();
     running = startServer(config, { port: 0 });
     expect(running.service.getTask("grok-bot", task.id).instructions).toBe("hi");
+  });
+});
+
+describe("startup warnings", () => {
+  test("logs rule names nothing knows and assistants shadowed by bridge.yaml agents, by name only", () => {
+    const dbPath = join(tempDir(), "bridge.db");
+    const db = openDb(dbPath);
+    const network = new NetworkStore(db);
+    network.insertAssistant(
+      { id: "a-muse", owner: "owner", name: "muse", kind: "muse", description: "Muse", createdAt: T0.toISOString() },
+      hashSecret("ba_shadowed-token-0123456789"),
+    );
+    addSession({ network }, { name: "api-claude", machine: "macbook" });
+    db.close();
+    const yaml = BASE_YAML.replace(
+      "rules:\n",
+      `rules:
+  - { from: ghost-agent, to: "dialog-claude@macbook", action: allow }
+  - { from: muse, to: "api-claude@macbook", action: allow }
+  - { from: "kind:claude-code", to: "dialog-*", action: ask }
+`,
+    );
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    try {
+      running = startServer({ ...testConfig(yaml), dbPath }, { port: 0 });
+    } finally {
+      captureLogs(null);
+    }
+    const entries = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(entries).toContainEqual({
+      time: expect.any(String),
+      level: "warn",
+      msg: "rule_names_unknown",
+      names: ["ghost-agent", "dialog-claude@macbook"],
+    });
+    expect(entries).toContainEqual({ time: expect.any(String), level: "warn", msg: "assistant_name_conflict", names: ["muse"] });
+    expect(lines.join("\n")).not.toContain("ba_shadowed-token");
+  });
+
+  test("logs neither warning when every rule name is known and no assistant is shadowed", () => {
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    try {
+      running = startServer({ ...testConfig(), dbPath: join(tempDir(), "bridge.db") }, { port: 0 });
+    } finally {
+      captureLogs(null);
+    }
+    const names = lines.map((line) => (JSON.parse(line) as { msg: string }).msg);
+    expect(names).toContain("bridge_started");
+    expect(names).not.toContain("rule_names_unknown");
+    expect(names).not.toContain("assistant_name_conflict");
   });
 });
 

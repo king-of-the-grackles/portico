@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import type { Directory } from "../core/directory";
 import { BridgeError } from "../core/errors";
 import type { PermissionRelay, PermissionRequest } from "../core/permissions";
-import { type BridgeConfig, isPushAgent } from "../core/types";
+import type { BridgeConfig } from "../core/types";
 import { clip, log } from "../log";
 import { type AgentEnv, type AgentResolver, requireAgent } from "./auth";
 import { jsonBodyLimit } from "./limits";
@@ -18,6 +19,7 @@ const PermissionBody = z.object({
 
 export interface PermissionRouteDeps {
   config: BridgeConfig;
+  directory: Directory;
   relay: PermissionRelay;
   resolveAgent: AgentResolver;
   /** Runs once for each new prompt, e.g. to send the push. */
@@ -25,14 +27,14 @@ export interface PermissionRouteDeps {
 }
 
 export function permissionRoutes(deps: PermissionRouteDeps): Hono<AgentEnv> {
-  const { config, relay } = deps;
+  const { config, directory, relay } = deps;
   const route = new Hono<AgentEnv>();
   route.use("*", jsonBodyLimit(config));
   route.use("*", requireAgent(deps.resolveAgent));
 
   route.post("/", async (c) => {
     const agent = c.get("agent");
-    if (!isPushAgent(config, agent)) {
+    if (!directory.isPush(agent)) {
       throw new BridgeError("not_allowed", "Only push agents can relay permission prompts.");
     }
     const body = PermissionBody.parse(await readJson(c));

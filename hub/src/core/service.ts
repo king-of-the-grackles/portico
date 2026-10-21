@@ -1,4 +1,5 @@
 import type { Store } from "../db";
+import type { Directory } from "./directory";
 import { BridgeError } from "./errors";
 import { resolveRule } from "./rules";
 import { renderTemplate } from "./templates";
@@ -8,6 +9,8 @@ import type { AgentConfig, BridgeConfig, BridgeEvent, Notice, Task, TaskStatus }
 export interface ServiceDeps {
   store: Store;
   config: BridgeConfig;
+  /** Recipients and rule refs: bridge.yaml agents, hub-page assistants and sessions. */
+  directory: Directory;
   now?: () => Date;
   newId?: () => string;
   notify?: (notice: Notice) => void;
@@ -29,6 +32,7 @@ const EXPIRY_REASON: Record<"waiting_approval" | "queued" | "working", string> =
 export class BridgeService {
   private readonly store: Store;
   private readonly config: BridgeConfig;
+  private readonly directory: Directory;
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly notify: (notice: Notice) => void;
@@ -38,14 +42,19 @@ export class BridgeService {
   constructor(deps: ServiceDeps) {
     this.store = deps.store;
     this.config = deps.config;
+    this.directory = deps.directory;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.notify = deps.notify ?? (() => {});
     this.log = deps.log ?? (() => {});
   }
 
+  /** Every member but the caller, by full address. */
   listAgents(caller: string): AgentConfig[] {
-    return this.config.agents.filter((agent) => agent.name !== caller);
+    return this.directory
+      .members()
+      .filter((member) => member.address !== caller)
+      .map(({ address, description, delivery, kind }) => ({ name: address, description, delivery, kind }));
   }
 
   lastCheckIn(agent: string): string | null {
@@ -62,7 +71,7 @@ export class BridgeService {
     if (key !== null) {
       const existing = this.store.findByIdempotencyKey(caller, key);
       if (existing) {
-        if (existing.toAgent !== input.to || existing.instructions !== input.instructions) {
+        if (!this.isSameReceiver(existing.toAgent, input.to, caller) || existing.instructions !== input.instructions) {
           throw new BridgeError(
             "bad_request",
             "idempotency_key was already used for a different task. Use a new key for a new task.",
@@ -71,9 +80,9 @@ export class BridgeService {
         return existing; // a retry: no new task, and it doesn't count against the rate limit
       }
     }
-    this.requireReceiver(caller, input.to);
+    const to = this.requireReceiver(caller, input.to);
     this.requireTaskBudget(caller, 1);
-    return this.createTask(caller, input.to, input.instructions, {
+    return this.createTask(caller, to, input.instructions, {
       eventId: null,
       triggerName: null,
       idempotencyKey: key,
@@ -295,14 +304,21 @@ export class BridgeService {
     }
   }
 
-  private requireReceiver(caller: string, to: unknown): void {
-    if (typeof to !== "string" || to.trim() === "") throw new BridgeError("bad_request", "to must be an agent name.");
-    if (to === caller) throw new BridgeError("bad_request", "An agent can't send a task to itself.");
-    if (!this.config.agents.some((agent) => agent.name === to)) {
-      const valid = this.listAgents(caller)
-        .map((agent) => agent.name)
-        .join(", ");
-      throw new BridgeError("unknown_agent", `No agent named "${to}". Valid agents: ${valid}.`);
+  /** The receiver's full address. A short session name resolves when it's unique. */
+  private requireReceiver(caller: string, to: unknown): string {
+    const receiver = this.directory.resolve(to, caller);
+    if (receiver.address === caller) throw new BridgeError("bad_request", "An agent can't send a task to itself.");
+    return receiver.address;
+  }
+
+  /** Whether a retry's `to` names the stored receiver: the same text, or a short name that still resolves to it. */
+  private isSameReceiver(stored: string, to: unknown, caller: string): boolean {
+    if (to === stored) return true;
+    try {
+      return this.directory.resolve(to, caller).address === stored;
+    } catch (err) {
+      if (err instanceof BridgeError) return false;
+      throw err;
     }
   }
 
@@ -341,7 +357,7 @@ export class BridgeService {
           ? `chained tasks are off; finish task ${parent.id} first`
           : `chain too long (limit ${maxChain}); finish task ${parent.id} first`;
     } else {
-      const { action, rule } = resolveRule(this.config.rules, from, to);
+      const { action, rule } = resolveRule(this.config.rules, this.directory.ref(from), this.directory.ref(to));
       // A chained task never passes straight through: "allow" becomes "ask".
       const effective = parent && action === "allow" ? "ask" : action;
       if (effective === "block") {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BASE_YAML, HOUR, errorCode, makeService, testConfig } from "./helpers";
+import { addSession, BASE_YAML, HOUR, errorCode, makeService, testConfig } from "./helpers";
 
 describe("listAgents", () => {
   test("lists everyone but the caller", () => {
@@ -70,6 +70,33 @@ describe("sendTask", () => {
     expect(() => service.sendTask("grok-bot", { to: "nobody", instructions: "x" })).toThrow(
       'No agent named "nobody". Valid agents: claude-code, muse, codex.',
     );
+  });
+
+  test("a kind pattern rule lets a session receive a task, addressed by its short name", () => {
+    const yaml = BASE_YAML.replace("rules:\n", 'rules:\n  - { from: grok-bot, to: "kind:claude-code", action: allow }\n');
+    const ctx = makeService(testConfig(yaml));
+    addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+    const task = ctx.service.sendTask("grok-bot", { to: "dialog-claude", instructions: "Fix the login bug" });
+    expect(task).toMatchObject({ status: "queued", toAgent: "dialog-claude@macbook" });
+    expect(ctx.notices).toEqual([{ kind: "queued", task }]);
+    // Without a rule naming the session, its kind or a matching glob, the pair stays blocked.
+    expect(ctx.service.sendTask("muse", { to: "dialog-claude", instructions: "x" })).toMatchObject({
+      status: "denied",
+      reason: "no rule allows muse → dialog-claude@macbook",
+    });
+  });
+
+  test("a session can't send a task to itself by its short name", () => {
+    const ctx = makeService();
+    const { address } = addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+    expect(errorCode(() => ctx.service.sendTask(address, { to: "dialog-claude", instructions: "x" }))).toBe("bad_request");
+  });
+
+  test("send_task refuses broadcasts", () => {
+    const { service } = makeService();
+    for (const to of ["*", "kind:claude-code", "claude-*"]) {
+      expect(errorCode(() => service.sendTask("grok-bot", { to, instructions: "x" }))).toBe("bad_request");
+    }
   });
 
   test("rate-limits each sender per hour", () => {
@@ -263,6 +290,16 @@ describe("sendTask with an idempotency key", () => {
     service.sendTask("grok-bot", send("k-1", "claude-code", "one"));
     expect(errorCode(() => service.sendTask("grok-bot", send("k-1", "claude-code", "two")))).toBe("bad_request");
     expect(errorCode(() => service.sendTask("grok-bot", send("k-1", "muse", "one")))).toBe("bad_request");
+  });
+
+  test("a retry by a session's short name returns the first task", () => {
+    const yaml = BASE_YAML.replace("rules:\n", 'rules:\n  - { from: grok-bot, to: "kind:claude-code", action: allow }\n');
+    const ctx = makeService(testConfig(yaml));
+    addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+    const first = ctx.service.sendTask("grok-bot", { to: "dialog-claude", instructions: "x", idempotencyKey: "k1" });
+    const retry = ctx.service.sendTask("grok-bot", { to: "dialog-claude", instructions: "x", idempotencyKey: "k1" });
+    expect(retry.id).toBe(first.id);
+    expect(ctx.service.sendTask("grok-bot", { to: "dialog-claude@macbook", instructions: "x", idempotencyKey: "k1" }).id).toBe(first.id);
   });
 
   test("keys are per sender", () => {

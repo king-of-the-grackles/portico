@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { addressOf } from "./core/directory";
 import type { Assistant, AssistantKind, JoinCode, Machine, SessionRecord } from "./core/types";
 
 interface MachineRow {
@@ -235,7 +236,7 @@ export class NetworkStore {
       const remove = this.db.query("DELETE FROM sessions WHERE id = $id");
       let deleted = 0;
       for (const row of stale) {
-        if (keep(`${row.name}@${row.machine}`)) continue;
+        if (keep(addressOf(row.name, row.machine))) continue;
         deleted += remove.run({ id: row.id }).changes;
       }
       return deleted;

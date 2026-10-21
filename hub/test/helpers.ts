@@ -2,10 +2,15 @@ import type { Hono } from "hono";
 import type { PushMessage } from "../src/approvals/ntfy";
 import { createHub } from "../src/hub";
 import { parseConfig } from "../src/config";
+import { addressOf, Directory } from "../src/core/directory";
 import { BridgeError } from "../src/core/errors";
+import type { NetworkService } from "../src/core/network";
 import { BridgeService } from "../src/core/service";
-import type { BridgeConfig, Notice } from "../src/core/types";
+import { hashSecret } from "../src/core/tokens";
+import type { Assistant, AssistantKind, BridgeConfig, Machine, Notice, SessionRecord } from "../src/core/types";
+import { OWNER } from "../src/core/types";
 import { openDb, Store } from "../src/db";
+import { NetworkStore } from "../src/network-store";
 
 export const T0 = new Date("2026-10-20T12:00:00.000Z");
 export const HOUR = 3_600_000;
@@ -70,18 +75,61 @@ export function testConfig(yaml: string = BASE_YAML, extraEnv: Record<string, st
 }
 
 export function makeService(config: BridgeConfig = testConfig()) {
-  const store = new Store(openDb(":memory:"));
+  const db = openDb(":memory:");
+  const store = new Store(db);
+  const network = new NetworkStore(db);
   const clock = testClock();
+  const directory = new Directory({ config, network, now: clock.now });
   const notices: Notice[] = [];
   let counter = 0;
   const service = new BridgeService({
     store,
     config,
+    directory,
     now: clock.now,
     newId: () => `id-${++counter}`,
     notify: (notice) => notices.push(notice),
   });
-  return { service, store, config, clock, notices };
+  return { service, store, network, directory, config, clock, notices };
+}
+
+/**
+ * Stores a session as if its plugin had registered, adding its machine first when it's missing. The session is
+ * last seen now by the context's clock (T0 without one).
+ */
+export function addSession(
+  ctx: { network: NetworkStore; clock?: { now: () => Date } },
+  input: { name: string; machine: string; key?: string; folder?: string; folderId?: string; lastSeenAt?: string },
+): { address: string; machine: Machine; session: SessionRecord } {
+  const at = input.lastSeenAt ?? (ctx.clock?.now() ?? T0).toISOString();
+  let machine = ctx.network.machineByName(input.machine);
+  if (!machine) {
+    machine = { id: `m-${input.machine}`, owner: OWNER, name: input.machine, createdAt: at, lastSeenAt: null };
+    ctx.network.insertMachine(machine, hashSecret(`t-${input.machine}`));
+  }
+  const session: SessionRecord = {
+    id: `s-${input.name}-${input.machine}`,
+    owner: OWNER,
+    machineId: machine.id,
+    machine: machine.name,
+    name: input.name,
+    key: input.key ?? `key-${input.name}`,
+    folder: input.folder ?? input.name.replace(/-claude.*$/, ""),
+    folderId: input.folderId ?? "f".repeat(64),
+    createdAt: at,
+    lastSeenAt: at,
+  };
+  ctx.network.insertSession(session);
+  return { address: addressOf(session.name, machine.name), machine, session };
+}
+
+/** Connects an assistant as the hub page would, returning its one-time token. */
+export function mintAssistant(
+  ctx: { networkService: NetworkService },
+  name: string,
+  kind: AssistantKind = "other",
+): { token: string; assistant: Assistant } {
+  return ctx.networkService.createAssistant({ name, kind });
 }
 
 /** Runs fn and returns the BridgeError code it threw, or null if it didn't throw. */

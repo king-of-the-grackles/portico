@@ -207,7 +207,7 @@ export function mcpRoutes(service: BridgeService, config: BridgeConfig, resolveA
   mcp.delete("/", (c) => c.body(null, 405, { Allow: "POST" }));
 
   mcp.post("/", jsonBodyLimit(config), async (c) => {
-    const agent = resolveAgent(c.req.header("authorization"));
+    const agent = resolveAgent(c.req.header("authorization"), c.req.header("x-bridge-session"));
     if (!agent) {
       return c.json({ error: "unauthorized", message: "Missing or invalid bearer token." }, 401, {
         "WWW-Authenticate": "Bearer",

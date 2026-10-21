@@ -1,6 +1,7 @@
 import { approvalPush, taskApprovedPush, taskDeniedPush, taskExpiredPush } from "./approvals/messages";
 import type { Pusher } from "./approvals/ntfy";
-import { type BridgeConfig, isPushAgent, type Notice } from "./core/types";
+import type { Directory } from "./core/directory";
+import type { BridgeConfig, Notice } from "./core/types";
 import type { Store } from "./db";
 import { errorName, log } from "./log";
 import type { StreamHub } from "./ways-in/stream";
@@ -8,6 +9,7 @@ import type { StreamHub } from "./ways-in/stream";
 export interface NotifierDeps {
   store: Store;
   config: BridgeConfig;
+  directory: Directory;
   streams: StreamHub;
   push: Pusher;
 }
@@ -18,7 +20,7 @@ export interface NotifierDeps {
  * rolled back. It never throws.
  */
 export function makeNotifier(deps: NotifierDeps): (notice: Notice) => void {
-  const { store, config, streams, push } = deps;
+  const { store, config, directory, streams, push } = deps;
   return (notice) => {
     queueMicrotask(() => {
       try {
@@ -28,10 +30,10 @@ export function makeNotifier(deps: NotifierDeps): (notice: Notice) => void {
         if (!task || (notice.kind !== "approval_decided" && task.status !== notice.task.status)) return;
         switch (notice.kind) {
           case "queued":
-            if (isPushAgent(config, task.toAgent)) streams.nudge(task.toAgent);
+            if (directory.isPush(task.toAgent)) streams.nudge(task.toAgent);
             break;
           case "result_ready":
-            if (isPushAgent(config, task.fromAgent)) streams.nudge(task.fromAgent);
+            if (directory.isPush(task.fromAgent)) streams.nudge(task.fromAgent);
             break;
           case "approval_needed":
             void push(approvalPush(config, task))

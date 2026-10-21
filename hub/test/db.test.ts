@@ -395,6 +395,55 @@ describe("NetworkStore", () => {
     expect(() => network.insertSession(session("s1", "missing", "dialog-claude", "key-1"))).toThrow();
   });
 
+  test("updateSession changes only the given fields; listSessions can keep only recent ones", () => {
+    const network = new NetworkStore(openDb(":memory:"));
+    network.insertMachine(machine("m1", "macbook"), "hash-1");
+    network.insertSession(session("s1", "m1", "dialog-claude", "key-1"));
+    network.insertSession({ ...session("s2", "m1", "api-claude", "key-2"), lastSeenAt: "2026-10-19T12:00:00.000Z" });
+    const later = "2026-10-20T13:00:00.000Z";
+    expect(network.updateSession("s1", { key: "key-3", lastSeenAt: later, folder: undefined })).toMatchObject({
+      key: "key-3",
+      folder: "dialog",
+      lastSeenAt: later,
+      machine: "macbook",
+    });
+    expect(() => network.updateSession("missing", { lastSeenAt: later })).toThrow("session missing not found");
+    expect(network.listSessions().map((s) => s.id)).toEqual(["s2", "s1"]);
+    expect(network.listSessions("2026-10-20T00:00:00.000Z").map((s) => s.id)).toEqual(["s1"]);
+  });
+
+  test("deleteSessionsSeenBefore spares the sessions keep() accepts", () => {
+    const network = new NetworkStore(openDb(":memory:"));
+    network.insertMachine(machine("m1", "macbook"), "hash-1");
+    const old = "2026-10-10T12:00:00.000Z";
+    network.insertSession({ ...session("s1", "m1", "dialog-claude", "key-1"), lastSeenAt: old });
+    network.insertSession({ ...session("s2", "m1", "api-claude", "key-2"), lastSeenAt: old });
+    network.insertSession(session("s3", "m1", "web-claude", "key-3"));
+    const kept: string[] = [];
+    const deleted = network.deleteSessionsSeenBefore("2026-10-13T12:00:00.000Z", (address) => {
+      kept.push(address);
+      return address === "api-claude@macbook";
+    });
+    expect(deleted).toBe(1);
+    expect(kept.sort()).toEqual(["api-claude@macbook", "dialog-claude@macbook"]);
+    expect(network.listSessions().map((s) => s.id).sort()).toEqual(["s2", "s3"]);
+  });
+
+  test("deleteJoinCodesBefore deletes codes that expired, or were used, before the cutoff", () => {
+    const network = new NetworkStore(openDb(":memory:"));
+    const code = (id: string, expiresAt: string, usedAt: string | null) =>
+      network.insertJoinCode({ id, owner: "owner", createdAt: at, expiresAt, usedAt }, `hash-${id}`);
+    code("expired", "2026-10-19T00:00:00.000Z", null);
+    code("used", "2026-10-21T12:00:00.000Z", "2026-10-19T00:00:00.000Z");
+    code("used-recently", "2026-10-21T12:00:00.000Z", "2026-10-20T11:00:00.000Z");
+    code("fresh", "2026-10-21T12:00:00.000Z", null);
+    expect(network.deleteJoinCodesBefore("2026-10-20T00:00:00.000Z")).toBe(2);
+    expect(network.joinCodeByHash("hash-expired")).toBeNull();
+    expect(network.joinCodeByHash("hash-used")).toBeNull();
+    expect(network.joinCodeByHash("hash-used-recently")).not.toBeNull();
+    expect(network.joinCodeByHash("hash-fresh")).not.toBeNull();
+  });
+
   test("a join code is marked used once", () => {
     const network = new NetworkStore(openDb(":memory:"));
     network.insertJoinCode({ id: "j1", owner: "owner", createdAt: at, expiresAt: "2026-10-21T12:00:00.000Z", usedAt: null }, "code-hash");

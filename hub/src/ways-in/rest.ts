@@ -2,9 +2,10 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
+import type { Directory } from "../core/directory";
 import { BridgeError, HTTP_STATUS } from "../core/errors";
 import { type BridgeService, DELIVERY_BATCH_MAX } from "../core/service";
-import { type BridgeConfig, isPushAgent } from "../core/types";
+import type { BridgeConfig } from "../core/types";
 import { errorName, log } from "../log";
 import { type AgentEnv, type AgentResolver, requireAgent } from "./auth";
 import { jsonBodyLimit } from "./limits";
@@ -36,7 +37,12 @@ export function handleError(err: unknown, c: Context): Response {
   return c.json({ error: "internal", message: "Something went wrong." }, 500);
 }
 
-export function restRoutes(service: BridgeService, config: BridgeConfig, resolveAgent: AgentResolver): Hono<AgentEnv> {
+export function restRoutes(
+  service: BridgeService,
+  config: BridgeConfig,
+  resolveAgent: AgentResolver,
+  directory: Directory,
+): Hono<AgentEnv> {
   const api = new Hono<AgentEnv>();
 
   api.use("*", jsonBodyLimit(config));
@@ -62,7 +68,7 @@ export function restRoutes(service: BridgeService, config: BridgeConfig, resolve
 
   // Peek and ack, for push agents' plugins: a GET changes nothing, and only the ack claims what was delivered.
   const requirePush = (agent: string) => {
-    if (!isPushAgent(config, agent)) {
+    if (!directory.isPush(agent)) {
       throw new BridgeError("not_allowed", "Only push agents use deliveries; pull agents call check_inbox.");
     }
   };

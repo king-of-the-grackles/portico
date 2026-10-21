@@ -89,9 +89,9 @@ describe("notifier", () => {
   });
 
   test("skips a notice whose task isn't in the database, because its transaction rolled back", async () => {
-    const { store, config, streams } = makeApp();
+    const { store, config, directory, streams } = makeApp();
     const pushes: PushMessage[] = [];
-    const notify = makeNotifier({ store, config, streams, push: async (m) => (pushes.push(m), true) });
+    const notify = makeNotifier({ store, config, directory, streams, push: async (m) => (pushes.push(m), true) });
     const at = T0.toISOString();
     const ghost: Task = {
       id: "ghost", fromAgent: "grok-bot", toAgent: "muse", instructions: "x", status: "waiting_approval",
@@ -109,7 +109,7 @@ describe("push failures", () => {
     const ctx = makeApp();
     const task = ctx.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
     const notify = makeNotifier({
-      store: ctx.store, config: ctx.config, streams: ctx.streams,
+      store: ctx.store, config: ctx.config, directory: ctx.directory, streams: ctx.streams,
       push: async () => {
         throw new TypeError("boom SECRET");
       },
@@ -139,7 +139,9 @@ describe("push failures", () => {
     const ctx = makeApp();
     expect(ctx.config.ntfy).toBeNull();
     const task = ctx.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
-    const notify = makeNotifier({ store: ctx.store, config: ctx.config, streams: ctx.streams, push: async () => false });
+    const notify = makeNotifier({
+      store: ctx.store, config: ctx.config, directory: ctx.directory, streams: ctx.streams, push: async () => false,
+    });
     const lines: string[] = [];
     captureLogs((line) => lines.push(line));
     try {

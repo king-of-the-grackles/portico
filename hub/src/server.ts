@@ -1,4 +1,5 @@
 import type { Pusher } from "./approvals/ntfy";
+import { unknownRuleNames } from "./core/rules";
 import type { BridgeService } from "./core/service";
 import type { BridgeConfig } from "./core/types";
 import { openDb } from "./db";
@@ -60,6 +61,14 @@ export function startServer(config: BridgeConfig, opts: { port?: number; push?: 
   if (!config.ntfy) {
     log("warn", "ntfy_disabled", { note: "BRIDGE_NTFY_TOPIC is not set; approvals happen on the hub page only" });
   }
+  // Rules may name agents that join later; at startup, say which exact names nothing knows yet.
+  const unknownNames = unknownRuleNames(config.rules, (name) => hub.directory.find(name) !== null);
+  if (unknownNames.length > 0) log("warn", "rule_names_unknown", { names: unknownNames });
+  const shadowed = hub.network
+    .listAssistants()
+    .map((assistant) => assistant.name)
+    .filter((name) => config.agents.some((agent) => agent.name === name));
+  if (shadowed.length > 0) log("warn", "assistant_name_conflict", { names: shadowed });
 
   return {
     port,

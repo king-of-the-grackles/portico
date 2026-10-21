@@ -157,7 +157,7 @@ export function a2aRoutes(service: BridgeService, config: BridgeConfig, resolveA
   a2a.post("/:agent", jsonBodyLimit(config), async (c) => {
     const target = findAgent(c.req.param("agent"));
     if (!target) return c.json({ error: "not_found", message: "No such agent." }, 404);
-    const caller = resolveAgent(c.req.header("authorization"));
+    const caller = resolveAgent(c.req.header("authorization"), c.req.header("x-bridge-session"));
     if (!caller) {
       return c.json({ error: "unauthorized", message: "Missing or invalid bearer token." }, 401, {
         "WWW-Authenticate": "Bearer",

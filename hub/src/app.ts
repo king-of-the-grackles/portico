@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import { pageRoutes } from "./page/routes";
 import { approvalRoutes } from "./approvals/routes";
+import type { Directory } from "./core/directory";
 import type { PermissionRelay, PermissionRequest } from "./core/permissions";
 import type { BridgeService } from "./core/service";
 import type { Pusher } from "./approvals/ntfy";
 import type { BridgeConfig } from "./core/types";
 import { a2aRoutes } from "./ways-in/a2a";
-import { makeAgentResolver } from "./ways-in/auth";
+import type { AgentResolver, PrincipalResolver } from "./ways-in/auth";
 import { mcpRoutes } from "./ways-in/mcp";
 import { openApiDocument } from "./ways-in/openapi";
 import { permissionRoutes } from "./ways-in/permissions";
@@ -16,6 +17,8 @@ import { type StreamHub, streamRoutes } from "./ways-in/stream";
 export interface AppDeps {
   service: BridgeService;
   config: BridgeConfig;
+  directory: Directory;
+  resolvers: { principal: PrincipalResolver; agent: AgentResolver };
   streams: StreamHub;
   relay: PermissionRelay;
   push: Pusher;
@@ -25,9 +28,9 @@ export interface AppDeps {
 }
 
 export function buildApp(deps: AppDeps): Hono {
-  const { service, config, streams, relay } = deps;
+  const { service, config, directory, streams, relay } = deps;
   const app = new Hono();
-  const resolveAgent = makeAgentResolver(config);
+  const resolveAgent = deps.resolvers.agent;
 
   // Clients and proxies that probe the root get a 200, not a 404. Reveals no version, agents or tasks.
   app.get("/", (c) => c.json({ openapi: "/api/openapi.json", health: "/healthz" }));
@@ -39,7 +42,7 @@ export function buildApp(deps: AppDeps): Hono {
     "/api/stream",
     streamRoutes({
       service,
-      config,
+      directory,
       streams,
       resolveAgent,
       heartbeatMs: deps.heartbeatMs,
@@ -48,9 +51,9 @@ export function buildApp(deps: AppDeps): Hono {
   );
   app.route(
     "/api/permission-requests",
-    permissionRoutes({ config, relay, resolveAgent, onCreated: deps.onPermissionRequest }),
+    permissionRoutes({ config, directory, relay, resolveAgent, onCreated: deps.onPermissionRequest }),
   );
-  app.route("/api", restRoutes(service, config, resolveAgent));
+  app.route("/api", restRoutes(service, config, resolveAgent, directory));
   app.route("/mcp", mcpRoutes(service, config, resolveAgent));
   app.route("/a2a", a2aRoutes(service, config, resolveAgent));
 

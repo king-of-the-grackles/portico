@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import type { Directory } from "../core/directory";
 import type { BridgeService } from "../core/service";
-import { type BridgeConfig, isPushAgent } from "../core/types";
 import { errorName, log } from "../log";
 import { type AgentEnv, type AgentResolver, requireAgent } from "./auth";
 
@@ -65,7 +65,7 @@ export const HEARTBEAT_MS = 25_000;
 
 export interface StreamRouteDeps {
   service: BridgeService;
-  config: BridgeConfig;
+  directory: Directory;
   streams: StreamHub;
   resolveAgent: AgentResolver;
   heartbeatMs?: number;
@@ -74,14 +74,14 @@ export interface StreamRouteDeps {
 }
 
 export function streamRoutes(deps: StreamRouteDeps): Hono<AgentEnv> {
-  const { service, config, streams } = deps;
+  const { service, directory, streams } = deps;
   const heartbeatMs = deps.heartbeatMs ?? HEARTBEAT_MS;
   const route = new Hono<AgentEnv>();
   route.use("*", requireAgent(deps.resolveAgent));
 
   route.get("/", (c) => {
     const agent = c.get("agent");
-    if (!isPushAgent(config, agent)) {
+    if (!directory.isPush(agent)) {
       return c.json({ error: "not_allowed", message: "Only push agents can open the live stream." }, 403);
     }
     return streamSSE(c, async (stream) => {

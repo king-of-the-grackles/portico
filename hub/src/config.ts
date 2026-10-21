@@ -1,7 +1,8 @@
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { rulePatternProblem } from "./core/rules";
 import { unknownPlaceholders } from "./core/templates";
-import type { BridgeConfig, Limits, NtfyConfig } from "./core/types";
+import type { AgentConfig, BridgeConfig, Limits, NtfyConfig } from "./core/types";
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {
@@ -38,6 +39,7 @@ const FileSchema = z.strictObject({
         name: z.string(),
         description: z.string(),
         delivery: z.enum(["push", "pull"]),
+        kind: z.string().optional(),
       }),
     )
     .min(1, "at least one agent is required"),
@@ -66,6 +68,18 @@ const FileSchema = z.strictObject({
 });
 
 type Env = Record<string, string | undefined>;
+
+/** Pull agents with these names get the name as their kind. */
+const NAMED_KINDS = ["muse", "grok-bot", "chatgpt", "codex"];
+
+/**
+ * Without an explicit kind, a push agent is claude-code, a pull agent named after a known kind gets that kind, and any
+ * other pull agent is assistant.
+ */
+function defaultKind(agent: Pick<AgentConfig, "name" | "delivery">): string {
+  if (agent.delivery === "push") return "claude-code";
+  return NAMED_KINDS.includes(agent.name) ? agent.name : "assistant";
+}
 
 export function tokenEnvName(agent: string): string {
   return `BRIDGE_TOKEN_${agent.toUpperCase().replace(/-/g, "_")}`;
@@ -129,12 +143,17 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
     if (names.has(agent.name)) problems.push(`agent name "${agent.name}" is used more than once`);
     names.add(agent.name);
     if (agent.description.trim() === "") problems.push(`agent "${agent.name}" needs a description`);
+    if (agent.kind !== undefined && !AGENT_NAME.test(agent.kind)) {
+      problems.push(`agent "${agent.name}": kind "${agent.kind}" must be lowercase letters, digits and hyphens`);
+    }
   }
-  const isAgentOrWildcard = (name: string) => name === "*" || names.has(name);
 
+  // Rules may name agents that aren't in this file: hub-page assistants and sessions appear after startup.
   for (const rule of file.rules) {
-    if (!isAgentOrWildcard(rule.from)) problems.push(`rule from "${rule.from}" is not a configured agent or "*"`);
-    if (!isAgentOrWildcard(rule.to)) problems.push(`rule to "${rule.to}" is not a configured agent or "*"`);
+    for (const [side, value] of [["from", rule.from], ["to", rule.to]] as const) {
+      const problem = rulePatternProblem(value);
+      if (problem) problems.push(`rule ${side} "${value}" is ${problem}`);
+    }
   }
 
   const triggerNames = new Set<string>();
@@ -197,7 +216,12 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
 
   const limits = file.limits;
   return {
-    agents: file.agents,
+    agents: file.agents.map((agent) => ({
+      name: agent.name,
+      description: agent.description,
+      delivery: agent.delivery,
+      kind: agent.kind ?? defaultKind(agent),
+    })),
     rules: file.rules,
     triggers: file.triggers,
     limits: {

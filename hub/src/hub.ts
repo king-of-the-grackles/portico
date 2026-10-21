@@ -3,12 +3,16 @@ import type { Hono } from "hono";
 import { buildApp } from "./app";
 import { permissionAnsweredPush, permissionPush } from "./approvals/messages";
 import { makePusher, type Pusher } from "./approvals/ntfy";
+import { Directory } from "./core/directory";
+import { NetworkService } from "./core/network";
 import { PermissionRelay, type PermissionRequest } from "./core/permissions";
 import { BridgeService } from "./core/service";
 import type { BridgeConfig, Notice } from "./core/types";
 import { Store } from "./db";
 import { errorName, log } from "./log";
+import { NetworkStore } from "./network-store";
 import { makeNotifier } from "./notifier";
+import { type AgentResolver, makeResolvers, type PrincipalResolver } from "./ways-in/auth";
 import { StreamHub } from "./ways-in/stream";
 
 export interface HubOptions {
@@ -24,6 +28,10 @@ export interface HubOptions {
 
 export interface Hub {
   store: Store;
+  network: NetworkStore;
+  networkService: NetworkService;
+  directory: Directory;
+  resolvers: { principal: PrincipalResolver; agent: AgentResolver };
   service: BridgeService;
   streams: StreamHub;
   relay: PermissionRelay;
@@ -34,12 +42,28 @@ export interface Hub {
 /** Wires every piece of the hub together. Used by startServer and by the tests. */
 export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
   const store = new Store(opts.db);
+  const network = new NetworkStore(opts.db);
   const streams = new StreamHub();
+  const directory = new Directory({
+    config,
+    network,
+    isConnected: (address) => streams.isConnected(address),
+    now: opts.now,
+  });
+  const networkService = new NetworkService({
+    store: network,
+    config,
+    now: opts.now,
+    newId: opts.newId,
+    log: (msg, fields) => log("info", msg, fields),
+  });
+  const resolvers = makeResolvers(config, network, { now: opts.now });
   const push = opts.push ?? makePusher(config.ntfy);
-  const notify = makeNotifier({ store, config, streams, push });
+  const notify = makeNotifier({ store, config, directory, streams, push });
   const service = new BridgeService({
     store,
     config,
+    directory,
     now: opts.now,
     newId: opts.newId,
     notify: (notice) => {
@@ -78,6 +102,8 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
   const app = buildApp({
     service,
     config,
+    directory,
+    resolvers,
     streams,
     relay,
     push,
@@ -85,5 +111,5 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
     now: opts.now ?? (() => new Date()),
     heartbeatMs: opts.heartbeatMs,
   });
-  return { store, service, streams, relay, push, app };
+  return { store, network, networkService, directory, resolvers, service, streams, relay, push, app };
 }

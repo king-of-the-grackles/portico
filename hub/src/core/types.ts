@@ -29,6 +29,8 @@ export interface AgentConfig {
   name: string;
   description: string;
   delivery: Delivery;
+  /** Labels the agent for the directory and for kind: rules. parseConfig fills in the default. */
+  kind: string;
 }
 
 /** The owner id every member record carries. One owner per hub for now. */
@@ -80,6 +82,25 @@ export interface JoinCode {
   createdAt: string;
   expiresAt: string;
   usedAt: string | null;
+}
+
+/** Anyone a task can be addressed to: a bridge.yaml agent, a hub-page assistant, or a session on a machine. */
+export interface Member {
+  /** The full address: the name, or `name@machine` for a session. */
+  address: string;
+  name: string;
+  source: "config" | "assistant" | "session";
+  kind: string;
+  description: string;
+  delivery: Delivery;
+  /** The machine's name for a session, otherwise null. */
+  machine: string | null;
+}
+
+/** What rules match on: the member's full address and its kind. */
+export interface MemberRef {
+  address: string;
+  kind: string;
 }
 
 export interface RuleConfig {
@@ -163,7 +184,3 @@ export type Notice =
   | { kind: "result_ready"; task: Task }
   /** A task that was waiting_approval got its outcome (by link, hub page or expiry). */
   | { kind: "approval_decided"; task: Task; outcome: "approved" | "denied" | "expired" };
-
-export function isPushAgent(config: BridgeConfig, name: string): boolean {
-  return config.agents.some((agent) => agent.name === name && agent.delivery === "push");
-}
