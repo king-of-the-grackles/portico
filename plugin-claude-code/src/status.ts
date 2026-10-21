@@ -93,6 +93,7 @@ export class SessionWatcher {
   private lastSent: string | null = null;
   private lastSentAt = Number.NEGATIVE_INFINITY;
   private failing = false;
+  private readFailing = false;
 
   constructor(private readonly deps: SessionWatcherDeps) {
     this.tail = deps.tail ?? new TranscriptTail();
@@ -132,8 +133,11 @@ export class SessionWatcher {
     try {
       try {
         await this.refresh();
+        this.readFailing = false;
       } catch (err) {
-        this.deps.log("warn", "status_read_failed", { error: errorName(err) });
+        // Once per run of failures, as for reports.
+        if (!this.readFailing) this.deps.log("warn", "status_read_failed", { error: errorName(err) });
+        this.readFailing = true;
       }
       if (!this.running) return;
       const report = this.current();

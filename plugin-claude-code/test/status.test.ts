@@ -178,6 +178,35 @@ describe("SessionWatcher", () => {
     }
   });
 
+  test("a failed read is logged once per run of failures, by error name only", async () => {
+    let failing = true;
+    const { deps, reports, logs } = watcherDeps({
+      locate: () => {
+        if (failing) throw new TypeError("boom /w/dialog");
+        return fakeSession("busy");
+      },
+      pollMs: 10,
+    });
+    const readFailures = () => logs.lines.filter((l) => l.msg === "status_read_failed");
+    const watcher = new SessionWatcher(deps);
+    watcher.start();
+    try {
+      await waitFor(() => readFailures().length === 1);
+      await Bun.sleep(60);
+      expect(readFailures()).toEqual([{ level: "warn", msg: "status_read_failed", fields: { error: "TypeError" } }]);
+      failing = false;
+      await waitFor(() => reports.some((r) => r.status === "busy"));
+      // A new run of failures after a good read is logged again, once.
+      failing = true;
+      await waitFor(() => readFailures().length === 2);
+      await Bun.sleep(60);
+      expect(readFailures()).toHaveLength(2);
+    } finally {
+      watcher.stop();
+    }
+    expect(JSON.stringify(logs.lines)).not.toContain("/w/dialog");
+  });
+
   test("a failed report is logged by error name only and retried on the next poll, and nothing private is logged", async () => {
     const doingText = "Secret plan · Moving the launch";
     let fail = true;

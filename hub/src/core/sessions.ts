@@ -43,9 +43,11 @@ export function parseRegistration(key: unknown, folderId: unknown, repo: unknown
   if (typeof repo === "string" && repo.length > MAX_REPO) {
     throw new BridgeError("bad_request", `repo must be at most ${MAX_REPO} characters.`);
   }
-  // Stored as the session's folder and shown in its directory description, so it gets the same cleaning as status text.
+  // Stored as the session's folder and shown in its directory description, so it gets the same cleaning as status
+  // text, and only its last path segment is kept, even if a client sends a path.
   const cleaned = typeof repo === "string" ? defang(repo).replace(/\s+/g, " ").trim() : "";
-  return { key, folderId, repo: cleaned || "session" };
+  const segment = cleaned.split(/[\\/]/).filter(Boolean).pop()?.trim() ?? "";
+  return { key, folderId, repo: segment || "session" };
 }
 
 export interface SessionRegistryDeps {

@@ -146,6 +146,10 @@ describe("registration input", () => {
     const { parseRegistration } = await import("../src/core/sessions");
     expect(parseRegistration("key-aaaaaaaa", F1, undefined)).toEqual({ key: "key-aaaaaaaa", repo: "session", folderId: F1 });
     expect(parseRegistration("key-aaaaaaaa", F1, "dialog")).toEqual({ key: "key-aaaaaaaa", repo: "dialog", folderId: F1 });
+    // Only the last path segment is kept, as in status reports.
+    expect(parseRegistration("key-aaaaaaaa", F1, "/Users/x/dialog").repo).toBe("dialog");
+    expect(parseRegistration("key-aaaaaaaa", F1, "C:\\work\\api\\").repo).toBe("api");
+    expect(parseRegistration("key-aaaaaaaa", F1, "/").repo).toBe("session");
     const bad = (key: unknown, folderId: unknown, repo: unknown) => {
       try {
         parseRegistration(key, folderId, repo);

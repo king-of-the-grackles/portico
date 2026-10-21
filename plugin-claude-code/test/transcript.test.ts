@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { applyTranscriptLine, findTranscript, type TranscriptState, TranscriptTail } from "../src/transcript";
+import { applyTranscriptLine, findTranscript, TaskNames, type TranscriptState, TranscriptTail } from "../src/transcript";
 import { tempDir } from "./helpers";
 
 const line = (o: unknown) => `${JSON.stringify(o)}\n`;
@@ -11,6 +11,18 @@ const tool = (name: string, input: Record<string, unknown>) => ({
   message: { content: [{ type: "text", text: "Working on it" }, { type: "tool_use", name, input }] },
 });
 const title = (aiTitle: string) => ({ type: "ai-title", aiTitle, sessionId: "s-1" });
+// Claude Code's own shapes: TaskCreate gets no task ID; it comes back in the next user entry's toolUseResult.task,
+// linked by tool_use_id. TaskUpdate then carries only { status, taskId }.
+const create = (toolUseId: string, input: Record<string, unknown>) => ({
+  type: "assistant",
+  message: { content: [{ type: "tool_use", id: toolUseId, name: "TaskCreate", input }] },
+});
+const created = (toolUseId: string, id: string, subject: string) => ({
+  type: "user",
+  message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Task #${id} created` }] },
+  toolUseResult: { task: { id, subject } },
+});
+const update = (input: Record<string, unknown>) => tool("TaskUpdate", input);
 const empty = (): TranscriptState => ({ title: null, task: null, taskId: null });
 
 describe("applyTranscriptLine", () => {
@@ -34,20 +46,53 @@ describe("applyTranscriptLine", () => {
     expect(state.task).toBe("Write docs");
   });
 
-  test("tracks TaskUpdate in_progress, and clears it when the same task completes", () => {
+  test("tracks TaskUpdate in_progress by the name its TaskCreate gave, and clears it when the same task completes", () => {
     const state = empty();
-    applyTranscriptLine(line(tool("TaskCreate", { subject: "Add tests", activeForm: "Adding tests" })), state);
+    const names = new TaskNames();
+    const apply = (entry: unknown) => applyTranscriptLine(line(entry), state, names);
+    apply(create("toolu_1", { subject: "Add tests", description: "Cover the login form", activeForm: "Adding tests" }));
+    apply(created("toolu_1", "3", "Add tests"));
+    apply(create("toolu_2", { subject: "Write docs", description: "Explain the flow" }));
+    apply(created("toolu_2", "4", "Write docs"));
     expect(state.task).toBeNull(); // created, not started
-    applyTranscriptLine(line(tool("TaskUpdate", { taskId: "3", status: "in_progress", activeForm: "Adding tests" })), state);
+
+    apply(update({ status: "in_progress", taskId: "3" }));
     expect(state).toMatchObject({ task: "Adding tests", taskId: "3" });
     // Another task finishing leaves the current one alone.
-    applyTranscriptLine(line(tool("TaskUpdate", { taskId: "2", status: "completed" })), state);
+    apply(update({ status: "completed", taskId: "2" }));
     expect(state.task).toBe("Adding tests");
-    applyTranscriptLine(line(tool("TaskUpdate", { taskId: "3", status: "completed" })), state);
-    expect(state.task).toBeNull();
+    apply(update({ status: "completed", taskId: "3" }));
+    expect(state).toMatchObject({ task: null, taskId: null });
+
+    // Without an activeForm, the subject; a name sent with the update itself wins.
+    apply(update({ status: "in_progress", taskId: "4" }));
+    expect(state).toMatchObject({ task: "Write docs", taskId: "4" });
+    apply(update({ status: "in_progress", taskId: "4", activeForm: "Rewriting docs" }));
+    expect(state.task).toBe("Rewriting docs");
+    // A task this transcript never named.
+    apply(update({ status: "in_progress", taskId: "9" }));
+    expect(state).toMatchObject({ task: null, taskId: "9" });
     // A task created in progress counts too, by its subject when there's no activeForm.
-    applyTranscriptLine(line(tool("TaskCreate", { subject: "Write docs", status: "in_progress" })), state);
-    expect(state.task).toBe("Write docs");
+    apply(tool("TaskCreate", { subject: "Ship it", status: "in_progress" }));
+    expect(state.task).toBe("Ship it");
+  });
+
+  test("a result whose TaskCreate wasn't seen names the task by its subject, and old names are forgotten past 200", () => {
+    const state = empty();
+    const names = new TaskNames();
+    const apply = (entry: unknown) => applyTranscriptLine(line(entry), state, names);
+    apply(created("toolu_unseen", "7", "Fix the build"));
+    apply(update({ status: "in_progress", taskId: "7" }));
+    expect(state.task).toBe("Fix the build");
+
+    for (let i = 0; i < 201; i++) {
+      apply(create(`toolu_${i}`, { subject: `Task ${i}` }));
+      apply(created(`toolu_${i}`, `n${i}`, `Task ${i}`));
+    }
+    apply(update({ status: "in_progress", taskId: "n0" }));
+    expect(state.task).toBeNull();
+    apply(update({ status: "in_progress", taskId: "n200" }));
+    expect(state.task).toBe("Task 200");
   });
 
   test("ignores lines that aren't JSON or aren't entries it knows", () => {
@@ -139,6 +184,33 @@ describe("TranscriptTail", () => {
     tail.read(path);
     appendFileSync(path, full.subarray(cut));
     expect(tail.read(path).title).toBe("Café ☕ crème");
+  });
+});
+
+describe("TranscriptTail and Claude Code's Task tools", () => {
+  test("a TaskCreate from an earlier read still names the task a later TaskUpdate starts", () => {
+    const dir = tempDir();
+    const path = join(dir, "s-1.jsonl");
+    writeFileSync(path, line(create("toolu_1", { subject: "Add tests", activeForm: "Adding tests" })) + line(created("toolu_1", "3", "Add tests")));
+    const tail = new TranscriptTail();
+    expect(tail.read(path)).toEqual({ title: null, task: null, taskId: null });
+    appendFileSync(path, line(update({ status: "in_progress", taskId: "3" })));
+    expect(tail.read(path)).toEqual({ title: null, task: "Adding tests", taskId: "3" });
+
+    // Another transcript starts with nothing remembered.
+    const other = join(dir, "s-2.jsonl");
+    writeFileSync(other, line(update({ status: "in_progress", taskId: "3" })));
+    expect(tail.read(other)).toEqual({ title: null, task: null, taskId: "3" });
+  });
+
+  test("a TaskCreate older than the first read gives way to its result's subject", () => {
+    const path = join(tempDir(), "s-1.jsonl");
+    const early = line(create("toolu_1", { subject: "Add tests", activeForm: "Adding tests", description: "x".repeat(300) }));
+    const result = line(created("toolu_1", "3", "Add tests"));
+    const start = line(update({ status: "in_progress", taskId: "3" }));
+    writeFileSync(path, early + result + start);
+    const tail = new TranscriptTail({ firstReadBytes: result.length + start.length + 10 });
+    expect(tail.read(path)).toEqual({ title: null, task: "Add tests", taskId: "3" });
   });
 });
 

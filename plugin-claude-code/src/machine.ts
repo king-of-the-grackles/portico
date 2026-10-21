@@ -1,7 +1,7 @@
 // Runs before the plugin's dependencies are installed (the join and off/on commands), so it imports only node:*.
 import { chmodSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 /** `~/.agent-bridge/machine.json`, written when this machine joins a hub. */
 export interface MachineFile {
@@ -61,16 +61,23 @@ export function readMachineFile(path: string): MachineFile | null {
     !Array.isArray(off) ||
     !off.every((folder) => typeof folder === "string")
   ) {
-    throw new MachineFileError(`${path} is not a machine file: it needs "hub", "machine" and "token" strings and an "off" list.`);
+    throw new MachineFileError(
+      `${path} is not a machine file: "hub", "machine" and "token" strings and an "off" list are required.`,
+    );
   }
   return { hub: record.hub.trim(), machine: record.machine.trim(), token: record.token.trim(), off: off as string[] };
 }
 
+/** The folder machine.json lives in by default, `~/.agent-bridge`: kept at mode 700 even when it already exists. */
+const OWN_FOLDER = ".agent-bridge";
+
 /** Writes the file with mode 600 through a temp file and a rename, creating its folder with mode 700. */
 export function writeMachineFile(path: string, file: MachineFile): void {
   const dir = dirname(path);
-  // Only a folder made here gets its mode set: BRIDGE_MACHINE_CONFIG may point into a shared folder.
-  if (mkdirSync(dir, { recursive: true, mode: 0o700 }) !== undefined) chmodSync(dir, 0o700);
+  // A folder made here, or the .agent-bridge folder itself, gets mode 700. Any other existing folder is left alone:
+  // BRIDGE_MACHINE_CONFIG may point into a shared one.
+  const made = mkdirSync(dir, { recursive: true, mode: 0o700 }) !== undefined;
+  if (made || basename(dir) === OWN_FOLDER) chmodSync(dir, 0o700);
   const temp = join(dir, `.machine.json.${process.pid}.${Date.now()}.tmp`);
   try {
     writeFileSync(temp, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600, flag: "wx" });

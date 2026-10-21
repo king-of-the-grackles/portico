@@ -14,6 +14,7 @@ import {
 import { tempDir } from "./helpers";
 
 const FILE = { hub: "https://bridge.example.com", machine: "macbook", token: "bm_x", off: [] as string[] };
+const PRONOUNS = /\b(i|me|my|we|us|our|you|your|it|its|they|them|their)\b/i;
 
 describe("machine.json", () => {
   test("writes machine.json with mode 600 in a folder with mode 700, and reads it back", () => {
@@ -22,6 +23,22 @@ describe("machine.json", () => {
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
     expect(readMachineFile(path)).toEqual({ hub: "https://bridge.example.com", machine: "macbook", token: "bm_x", off: [] });
+  });
+
+  test("an existing .agent-bridge folder is tightened to mode 700; any other existing folder is left alone", () => {
+    const own = join(tempDir(), ".agent-bridge");
+    mkdirSync(own);
+    chmodSync(own, 0o755);
+    writeMachineFile(join(own, "machine.json"), FILE);
+    expect(statSync(own).mode & 0o777).toBe(0o700);
+
+    // BRIDGE_MACHINE_CONFIG may point into a shared folder.
+    const shared = join(tempDir(), "shared");
+    mkdirSync(shared);
+    chmodSync(shared, 0o755);
+    writeMachineFile(join(shared, "machine.json"), FILE);
+    expect(statSync(shared).mode & 0o777).toBe(0o755);
+    expect(statSync(join(shared, "machine.json")).mode & 0o777).toBe(0o600);
   });
 
   test("rewriting replaces the file in one step and leaves no temp file behind", () => {
@@ -46,6 +63,16 @@ describe("machine.json", () => {
     const wrongShape = join(dir, "wrong.json");
     writeFileSync(wrongShape, JSON.stringify({ hub: "https://bridge.example.com", machine: "macbook", off: [] }));
     expect(() => readMachineFile(wrongShape)).toThrow(MachineFileError);
+    // The messages are CLI output: no pronouns (the path itself aside).
+    for (const path of [broken, wrongShape]) {
+      let message = "";
+      try {
+        readMachineFile(path);
+      } catch (err) {
+        message = (err as Error).message.replace(path, "");
+      }
+      expect(message).not.toMatch(PRONOUNS);
+    }
 
     const badOff = join(dir, "bad-off.json");
     writeFileSync(badOff, JSON.stringify({ ...FILE, off: [42] }));

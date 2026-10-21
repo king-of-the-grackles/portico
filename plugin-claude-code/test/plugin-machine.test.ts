@@ -114,6 +114,55 @@ test("two plugins on one machine, in different folders, both stay connected", as
   expect(logs.lines.map((l) => l.msg)).not.toContain("stream_replaced");
 });
 
+test("the status watcher starts on the first hello, resends on a later hello, and stops on onStop", async () => {
+  const { token } = joinTestMachine(hub, "macbook");
+  const sock = await fakeInboxSocket();
+  const calls: string[] = [];
+  const watcher = {
+    start: () => void calls.push("start"),
+    resend: () => void calls.push("resend"),
+    stop: () => void calls.push("stop"),
+  };
+  // The stream can't open, so no hello comes, until the gate is released.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const plugin = createBridgePlugin({
+    config: { url: hub.url, token, permissionRelay: false, source: "machine", machine: "macbook" },
+    client: new HubClient({ url: hub.url, token, sessionKey: "key-aaaaaaaa" }),
+    log: logs.log,
+    socket: sock.socket,
+    registration: async () => {
+      await gate;
+      return { repo: "dialog", folderId: "a".repeat(64) };
+    },
+    watcher,
+    stream: { initialBackoffMs: 10 },
+  });
+  const host = await fakeHost(plugin);
+  cleanup.push(async () => {
+    await plugin.stop();
+    await host.close();
+    await sock.close();
+  });
+  await Bun.sleep(100);
+  expect(calls).toEqual([]); // the MCP handshake alone starts nothing
+
+  release();
+  await waitFor(() => calls.length === 1, 3000);
+  expect(calls).toEqual(["start"]);
+
+  // The stream drops and reconnects: a second hello.
+  hub.streams.close("dialog-claude@macbook");
+  await waitFor(() => calls.length === 2, 3000);
+  expect(calls).toEqual(["start", "resend"]);
+
+  // The machine is removed: the reconnect gets 401, and the stream stops for good.
+  hub.networkService.removeMachine("macbook");
+  hub.streams.close("dialog-claude@macbook");
+  await waitFor(() => calls.length === 3, 3000);
+  expect(calls).toEqual(["start", "resend", "stop"]);
+});
+
 test("a removed machine's session is told to join again", async () => {
   const { token } = joinTestMachine(hub, "macbook");
   const { sock } = await machinePlugin({ token, key: "key-aaaaaaaa", repo: "dialog", folderId: "a".repeat(64) });
