@@ -6,7 +6,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
-import { makeApp, TOKENS, type TestAgent } from "../../hub/test/helpers";
+import type { BridgeConfig } from "../../hub/src/core/types";
+import { joinMachine, makeApp, TOKENS, type TestAgent, testConfig } from "../../hub/test/helpers";
 import { HubClient } from "../src/hub-client";
 import type { Logger } from "../src/log";
 import { InboxSocket } from "../src/socket";
@@ -14,8 +15,8 @@ import { InboxSocket } from "../src/socket";
 export { TOKENS };
 
 /** A real hub (in-memory database, fake clock, recorded pushes, 50 ms heartbeats) on a random local port. */
-export function startHub() {
-  const hub = makeApp();
+export function startHub(config: BridgeConfig = testConfig()) {
+  const hub = makeApp(config);
   const server = Bun.serve({ port: 0, fetch: hub.app.fetch, idleTimeout: 60 });
   return { ...hub, url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
 }
@@ -24,6 +25,12 @@ export type TestHub = ReturnType<typeof startHub>;
 
 export function hubClient(hub: TestHub, agent: TestAgent): HubClient {
   return new HubClient({ url: hub.url, token: TOKENS[agent] });
+}
+
+/** Joins a machine to the test hub, as the plugin's join would: its machine token and name. */
+export function joinTestMachine(hub: TestHub, name = "macbook"): { token: string; machine: string } {
+  const { machine, token } = joinMachine(hub, name);
+  return { token, machine: machine.name };
 }
 
 export interface LogLine {

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { PluginConfigError, parsePluginConfig } from "../src/config";
 
-function problems(env: Record<string, string>): string[] {
+const MACHINE = { hub: "https://bridge.example.com", machine: "macbook", token: "bm_machine-token", off: [] };
+
+function problems(env: Record<string, string>, machineFile: typeof MACHINE | null = null): string[] {
   try {
-    parsePluginConfig(env);
+    parsePluginConfig(env, machineFile);
   } catch (err) {
     if (err instanceof PluginConfigError) return err.problems;
     throw err;
@@ -17,6 +19,8 @@ describe("parsePluginConfig", () => {
       url: "https://bridge.example.com",
       token: "t".repeat(30),
       permissionRelay: true,
+      source: "env",
+      machine: null,
     });
   });
 
@@ -77,5 +81,47 @@ describe("parsePluginConfig", () => {
       }
     })();
     expect(err?.message).not.toContain(token);
+  });
+});
+
+describe("machine mode", () => {
+  test("env settings win over a machine file", () => {
+    const env = { BRIDGE_URL: "https://other.example.com", BRIDGE_TOKEN: "token-0123456789" };
+    expect(parsePluginConfig(env, MACHINE)).toEqual({
+      url: "https://other.example.com",
+      token: "token-0123456789",
+      permissionRelay: true,
+      source: "env",
+      machine: null,
+    });
+    // Half-set env settings still fail, as in v1, rather than falling back to the machine file.
+    expect(problems({ BRIDGE_URL: "https://other.example.com" }, MACHINE)[0]).toStartWith("BRIDGE_TOKEN is not set.");
+  });
+
+  test("with no env settings, a machine file gives machine mode", () => {
+    expect(parsePluginConfig({}, MACHINE)).toEqual({
+      url: MACHINE.hub,
+      token: MACHINE.token,
+      source: "machine",
+      machine: "macbook",
+      permissionRelay: true,
+    });
+    // Claude Code's unset ${VAR} placeholders count as unset.
+    expect(parsePluginConfig({ BRIDGE_URL: "${BRIDGE_URL}", BRIDGE_TOKEN: "${BRIDGE_TOKEN}" }, MACHINE)?.source).toBe("machine");
+    expect(parsePluginConfig({ BRIDGE_PERMISSION_RELAY: "off" }, MACHINE)?.permissionRelay).toBe(false);
+    expect(parsePluginConfig({}, { ...MACHINE, hub: "http://localhost:8790/" })?.url).toBe("http://localhost:8790");
+  });
+
+  test("with neither, the result is null", () => {
+    expect(parsePluginConfig({}, null)).toBeNull();
+    expect(parsePluginConfig({})).toBeNull();
+  });
+
+  test("a machine file whose hub isn't https is refused, without repeating the token", () => {
+    const found = problems({}, { ...MACHINE, hub: "http://example.com" });
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain("the hub address in machine.json must start with https://");
+    expect(problems({}, { ...MACHINE, hub: "not a url" })).toEqual(["the hub address in machine.json is not a valid URL."]);
+    expect(found.join("\n")).not.toContain(MACHINE.token);
   });
 });

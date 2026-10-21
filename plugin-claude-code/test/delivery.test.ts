@@ -33,7 +33,7 @@ async function connect(
 ) {
   const sock = await fakeInboxSocket();
   const plugin = createBridgePlugin({
-    config: { url: hub.url, token: TOKENS[opts.agent ?? "claude-code"], permissionRelay: opts.relay ?? false },
+    config: { url: hub.url, token: TOKENS[opts.agent ?? "claude-code"], permissionRelay: opts.relay ?? false, source: "env", machine: null },
     client: opts.client ?? hubClient(hub, opts.agent ?? "claude-code"),
     log: logs.log,
     socket: opts.socket ?? sock.socket,

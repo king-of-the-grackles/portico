@@ -20,7 +20,7 @@ afterEach(async () => {
 
 function plugin(): BridgePlugin {
   const p = createBridgePlugin({
-    config: { url: hub.url, token: TOKENS["claude-code"], permissionRelay: false },
+    config: { url: hub.url, token: TOKENS["claude-code"], permissionRelay: false, source: "env", machine: null },
     client: hubClient(hub, "claude-code"),
     log: captureLog().log,
     socket: sock.socket,

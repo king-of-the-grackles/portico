@@ -1,10 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ChannelNotification, fakeInboxSocket, type FakeInboxSocket, startHub, type TestHub, TOKENS, waitFor, writeSessionFile } from "./helpers";
+import { sessionBaseName } from "../../hub/src/core/sessions";
+import { writeMachineFile } from "../src/machine";
+import {
+  ChannelNotification,
+  fakeInboxSocket,
+  type FakeInboxSocket,
+  joinTestMachine,
+  startHub,
+  type TestHub,
+  TOKENS,
+  waitFor,
+  writeSessionFile,
+} from "./helpers";
 
 const MAIN = join(import.meta.dir, "../src/main.ts");
 
@@ -46,12 +58,21 @@ async function launch(env: Record<string, string>) {
   const host = new Client({ name: "fake-claude-code", version: "1.0.0" });
   const channel: string[] = [];
   const errors: Error[] = [];
+  const stderr: string[] = [];
+  transport.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk.toString("utf8")));
   host.setNotificationHandler(ChannelNotification, ({ params }) => {
     channel.push(params.content);
   });
   host.onerror = (err) => errors.push(err);
   await host.connect(transport);
-  return { host, channel, errors };
+  return { host, channel, errors, stderr: () => stderr.join("") };
+}
+
+/** A session registry file naming this test process, which is the plugin's parent, as the Claude Code session. */
+function registerSession(env: Record<string, string>, fields: Parameters<typeof writeSessionFile>[2]): void {
+  const sessions = join(env.BRIDGE_CLAUDE_HOME!, "sessions");
+  mkdirSync(sessions, { recursive: true });
+  writeSessionFile(sessions, process.pid, fields);
 }
 
 describe("the plugin over stdio", () => {
@@ -121,6 +142,65 @@ describe("the plugin over stdio", () => {
     const stderr = await new Response(proc.stderr).text();
     expect(stderr).toContain("BRIDGE_TOKEN is not set");
     expect(stderr).toContain("https://");
+    expect(await new Response(proc.stdout).text()).toBe("");
+  });
+
+  test("idles when the session's folder is off", async () => {
+    const project = tempFolder("bridge-proj-");
+    const env = childEnv();
+    writeMachineFile(env.BRIDGE_MACHINE_CONFIG!, {
+      hub: "http://127.0.0.1:9",
+      machine: "macbook",
+      token: "bm_test-machine-token",
+      off: [project],
+    });
+    registerSession(env, { sessionId: "s-off", cwd: project, status: "busy" });
+    const { host, stderr } = await launch(env);
+    try {
+      const capabilities = host.getServerCapabilities() ?? {};
+      expect(capabilities.tools).toBeUndefined();
+      expect(capabilities.experimental).toBeUndefined();
+      await waitFor(() => stderr().includes('"plugin_idle"'), 5000);
+      expect(stderr()).not.toContain(project);
+      expect(stderr()).not.toContain(realpathSync(project));
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("in machine mode, registers and serves the tools", async () => {
+    hub = startHub();
+    sock = await fakeInboxSocket();
+    const { token, machine } = joinTestMachine(hub, "macbook");
+    const project = tempFolder("bridge-proj-");
+    const env = childEnv();
+    writeMachineFile(env.BRIDGE_MACHINE_CONFIG!, { hub: hub.url, machine, token, off: [] });
+    registerSession(env, { sessionId: "s-machine", cwd: project, status: "busy", messagingSocketPath: sock.path });
+    const address = `${sessionBaseName(basename(project))}@macbook`;
+    const { host, errors, stderr } = await launch(env);
+    try {
+      expect((await host.listTools()).tools).toHaveLength(6);
+      await waitFor(() => hub!.streams.isConnected(address), 5000);
+      await waitFor(() => hub!.presence.get(address)?.status === "busy", 5000);
+      // Outside git, the repo is the folder's basename; never the path.
+      expect(hub.presence.get(address)).toMatchObject({ repo: basename(project), branch: null });
+      expect(hub.network.sessionByAddress(sessionBaseName(basename(project)), "macbook")?.folder).toBe(basename(project));
+      expect(errors).toEqual([]);
+      for (const secret of [token, project, realpathSync(project)]) expect(stderr()).not.toContain(secret);
+    } finally {
+      await host.close();
+    }
+  });
+
+  test("exits with a JSON error line, naming no path, when machine.json is broken", async () => {
+    const env = childEnv();
+    writeFileSync(env.BRIDGE_MACHINE_CONFIG!, "{ not json");
+    const proc = Bun.spawn(["bun", MAIN], { cwd: tempFolder("bridge-plugin-"), env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    expect(await proc.exited).toBe(1);
+    const stderr = await new Response(proc.stderr).text();
+    const lines = stderr.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines).toContainEqual(expect.objectContaining({ level: "error", msg: "machine_file_invalid", error: "MachineFileError" }));
+    expect(stderr).not.toContain(env.BRIDGE_MACHINE_CONFIG!);
     expect(await new Response(proc.stdout).text()).toBe("");
   });
 });

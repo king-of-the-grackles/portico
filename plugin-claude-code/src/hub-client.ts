@@ -81,6 +81,22 @@ export interface PermissionView {
   answer: string | null;
 }
 
+/** What a session's stream open registers, in machine mode (spec §5.2). Only basenames and an HMAC leave the machine. */
+export interface StreamRegistration {
+  /** The repo basename. */
+  repo: string;
+  /** HMAC-SHA256 of the folder's real path, keyed with the machine token. */
+  folderId: string;
+}
+
+/** This session's live status, for `POST /api/status` (spec §5.3). */
+export interface StatusReport {
+  status: "busy" | "idle" | "waiting";
+  doing: string | null;
+  repo: string | null;
+  branch: string | null;
+}
+
 /** A failed hub call. `status` 0 means the hub couldn't be reached. */
 export class HubError extends Error {
   constructor(
@@ -99,9 +115,11 @@ export interface HubClientOptions {
   fetch?: typeof fetch;
   /** For ordinary calls. The live stream has no timeout. Default 15 s. */
   timeoutMs?: number;
+  /** This session's key in machine mode, sent as X-Bridge-Session on every request and on the stream. */
+  sessionKey?: string;
 }
 
-/** The hub's web API (spec §9.1), authenticated with this session's agent token. */
+/** The hub's web API (spec §9.1), authenticated with this session's agent or machine token. */
 export class HubClient {
   private readonly doFetch: typeof fetch;
   private readonly timeoutMs: number;
@@ -149,16 +167,33 @@ export class HubClient {
     return this.call("POST", "/api/permission-requests", prompt);
   }
 
-  /** Opens `GET /api/stream`. Doesn't throw for HTTP errors: the caller checks `status`, reads the body, and aborts with `signal`. */
-  openStream(signal: AbortSignal): Promise<Response> {
-    return this.doFetch(`${this.opts.url}/api/stream`, {
-      headers: { authorization: `Bearer ${this.opts.token}`, accept: "text/event-stream" },
-      signal,
-    });
+  /** Reports this session's status. Push members only. */
+  reportStatus(report: StatusReport): Promise<{ ok: true }> {
+    return this.call("POST", "/api/status", report);
+  }
+
+  /**
+   * Opens `GET /api/stream`, registering the session when given a registration. Doesn't throw for HTTP errors: the
+   * caller checks `status`, reads the body, and aborts with `signal`.
+   */
+  openStream(signal: AbortSignal, registration?: StreamRegistration): Promise<Response> {
+    const headers = this.headers("text/event-stream");
+    let path = "/api/stream";
+    if (registration) {
+      path += `?repo=${encodeURIComponent(registration.repo)}`;
+      headers["x-bridge-folder"] = registration.folderId;
+    }
+    return this.doFetch(`${this.opts.url}${path}`, { headers, signal });
+  }
+
+  private headers(accept: string): Record<string, string> {
+    const headers: Record<string, string> = { authorization: `Bearer ${this.opts.token}`, accept };
+    if (this.opts.sessionKey) headers["x-bridge-session"] = this.opts.sessionKey;
+    return headers;
   }
 
   private async call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
-    const headers: Record<string, string> = { authorization: `Bearer ${this.opts.token}`, accept: "application/json" };
+    const headers = this.headers("application/json");
     if (body !== undefined) headers["content-type"] = "application/json";
     let res: Response;
     try {

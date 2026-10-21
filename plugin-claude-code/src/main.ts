@@ -1,19 +1,38 @@
 #!/usr/bin/env bun
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { type PluginConfig, PluginConfigError, parsePluginConfig } from "./config";
-import { HubClient } from "./hub-client";
+import { HubClient, type StreamRegistration } from "./hub-client";
 import { errorName, stderrLog as log } from "./log";
+import { claudeHome, isOff, type MachineFile, MachineFileError, machineConfigPath, readMachineFile } from "./machine";
 import { createBridgePlugin, createIdleServer } from "./plugin";
 import { SessionLocator } from "./registry";
 import { InboxSocket, socketTarget } from "./socket";
+import { folderId, gitInfo, SessionWatcher } from "./status";
+import { findTranscript } from "./transcript";
 
-function setUp(): { server: Server; stop: () => Promise<void> } {
+type Running = { server: Server; stop: () => Promise<void> };
+
+/** No tools and no channel. The note is fixed text: never a folder or a path. */
+function idle(note: string): Running {
+  log("info", "plugin_idle", { note });
+  return { server: createIdleServer(), stop: async () => {} };
+}
+
+function setUp(): Running {
+  const env = process.env;
+  let machineFile: MachineFile | null = null;
+  let machineFileBroken = false;
+  try {
+    machineFile = readMachineFile(machineConfigPath(env));
+  } catch (err) {
+    if (!(err instanceof MachineFileError)) throw err;
+    machineFileBroken = true; // only fatal when nothing else configures the plugin
+  }
   let config: PluginConfig | null;
   try {
-    config = parsePluginConfig(process.env);
+    config = parsePluginConfig(env, machineFile);
   } catch (err) {
     if (err instanceof PluginConfigError) {
       process.stderr.write(`${err.message}\n`);
@@ -21,19 +40,48 @@ function setUp(): { server: Server; stop: () => Promise<void> } {
     }
     throw err;
   }
-  if (!config) {
-    log("info", "plugin_idle", { note: "BRIDGE_URL and BRIDGE_TOKEN are not set; no tools and no channel in this session" });
-    return { server: createIdleServer(), stop: async () => {} };
+  if (!config && machineFileBroken) {
+    // The error's message names the file's path, so only its name is logged.
+    log("error", "machine_file_invalid", { error: "MachineFileError" });
+    process.exit(1);
   }
-  log("info", "plugin_started", { origin: new URL(config.url).origin, permission_relay: config.permissionRelay });
-  // CLAUDE_CODE_MESSAGING_SOCKET names the inbox socket; without it, the session's registry file does.
-  const claudeHome = process.env.BRIDGE_CLAUDE_HOME?.trim() || join(homedir(), ".claude");
-  const locator = new SessionLocator({ sessionsDir: join(claudeHome, "sessions") });
+  if (!config) return idle("BRIDGE_URL and BRIDGE_TOKEN are not set and this machine hasn't joined; no tools in this session");
+
+  const home = claudeHome(env);
+  const locator = new SessionLocator({ sessionsDir: join(home, "sessions") });
+  // The session's working folder, from Claude Code's registry: the plugin's own is its install folder.
+  const cwd = locator.current()?.cwd ?? env.CLAUDE_PROJECT_DIR ?? env.PWD ?? process.cwd();
+  // The env-var override ignores the off list (spec §9).
+  if (config.source === "machine" && machineFile && isOff(machineFile, cwd)) return idle("this folder is off the network");
+  log("info", "plugin_started", {
+    origin: new URL(config.url).origin,
+    mode: config.source,
+    machine: config.machine,
+    permission_relay: config.permissionRelay,
+  });
+
+  // Stable for this process: a reconnect is the same session, a restart a new one.
+  const sessionKey = crypto.randomUUID();
+  const client = new HubClient({ url: config.url, token: config.token, sessionKey });
+  const watcher = new SessionWatcher({
+    locate: () => locator.current(),
+    cwd,
+    transcriptOf: (id) => findTranscript(join(home, "projects"), id),
+    git: (dir) => gitInfo(dir),
+    report: (r) => client.reportStatus(r),
+    log,
+  });
+  const token = config.token;
+  let registration: Promise<StreamRegistration> | null = null;
   return createBridgePlugin({
     config,
-    client: new HubClient({ url: config.url, token: config.token }),
+    client,
     log,
-    socket: new InboxSocket(socketTarget(process.env, () => locator.current())),
+    watcher,
+    // CLAUDE_CODE_MESSAGING_SOCKET names the inbox socket; without it, the session's registry file does.
+    socket: new InboxSocket(socketTarget(env, () => locator.current())),
+    registration: () =>
+      (registration ??= gitInfo(cwd).then(({ repo }) => ({ repo: repo ?? basename(cwd), folderId: folderId(token, cwd) }))),
   });
 }
 

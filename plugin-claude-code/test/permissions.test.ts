@@ -29,7 +29,7 @@ const prompt = (request_id: string) => ({
 
 async function connect(opts: { relay?: boolean; client?: HubClient } = {}) {
   const plugin = createBridgePlugin({
-    config: { url: hub.url, token: TOKENS["claude-code"], permissionRelay: opts.relay ?? true },
+    config: { url: hub.url, token: TOKENS["claude-code"], permissionRelay: opts.relay ?? true, source: "env", machine: null },
     client: opts.client ?? new HubClient({ url: hub.url, token: TOKENS["claude-code"] }),
     log: logs.log,
     socket: sock.socket,
