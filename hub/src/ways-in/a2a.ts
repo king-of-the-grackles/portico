@@ -165,14 +165,16 @@ export function a2aRoutes(
   a2a.get("/:agent/.well-known/agent.json", cardHandler);
 
   a2a.post("/:agent", jsonBodyLimit(config), async (c) => {
-    const target = directory.find(c.req.param("agent"));
-    if (!target) return c.json({ error: "not_found", message: "No such agent." }, 404);
+    // Authenticate before looking the address up, so a caller without a token gets the same 401 for every address and
+    // can't learn which sessions exist.
     const caller = resolveAgent(c.req.header("authorization"), c.req.header("x-bridge-session"));
     if (!caller) {
       return c.json({ error: "unauthorized", message: "Missing or invalid bearer token." }, 401, {
         "WWW-Authenticate": "Bearer",
       });
     }
+    const target = directory.find(c.req.param("agent"));
+    if (!target) return c.json({ error: "not_found", message: "No such agent." }, 404);
     let body: unknown;
     try {
       body = await c.req.json();

@@ -91,6 +91,24 @@ describe("A2A for network members", () => {
     }
   });
 
+  test("a JSON-RPC call without a valid token gets the same 401 for an existing session and an unknown address", async () => {
+    const ctx = makeApp();
+    addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+    for (const target of ["dialog-claude@macbook", "nobody@macbook", "nobody"]) {
+      for (const token of [undefined, "not-a-real-token-123456789"]) {
+        const res = await ctx.app.request(`/a2a/${target}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "message/send", params: message("x") }),
+        });
+        expect(`${target} ${token ?? "none"} -> ${res.status}`).toBe(`${target} ${token ?? "none"} -> 401`);
+        expect(await res.json()).toEqual({ error: "unauthorized", message: "Missing or invalid bearer token." });
+      }
+    }
+    // With a valid token, an unknown address is still a 404.
+    expect((await rpc(ctx, "grok-bot", "nobody@macbook", "message/send", message("x"))).status).toBe(404);
+  });
+
   test("an assistant's card stays public, as bridge.yaml agents' cards are", async () => {
     const ctx = makeApp();
     mintAssistant(ctx, "chatgpt", "chatgpt");
