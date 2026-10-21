@@ -9,7 +9,7 @@ import { type BridgeService, DELIVERY_BATCH_MAX } from "../core/service";
 import type { SessionRegistry } from "../core/sessions";
 import type { BridgeConfig } from "../core/types";
 import { errorName, log } from "../log";
-import { type AgentEnv, type AgentResolver, requireAgent } from "./auth";
+import { type AgentEnv, type AgentResolver, inboxTakesMessages, type PrincipalResolver, requireAgent } from "./auth";
 import { jsonBodyLimit } from "./limits";
 import {
   directoryEntryView,
@@ -51,7 +51,7 @@ export function handleError(err: unknown, c: Context): Response {
 export function restRoutes(
   service: BridgeService,
   config: BridgeConfig,
-  resolveAgent: AgentResolver,
+  resolvers: { agent: AgentResolver; principal: PrincipalResolver },
   directory: Directory,
   status: { presence: Presence; sessions: SessionRegistry; now: () => Date },
 ): Hono<AgentEnv> {
@@ -59,7 +59,7 @@ export function restRoutes(
 
   api.use("*", jsonBodyLimit(config));
 
-  api.use("*", requireAgent(resolveAgent));
+  api.use("*", requireAgent(resolvers.agent, resolvers.principal));
 
   api.get("/agents", (c) => c.json({ agents: service.listAgents(c.get("agent")).map(directoryEntryView) }));
 
@@ -80,10 +80,13 @@ export function restRoutes(
   });
 
   api.get("/inbox", (c) => {
-    const { tasks, results, messages } = service.checkInbox(c.get("agent"));
+    const agent = c.get("agent");
+    const { tasks, results, messages } = service.checkInbox(agent, {
+      messages: inboxTakesMessages(directory, agent, c.req.header("x-bridge-session")),
+    });
     return c.json({
       tasks: tasks.map(inboxTaskView),
-      results: results.map(taskView),
+      results: results.map(resultDeliveryView),
       messages: messages.map(messageDeliveryView),
     });
   });

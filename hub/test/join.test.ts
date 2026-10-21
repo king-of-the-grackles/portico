@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { captureLogs } from "../src/log";
 import { CSP } from "../src/page/layout";
 import { BASE_YAML, HOUR, makeApp, openSessionStream, PRONOUNS, testConfig, visibleCopy } from "./helpers";
@@ -139,6 +142,25 @@ describe("GET /join", () => {
     expect(testConfig(BASE_YAML, { BRIDGE_PLUGIN_SOURCE: "  owner/agent-bridge \n" }).pluginSource).toBe("owner/agent-bridge");
     expect(testConfig(BASE_YAML, { BRIDGE_PLUGIN_SOURCE: "  " }).pluginSource).toBeNull();
     expect(testConfig().pluginSource).toBeNull();
+  });
+
+  test("the bun one-liner picks the plugin folder by version order, so 0.10.0 beats 0.9.0", async () => {
+    const page = await (await makeApp().app.request("/join")).text();
+    // Run the folder pick from the page as a shell would, against a temporary home, never the real ~/.claude.
+    const pick = /<pre>bun "\$\((.+?)\)src\/cli\.ts" join/.exec(page)![1]!;
+    const home = mkdtempSync(join(tmpdir(), "ab-"));
+    try {
+      const cache = join(home, ".claude/plugins/cache/agent-bridge/agent-bridge");
+      for (const version of ["0.2.0", "0.9.0", "0.10.0"]) mkdirSync(join(cache, version), { recursive: true });
+      const run = Bun.spawnSync(["sh", "-c", pick], { env: { PATH: process.env.PATH ?? "", HOME: home } });
+      expect(run.exitCode).toBe(0);
+      expect(run.stdout.toString().trim()).toBe(`${cache}/0.10.0/`);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+    expect(page).toContain(
+      `<pre>bun "$(ls -d ~/.claude/plugins/cache/agent-bridge/agent-bridge/*/ | sort -V | tail -n 1)src/cli.ts" join '&lt;join line&gt;'</pre>`,
+    );
   });
 
   test("the join page's prose has no pronouns and never names the app", async () => {

@@ -65,6 +65,9 @@ describe("OpenAPI document", () => {
     expect(sent.properties).toHaveProperty("delivery");
     const inbox = doc.paths["/api/inbox"].get.responses["200"].content["application/json"].schema;
     expect(inbox.properties).toHaveProperty("messages");
+    // Results come framed, like tasks and messages.
+    expect(inbox.properties.results.items.$ref).toBe("#/components/schemas/InboxResult");
+    expect(doc.components.schemas.InboxResult.allOf[1].required).toEqual(["framed_message"]);
   });
 
   test("leaves out the plugin-only routes and the join route", () => {

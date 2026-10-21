@@ -339,6 +339,29 @@ describe("the network page", () => {
     }
   });
 
+  test("removing a machine forgets its sessions' live status", async () => {
+    const ctx = makeApp();
+    const cookie = await signIn(ctx.app);
+    const { token } = joinMachine(ctx, "macbook");
+    const { events } = await openSessionStream(ctx, token, { key: "key-aaaaaaaa", repo: "dialog" });
+    try {
+      const report = await callAs(ctx, { token, key: "key-aaaaaaaa" }, "POST", "/api/status", {
+        status: "busy",
+        doing: "Fixing login",
+        repo: "dialog",
+        branch: "main",
+      });
+      expect(report.status).toBe(200);
+      ctx.presence.checkedIn("dialog-claude@macbook", T0.toISOString());
+      expect(ctx.presence.get("dialog-claude@macbook")).toMatchObject({ status: "busy", doing: "Fixing login" });
+      expect((await post(ctx, "/hub/network/machines/macbook/remove", cookie)).status).toBe(303);
+      expect(ctx.presence.get("dialog-claude@macbook")).toBeNull();
+      expect(ctx.presence.lastCheckIn("dialog-claude@macbook")).toBeNull();
+    } finally {
+      await events.cancel();
+    }
+  });
+
   test("removing a machine closes its streams without errors", async () => {
     const ctx = makeApp();
     const cookie = await signIn(ctx.app);

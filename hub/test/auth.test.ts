@@ -3,7 +3,7 @@ import { hashSecret } from "../src/core/tokens";
 import { openDb } from "../src/db";
 import { NetworkStore } from "../src/network-store";
 import { makeResolvers } from "../src/ways-in/auth";
-import { addSession, makeApp, mintAssistant, T0, TOKENS, testConfig } from "./helpers";
+import { addSession, callAs, joinMachine, makeApp, mintAssistant, PRONOUNS, T0, TOKENS, testConfig } from "./helpers";
 
 test("resolves agents from bearer tokens", () => {
   const resolve = makeResolvers(testConfig(), new NetworkStore(openDb(":memory:"))).agent;
@@ -98,4 +98,25 @@ test("REST calls with a machine token act as the session named by X-Bridge-Sessi
   const names = ((await res.json()) as { agents: { name: string }[] }).agents.map((agent) => agent.name);
   // Everyone but the session itself, in the directory's order: pull agents, then claude-code (offline).
   expect(names).toEqual(["codex", "grok-bot", "muse", "claude-code"]);
+});
+
+test("a joined machine's session that hasn't registered gets a 401 saying so, not a bad-token message", async () => {
+  const ctx = makeApp();
+  const { token } = joinMachine(ctx, "macbook");
+  const notRegistered =
+    "Not registered with the hub yet. The session registers when the live stream connects; check the plugin log.";
+  // Before the first hello (no row for the key yet), after a refused registration, and with no key at all.
+  for (const key of ["key-not-registered", undefined]) {
+    const res = await callAs(ctx, { token, key }, "GET", "/api/agents");
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toBe("Bearer");
+    expect(await res.json()).toEqual({ error: "unauthorized", message: notRegistered });
+  }
+  expect(notRegistered).not.toMatch(PRONOUNS);
+  expect(notRegistered.toLowerCase()).not.toContain("agent-bridge");
+  // A token that isn't a machine's, or a removed machine's, still reads as a bad token.
+  const missing = { error: "unauthorized", message: "Missing or invalid bearer token." };
+  expect(await (await callAs(ctx, { token: "bm_not-a-real-token" }, "GET", "/api/agents")).json()).toEqual(missing);
+  ctx.networkService.removeMachine("macbook");
+  expect(await (await callAs(ctx, { token, key: "key-not-registered" }, "GET", "/api/agents")).json()).toEqual(missing);
 });

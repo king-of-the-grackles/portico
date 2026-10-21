@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
-import { addressOf } from "../core/directory";
+import { addressOf, type Directory } from "../core/directory";
 import { hashSecret } from "../core/tokens";
 import type { BridgeConfig, Machine } from "../core/types";
 import type { NetworkStore } from "../network-store";
@@ -74,16 +74,36 @@ export function makeResolvers(
   return { principal, agent };
 }
 
+/**
+ * Whether a check_inbox call takes the caller's messages. A 0.1.x plugin (a bridge.yaml push agent in env mode) reads
+ * the inbox but shows only tasks and results, and never sends X-Bridge-Session; the 0.2 plugin always does. So a push
+ * caller without the header gets no messages, and they stay pending for its deliveries. Pull callers always get them.
+ */
+export function inboxTakesMessages(directory: Directory, agent: string, sessionKey: string | undefined): boolean {
+  return Boolean(sessionKey) || !directory.isPush(agent);
+}
+
 export type AgentEnv = { Variables: { agent: string } };
 
-/** Answers 401 without a valid bearer token; otherwise sets c.var.agent to the calling member's address. */
-export function requireAgent(resolveAgent: AgentResolver): MiddlewareHandler<AgentEnv> {
+/** For a machine's token whose session key isn't registered: before the first hello, or after a refused registration. */
+export const NOT_REGISTERED =
+  "Not registered with the hub yet. The session registers when the live stream connects; check the plugin log.";
+
+/**
+ * Answers 401 without a valid bearer token; otherwise sets c.var.agent to the calling member's address. Given the
+ * principal resolver, the 401 for a machine's own token says the session isn't registered, rather than blaming the token.
+ */
+export function requireAgent(resolveAgent: AgentResolver, resolvePrincipal?: PrincipalResolver): MiddlewareHandler<AgentEnv> {
   return async (c, next) => {
-    const agent = resolveAgent(c.req.header("authorization"), c.req.header("x-bridge-session"));
+    const authorization = c.req.header("authorization");
+    const agent = resolveAgent(authorization, c.req.header("x-bridge-session"));
     if (!agent) {
-      return c.json({ error: "unauthorized", message: "Missing or invalid bearer token." }, 401, {
-        "WWW-Authenticate": "Bearer",
-      });
+      const machineToken = resolvePrincipal?.(authorization)?.type === "machine";
+      return c.json(
+        { error: "unauthorized", message: machineToken ? NOT_REGISTERED : "Missing or invalid bearer token." },
+        401,
+        { "WWW-Authenticate": "Bearer" },
+      );
     }
     c.set("agent", agent);
     await next();

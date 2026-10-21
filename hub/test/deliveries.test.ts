@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Task } from "../src/core/types";
-import { addSession, BASE_YAML, makeApp, testConfig } from "./helpers";
+import { addSession, BASE_YAML, callAs, makeApp, TOKENS, testConfig } from "./helpers";
 
 const json = async (res: Response) => (await res.json()) as any;
 
@@ -96,5 +96,77 @@ describe("deliveries for push agents", () => {
     expect((await ctx.call("grok-bot", "POST", "/api/deliveries/ack", { tasks: [] })).status).toBe(403);
     expect((await ctx.call("claude-code", "POST", "/api/deliveries/ack", { tasks: "x" })).status).toBe(400);
     expect((await ctx.call(null, "GET", "/api/deliveries")).status).toBe(401);
+  });
+});
+
+// A 0.1.x plugin (a bridge.yaml push agent in env mode) reads GET /api/inbox but shows only tasks and results, and
+// never sends X-Bridge-Session. The 0.2 plugin always does. Messages wait for the 0.2 plugin's deliveries instead.
+describe("an old plugin's inbox call leaves messages for the deliveries path", () => {
+  const TOKEN = TOKENS["claude-code"];
+  const mcpCheckInbox = (ctx: ReturnType<typeof makeApp>, auth: { token: string; key?: string }) =>
+    callAs(ctx, auth, "POST", "/mcp", {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "check_inbox", arguments: {} },
+    }).then(async (res) => ((await res.json()) as any).result.content[0].text as string);
+
+  test("a push agent's REST inbox call without the session header gets tasks but no messages, and the messages stay pending", async () => {
+    const ctx = makeApp();
+    const task = ctx.service.sendTask("grok-bot", { to: "claude-code", instructions: "Write the changelog" });
+    const { message } = ctx.service.sendMessage("muse", { to: "claude-code", text: "Which branch?" });
+    const inbox = await json(await callAs(ctx, { token: TOKEN }, "GET", "/api/inbox"));
+    expect(inbox.tasks.map((t: any) => t.id)).toEqual([task.id]);
+    expect(inbox.messages).toEqual([]);
+    expect(ctx.store.getMessage(message.id)?.deliveredAt).toBeNull();
+  });
+
+  test("a push agent's MCP check_inbox without the session header shows no messages and leaves them pending", async () => {
+    const ctx = makeApp();
+    const { message } = ctx.service.sendMessage("muse", { to: "claude-code", text: "Which branch?" });
+    const text = await mcpCheckInbox(ctx, { token: TOKEN });
+    expect(text).toContain("No new messages.");
+    expect(text).not.toContain("Which branch?");
+    expect(ctx.store.getMessage(message.id)?.deliveredAt).toBeNull();
+  });
+
+  test("the same agent with the session header gets the messages, over REST and MCP, marked delivered", async () => {
+    const ctx = makeApp();
+    const { message: first } = ctx.service.sendMessage("muse", { to: "claude-code", text: "Which branch?" });
+    const inbox = await json(await callAs(ctx, { token: TOKEN, key: "key-env-mode" }, "GET", "/api/inbox"));
+    expect(inbox.messages.map((m: any) => m.id)).toEqual([first.id]);
+    expect(ctx.store.getMessage(first.id)?.deliveredAt).not.toBeNull();
+
+    const { message: second } = ctx.service.sendMessage("muse", { to: "claude-code", text: "And the tag?" });
+    const text = await mcpCheckInbox(ctx, { token: TOKEN, key: "key-env-mode" });
+    expect(text).toContain("Messages (1):");
+    expect(text).toContain("And the tag?");
+    expect(ctx.store.getMessage(second.id)?.deliveredAt).not.toBeNull();
+  });
+
+  test("a pull agent without the header is unchanged: it gets its messages, marked delivered", async () => {
+    const ctx = makeApp();
+    const { message: first } = ctx.service.sendMessage("claude-code", { to: "muse", text: "Lunch at noon?" });
+    const inbox = await json(await callAs(ctx, { token: TOKENS.muse }, "GET", "/api/inbox"));
+    expect(inbox.messages.map((m: any) => m.id)).toEqual([first.id]);
+    expect(ctx.store.getMessage(first.id)?.deliveredAt).not.toBeNull();
+
+    const { message: second } = ctx.service.sendMessage("claude-code", { to: "muse", text: "Or at one?" });
+    expect(await mcpCheckInbox(ctx, { token: TOKENS.muse })).toContain("Or at one?");
+    expect(ctx.store.getMessage(second.id)?.deliveredAt).not.toBeNull();
+  });
+
+  test("a message the old inbox call left behind reaches the push agent through peek and ack", async () => {
+    const ctx = makeApp();
+    const { message } = ctx.service.sendMessage("muse", { to: "claude-code", text: "Which branch?" });
+    await callAs(ctx, { token: TOKEN }, "GET", "/api/inbox");
+    const auth = { token: TOKEN, key: "key-env-mode" };
+    const peek = await json(await callAs(ctx, auth, "GET", "/api/deliveries"));
+    expect(peek.messages.map((m: any) => m.id)).toEqual([message.id]);
+    expect(peek.messages[0].framed_message).toContain("Which branch?");
+    const ack = await callAs(ctx, auth, "POST", "/api/deliveries/ack", { messages: [message.id] });
+    expect((await json(ack)).acked).toEqual({ tasks: 0, results: 0, messages: 1 });
+    expect(ctx.store.getMessage(message.id)?.deliveredAt).not.toBeNull();
+    expect((await json(await callAs(ctx, auth, "GET", "/api/deliveries"))).messages).toEqual([]);
   });
 });

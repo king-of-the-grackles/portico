@@ -53,7 +53,7 @@ export interface MessageView {
 
 export interface Inbox {
   tasks: InboxTask[];
-  results: TaskView[];
+  results: ResultDelivery[];
   messages: MessageDelivery[];
 }
 

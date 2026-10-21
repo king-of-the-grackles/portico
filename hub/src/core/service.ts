@@ -164,7 +164,11 @@ export class BridgeService {
     return { message, delivery };
   }
 
-  checkInbox(caller: string): { tasks: Task[]; results: Task[]; messages: Message[] } {
+  /**
+   * Claims the caller's queued tasks, marks its results seen and marks its pending messages delivered. With
+   * `messages: false`, messages are left out and stay pending, for a caller that would drop them.
+   */
+  checkInbox(caller: string, opts: { messages?: boolean } = {}): { tasks: Task[]; results: Task[]; messages: Message[] } {
     const at = this.iso();
     const outcome = this.store.transaction(() => {
       const tasks = this.store
@@ -173,7 +177,7 @@ export class BridgeService {
       const results = this.store
         .listUnseenResultsFor(caller)
         .map((task) => this.store.updateTask(task.id, { senderNotifiedAt: at }));
-      const pending = this.store.listPendingMessagesFor(caller, at);
+      const pending = opts.messages === false ? [] : this.store.listPendingMessagesFor(caller, at);
       this.store.markMessagesDelivered(caller, pending.map((message) => message.id), at);
       const messages = pending.map((message) => ({ ...message, deliveredAt: at }));
       return { tasks, results, messages };

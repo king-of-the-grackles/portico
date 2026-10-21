@@ -21,9 +21,15 @@ export interface RegistryDeps {
   startPid?: number;
   /** How many parents up the walk goes. Default 6. */
   maxDepth?: number;
+  /** The clock, in milliseconds, for SessionLocator's retries. Default: `Date.now`. */
+  now?: () => number;
 }
 
+// While no registry file is found: a walk every 5 s for the first minute, then every 30 s. Each walk spawns up to
+// seven `ps` processes synchronously.
 const RETRY_MS = 5_000;
+const SLOW_RETRY_MS = 30_000;
+const FAST_RETRY_FOR_MS = 60_000;
 
 /** Reads one registry file. Null for a missing, unreadable or invalid file. */
 export function readSessionFile(path: string): OwnSession | null {
@@ -73,18 +79,22 @@ export function findOwnSession(deps: RegistryDeps): OwnSession | null {
 
 /**
  * Finds the session's pid once, then re-reads that file on every call, so status and socket path stay current.
- * While nothing is found, it walks again at most every 5 s.
+ * While nothing is found, it walks again at most every 5 s for the first minute after the first walk, then at most
+ * every 30 s.
  */
 export class SessionLocator {
   private pid: number | null = null;
+  private firstWalk: number | null = null;
   private lastWalk = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly deps: RegistryDeps) {}
 
   current(): OwnSession | null {
     if (this.pid !== null) return readSessionFile(join(this.deps.sessionsDir, `${this.pid}.json`));
-    const now = Date.now();
-    if (now - this.lastWalk < RETRY_MS) return null;
+    const now = (this.deps.now ?? Date.now)();
+    this.firstWalk ??= now;
+    const gap = now - this.firstWalk < FAST_RETRY_FOR_MS ? RETRY_MS : SLOW_RETRY_MS;
+    if (now - this.lastWalk < gap) return null;
     this.lastWalk = now;
     const found = locate(this.deps);
     if (!found) return null;

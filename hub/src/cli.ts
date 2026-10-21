@@ -18,7 +18,7 @@ Commands:
                     and send a test push.
   invite            Make a one-time join line for a new machine (runs where the hub's
                     config and database are).
-  join <line> [--name <machine>] [--replace]
+  join <line> [--code <code>] [--name <machine>] [--replace]
                     Join this machine to a hub with a join line.
   help              Show this message.
 `;

@@ -42,3 +42,37 @@ test("SessionLocator finds the pid once and re-reads that file on every call", (
   expect(locator.current()?.status).toBe("busy");
   expect(walks).toBe(0);
 });
+
+test("SessionLocator walks every 5 s while nothing is found for the first minute, then every 30 s, and stops once found", () => {
+  const dir = tempDir();
+  let now = 1_000_000;
+  let walks = 0;
+  const locator = new SessionLocator({ sessionsDir: dir, startPid: 300, parentOf: () => (walks++, null), now: () => now });
+  const callAt = (ms: number) => {
+    now = 1_000_000 + ms;
+    return locator.current();
+  };
+  expect(callAt(0)).toBeNull();
+  expect(walks).toBe(1);
+  callAt(4_999);
+  expect(walks).toBe(1);
+  // Every 5 s through the first minute: walks at 0, 5, 10, ... 55 s.
+  for (let s = 5; s <= 55; s += 5) callAt(s * 1000);
+  expect(walks).toBe(12);
+  // Then every 30 s after the last walk.
+  callAt(60_000);
+  callAt(84_999);
+  expect(walks).toBe(12);
+  callAt(85_000);
+  expect(walks).toBe(13);
+  callAt(114_999);
+  expect(walks).toBe(13);
+  callAt(115_000);
+  expect(walks).toBe(14);
+  // Found at the next walk, then read directly with no more walks.
+  writeSessionFile(dir, 300, { sessionId: "s-1", cwd: "/w", status: "idle" });
+  expect(callAt(130_000)).toBeNull();
+  expect(callAt(145_000)?.sessionId).toBe("s-1");
+  expect(callAt(145_001)?.sessionId).toBe("s-1");
+  expect(walks).toBe(14);
+});

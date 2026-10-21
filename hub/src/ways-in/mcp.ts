@@ -1,14 +1,22 @@
 import { Hono } from "hono";
 import type { Directory } from "../core/directory";
 import { BridgeError } from "../core/errors";
-import { frameMessage, frameTask } from "../core/framing";
+import { frameMessage, frameResult, frameTask } from "../core/framing";
 import type { BridgeService } from "../core/service";
 import type { BridgeConfig, Message, Task } from "../core/types";
 import { clip, errorName, log } from "../log";
-import type { AgentResolver } from "./auth";
+import { type AgentResolver, inboxTakesMessages } from "./auth";
 import { jsonBodyLimit } from "./limits";
 import { type JsonRpcRequest, parseRequest, rpcError, rpcResult } from "./jsonrpc";
-import { directoryEntryView, eventView, inboxTaskView, messageDeliveryView, messageView, taskView } from "./views";
+import {
+  directoryEntryView,
+  eventView,
+  inboxTaskView,
+  messageDeliveryView,
+  messageView,
+  resultDeliveryView,
+  taskView,
+} from "./views";
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER_VERSION = "0.1.0";
@@ -129,13 +137,10 @@ function inboxContent(tasks: Task[], results: Task[], messages: Message[]): Text
   lines.push("", messages.length ? `Messages (${messages.length}):` : "No new messages.");
   for (const message of messages) lines.push("---", frameMessage(message));
   lines.push("", results.length ? `Results of tasks you sent (${results.length}):` : "No new results.");
-  for (const task of results) {
-    lines.push(`- Task ${task.id} to ${task.toAgent}: ${task.status}`);
-    lines.push(task.status === "done" ? `  Result: ${task.result}` : `  Reason: ${task.reason}`);
-  }
+  for (const task of results) lines.push("---", frameResult(task));
   const data = {
     tasks: tasks.map(inboxTaskView),
-    results: results.map(taskView),
+    results: results.map(resultDeliveryView),
     messages: messages.map(messageDeliveryView),
   };
   return [
@@ -144,7 +149,14 @@ function inboxContent(tasks: Task[], results: Task[], messages: Message[]): Text
   ];
 }
 
-function callTool(service: BridgeService, agent: string, name: string, args: Record<string, unknown>): TextContent {
+/** `inboxMessages` says whether check_inbox takes the caller's messages (see inboxTakesMessages). */
+function callTool(
+  service: BridgeService,
+  agent: string,
+  name: string,
+  args: Record<string, unknown>,
+  inboxMessages: boolean,
+): TextContent {
   const arg = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
   switch (name) {
     case "list_agents":
@@ -166,7 +178,7 @@ function callTool(service: BridgeService, agent: string, name: string, args: Rec
       return json({ message: messageView(message), delivery });
     }
     case "check_inbox": {
-      const { tasks, results, messages } = service.checkInbox(agent);
+      const { tasks, results, messages } = service.checkInbox(agent, { messages: inboxMessages });
       return inboxContent(tasks, results, messages);
     }
     case "finish_task":
@@ -205,6 +217,7 @@ function handle(
   tools: Tool[],
   agent: string,
   req: JsonRpcRequest,
+  sessionKey: string | undefined,
 ) {
   const id = req.id ?? null;
   const params = (req.params ?? {}) as Record<string, unknown>;
@@ -234,7 +247,7 @@ function handle(
       let content: TextContent;
       let isError = false;
       try {
-        content = callTool(service, agent, name, args);
+        content = callTool(service, agent, name, args, inboxTakesMessages(directory, agent, sessionKey));
       } catch (err) {
         if (!(err instanceof BridgeError)) throw err;
         content = [{ type: "text", text: `${err.code}: ${err.message}` }];
@@ -271,7 +284,8 @@ export function mcpRoutes(
   mcp.delete("/", (c) => c.body(null, 405, { Allow: "POST" }));
 
   mcp.post("/", jsonBodyLimit(config), async (c) => {
-    const agent = resolveAgent(c.req.header("authorization"), c.req.header("x-bridge-session"));
+    const sessionKey = c.req.header("x-bridge-session");
+    const agent = resolveAgent(c.req.header("authorization"), sessionKey);
     if (!agent) {
       return c.json({ error: "unauthorized", message: "Missing or invalid bearer token." }, 401, {
         "WWW-Authenticate": "Bearer",
@@ -298,7 +312,7 @@ export function mcpRoutes(
 
     if (req.id === undefined || req.id === null) return c.body(null, 202); // a notification: nothing to answer
     try {
-      return c.json(handle(service, directory, tools, agent, req));
+      return c.json(handle(service, directory, tools, agent, req, sessionKey));
     } catch (err) {
       log("error", "mcp_internal_error", { error: errorName(err) });
       return c.json(rpcError(req.id, -32603, "Internal error"));

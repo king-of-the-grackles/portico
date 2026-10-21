@@ -113,6 +113,21 @@ export function openApiDocument(config: BridgeConfig): OpenApiDocument {
             },
           ],
         },
+        InboxResult: {
+          allOf: [
+            { $ref: "#/components/schemas/Task" },
+            {
+              type: "object",
+              required: ["framed_message"],
+              properties: {
+                framed_message: {
+                  type: "string",
+                  description: "The result wrapped in the bridge's standard framing. Read this rather than result alone.",
+                },
+              },
+            },
+          ],
+        },
         Message: {
           type: "object",
           required: ["id", "from_agent", "to_agent", "text", "reply_to", "created_at", "expires_at", "delivered_at"],
@@ -264,7 +279,7 @@ export function openApiDocument(config: BridgeConfig): OpenApiDocument {
               required: ["tasks", "results", "messages"],
               properties: {
                 tasks: { type: "array", items: { $ref: "#/components/schemas/InboxTask" } },
-                results: { type: "array", items: { $ref: "#/components/schemas/Task" } },
+                results: { type: "array", items: { $ref: "#/components/schemas/InboxResult" } },
                 messages: { type: "array", items: { $ref: "#/components/schemas/InboxMessage" } },
               },
             }),

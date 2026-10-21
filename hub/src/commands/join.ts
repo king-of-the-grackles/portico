@@ -3,7 +3,7 @@
 import { runCli } from "../../../plugin-claude-code/src/cli-run";
 import type { CliIo } from "./io";
 
-/** `bridge join <line> [--name <machine>] [--replace]`: joins this machine to a hub and writes machine.json. */
+/** `bridge join <line> [--code <code>] [--name <machine>] [--replace]`: joins this machine to a hub and writes machine.json. */
 export async function joinCommand(
   args: string[],
   io: CliIo,

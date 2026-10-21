@@ -69,9 +69,13 @@ export function networkRoutes(deps: NetworkRouteDeps): Hono {
   });
 
   app.post("/machines/:name/remove", (c) => {
-    // The rows are gone first, so each closing stream's last-seen write finds nothing to update.
+    // The rows are gone first, so each closing stream's last-seen write finds nothing to update. The sessions' live
+    // status goes too, so a later session under the same address starts with none.
     const { sessionAddresses } = network.removeMachine(c.req.param("name"));
-    for (const address of sessionAddresses) streams.close(address);
+    for (const address of sessionAddresses) {
+      streams.close(address);
+      presence.forget(address);
+    }
     return c.redirect(NETWORK_PATH, 303);
   });
 

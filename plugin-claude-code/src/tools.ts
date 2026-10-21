@@ -117,10 +117,7 @@ export function inboxText(inbox: Inbox): string {
   lines.push("", inbox.messages.length ? `Messages (${inbox.messages.length}):` : "No new messages.");
   for (const message of inbox.messages) lines.push("---", message.framed_message);
   lines.push("", inbox.results.length ? `Results of tasks you sent (${inbox.results.length}):` : "No new results.");
-  for (const task of inbox.results) {
-    lines.push(`- Task ${task.id} to ${task.to_agent}: ${task.status}`);
-    lines.push(task.status === "done" ? `  Result: ${task.result}` : `  Reason: ${task.reason}`);
-  }
+  for (const task of inbox.results) lines.push("---", task.framed_message);
   return lines.join("\n");
 }
 

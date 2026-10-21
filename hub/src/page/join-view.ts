@@ -14,7 +14,7 @@ ${pluginSource ? "" : html`<p class="meta">The marketplace source isn't set on t
 <h2>2. Join with the code</h2>
 <p>Pass the whole join line, in single quotes, to whichever of these is available:</p>
 <pre>bridge join '&lt;join line&gt;'</pre>
-<pre>bun "$(ls -d ~/.claude/plugins/cache/agent-bridge/agent-bridge/*/ | tail -n 1)src/cli.ts" join '&lt;join line&gt;'</pre>
+<pre>bun "$(ls -d ~/.claude/plugins/cache/agent-bridge/agent-bridge/*/ | sort -V | tail -n 1)src/cli.ts" join '&lt;join line&gt;'</pre>
 <p>Or, in a Claude Code session started after the install:</p>
 <pre>/agent-bridge:join &lt;join line&gt;</pre>
 <p>The machine's token is saved in <code>~/.agent-bridge/machine.json</code>, readable only by the account that ran the join.</p>

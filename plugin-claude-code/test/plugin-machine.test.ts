@@ -4,6 +4,7 @@ import { HubClient } from "../src/hub-client";
 import { createBridgePlugin } from "../src/plugin";
 import type { OwnSession } from "../src/registry";
 import { SessionWatcher } from "../src/status";
+import { runTool } from "../src/tools";
 import { captureLog, fakeHost, fakeInboxSocket, type FakeInboxSocket, joinTestMachine, startHub, type TestHub, waitFor } from "./helpers";
 
 // Sessions are reached through a kind rule, as on a real network.
@@ -85,6 +86,20 @@ test("a machine-mode plugin registers as <repo>-claude@<machine> and reports its
   // Nothing private in the logs: not the doing text, the folder ID, the session key or the token.
   const logged = JSON.stringify(logs.lines);
   for (const secret of ["Secret plan", folderId, "key-aaaaaaaa", token]) expect(logged).not.toContain(secret);
+});
+
+test("a tool call before the session registers says so, rather than blaming the token", async () => {
+  const { token } = joinTestMachine(hub, "macbook");
+  const client = new HubClient({ url: hub.url, token, sessionKey: "key-not-registered" });
+  expect(await runTool(client, "list_agents", {})).toEqual({
+    content: [
+      {
+        type: "text",
+        text: "unauthorized: Not registered with the hub yet. The session registers when the live stream connects; check the plugin log.",
+      },
+    ],
+    isError: true,
+  });
 });
 
 test("tasks for the session arrive through its socket", async () => {
