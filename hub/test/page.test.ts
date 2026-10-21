@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { safeNext } from "../src/page/session";
-import { ADMIN_PASSWORD, BASE_YAML, HOUR, PRONOUNS, flush, makeApp, signIn, testConfig, visibleCopy } from "./helpers";
+import { ASSISTANT_KINDS } from "../src/core/types";
+import { ADMIN_PASSWORD, BASE_YAML, HOUR, PRONOUNS, addSession, flush, makeApp, mintAssistant, signIn, testConfig, visibleCopy } from "./helpers";
 
 const login = (password: string) => ({ method: "POST", body: new URLSearchParams({ password }) });
 
@@ -78,7 +79,7 @@ describe("hub page sign-in", () => {
 });
 
 describe("hub page", () => {
-  test("lists waiting tasks, permission prompts, and agents with their last check-in", async () => {
+  test("lists waiting tasks, permission prompts, and the directory with last check-ins", async () => {
     const ctx = makeApp();
     const cookie = await signIn(ctx.app);
     ctx.service.sendTask("grok-bot", { to: "muse", instructions: "Summarize the <b>inbox</b>" });
@@ -96,7 +97,9 @@ describe("hub page", () => {
     expect(page).toContain("bun test");
     expect(page).toContain("2026-10-20 12:00 UTC"); // codex's check-in
     expect(page).toContain("Not since the last restart");
-    expect(page).toContain("not connected"); // claude-code is a push agent with no stream open
+    // claude-code is a push agent with no stream open; the others are pull agents.
+    expect(page).toMatch(/<td>claude-code<\/td><td>claude-code<\/td><td><\/td><td><span class="status">offline<\/span>/);
+    expect(page).toMatch(/<td>codex<\/td><td>codex<\/td><td><\/td><td><span class="status">checks in<\/span>/);
   });
 
   test("approve and deny from the page", async () => {
@@ -205,7 +208,19 @@ describe("hub page", () => {
     });
     await flush();
     const approvePath = new URL(ctx.pushes[0]!.actions[0]!.url).pathname;
+    addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+    mintAssistant(ctx, "helper", "muse");
+    const form = (path: string, fields: Record<string, string> = {}) =>
+      ctx.app.request(path, { method: "POST", headers: { cookie }, body: new URLSearchParams(fields) });
+    const assistantPages = await Promise.all(
+      ASSISTANT_KINDS.map(async (kind) => (await form("/hub/network/assistants", { kind, name: `copy-${kind}` })).text()),
+    );
     const pages = [
+      await (await ctx.app.request("/hub/network", { headers: { cookie } })).text(),
+      await (await form("/hub/network/join-codes")).text(),
+      ...assistantPages,
+      await (await form("/hub/network/assistants", { kind: "muse", name: "Bad Name" })).text(),
+      await (await ctx.app.request("/join")).text(),
       await (await ctx.app.request("/hub/login")).text(),
       await (await ctx.app.request("/hub", { headers: { cookie } })).text(),
       await (await ctx.app.request("/hub/history", { headers: { cookie } })).text(),
@@ -218,6 +233,8 @@ describe("hub page", () => {
       await (await ctx.app.request("/hub/login", login("nope"))).text(),
     ];
     for (const page of pages) {
+      // Every entry is a rendered page, so a missing route can't pass the sweep as a JSON 404.
+      expect(page).toStartWith("<!doctype html>");
       const text = visibleCopy(page);
       expect(text).not.toMatch(PRONOUNS);
       expect(text.toLowerCase()).not.toContain("agent-bridge");

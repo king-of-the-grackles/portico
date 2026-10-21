@@ -1,6 +1,6 @@
 import { html } from "hono/html";
 import type { PermissionRequest } from "../core/permissions";
-import { type AgentConfig, type BridgeEvent, TASK_STATUSES, type Task, type TaskStatus } from "../core/types";
+import { type BridgeEvent, type DirectoryEntry, TASK_STATUSES, type Task, type TaskStatus } from "../core/types";
 import { formatTime, type Html, STATUS_WORDS } from "./layout";
 
 const clipText = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
@@ -47,30 +47,48 @@ ${request.description ? html`<p>${request.description}</p>` : ""}${request.input
 <div class="actions"><form method="post" action="${base}/allow"><button type="submit" class="primary">Allow</button></form><form method="post" action="${base}/deny"><button type="submit" class="danger">Deny</button></form></div></div>`;
 }
 
-export interface AgentRow {
-  agent: AgentConfig;
-  lastCheckIn: string | null;
-  connected: boolean;
+/** Where a member is: `machine · repo@branch`, leaving out the parts it doesn't have. */
+function whereOf(entry: DirectoryEntry): string {
+  const place = [entry.repo, entry.branch].filter(Boolean).join("@");
+  return [entry.machine, place].filter(Boolean).join(" · ");
 }
 
-export function homeView(waiting: { task: Task; chain: Task[] }[], permissions: PermissionRequest[], agents: AgentRow[], moreWaiting = false): Html {
-  return html`<h1>Waiting</h1>
-${waiting.length === 0 && permissions.length === 0 ? html`<p class="meta">Nothing waiting.</p>` : ""}
-${permissions.length > 0 ? html`<h2>Permission prompts</h2>${permissions.map(waitingPermission)}` : ""}
-${waiting.length > 0 ? html`<h2>Tasks waiting for approval</h2>${waiting.map(waitingTask)}${moreWaiting ? html`<p class="meta">Showing the oldest ${waiting.length} tasks. More are waiting.</p>` : ""}` : ""}
-<h2>Agents</h2>
-<table><thead><tr><th>Agent</th><th>Delivery</th><th>Last checked in</th><th>Description</th></tr></thead><tbody>
-${agents.map(
-  ({ agent, lastCheckIn, connected }) =>
-    html`<tr><td>${agent.name}</td><td>${agent.delivery}${
-      agent.delivery === "push" ? html` · ${connected ? "connected" : "not connected"}` : ""
-    }</td><td>${lastCheckIn ? formatTime(lastCheckIn) : "Not since the last restart"}</td><td>${agent.description}</td></tr>`,
+/** A push member's live status, in the accent while connected; a pull member checks in instead. */
+function statusPill(entry: DirectoryEntry): Html {
+  if (entry.status === null) return html`<span class="status">checks in</span>`;
+  return html`<span class="status${entry.status === "offline" ? "" : " live"}">${entry.status}</span>`;
+}
+
+/** The live directory: every member, connected ones first (Directory.entries decides the order). */
+export function directoryTable(entries: DirectoryEntry[]): Html {
+  return html`<table><thead><tr><th>Agent</th><th>Kind</th><th>Where</th><th>Status</th><th class="narrow-hide">Doing</th><th>Last seen</th></tr></thead><tbody>
+${entries.map(
+  (entry) =>
+    html`<tr><td>${entry.display}${entry.display !== entry.address ? html`<div class="meta">${entry.address}</div>` : ""}</td><td>${
+      entry.kind
+    }</td><td>${whereOf(entry)}</td><td>${statusPill(entry)}</td><td class="narrow-hide">${entry.doing ?? ""}</td><td>${
+      entry.lastSeen ? formatTime(entry.lastSeen) : "Not since the last restart"
+    }</td></tr>`,
 )}
 </tbody></table>`;
 }
 
+export function homeView(
+  waiting: { task: Task; chain: Task[] }[],
+  permissions: PermissionRequest[],
+  entries: DirectoryEntry[],
+  moreWaiting = false,
+): Html {
+  return html`<h1>Waiting</h1>
+${waiting.length === 0 && permissions.length === 0 ? html`<p class="meta">Nothing waiting.</p>` : ""}
+${permissions.length > 0 ? html`<h2>Permission prompts</h2>${permissions.map(waitingPermission)}` : ""}
+${waiting.length > 0 ? html`<h2>Tasks waiting for approval</h2>${waiting.map(waitingTask)}${moreWaiting ? html`<p class="meta">Showing the oldest ${waiting.length} tasks. More are waiting.</p>` : ""}` : ""}
+<h2>Directory</h2>
+${directoryTable(entries)}`;
+}
+
 function historyRow(task: Task): Html {
-  return html`<tr><td>${formatTime(task.createdAt)}</td><td>${task.fromAgent} → ${task.toAgent}</td><td><span class="status">${STATUS_WORDS[task.status]}</span></td><td><a href="${taskPath(task)}">${clipText(task.instructions, 80)}</a></td></tr>`;
+  return html`<tr><td>${formatTime(task.createdAt)}</td><td>${task.fromAgent} → ${task.toAgent}</td><td><span class="status">${STATUS_WORDS[task.status]}</span></td><td class="narrow-hide"><a href="${taskPath(task)}">${clipText(task.instructions, 80)}</a></td></tr>`;
 }
 
 export function historyView(
@@ -92,15 +110,15 @@ export function historyView(
 ${
   tasks.length === 0
     ? html`<p class="meta">No tasks.</p>`
-    : html`<table><thead><tr><th>Created</th><th>From → to</th><th>Status</th><th>Instructions</th></tr></thead><tbody>${tasks.map(historyRow)}</tbody></table>`
+    : html`<table><thead><tr><th>Created</th><th>From → to</th><th>Status</th><th class="narrow-hide">Instructions</th></tr></thead><tbody>${tasks.map(historyRow)}</tbody></table>`
 }
 <h2>Events</h2>
 ${
   events.length === 0
     ? html`<p class="meta">No events.</p>`
-    : html`<table><thead><tr><th>Reported</th><th>Agent</th><th>Event</th><th>Details</th></tr></thead><tbody>${events.map(
+    : html`<table><thead><tr><th>Reported</th><th>Agent</th><th>Event</th><th class="narrow-hide">Details</th></tr></thead><tbody>${events.map(
         (event) =>
-          html`<tr><td>${formatTime(event.createdAt)}</td><td>${event.agent}</td><td>${event.name}</td><td>${clipText(event.details, 80)}</td></tr>`,
+          html`<tr><td>${formatTime(event.createdAt)}</td><td>${event.agent}</td><td>${event.name}</td><td class="narrow-hide">${clipText(event.details, 80)}</td></tr>`,
       )}</tbody></table>`
 }`;
 }

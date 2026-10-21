@@ -39,6 +39,11 @@ export function slugify(raw: string, fallback: string): string {
   return slug || fallback;
 }
 
+/** The paste-ready line that carries a join code to a new machine. The code is in the fragment, which browsers never send. */
+export function joinLine(publicUrl: string, code: string): string {
+  return `Join my agent bridge: ${publicUrl}/join#${code}`;
+}
+
 /** A joining machine's proposed name (usually its hostname) as a machine name: slugged, without `.local`. */
 export function machineSlug(raw: string): string {
   return slugify(raw.trim().replace(/\.local$/i, ""), "machine");

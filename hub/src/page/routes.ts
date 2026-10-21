@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { deleteCookie, setCookie } from "hono/cookie";
 import { html } from "hono/html";
 import { answerPermission, decideTask } from "../approvals/routes";
+import type { Directory } from "../core/directory";
+import type { NetworkService } from "../core/network";
 import type { PermissionRelay } from "../core/permissions";
 import type { Presence } from "../core/presence";
 import type { BridgeService } from "../core/service";
@@ -9,6 +11,7 @@ import { type BridgeConfig, TASK_STATUSES, type TaskStatus } from "../core/types
 import { log } from "../log";
 import type { StreamHub } from "../ways-in/stream";
 import { formBodyLimit, sendPage } from "./layout";
+import { networkRoutes } from "./network";
 import {
   hasSession,
   loginPath,
@@ -24,6 +27,8 @@ import { historyView, homeView, loginView, taskDetailView } from "./views";
 
 export interface PageDeps {
   service: BridgeService;
+  directory: Directory;
+  network: NetworkService;
   relay: PermissionRelay;
   streams: StreamHub;
   presence: Presence;
@@ -36,7 +41,7 @@ const WAITING_SHOWN = 100;
 const formText = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
 export function pageRoutes(deps: PageDeps): Hono {
-  const { service, relay, streams, presence, config, now } = deps;
+  const { service, directory, network, relay, streams, presence, config, now } = deps;
   const page = new Hono();
   const limiter = new LoginLimiter(now);
 
@@ -94,13 +99,11 @@ export function pageRoutes(deps: PageDeps): Hono {
     // One more than shown, to know whether to say that more are waiting.
     const rows = service.listTasks({ status: "waiting_approval", limit: WAITING_SHOWN + 1, oldestFirst: true });
     const waiting = rows.slice(0, WAITING_SHOWN).map((task) => ({ task, chain: service.chainOf(task) }));
-    const agents = config.agents.map((agent) => ({
-      agent,
-      lastCheckIn: presence.lastCheckIn(agent.name),
-      connected: streams.isConnected(agent.name),
-    }));
-    return sendPage(c, 200, "Waiting", homeView(waiting, relay.pending(), agents, rows.length > WAITING_SHOWN), { nav: true });
+    const entries = directory.entries();
+    return sendPage(c, 200, "Waiting", homeView(waiting, relay.pending(), entries, rows.length > WAITING_SHOWN), { nav: true });
   });
+
+  page.route("/network", networkRoutes({ network, presence, streams, config }));
 
   page.get("/history", (c) => {
     const agentParam = c.req.query("agent");

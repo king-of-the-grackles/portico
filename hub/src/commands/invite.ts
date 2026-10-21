@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { resolve } from "node:path";
 import { ConfigError, loadConfig } from "../config";
-import { NetworkService } from "../core/network";
+import { joinLine, NetworkService } from "../core/network";
 import type { BridgeConfig } from "../core/types";
 import { openDb } from "../db";
 import { NetworkStore } from "../network-store";
@@ -39,7 +39,7 @@ export async function inviteCommand(args: string[], io: CliIo, deps: { now?: () 
     const network = new NetworkService({ store: new NetworkStore(db), config, now: deps.now });
     const { code, expiresAt } = network.createJoinCode();
     io.out(`Join line for a new machine (one use, expires ${expiresAt.slice(0, 16).replace("T", " ")} UTC):`);
-    io.out(`Join my agent bridge: ${config.publicUrl}/join#${code}`);
+    io.out(joinLine(config.publicUrl, code));
     io.out("Paste the line into Claude Code on the new machine, or open the link there for the steps.");
     return 0;
   } finally {

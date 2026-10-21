@@ -67,7 +67,10 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/a2a", a2aRoutes(service, config, resolveAgent, directory, deps.resolvers.principal));
 
   app.get("/hub/", (c) => c.redirect("/hub", 303));
-  app.route("/hub", pageRoutes({ service, relay, streams, presence, config, now: deps.now }));
+  app.route(
+    "/hub",
+    pageRoutes({ service, directory, network: deps.networkService, relay, streams, presence, config, now: deps.now }),
+  );
   app.route("/", approvalRoutes({ service, relay, config, push: deps.push, now: deps.now }));
 
   app.notFound((c) => c.json({ error: "not_found", message: "No such endpoint." }, 404));

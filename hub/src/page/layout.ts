@@ -33,8 +33,11 @@ label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
 table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top;font-size:14px}
 .status{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.status.live{border-color:var(--accent);color:var(--accent)}
+.paste{width:100%;min-height:72px;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
+.full{width:100%}
 .error{border-left:3px solid var(--danger)}
-@media (max-width:600px){th:nth-child(4),td:nth-child(4){display:none}}
+@media (max-width:600px){.narrow-hide{display:none}}
 `;
 
 export const CSP =
@@ -55,7 +58,7 @@ export function formatTime(iso: string): Html {
   return html`<time datetime="${iso}">${iso.slice(0, 16).replace("T", " ")} UTC</time>`;
 }
 
-const NAV = html`<nav><a href="/hub">Waiting</a><a href="/hub/history">History</a><form method="post" action="/hub/logout"><button type="submit">Sign out</button></form></nav>`;
+const NAV = html`<nav><a href="/hub">Waiting</a><a href="/hub/network">Network</a><a href="/hub/history">History</a><form method="post" action="/hub/logout"><button type="submit">Sign out</button></form></nav>`;
 
 export function layout(title: string, body: Html, opts: { nav?: boolean } = {}): Html {
   return html`<!doctype html>
@@ -66,7 +69,7 @@ export function layout(title: string, body: Html, opts: { nav?: boolean } = {}):
 /** Sends a page with the headers every hub and approval page uses. */
 export function sendPage(
   c: Context,
-  status: 200 | 401 | 403 | 404 | 413 | 429,
+  status: 200 | 400 | 401 | 403 | 404 | 413 | 429,
   title: string,
   body: Html,
   opts: { nav?: boolean } = {},
