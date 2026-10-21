@@ -177,6 +177,14 @@ rules:
     expect(p).toContain('rule to "kind:" is not a valid name, address, glob, kind:<kind> or "*"');
   });
 
+  test("rejects a glob made only of * and @", () => {
+    const p = problems(YAML.replace('{ from: "*", to: grok-bot', '{ from: "*@*", to: grok-bot'));
+    expect(p).toEqual([
+      'rule from "*@*" is a glob without any name; use "*" for everyone, or a glob like "dialog-*" or "*@macbook"',
+    ]);
+    expect(p[0]).not.toMatch(/\b(i|me|my|we|us|our|you|your|it|its|they|them|their)\b/i);
+  });
+
   test("rejects unknown template placeholders", () => {
     const p = problems(YAML.replace("{{ event.details }}", "{{ event.secret }}"));
     expect(p).toContain('trigger "bug-to-claude": unknown placeholder {{event.secret}}');

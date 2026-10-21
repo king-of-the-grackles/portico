@@ -324,13 +324,61 @@ describe("versioned migrations", () => {
     }
   });
 
+  test("keeps v1 tasks and events exactly as they were", () => {
+    const path = v1Database(V1_SCHEMA_SQL);
+    const raw = new Database(path);
+    raw.run(`INSERT INTO tasks (id, from_agent, to_agent, instructions, status, chain_length, created_at, updated_at, expires_at, idempotency_key)
+             VALUES ('t-2', 'muse', 'claude-code-dialog', 'keyed work', 'queued', 1, '2026-10-20T01:00:00Z', '2026-10-20T01:00:00Z', '2026-10-21T01:00:00Z', 'k-1')`);
+    raw.run(`INSERT INTO events (id, agent, name, details, created_at)
+             VALUES ('e-1', 'muse', 'bug_report_received', 'the login page is down', '2026-10-20T00:30:00Z')`);
+    const rows = (db: Database) => ({
+      tasks: db.query("SELECT * FROM tasks ORDER BY id").all(),
+      events: db.query("SELECT * FROM events ORDER BY id").all(),
+    });
+    const before = rows(raw);
+    raw.close();
+    expect(before.tasks).toHaveLength(2);
+    const db = openDb(path);
+    try {
+      expect(rows(db)).toEqual(before);
+      const store = new Store(db);
+      expect(store.findByIdempotencyKey("muse", "k-1")?.id).toBe("t-2");
+      expect(store.getEvent("e-1")?.details).toBe("the login page is down");
+    } finally {
+      db.close();
+    }
+  });
+
   test("upgrades a v1 database from before idempotency keys", () => {
     const db = openDb(v1Database(V1_PRE_IDEMPOTENCY_SQL));
     try {
-      expect(new Store(db).getTask("t-1")?.idempotencyKey).toBeNull();
+      const store = new Store(db);
+      expect(store.getTask("t-1")?.idempotencyKey).toBeNull();
       expect(version(db)).toBe(SCHEMA_VERSION);
+      const indexes = db.query("PRAGMA index_list(tasks)").all() as { name: string; unique: number }[];
+      expect(indexes).toContainEqual(expect.objectContaining({ name: "tasks_idempotency", unique: 1 }));
+      store.insertTask(task({ id: "a", idempotencyKey: "k" }));
+      expect(() => store.insertTask(task({ id: "b", idempotencyKey: "k" }))).toThrow();
     } finally {
       db.close();
+    }
+  });
+
+  test("a migration step that fails leaves the database at the version before it, without its changes", () => {
+    const path = v1Database(V1_SCHEMA_SQL);
+    const raw = new Database(path);
+    raw.run("PRAGMA user_version = 1");
+    // Migration 2 creates machines, then fails on sessions: SQLite refuses a table named like an existing index.
+    raw.run("CREATE INDEX sessions ON tasks (status)");
+    raw.close();
+    expect(() => openDb(path)).toThrow("there is already an index named sessions");
+    const after = new Database(path, { strict: true });
+    try {
+      expect(version(after)).toBe(1);
+      expect(tables(after)).not.toContain("machines");
+      expect(new Store(after).getTask("t-1")?.instructions).toBe("old work");
+    } finally {
+      after.close();
     }
   });
 

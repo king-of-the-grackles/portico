@@ -1,10 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import type { Task } from "../src/core/types";
-import { makeApp } from "./helpers";
+import { addSession, BASE_YAML, makeApp, testConfig } from "./helpers";
 
 const json = async (res: Response) => (await res.json()) as any;
 
 describe("deliveries for push agents", () => {
+  test("a session is a push member: its plugin reads the session's own deliveries", async () => {
+    const yaml = BASE_YAML.replace("rules:\n", 'rules:\n  - { from: grok-bot, to: "kind:claude-code", action: allow }\n');
+    const ctx = makeApp(testConfig(yaml));
+    const { token } = ctx.networkService.redeemJoinCode(ctx.networkService.createJoinCode().code, "macbook");
+    addSession(ctx, { name: "dialog-claude", machine: "macbook", key: "key-12345678" });
+    const task = ctx.service.sendTask("grok-bot", { to: "dialog-claude", instructions: "Fix the login bug" });
+    const res = await ctx.app.request("/api/deliveries", {
+      headers: { authorization: `Bearer ${token}`, "x-bridge-session": "key-12345678" },
+    });
+    expect(res.status).toBe(200);
+    expect((await json(res)).tasks.map((t: any) => t.id)).toEqual([task.id]);
+  });
+
   test("list queued tasks and unseen results with framed messages, and change nothing", async () => {
     const ctx = makeApp();
     const task = ctx.service.sendTask("grok-bot", { to: "claude-code", instructions: "Write the changelog" });

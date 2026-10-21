@@ -302,6 +302,21 @@ describe("sendTask with an idempotency key", () => {
     expect(ctx.service.sendTask("grok-bot", { to: "dialog-claude@macbook", instructions: "x", idempotencyKey: "k1" }).id).toBe(first.id);
   });
 
+  test("a retry by short name still returns the first task once the name is ambiguous or the session is gone", () => {
+    const yaml = BASE_YAML.replace("rules:\n", 'rules:\n  - { from: grok-bot, to: "kind:claude-code", action: allow }\n');
+    const ctx = makeService(testConfig(yaml));
+    addSession(ctx, { name: "dialog-claude", machine: "macbook" });
+    const send = (to = "dialog-claude") => ctx.service.sendTask("grok-bot", { to, instructions: "x", idempotencyKey: "k1" });
+    const first = send();
+    addSession(ctx, { name: "dialog-claude", machine: "studio" });
+    expect(send().id).toBe(first.id); // ambiguous now
+    ctx.network.deleteMachine("m-macbook");
+    expect(send().id).toBe(first.id); // resolves to studio now
+    ctx.network.deleteMachine("m-studio");
+    expect(send().id).toBe(first.id); // resolves to nothing now
+    expect(errorCode(() => send("dialog"))).toBe("bad_request"); // another name is another task
+  });
+
   test("keys are per sender", () => {
     const { service } = makeService();
     const a = service.sendTask("grok-bot", send("k-1"));

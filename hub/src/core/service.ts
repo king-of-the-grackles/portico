@@ -311,9 +311,13 @@ export class BridgeService {
     return receiver.address;
   }
 
-  /** Whether a retry's `to` names the stored receiver: the same text, or a short name that still resolves to it. */
+  /**
+   * Whether a retry's `to` names the stored receiver: the same text, the stored session's short name (even once that
+   * name is ambiguous or the session is gone), or a name that still resolves to it.
+   */
   private isSameReceiver(stored: string, to: unknown, caller: string): boolean {
     if (to === stored) return true;
+    if (typeof to === "string" && !to.includes("@") && stored.startsWith(`${to}@`)) return true;
     try {
       return this.directory.resolve(to, caller).address === stored;
     } catch (err) {

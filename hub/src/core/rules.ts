@@ -37,10 +37,16 @@ const SLUG = "[a-z0-9]+(?:-[a-z0-9]+)*";
 const EXACT = new RegExp(`^${SLUG}(?:@${SLUG})?$`);
 const GLOB = /^[a-z0-9@*-]*\*[a-z0-9@*-]*$/;
 const KIND = new RegExp(`^kind:${SLUG}$`);
+/** A glob with stars and @ but no name, such as "**" or "*@*". */
+const NAMELESS_GLOB = /^[*@]*\*[*@]*$/;
 
 /** Null when the rule side is an exact name or address, a glob, `kind:<kind>` or "*"; otherwise what's wrong. */
 export function rulePatternProblem(side: string): string | null {
-  return side === "*" || EXACT.test(side) || GLOB.test(side) || KIND.test(side)
+  if (side === "*") return null;
+  if (NAMELESS_GLOB.test(side)) {
+    return 'a glob without any name; use "*" for everyone, or a glob like "dialog-*" or "*@macbook"';
+  }
+  return EXACT.test(side) || GLOB.test(side) || KIND.test(side)
     ? null
     : 'not a valid name, address, glob, kind:<kind> or "*"';
 }

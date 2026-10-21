@@ -107,6 +107,14 @@ describe("rule patterns", () => {
     expect(rulePatternProblem("Muse")).toBe('not a valid name, address, glob, kind:<kind> or "*"');
   });
 
+  test("a glob of only * and @, other than the bare *, is refused with its own problem", () => {
+    for (const bare of ["**", "*@*", "@*", "*@", "***"]) {
+      expect(rulePatternProblem(bare)).toBe('a glob without any name; use "*" for everyone, or a glob like "dialog-*" or "*@macbook"');
+    }
+    expect(rulePatternProblem("*")).toBeNull();
+    expect(rulePatternProblem("@")).toBe('not a valid name, address, glob, kind:<kind> or "*"');
+  });
+
   test("unknownRuleNames lists exact names nothing knows, never patterns", () => {
     const rules: RuleConfig[] = [
       { from: "muse", to: "dialog-claude@macbook", action: "allow" },
