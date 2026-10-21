@@ -31,6 +31,57 @@ export interface AgentConfig {
   delivery: Delivery;
 }
 
+/** The owner id every member record carries. One owner per hub for now. */
+export const OWNER = "owner";
+
+export const ASSISTANT_KINDS = ["muse", "grok-bot", "chatgpt", "codex", "other"] as const;
+export type AssistantKind = (typeof ASSISTANT_KINDS)[number];
+
+/** A computer that joined with a join code. Not an agent itself: its name follows the @ in its sessions' addresses. */
+export interface Machine {
+  id: string;
+  owner: string;
+  name: string;
+  createdAt: string;
+  lastSeenAt: string | null;
+}
+
+/** One Claude Code session on a joined machine. Its address is `${name}@${machine}`. */
+export interface SessionRecord {
+  id: string;
+  owner: string;
+  machineId: string;
+  /** The machine's name, joined in on read. */
+  machine: string;
+  name: string;
+  /** The random ID the plugin made when it started. An identifier, not a secret. */
+  key: string;
+  /** The repo basename the name came from. */
+  folder: string;
+  /** HMAC of the full folder path, keyed with the machine token. */
+  folderId: string;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
+/** A pull agent connected on the hub page, with a minted token. */
+export interface Assistant {
+  id: string;
+  owner: string;
+  name: string;
+  kind: AssistantKind;
+  description: string;
+  createdAt: string;
+}
+
+export interface JoinCode {
+  id: string;
+  owner: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt: string | null;
+}
+
 export interface RuleConfig {
   from: string;
   to: string;

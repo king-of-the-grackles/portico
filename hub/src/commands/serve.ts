@@ -1,10 +1,14 @@
 import { ConfigError, loadConfig } from "../config";
 import type { BridgeConfig } from "../core/types";
+import { SchemaTooNewError } from "../db";
 import { startServer } from "../server";
 import type { CliIo } from "./io";
 
 /** A plain explanation for startup failures that aren't bugs, or null for anything else. */
 export function startupProblem(err: unknown, config: Pick<BridgeConfig, "port" | "dbPath">): string | null {
+  if (err instanceof SchemaTooNewError) {
+    return `The database at ${config.dbPath} was written by a newer hub version. Run that version, or restore a backup.`;
+  }
   const code = (err as { code?: unknown } | null)?.code;
   if (code === "EADDRINUSE") return `Port ${config.port} is already in use. Stop the other process, or set PORT to a free port.`;
   if (code === "SQLITE_CANTOPEN") {

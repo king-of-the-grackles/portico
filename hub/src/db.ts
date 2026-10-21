@@ -1,7 +1,9 @@
 import { Database } from "bun:sqlite";
 import type { BridgeEvent, Task, TaskStatus } from "./core/types";
 
-const SCHEMA = [
+// v1's schema, as deployed. Every statement is idempotent, because deployed v1 databases are at user_version 0
+// with these tables already there.
+const V1_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     from_agent TEXT NOT NULL,
@@ -37,20 +39,116 @@ const SCHEMA = [
 const IDEMPOTENCY_INDEX = `CREATE UNIQUE INDEX IF NOT EXISTS tasks_idempotency
   ON tasks (from_agent, idempotency_key) WHERE idempotency_key IS NOT NULL`;
 
+// v1.1, the personal agent network. Every member record carries owner, always "owner" for now.
+const NETWORK_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS machines (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    machine_id TEXT NOT NULL REFERENCES machines (id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    key TEXT NOT NULL,
+    folder TEXT NOT NULL,
+    folder_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    UNIQUE (machine_id, name),
+    UNIQUE (machine_id, key)
+  )`,
+  `CREATE INDEX IF NOT EXISTS sessions_name ON sessions (name)`,
+  `CREATE TABLE IF NOT EXISTS assistants (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    description TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS join_codes (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    code_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    from_agent TEXT NOT NULL,
+    to_agent TEXT NOT NULL,
+    text TEXT NOT NULL,
+    reply_to TEXT,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    delivered_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS messages_to_pending ON messages (to_agent, delivered_at, expires_at)`,
+  `CREATE INDEX IF NOT EXISTS messages_pair_created ON messages (from_agent, to_agent, created_at)`,
+];
+
 /** Databases created before a column existed get it added here. */
 function addMissingColumns(db: Database): void {
   const columns = (db.query("PRAGMA table_info(tasks)").all() as { name: string }[]).map((column) => column.name);
   if (!columns.includes("idempotency_key")) db.run("ALTER TABLE tasks ADD COLUMN idempotency_key TEXT");
 }
 
+/** Migration n + 1 takes a database from user_version n to n + 1. Append only: never edit a shipped migration. */
+const MIGRATIONS: ((db: Database) => void)[] = [
+  // 1: the v1 schema.
+  (db) => {
+    for (const statement of V1_SCHEMA) db.run(statement);
+    addMissingColumns(db);
+    db.run(IDEMPOTENCY_INDEX);
+  },
+  // 2: v1.1, the personal agent network.
+  (db) => {
+    for (const statement of NETWORK_SCHEMA) db.run(statement);
+  },
+];
+
+export const SCHEMA_VERSION = MIGRATIONS.length;
+
+/** The database was written by a newer hub, whose schema this one doesn't know. */
+export class SchemaTooNewError extends Error {
+  constructor(readonly found: number) {
+    super(`database schema version ${found} is newer than this hub's version ${SCHEMA_VERSION}`);
+    this.name = "SchemaTooNewError";
+  }
+}
+
+function migrate(db: Database): void {
+  const current = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+  if (current > SCHEMA_VERSION) throw new SchemaTooNewError(current);
+  for (let v = current; v < SCHEMA_VERSION; v++) {
+    // Each step and its version bump commit together, so a failed step leaves the database as it was.
+    db.transaction(() => {
+      MIGRATIONS[v]!(db);
+      db.run(`PRAGMA user_version = ${v + 1}`);
+    })();
+  }
+}
+
 export function openDb(path: string): Database {
   // strict: true lets us bind { id } to $id without writing the "$" prefix in JS.
   const db = new Database(path, { create: true, strict: true });
-  db.run("PRAGMA journal_mode = WAL");
-  db.run("PRAGMA busy_timeout = 5000");
-  for (const statement of SCHEMA) db.run(statement);
-  addMissingColumns(db);
-  db.run(IDEMPOTENCY_INDEX);
+  try {
+    db.run("PRAGMA journal_mode = WAL");
+    db.run("PRAGMA busy_timeout = 5000");
+    // Off by default in SQLite, and a no-op inside a transaction: removing a machine cascades to its sessions.
+    db.run("PRAGMA foreign_keys = ON");
+    migrate(db);
+  } catch (err) {
+    db.close();
+    throw err;
+  }
   return db;
 }
 

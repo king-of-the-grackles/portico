@@ -8,6 +8,7 @@ import type { CliIo } from "../src/commands/io";
 import { startupProblem } from "../src/commands/serve";
 import { STARTER_YAML } from "../src/commands/starter";
 import { parseConfig } from "../src/config";
+import { SchemaTooNewError } from "../src/db";
 import { startServer } from "../src/server";
 import { BASE_YAML, testConfig, testEnv } from "./helpers";
 
@@ -145,6 +146,13 @@ describe("startup errors", () => {
       "The database at /data/bridge.db can't be opened. Check that its folder exists and is writable, or set BRIDGE_DB_PATH.",
     );
     expect(startupProblem(new Error("other"), config)).toBeNull();
+  });
+
+  test("startupProblem explains a database written by a newer hub", () => {
+    const config = { port: 8790, dbPath: "/data/bridge.db" };
+    expect(startupProblem(new SchemaTooNewError(3), config)).toBe(
+      "The database at /data/bridge.db was written by a newer hub version. Run that version, or restore a backup.",
+    );
   });
 
   test("startServer closes the database when the server can't start", () => {
