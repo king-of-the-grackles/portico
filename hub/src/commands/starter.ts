@@ -15,11 +15,21 @@ agents:
   - name: codex
     description: Codex. Good for code changes in local repos.
     delivery: pull
+  # An optional kind labels an agent in the directory and in rules ("kind:<kind>"). Without one, a push agent is
+  # claude-code, a pull agent named after a known kind (muse, grok-bot, chatgpt, codex) gets that kind, and any
+  # other pull agent is "assistant". Assistants can also be connected from the hub page (Network).
+  # - name: research-bot
+  #   description: A custom assistant.
+  #   delivery: pull
+  #   kind: other
 
 rules:
   - { from: grok-bot, to: claude-code, action: allow }
   - { from: muse,     to: claude-code, action: allow }
   - { from: codex,    to: grok-bot,    action: allow }
+  # Claude Code sessions appear by themselves once a machine joins (see docs/agents/claude-code.md), named
+  # <repo>-claude@<machine>. They are not listed under agents. Name them in rules with a pattern:
+  - { from: grok-bot, to: "kind:claude-code", action: allow }
   - { from: "*",      to: muse,        action: ask }   # Muse's answers can contain private data
 
 triggers:

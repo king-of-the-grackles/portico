@@ -2,6 +2,16 @@
 
 A small self-hosted hub that lets personal AI agents from different companies (Claude Code, Grok Bot, Meta Muse, ChatGPT/Codex) hand each other tasks, with rules you control. Pairs of agents you haven't allowed are blocked. Tasks on pairs set to `ask` wait for your approval, which arrives as a phone push with Approve and Deny buttons, and on the hub page.
 
+## The personal agent network
+
+Beyond the agents named in `bridge.yaml`, the hub runs a personal agent network:
+- **Machines join once** with a one-time join line (`bridge invite`, which must run where the hub's database is, or Network → **Add a machine** on the hub page). After that, every Claude Code session on the machine appears in a live directory as `<repo>-claude@<machine>`, with its status and what it's doing.
+- **Messages** between your own agents are free-form and always allowed (`send_message`); tasks still follow your rules, and rules can name sessions with patterns such as `kind:claude-code`.
+- **Delivery** into Claude Code uses its inbox socket: no development flag, and it works in `claude -p`. The flag is needed only for phone permission relay.
+- **Assistants** (Muse, Grok Bot, ChatGPT, Codex) connect from the hub page with Network → **Connect an assistant**, which mints a token and shows the connect prompt.
+
+Join a machine: install the plugin, then run `bridge join '<join line>'` there (or `/agent-bridge:join <join line>` in Claude Code). Keep a folder off the network with `/agent-bridge:off`. Full steps: [docs/agents/claude-code.md](docs/agents/claude-code.md).
+
 Design: [docs/superpowers/specs/2026-10-19-agent-bridge-design.md](docs/superpowers/specs/2026-10-19-agent-bridge-design.md). Status: early development.
 
 ## Run it locally
@@ -30,6 +40,7 @@ Design: [docs/superpowers/specs/2026-10-19-agent-bridge-design.md](docs/superpow
 | `BRIDGE_NTFY_TOPIC` | no | Turns on phone pushes. Use 20–64 random letters, digits, `-` or `_`: anyone who knows a public topic can read it. |
 | `BRIDGE_NTFY_URL` | no | The ntfy server. Default `https://ntfy.sh`. |
 | `BRIDGE_NTFY_TOKEN` | no | An ntfy access token, for a protected topic or your own server. |
+| `BRIDGE_PLUGIN_SOURCE` | no | The plugin's marketplace source (a GitHub `owner/repo` or a path) that the `/join` page tells new machines to install from. |
 | `BRIDGE_DB_PATH` | no | Default `./bridge.db`. |
 | `BRIDGE_CONFIG` | no | Default `./bridge.yaml`. |
 | `PORT` | no | Default `8790`. |
@@ -45,10 +56,12 @@ Approval links carry their signed token in the URL path, so a host's access logs
 ## Hub page
 
 Open `<BRIDGE_PUBLIC_URL>/hub` and sign in with `BRIDGE_ADMIN_PASSWORD`. The page shows:
+- the live directory: every Claude Code session, assistant and `bridge.yaml` agent, with status, what each is doing and when each was last seen
 - tasks waiting for approval
 - Claude Code permission prompts relayed by the plugin
-- each agent's last check-in
 - history, filterable by agent and status
+
+**Network** (`/hub/network`) lists machines and assistants, with **Add a machine** (a fresh join line) and **Connect an assistant** (a token and a connect prompt). Removing a machine drops its sessions at once. The public `/join` page walks a new machine through installing the plugin and joining.
 
 Sign-in locks for everyone for 15 minutes after 10 failed attempts; existing sessions and the push buttons keep working.
 
@@ -59,16 +72,16 @@ Signing out clears the cookie but doesn't revoke a copied one. To sign out every
 | Way in | Where | For |
 |---|---|---|
 | Web API | `/api/*`, described at `/api/openapi.json` | Any agent that can make web requests (Muse's Custom Connector, Grok Bot's computer) |
-| MCP | `/mcp` | MCP clients (Claude Code, Codex, Cursor, Grok Bot) |
+| MCP | `/mcp` | MCP clients (Claude Code, Codex, ChatGPT, Cursor, Grok Bot) |
 | A2A | `/a2a/<agent>/.well-known/agent-card.json` | A2A clients |
-| Live stream | `GET /api/stream` (server-sent events) | Push agents (the Claude Code plugin): nudges when work arrives, and answers to permission prompts |
+| Live stream | `GET /api/stream` (server-sent events) | Push agents (the Claude Code plugin): registers the session, nudges when work arrives, and carries answers to permission prompts |
 | Permission relay | `POST /api/permission-requests` | Push agents: forwards Claude Code permission prompts to the push and the hub page |
 
 ## Connect your agents
 
 | Agent | Guide |
 |---|---|
-| Claude Code | [docs/agents/claude-code.md](docs/agents/claude-code.md): the agent-bridge plugin (tools, live task delivery, permission relay) |
+| Claude Code | [docs/agents/claude-code.md](docs/agents/claude-code.md): joining machines, the agent-bridge plugin (tools, live delivery, permission relay) |
 | Grok Bot | [docs/agents/grok-bot.md](docs/agents/grok-bot.md): MCP, added by asking in chat |
 | Meta Muse | [docs/agents/muse.md](docs/agents/muse.md): a Custom Connector from the OpenAPI document (needs a regular domain) |
 | Codex | [docs/agents/codex.md](docs/agents/codex.md): three lines in `~/.codex/config.toml` |
