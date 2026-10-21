@@ -128,6 +128,22 @@ describe("joinMachine", () => {
     expect(existsSync(path)).toBe(false);
   });
 
+  test("control characters from the hub are stripped from its error text and from the machine name", async () => {
+    const ESC = "\u001b";
+    const line = `https://bridge.example.com/join#${"B".repeat(22)}`;
+    const path = configPath();
+    const refusing = (async () =>
+      Response.json({ error: "bad_request", message: `${ESC}[2J${ESC}]0;title\u0007Bad code\u009b31m` }, { status: 400 })) as unknown as typeof fetch;
+    const err = await joinError(joinMachine({ line }, { configPath: path, hostname, fetch: refusing }));
+    expect(err.message).toBe("[2J]0;titleBad code31m");
+
+    const naming = (async () =>
+      Response.json({ machine: { name: `studio${ESC}[31m\u0085` }, token: "bm_x" }, { status: 201 })) as unknown as typeof fetch;
+    const joined = await joinMachine({ line }, { configPath: path, hostname, fetch: naming });
+    expect(joined.machine).toBe("studio[31m");
+    expect(readMachineFile(path)?.machine).toBe("studio[31m");
+  });
+
   test("an unreachable hub becomes a JoinError, and nothing is written", async () => {
     const path = configPath();
     const err = await joinError(joinMachine({ line: `http://127.0.0.1:1/join#${"B".repeat(22)}` }, { configPath: path, hostname }));

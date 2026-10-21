@@ -21,8 +21,10 @@ export function joinRoutes(deps: { network: NetworkService; config: BridgeConfig
   const app = new Hono();
 
   app.post("/api/join", jsonBodyLimit(config), async (c) => {
-    if (limiter.blocked()) throw new BridgeError("rate_limited", "Too many failed join attempts. Try again in 15 minutes.");
     const body = JoinBody.parse(await readJson(c));
+    // Nothing awaits from this check to recordFailure (bun:sqlite is synchronous), so a burst of concurrent requests
+    // can't all pass the check before the first failure is recorded.
+    if (limiter.blocked()) throw new BridgeError("rate_limited", "Too many failed join attempts. Try again in 15 minutes.");
     try {
       const { machine, token } = network.redeemJoinCode(body.code, body.machine ?? "machine");
       return c.json({ machine: { name: machine.name }, token }, 201);

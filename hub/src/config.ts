@@ -96,7 +96,7 @@ function parseNtfy(env: Env, problems: string[]): NtfyConfig | null {
   if (!topic) return null;
   if (!NTFY_TOPIC.test(topic)) {
     problems.push(
-      "BRIDGE_NTFY_TOPIC must be 20–64 letters, digits, - or _, because anyone who knows a public topic can read it",
+      "BRIDGE_NTFY_TOPIC must be 20–64 letters, digits, - or _, because anyone who knows a public topic can read every push sent to the topic",
     );
   }
   const url = (env.BRIDGE_NTFY_URL?.trim() || "https://ntfy.sh").replace(/\/+$/, "");

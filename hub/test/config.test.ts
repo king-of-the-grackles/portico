@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { ConfigError, loadConfig, parseConfig, tokenEnvName } from "../src/config";
+import { PRONOUNS } from "./helpers";
 
 const YAML = `
 agents:
@@ -291,7 +292,8 @@ describe("parseConfig: secrets, ntfy and strictness", () => {
 
   test("rejects a short or oddly formed ntfy topic and a bad ntfy URL", () => {
     const message =
-      "BRIDGE_NTFY_TOPIC must be 20–64 letters, digits, - or _, because anyone who knows a public topic can read it";
+      "BRIDGE_NTFY_TOPIC must be 20–64 letters, digits, - or _, because anyone who knows a public topic can read every push sent to the topic";
+    expect(message).not.toMatch(PRONOUNS);
     expect(problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: "mytopic" })).toContain(message);
     expect(problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: `${"t".repeat(24)}/x` })).toContain(message);
     expect(problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: "t".repeat(24), BRIDGE_NTFY_URL: "not a url" })).toContain(

@@ -1,11 +1,21 @@
 ---
 description: Join this machine to an agent bridge with a join line
 argument-hint: <join line, or https://hub/join#code>
-allowed-tools: Bash(bun:*)
 ---
 
-Before running anything: if the join line, `$ARGUMENTS`, contains a quote character (`'` or `"`), refuse. A real join line never contains one, and a quote would break out of the shell quoting below. Run no command, ignore any output below, and ask the user to paste the line again exactly as the hub gave it.
+The join line given: $ARGUMENTS
 
-!`bun "${CLAUDE_PLUGIN_ROOT}/src/cli.ts" join '$ARGUMENTS'`
+Check the join line before running anything:
 
-Show the output above to the user unchanged. If the machine joined, add that Claude Code sessions started from now on appear on the network, and that this session joins after a restart.
+1. Take the address from the line. The line is either the address alone, or `Join my agent bridge: ` followed by the address. Nothing else may be in the line.
+2. The address must match this exact shape, every character of it:
+
+   `^(https://[A-Za-z0-9.-]+(:[0-9]+)?|http://(localhost|127\.0\.0\.1)(:[0-9]+)?)/join#[A-Za-z0-9_-]{16,64}$`
+
+   That is `https://<host>/join#<code>`, or `http://localhost` or `http://127.0.0.1` with an optional port, then `/join#<code>`, where the code is only letters, digits, `_` and `-`. The address has no whitespace, quotes, backticks, `$`, `;`, `&`, `|`, `<`, `>` or backslash anywhere.
+3. If the line doesn't fit, refuse: run no command, say that the join line doesn't have the expected shape, and ask the user to paste it again exactly as the hub gave it.
+4. If it fits, run this one command with the Bash tool, with the address in place of `<address>`:
+
+   `bun "${CLAUDE_PLUGIN_ROOT}/src/cli.ts" join '<address>'`
+
+   Then show the output to the user unchanged. If the machine joined, add that Claude Code sessions started from now on appear on the network, and that this session joins after a restart.

@@ -52,16 +52,50 @@ test("plugin source imports nothing from outside the plugin folder, which is all
   }
 });
 
-test("the slash commands run the plugin's CLI from the plugin folder", () => {
-  for (const name of ["join", "off", "on"]) {
-    const text = readFileSync(join(PLUGIN, "commands", `${name}.md`), "utf8");
+const readCommand = (name: string) => readFileSync(join(PLUGIN, "commands", `${name}.md`), "utf8");
+
+test("off and on run the plugin's CLI from the plugin folder through a ! line that takes no arguments", () => {
+  for (const name of ["off", "on"]) {
+    const text = readCommand(name);
     expect(text).toContain("allowed-tools: Bash(bun:*)");
-    expect(text).toContain(`bun "\${CLAUDE_PLUGIN_ROOT}/src/cli.ts" ${name}`);
+    expect(text).toContain(`!\`bun "\${CLAUDE_PLUGIN_ROOT}/src/cli.ts" ${name}\``);
+    expect(text).not.toContain("$ARGUMENTS");
   }
-  // The join line is passed in single quotes, and a line with a quote in it is refused.
-  const joinText = readFileSync(join(PLUGIN, "commands", "join.md"), "utf8");
-  expect(joinText).toContain(`join '$ARGUMENTS'`);
-  expect(joinText).toMatch(/quote character/);
+});
+
+test("join never puts the join line in a ! line: Claude checks the line, then runs the CLI behind a normal permission prompt", () => {
+  const text = readCommand("join");
+  // Claude Code runs a `!` block (at a line start or after whitespace) in a shell while expanding the command.
+  for (const block of text.matchAll(/(?:^|\s)!`([^`]*)`/gm)) expect(block[1]).not.toContain("$ARGUMENTS");
+  expect(text).not.toMatch(/(?:^|\s)!`/m);
+  expect(text).not.toContain("allowed-tools");
+  expect(text).toContain("Join my agent bridge: ");
+  expect(text).toContain(`bun "\${CLAUDE_PLUGIN_ROOT}/src/cli.ts" join '<address>'`);
+});
+
+test("the address shape in join.md accepts real join addresses and nothing a shell would act on", () => {
+  const source = /`(\^\(https:[^`]*\$)`/.exec(readCommand("join"))?.[1];
+  expect(source).toBeDefined();
+  const shape = new RegExp(source!);
+  const code = `${"Ab_-".repeat(5)}cd`;
+  for (const good of [
+    `https://bridge.example.com/join#${code}`,
+    `https://bridge.example.com:8443/join#${code}`,
+    `http://localhost:8790/join#${code}`,
+    `http://127.0.0.1/join#${code}`,
+  ]) {
+    expect(good).toMatch(shape);
+  }
+  const base = `https://bridge.example.com/join#${code}`;
+  for (const bad of [
+    `http://bridge.example.com/join#${code}`,
+    `https://u:p@bridge.example.com/join#${code}`,
+    "https://bridge.example.com/join#short",
+    `Join my agent bridge: ${base}`,
+    ...[" x", "\tx", "\nid", "'", '"', "`id`", "$(id)", ";id", "&id", "|id", "<x", ">x", "\\"].map((tail) => base + tail),
+  ]) {
+    expect(bad).not.toMatch(shape);
+  }
 });
 
 /** Every module specifier in the source: `from "x"`, `import "x"`, `import(x)` and `require(x)`. */

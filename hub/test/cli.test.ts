@@ -211,7 +211,9 @@ describe("bridge CLI dispatch", () => {
   });
 
   test("the usage lists invite and join", async () => {
-    const proc = Bun.spawn(["bun", CLI, "help"], { stdout: "pipe", stderr: "pipe" });
+    // Built from scratch, so the child never inherits this session's settings.
+    const env = { PATH: process.env.PATH ?? "", HOME: tempDir() };
+    const proc = Bun.spawn(["bun", CLI, "help"], { env, stdout: "pipe", stderr: "pipe" });
     expect(await proc.exited).toBe(0);
     const usage = await new Response(proc.stdout).text();
     expect(usage).toContain("\n  invite            Make a one-time join line for a new machine");

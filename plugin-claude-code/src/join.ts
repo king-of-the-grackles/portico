@@ -103,12 +103,13 @@ export async function joinMachine(opts: JoinOptions, deps: JoinDeps): Promise<{ 
   }
   const body = (await res.json().catch(() => null)) as { message?: unknown; machine?: { name?: unknown }; token?: unknown } | null;
   if (!res.ok) {
-    const message = typeof body?.message === "string" && body.message.trim() ? body.message : null;
-    throw new JoinError(message ?? `The hub at ${hub} answered HTTP ${res.status}.`);
+    const message = typeof body?.message === "string" ? withoutControls(body.message).trim() : "";
+    throw new JoinError(message || `The hub at ${hub} answered HTTP ${res.status}.`);
   }
-  const machine = body?.machine?.name;
+  const answeredName = body?.machine?.name;
+  const machine = typeof answeredName === "string" ? withoutControls(answeredName) : null;
   const token = body?.token;
-  if (typeof machine !== "string" || !machine || typeof token !== "string" || !token) {
+  if (!machine || typeof token !== "string" || !token) {
     throw new JoinError(`The hub at ${hub} sent an answer that isn't a join result. Nothing was written.`);
   }
   try {
@@ -118,6 +119,11 @@ export async function joinMachine(opts: JoinOptions, deps: JoinDeps): Promise<{ 
     throw new JoinError(`${path} could not be written (${reason}). The join code is used up: ask for a new join line, then join again.`);
   }
   return { hub, machine, path };
+}
+
+/** The hub's text without control characters (C0, DEL and C1, ESC included), so it can't drive the terminal. */
+function withoutControls(text: string): string {
+  return text.replace(/\p{Cc}/gu, "");
 }
 
 /** The current machine file, or null. With replace, a broken file counts as none, so joining again repairs the file. */

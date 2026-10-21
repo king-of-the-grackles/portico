@@ -103,6 +103,16 @@ describe("plugin CLI", () => {
     expect(missing.err).toEqual(["--name needs a value. Usage: join <line> [--code <code>] [--name <machine>] [--replace]"]);
   });
 
+  test("join prints no control characters from the hub", async () => {
+    const { dir, path } = machineDir();
+    const fetch = (async () =>
+      Response.json({ machine: { name: "studio\u001b[2J" }, token: "bm_x" }, { status: 201 })) as unknown as typeof globalThis.fetch;
+    const run = await cli(["join", `https://bridge.example.com/join#${"B".repeat(22)}`], { path, cwd: dir, deps: { fetch } });
+    expect(run.code).toBe(0);
+    expect(run.out[0]).toBe('Joined https://bridge.example.com as machine "studio[2J".');
+    for (const line of run.lines) expect(line).not.toMatch(/\p{Cc}/u);
+  });
+
   test("off and on edit the list for the current folder by default", async () => {
     const { dir, path } = machineDir();
     writeMachineFile(path, FILE);

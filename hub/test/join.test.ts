@@ -67,6 +67,16 @@ describe("POST /api/join", () => {
     expect((await postJoin(ctx, { code, machine: "macbook" })).status).toBe(201);
   });
 
+  test("a burst of concurrent failures still locks after ten", async () => {
+    const ctx = makeApp();
+    const answers = await Promise.all(
+      Array.from({ length: 20 }, (_, i) => postJoin(ctx, { code: `${"B".repeat(20)}${String(i).padStart(2, "0")}` })),
+    );
+    const statuses = answers.map((res) => res.status);
+    expect(statuses.filter((status) => status === 404)).toHaveLength(10);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(10);
+  });
+
   test("the body is validated", async () => {
     const ctx = makeApp();
     for (const body of [{ code: 5 }, { machine: "macbook" }, { code: "A".repeat(22), machine: 5 }, "not json"]) {

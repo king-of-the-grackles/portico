@@ -55,11 +55,14 @@ describe("bridge invite", () => {
     const code = ok.out[1]!.split("#")[1]!;
     const broken = setup({ BRIDGE_PUBLIC_URL: "" });
     expect(await inviteCommand([], broken.io)).toBe(1);
+    const badTopic = setup({ BRIDGE_NTFY_TOPIC: "mytopic" });
+    expect(await inviteCommand([], badTopic.io)).toBe(1);
+    expect(badTopic.err.join("\n")).toContain("BRIDGE_NTFY_TOPIC must be");
     const unknown = setup();
     expect(await inviteCommand(["--force"], unknown.io)).toBe(1);
 
-    const lines = [ok, broken, unknown].flatMap((run) => [...run.out, ...run.err]).filter((line) => !JOIN_LINE.test(line));
-    expect(lines.length).toBeGreaterThanOrEqual(4);
+    const lines = [ok, broken, badTopic, unknown].flatMap((run) => [...run.out, ...run.err]).filter((line) => !JOIN_LINE.test(line));
+    expect(lines.length).toBeGreaterThanOrEqual(5);
     for (const line of lines) {
       expect(line).not.toMatch(PRONOUNS);
       expect(line).not.toContain(code);
