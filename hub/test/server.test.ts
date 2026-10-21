@@ -98,6 +98,40 @@ describe("startup warnings", () => {
   });
 });
 
+describe("network sweep", () => {
+  test("deletes sessions unseen for 7 days and join codes past a day, at startup, logging the counts", () => {
+    const dbPath = join(tempDir(), "bridge.db");
+    const db = openDb(dbPath);
+    const network = new NetworkStore(db);
+    const now = Date.now();
+    const daysAgo = (days: number) => new Date(now - days * 86_400_000).toISOString();
+    addSession({ network }, { name: "old-claude", machine: "macbook", key: "key-old", lastSeenAt: daysAgo(8) });
+    addSession({ network }, { name: "recent-claude", machine: "macbook", key: "key-recent", lastSeenAt: daysAgo(6) });
+    const code = (id: string, expiresAt: string, usedAt: string | null) =>
+      network.insertJoinCode({ id, owner: "owner", createdAt: daysAgo(3), expiresAt, usedAt }, hashSecret(id));
+    code("expired-long-ago", daysAgo(2), null);
+    code("used-long-ago", daysAgo(-1), daysAgo(2));
+    code("still-valid", daysAgo(-1), null);
+    db.close();
+
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    try {
+      running = startServer({ ...testConfig(), dbPath }, { port: 0 });
+    } finally {
+      captureLogs(null);
+    }
+    const entries = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(entries).toContainEqual({ time: expect.any(String), level: "info", msg: "network_pruned", sessions: 1, join_codes: 2 });
+    running.stop();
+    running = null;
+    const after = new NetworkStore(openDb(dbPath));
+    expect(after.listSessions().map((s) => s.name)).toEqual(["recent-claude"]);
+    expect(after.joinCodeByHash(hashSecret("still-valid"))).not.toBeNull();
+    expect(after.joinCodeByHash(hashSecret("used-long-ago"))).toBeNull();
+  });
+});
+
 describe("example config", () => {
   test("bridge.example.yaml is valid", () => {
     const yaml = readFileSync(join(import.meta.dir, "../../bridge.example.yaml"), "utf8");

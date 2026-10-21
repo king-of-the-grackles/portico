@@ -4,7 +4,9 @@ import type { Task } from "../src/core/types";
 import { makeNotifier } from "../src/notifier";
 import { type StreamConnection, StreamHub } from "../src/ways-in/stream";
 import { captureLogs } from "../src/log";
-import { T0, flush, makeApp, sseReader } from "./helpers";
+import { T0, callAs, flush, joinMachine, makeApp, mintAssistant, openSessionStream, sseReader } from "./helpers";
+
+const AGENT_HELLO = { event: "hello", data: { address: "claude-code", name: "claude-code", machine: null } };
 
 function fakeConnection() {
   const sent: { event: string; data: Record<string, unknown> }[] = [];
@@ -47,6 +49,29 @@ describe("StreamHub", () => {
     disconnectFirst(); // the old stream ending must not drop the new one
     expect(hub.nudge("claude-code")).toBe(true);
     expect(second.sent).toEqual([{ event: "nudge", data: {} }]);
+  });
+
+  test("a quiet replacement closes the old stream without telling it", () => {
+    const hub = new StreamHub();
+    const first = fakeConnection();
+    const second = fakeConnection();
+    hub.connect("dialog-claude@macbook", first.conn, "quiet");
+    hub.connect("dialog-claude@macbook", second.conn, "quiet");
+    expect(first.sent).toEqual([]);
+    expect(first.isClosed()).toBe(true);
+    expect(hub.nudge("dialog-claude@macbook")).toBe(true);
+    expect(second.sent).toEqual([{ event: "nudge", data: {} }]);
+  });
+
+  test("close() closes and forgets an address's stream", () => {
+    const hub = new StreamHub();
+    const { conn, sent, isClosed } = fakeConnection();
+    hub.connect("dialog-claude@macbook", conn, "quiet");
+    hub.close("dialog-claude@macbook");
+    expect(isClosed()).toBe(true);
+    expect(sent).toEqual([]);
+    expect(hub.isConnected("dialog-claude@macbook")).toBe(false);
+    hub.close("dialog-claude@macbook"); // nothing left to close
   });
 
   test("a stream that fails to send is dropped", () => {
@@ -171,6 +196,7 @@ describe("GET /api/stream", () => {
     expect(res.headers.get("content-type")).toContain("text/event-stream");
     const events = sseReader(res);
     try {
+      expect(await events.next()).toEqual(AGENT_HELLO);
       expect(await events.next()).toEqual({ event: "nudge", data: {} });
       service.sendTask("grok-bot", { to: "claude-code", instructions: "second" });
       expect(await events.next()).toEqual({ event: "nudge", data: {} });
@@ -179,10 +205,11 @@ describe("GET /api/stream", () => {
     }
   });
 
-  test("stays quiet on connect when nothing is waiting, apart from heartbeats", async () => {
+  test("stays quiet on connect when nothing is waiting, apart from the hello and heartbeats", async () => {
     const { call } = makeApp();
     const events = sseReader(await call("claude-code", "GET", "/api/stream"));
     try {
+      expect(await events.next()).toEqual(AGENT_HELLO);
       await expect(events.next(200)).rejects.toThrow("timed out");
     } finally {
       await events.cancel();
@@ -195,6 +222,7 @@ describe("GET /api/stream", () => {
     await flush();
     const second = sseReader(await call("claude-code", "GET", "/api/stream"));
     try {
+      expect(await first.next()).toEqual(AGENT_HELLO);
       expect(await first.next()).toEqual({ event: "replaced", data: {} });
       await expect(first.next()).rejects.toThrow("stream ended");
     } finally {
@@ -220,5 +248,119 @@ describe("GET /api/stream", () => {
     }
     expect(text.startsWith(": connected\n\n")).toBe(true);
     expect(text).toContain(": ping\n\n");
+  });
+});
+
+describe("session streams", () => {
+  test("a machine token registers the session on connect and says hello with its address", async () => {
+    const ctx = makeApp();
+    const { token } = joinMachine(ctx, "macbook");
+    const { hello, events } = await openSessionStream(ctx, token, { key: "key-aaaaaaaa", repo: "dialog" });
+    expect(hello).toEqual({ address: "dialog-claude@macbook", name: "dialog-claude", machine: "macbook" });
+    expect(ctx.streams.isConnected("dialog-claude@macbook")).toBe(true);
+    await events.cancel();
+  });
+
+  test("two sessions on one machine hold separate streams, and neither is replaced", async () => {
+    const ctx = makeApp();
+    const { token } = joinMachine(ctx, "macbook");
+    const one = await openSessionStream(ctx, token, { key: "key-aaaaaaaa", repo: "dialog", folderId: "1".repeat(64) });
+    const two = await openSessionStream(ctx, token, { key: "key-bbbbbbbb", repo: "dialog", folderId: "1".repeat(64) });
+    try {
+      expect(one.hello.address).toBe("dialog-claude@macbook");
+      expect(two.hello.address).toBe("dialog-claude-2@macbook");
+      expect(ctx.streams.isConnected("dialog-claude@macbook")).toBe(true);
+      expect(ctx.streams.isConnected("dialog-claude-2@macbook")).toBe(true);
+      await expect(one.events.next(200)).rejects.toThrow("timed out");
+      await expect(two.events.next(50)).rejects.toThrow("timed out");
+    } finally {
+      await one.events.cancel();
+      await two.events.cancel();
+    }
+  });
+
+  test("the same session reconnecting closes its old stream without a replaced event", async () => {
+    const ctx = makeApp();
+    const { token } = joinMachine(ctx, "macbook");
+    const first = await openSessionStream(ctx, token, { key: "key-aaaaaaaa", repo: "dialog" });
+    const second = await openSessionStream(ctx, token, { key: "key-aaaaaaaa", repo: "dialog" });
+    try {
+      expect(second.hello.address).toBe("dialog-claude@macbook");
+      // Any event at all, "replaced" included, would be returned here instead of the stream ending.
+      await expect(first.events.next()).rejects.toThrow("stream ended");
+      expect(ctx.streams.isConnected("dialog-claude@macbook")).toBe(true);
+    } finally {
+      await second.events.cancel();
+    }
+  });
+
+  test("a machine stream without the session or folder header is refused with 400", async () => {
+    const ctx = makeApp();
+    const { token } = joinMachine(ctx, "macbook");
+    const noKey = await ctx.app.request("/api/stream?repo=dialog", {
+      headers: { authorization: `Bearer ${token}`, "x-bridge-folder": "a".repeat(64) },
+    });
+    expect(noKey.status).toBe(400);
+    expect(await noKey.json()).toMatchObject({ error: "bad_request" });
+    const noFolder = await ctx.app.request("/api/stream?repo=dialog", {
+      headers: { authorization: `Bearer ${token}`, "x-bridge-session": "key-aaaaaaaa" },
+    });
+    expect(noFolder.status).toBe(400);
+    expect(await noFolder.json()).toMatchObject({ error: "bad_request" });
+    expect(ctx.network.listSessions()).toEqual([]);
+  });
+
+  test("a bridge.yaml push agent still gets hello, and is still replaced by its own second stream", async () => {
+    const { call } = makeApp();
+    const first = sseReader(await call("claude-code", "GET", "/api/stream"));
+    expect(await first.next()).toEqual(AGENT_HELLO);
+    const second = sseReader(await call("claude-code", "GET", "/api/stream"));
+    try {
+      expect(await second.next()).toEqual(AGENT_HELLO);
+      expect(await first.next()).toEqual({ event: "replaced", data: {} });
+      await expect(first.next()).rejects.toThrow("stream ended");
+    } finally {
+      await second.cancel();
+    }
+  });
+
+  test("an assistant's token can't open a stream", async () => {
+    const ctx = makeApp();
+    const { token } = mintAssistant(ctx, "helper");
+    const res = await callAs(ctx, { token }, "GET", "/api/stream");
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "not_allowed", message: "Only push agents can open the live stream." });
+  });
+
+  test("REST calls with the machine token and the key act as the session; an unknown key gets 401", async () => {
+    const ctx = makeApp();
+    const { token } = joinMachine(ctx, "macbook");
+    // Before the stream registers the key, it means nothing.
+    expect((await callAs(ctx, { token, key: "key-aaaaaaaa" }, "GET", "/api/agents")).status).toBe(401);
+    const { events } = await openSessionStream(ctx, token, { key: "key-aaaaaaaa", repo: "dialog" });
+    try {
+      const res = await callAs(ctx, { token, key: "key-aaaaaaaa" }, "GET", "/api/agents");
+      expect(res.status).toBe(200);
+      const { agents } = (await res.json()) as { agents: { name: string }[] };
+      expect(agents.map((agent) => agent.name)).toContain("claude-code");
+      expect(agents.map((agent) => agent.name)).not.toContain("dialog-claude@macbook");
+      expect((await callAs(ctx, { token, key: "nope-nope-1" }, "GET", "/api/agents")).status).toBe(401);
+      // A machine token alone serves only the stream.
+      expect((await callAs(ctx, { token }, "GET", "/api/agents")).status).toBe(401);
+    } finally {
+      await events.cancel();
+    }
+  });
+
+  test("closing a session's stream writes its last_seen_at", async () => {
+    const ctx = makeApp();
+    const { token } = joinMachine(ctx, "macbook");
+    const { events } = await openSessionStream(ctx, token, { key: "key-aaaaaaaa", repo: "dialog" });
+    ctx.clock.advance(5 * 60_000);
+    await events.cancel();
+    const deadline = Date.now() + 2000;
+    while (ctx.streams.isConnected("dialog-claude@macbook") && Date.now() < deadline) await Bun.sleep(5);
+    expect(ctx.streams.isConnected("dialog-claude@macbook")).toBe(false);
+    expect(ctx.network.sessionByAddress("dialog-claude", "macbook")?.lastSeenAt).toBe(ctx.clock.now().toISOString());
   });
 });

@@ -4,7 +4,9 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import type { Directory } from "../core/directory";
 import { BridgeError, HTTP_STATUS } from "../core/errors";
+import { parseStatusReport, type Presence } from "../core/presence";
 import { type BridgeService, DELIVERY_BATCH_MAX } from "../core/service";
+import type { SessionRegistry } from "../core/sessions";
 import type { BridgeConfig } from "../core/types";
 import { errorName, log } from "../log";
 import { type AgentEnv, type AgentResolver, requireAgent } from "./auth";
@@ -42,6 +44,7 @@ export function restRoutes(
   config: BridgeConfig,
   resolveAgent: AgentResolver,
   directory: Directory,
+  status: { presence: Presence; sessions: SessionRegistry; now: () => Date },
 ): Hono<AgentEnv> {
   const api = new Hono<AgentEnv>();
 
@@ -85,6 +88,16 @@ export function restRoutes(
     // Messages are accepted and ignored until the hub has them.
     const acked = service.ackDeliveries(c.get("agent"), { tasks: body.tasks, results: body.results });
     return c.json({ acked: { ...acked, messages: 0 } });
+  });
+
+  // Push members' live status, kept in memory (spec §5.3). The text is cleaned here; nothing about it is logged.
+  api.post("/status", async (c) => {
+    const agent = c.get("agent");
+    if (!directory.isPush(agent)) throw new BridgeError("not_allowed", "Only push agents report status.");
+    const report = parseStatusReport(await readJson(c));
+    status.presence.report(agent, report, status.now().toISOString());
+    status.sessions.touch(agent);
+    return c.json({ ok: true });
   });
 
   api.post("/tasks/:id/finish", async (c) => {

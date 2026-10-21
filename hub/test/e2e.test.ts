@@ -95,6 +95,7 @@ describe("end to end over HTTP", () => {
     const stream = await fetch(`${base}/api/stream`, { headers: { authorization: `Bearer ${TOKENS["claude-code"]}` } });
     const events = sseReader(stream);
     try {
+      expect(await events.next()).toEqual({ event: "hello", data: { address: "claude-code", name: "claude-code", machine: null } });
       await api("grok-bot", "POST", "/api/tasks", { to: "claude-code", instructions: "Add rate limiting" });
       expect(await events.next()).toEqual({ event: "nudge", data: {} });
 

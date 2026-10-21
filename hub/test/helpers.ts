@@ -5,12 +5,14 @@ import { parseConfig } from "../src/config";
 import { addressOf, Directory } from "../src/core/directory";
 import { BridgeError } from "../src/core/errors";
 import type { NetworkService } from "../src/core/network";
+import { Presence } from "../src/core/presence";
 import { BridgeService } from "../src/core/service";
 import { hashSecret } from "../src/core/tokens";
 import type { Assistant, AssistantKind, BridgeConfig, Machine, Notice, SessionRecord } from "../src/core/types";
 import { OWNER } from "../src/core/types";
 import { openDb, Store } from "../src/db";
 import { NetworkStore } from "../src/network-store";
+import type { HelloEvent } from "../src/ways-in/stream";
 
 export const T0 = new Date("2026-10-20T12:00:00.000Z");
 export const HOUR = 3_600_000;
@@ -79,18 +81,20 @@ export function makeService(config: BridgeConfig = testConfig()) {
   const store = new Store(db);
   const network = new NetworkStore(db);
   const clock = testClock();
-  const directory = new Directory({ config, network, now: clock.now });
+  const presence = new Presence();
+  const directory = new Directory({ config, network, presence, now: clock.now });
   const notices: Notice[] = [];
   let counter = 0;
   const service = new BridgeService({
     store,
     config,
     directory,
+    presence,
     now: clock.now,
     newId: () => `id-${++counter}`,
     notify: (notice) => notices.push(notice),
   });
-  return { service, store, network, directory, config, clock, notices };
+  return { service, store, network, directory, presence, config, clock, notices };
 }
 
 /**
@@ -130,6 +134,50 @@ export function mintAssistant(
   kind: AssistantKind = "other",
 ): { token: string; assistant: Assistant } {
   return ctx.networkService.createAssistant({ name, kind });
+}
+
+/** Joins a machine as `bridge join` would, returning its one-time token. */
+export function joinMachine(ctx: { networkService: NetworkService }, name = "macbook"): { machine: Machine; token: string } {
+  const { code } = ctx.networkService.createJoinCode();
+  return ctx.networkService.redeemJoinCode(code, name);
+}
+
+/** Calls the app with any bearer token, plus a session key when given. */
+export async function callAs(
+  ctx: { app: Hono },
+  auth: { token: string; key?: string },
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<Response> {
+  const headers: Record<string, string> = { authorization: `Bearer ${auth.token}` };
+  if (auth.key !== undefined) headers["x-bridge-session"] = auth.key;
+  let payload: string | undefined;
+  if (body !== undefined) {
+    headers["content-type"] = "application/json";
+    payload = typeof body === "string" ? body : JSON.stringify(body);
+  }
+  return await ctx.app.request(path, { method, headers, body: payload });
+}
+
+/** Opens a session's live stream as the plugin does in machine mode, and reads its hello. */
+export async function openSessionStream(
+  ctx: { app: Hono },
+  token: string,
+  opts: { key: string; repo: string; folderId?: string },
+): Promise<{ res: Response; events: ReturnType<typeof sseReader>; hello: HelloEvent }> {
+  const res = await ctx.app.request(`/api/stream?repo=${encodeURIComponent(opts.repo)}`, {
+    headers: {
+      authorization: `Bearer ${token}`,
+      "x-bridge-session": opts.key,
+      "x-bridge-folder": opts.folderId ?? "a".repeat(64),
+    },
+  });
+  if (res.status !== 200) throw new Error(`stream open failed with ${res.status}: ${await res.text()}`);
+  const events = sseReader(res);
+  const first = await events.next();
+  if (first.event !== "hello") throw new Error(`expected hello, got ${first.event}`);
+  return { res, events, hello: first.data as HelloEvent };
 }
 
 /** Runs fn and returns the BridgeError code it threw, or null if it didn't throw. */

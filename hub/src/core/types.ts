@@ -66,6 +66,19 @@ export interface SessionRecord {
   lastSeenAt: string;
 }
 
+/** What a push member reports about itself: Claude Code's own status for a session. */
+export type SessionStatus = "busy" | "idle" | "waiting";
+
+/** A push member's live status, kept in memory only. Text fields are defanged, one line and clipped. */
+export interface StatusReport {
+  status: SessionStatus;
+  /** `<title> · <current to-do>`, at most 120 characters. */
+  doing: string | null;
+  /** A basename, never a path. */
+  repo: string | null;
+  branch: string | null;
+}
+
 /** A pull agent connected on the hub page, with a minted token. */
 export interface Assistant {
   id: string;

@@ -41,12 +41,15 @@ describe("StreamClient against the hub", () => {
 
   const openAs = (agent: keyof typeof TOKENS) => (signal: AbortSignal) => hubClient(hub, agent).openStream(signal);
 
-  test("passes nudges through", async () => {
+  test("passes the hello and nudges through", async () => {
     const watched = watch(openAs("claude-code"));
     await waitFor(() => hub.streams.isConnected("claude-code"));
     hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "hello" });
-    await waitFor(() => watched.events.length > 0);
-    expect(watched.events[0]).toEqual({ event: "nudge", data: {} });
+    await waitFor(() => watched.events.length > 1);
+    expect(watched.events).toEqual([
+      { event: "hello", data: { address: "claude-code", name: "claude-code", machine: null } },
+      { event: "nudge", data: {} },
+    ]);
   });
 
   test("stops for good when another stream replaces it", async () => {

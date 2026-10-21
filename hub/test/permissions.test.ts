@@ -194,6 +194,7 @@ describe("POST /api/permission-requests", () => {
     await first.cancel();
     const second = sseReader(await call("claude-code", "GET", "/api/stream"));
     try {
+      expect(await second.next()).toEqual({ event: "hello", data: { address: "claude-code", name: "claude-code", machine: null } });
       expect(await second.next()).toEqual({ event: "permission", data: { request_id: "abcde", behavior: "allow" } });
     } finally {
       await second.cancel();
@@ -206,6 +207,7 @@ describe("POST /api/permission-requests", () => {
     relay.answer("claude-code", "abcde", "allow"); // no stream open yet
     const events = sseReader(await call("claude-code", "GET", "/api/stream"));
     try {
+      expect(await events.next()).toEqual({ event: "hello", data: { address: "claude-code", name: "claude-code", machine: null } });
       expect(await events.next()).toEqual({ event: "permission", data: { request_id: "abcde", behavior: "allow" } });
       await call("claude-code", "POST", "/api/permission-requests", { ...body, request_id: "fghij" });
       relay.answer("claude-code", "fghij", "deny");

@@ -326,6 +326,17 @@ export class Store {
     return marked;
   }
 
+  /** Moves every task the agent is working on back to queued, for a new session inheriting its address. */
+  requeueWorkingFor(agent: string, at: string): Task[] {
+    const rows = this.db
+      .query(
+        `UPDATE tasks SET status = 'queued', updated_at = $at WHERE to_agent = $agent AND status = 'working'
+         RETURNING *`,
+      )
+      .all({ agent, at }) as TaskRow[];
+    return rows.map(toTask);
+  }
+
   /** True if the agent has queued tasks, or finished results it sent and hasn't seen. */
   hasWaitingFor(agent: string): boolean {
     const row = this.db

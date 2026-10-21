@@ -227,6 +227,11 @@ export class NetworkStore {
     return session;
   }
 
+  /** Writes the session's last_seen_at. False, and nothing written, when no row has this ID. */
+  touchSession(id: string, at: string): boolean {
+    return this.db.query("UPDATE sessions SET last_seen_at = $at WHERE id = $id").run({ id, at }).changes === 1;
+  }
+
   /** Deletes sessions last seen before the cutoff, except those whose address `keep` accepts. Returns how many. */
   deleteSessionsSeenBefore(cutoff: string, keep: (address: string) => boolean): number {
     return this.transaction(() => {

@@ -3,7 +3,9 @@ import { pageRoutes } from "./page/routes";
 import { approvalRoutes } from "./approvals/routes";
 import type { Directory } from "./core/directory";
 import type { PermissionRelay, PermissionRequest } from "./core/permissions";
+import type { Presence } from "./core/presence";
 import type { BridgeService } from "./core/service";
+import type { SessionRegistry } from "./core/sessions";
 import type { Pusher } from "./approvals/ntfy";
 import type { BridgeConfig } from "./core/types";
 import { a2aRoutes } from "./ways-in/a2a";
@@ -19,6 +21,8 @@ export interface AppDeps {
   config: BridgeConfig;
   directory: Directory;
   resolvers: { principal: PrincipalResolver; agent: AgentResolver };
+  presence: Presence;
+  sessions: SessionRegistry;
   streams: StreamHub;
   relay: PermissionRelay;
   push: Pusher;
@@ -28,7 +32,7 @@ export interface AppDeps {
 }
 
 export function buildApp(deps: AppDeps): Hono {
-  const { service, config, directory, streams, relay } = deps;
+  const { service, config, directory, presence, sessions, streams, relay } = deps;
   const app = new Hono();
   const resolveAgent = deps.resolvers.agent;
 
@@ -44,7 +48,8 @@ export function buildApp(deps: AppDeps): Hono {
       service,
       directory,
       streams,
-      resolveAgent,
+      resolvePrincipal: deps.resolvers.principal,
+      sessions,
       heartbeatMs: deps.heartbeatMs,
       onConnect: (agent) => relay.redeliver(agent),
     }),
@@ -53,12 +58,12 @@ export function buildApp(deps: AppDeps): Hono {
     "/api/permission-requests",
     permissionRoutes({ config, directory, relay, resolveAgent, onCreated: deps.onPermissionRequest }),
   );
-  app.route("/api", restRoutes(service, config, resolveAgent, directory));
+  app.route("/api", restRoutes(service, config, resolveAgent, directory, { presence, sessions, now: deps.now }));
   app.route("/mcp", mcpRoutes(service, config, resolveAgent));
   app.route("/a2a", a2aRoutes(service, config, resolveAgent));
 
   app.get("/hub/", (c) => c.redirect("/hub", 303));
-  app.route("/hub", pageRoutes({ service, relay, streams, config, now: deps.now }));
+  app.route("/hub", pageRoutes({ service, relay, streams, presence, config, now: deps.now }));
   app.route("/", approvalRoutes({ service, relay, config, push: deps.push, now: deps.now }));
 
   app.notFound((c) => c.json({ error: "not_found", message: "No such endpoint." }, 404));

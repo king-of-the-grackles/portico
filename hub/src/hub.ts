@@ -6,7 +6,9 @@ import { makePusher, type Pusher } from "./approvals/ntfy";
 import { Directory } from "./core/directory";
 import { NetworkService } from "./core/network";
 import { PermissionRelay, type PermissionRequest } from "./core/permissions";
+import { Presence } from "./core/presence";
 import { BridgeService } from "./core/service";
+import { SessionRegistry } from "./core/sessions";
 import type { BridgeConfig, Notice } from "./core/types";
 import { Store } from "./db";
 import { errorName, log } from "./log";
@@ -32,6 +34,9 @@ export interface Hub {
   networkService: NetworkService;
   directory: Directory;
   resolvers: { principal: PrincipalResolver; agent: AgentResolver };
+  /** Live status reports and check-ins, in memory. */
+  presence: Presence;
+  sessions: SessionRegistry;
   service: BridgeService;
   streams: StreamHub;
   relay: PermissionRelay;
@@ -44,11 +49,16 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
   const store = new Store(opts.db);
   const network = new NetworkStore(opts.db);
   const streams = new StreamHub();
-  const directory = new Directory({
-    config,
+  const presence = new Presence();
+  const isConnected = (address: string) => streams.isConnected(address);
+  const directory = new Directory({ config, network, isConnected, presence, now: opts.now });
+  const sessions = new SessionRegistry({
     network,
-    isConnected: (address) => streams.isConnected(address),
+    store,
+    isConnected,
     now: opts.now,
+    newId: opts.newId,
+    log: (msg, fields) => log("info", msg, fields),
   });
   const networkService = new NetworkService({
     store: network,
@@ -64,6 +74,7 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
     store,
     config,
     directory,
+    presence,
     now: opts.now,
     newId: opts.newId,
     notify: (notice) => {
@@ -104,6 +115,8 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
     config,
     directory,
     resolvers,
+    presence,
+    sessions,
     streams,
     relay,
     push,
@@ -111,5 +124,5 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
     now: opts.now ?? (() => new Date()),
     heartbeatMs: opts.heartbeatMs,
   });
-  return { store, network, networkService, directory, resolvers, service, streams, relay, push, app };
+  return { store, network, networkService, directory, resolvers, presence, sessions, service, streams, relay, push, app };
 }

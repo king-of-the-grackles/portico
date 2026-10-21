@@ -14,6 +14,8 @@ export interface RunningServer {
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
+/** Sessions not seen for this long, and not connected, are deleted by the daily sweep. */
+const SESSION_RETENTION_DAYS = 7;
 
 export function startServer(config: BridgeConfig, opts: { port?: number; push?: Pusher } = {}): RunningServer {
   const db = openDb(config.dbPath);
@@ -51,10 +53,27 @@ export function startServer(config: BridgeConfig, opts: { port?: number; push?: 
       log("error", "history_prune_failed", { error: errorName(err) });
     }
   };
+  const networkSweep = () => {
+    try {
+      const now = Date.now();
+      const sessions = hub.network.deleteSessionsSeenBefore(
+        new Date(now - SESSION_RETENTION_DAYS * DAY_MS).toISOString(),
+        (address) => hub.streams.isConnected(address),
+      );
+      const joinCodes = hub.network.deleteJoinCodesBefore(new Date(now - DAY_MS).toISOString());
+      if (sessions > 0 || joinCodes > 0) log("info", "network_pruned", { sessions, join_codes: joinCodes });
+    } catch (err) {
+      log("error", "network_prune_failed", { error: errorName(err) });
+    }
+  };
+  const dailySweep = () => {
+    historySweep();
+    networkSweep();
+  };
   expireSweep();
-  historySweep();
+  dailySweep();
   const expireTimer = setInterval(expireSweep, MINUTE_MS);
-  const historyTimer = setInterval(historySweep, DAY_MS);
+  const historyTimer = setInterval(dailySweep, DAY_MS);
 
   const port = server.port as number;
   log("info", "bridge_started", { port, agents: config.agents.length, public_url: config.publicUrl });

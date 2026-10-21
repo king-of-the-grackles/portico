@@ -93,6 +93,7 @@ test("a session not seen for 24 hours leaves members() but still resolves by ful
     config: ctx.config,
     network: ctx.network,
     isConnected: (address) => address === "dialog-claude@macbook",
+    presence: ctx.presence,
     now: ctx.clock.now,
   });
   expect(connected.members().map((m) => m.address)).toContain("dialog-claude@macbook");

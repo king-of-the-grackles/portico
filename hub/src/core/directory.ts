@@ -1,6 +1,7 @@
 import type { NetworkStore } from "../network-store";
 import { BridgeError } from "./errors";
 import { isBroadcast } from "./guards";
+import type { Presence } from "./presence";
 import type { AgentConfig, Assistant, BridgeConfig, Member, MemberRef, SessionRecord } from "./types";
 
 /** Sessions not seen for this long drop out of members(), though their address keeps resolving. */
@@ -53,6 +54,8 @@ export interface DirectoryDeps {
   network: NetworkStore;
   /** Whether the address has an open stream. A connected session stays listed however long ago its row was written. */
   isConnected?: (address: string) => boolean;
+  /** Live status reports and check-ins, for the directory's entries. */
+  presence: Presence;
   now?: () => Date;
 }
 
@@ -64,12 +67,14 @@ export class Directory {
   private readonly config: BridgeConfig;
   private readonly network: NetworkStore;
   private readonly isConnected: (address: string) => boolean;
+  private readonly presence: Presence;
   private readonly now: () => Date;
 
   constructor(deps: DirectoryDeps) {
     this.config = deps.config;
     this.network = deps.network;
     this.isConnected = deps.isConnected ?? (() => false);
+    this.presence = deps.presence;
     this.now = deps.now ?? (() => new Date());
   }
 

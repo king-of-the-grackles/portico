@@ -1,6 +1,7 @@
 import type { Store } from "../db";
 import type { Directory } from "./directory";
 import { BridgeError } from "./errors";
+import type { Presence } from "./presence";
 import { resolveRule } from "./rules";
 import { renderTemplate } from "./templates";
 import { isFinal } from "./types";
@@ -11,6 +12,8 @@ export interface ServiceDeps {
   config: BridgeConfig;
   /** Recipients and rule refs: bridge.yaml agents, hub-page assistants and sessions. */
   directory: Directory;
+  /** Where check-ins are recorded. */
+  presence: Presence;
   now?: () => Date;
   newId?: () => string;
   notify?: (notice: Notice) => void;
@@ -37,12 +40,13 @@ export class BridgeService {
   private readonly newId: () => string;
   private readonly notify: (notice: Notice) => void;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
-  private readonly lastCheckIns = new Map<string, string>();
+  private readonly presence: Presence;
 
   constructor(deps: ServiceDeps) {
     this.store = deps.store;
     this.config = deps.config;
     this.directory = deps.directory;
+    this.presence = deps.presence;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.notify = deps.notify ?? (() => {});
@@ -58,7 +62,7 @@ export class BridgeService {
   }
 
   lastCheckIn(agent: string): string | null {
-    return this.lastCheckIns.get(agent) ?? null;
+    return this.presence.lastCheckIn(agent);
   }
 
   hasWaiting(agent: string): boolean {
@@ -100,7 +104,7 @@ export class BridgeService {
         .map((task) => this.store.updateTask(task.id, { senderNotifiedAt: at }));
       return { tasks, results };
     });
-    this.lastCheckIns.set(caller, at);
+    this.presence.checkedIn(caller, at);
     for (const task of outcome.tasks) this.log("task_status", { task_id: task.id, status: "working" });
     return outcome;
   }
@@ -114,7 +118,7 @@ export class BridgeService {
       tasks: this.store.listQueuedFor(caller, DELIVERY_BATCH_MAX),
       results: this.store.listUnseenResultsFor(caller, DELIVERY_BATCH_MAX),
     };
-    this.lastCheckIns.set(caller, this.iso());
+    this.presence.checkedIn(caller, this.iso());
     return pending;
   }
 
