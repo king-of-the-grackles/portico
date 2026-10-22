@@ -78,10 +78,18 @@ export function writeMachineFile(path: string, file: MachineFile): void {
   // BRIDGE_MACHINE_CONFIG may point into a shared one.
   const made = mkdirSync(dir, { recursive: true, mode: 0o700 }) !== undefined;
   if (made || basename(dir) === OWN_FOLDER) chmodSync(dir, 0o700);
-  const temp = join(dir, `.machine.json.${process.pid}.${Date.now()}.tmp`);
+  writeFileAtomically(path, `${JSON.stringify(file, null, 2)}\n`, 0o600);
+}
+
+/**
+ * Writes the text through a temp file beside the path and a rename, so no reader ever sees half a file, and gives the
+ * file exactly `mode`. The folder must exist. The temp file is removed when anything fails, and the error rethrown.
+ */
+export function writeFileAtomically(path: string, text: string, mode: number): void {
+  const temp = join(dirname(path), `.${basename(path)}.${process.pid}.${Date.now()}.tmp`);
   try {
-    writeFileSync(temp, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-    chmodSync(temp, 0o600); // the mode above is reduced by the umask
+    writeFileSync(temp, text, { mode, flag: "wx" });
+    chmodSync(temp, mode); // the mode above is reduced by the umask
     renameSync(temp, path);
   } catch (err) {
     rmSync(temp, { force: true });

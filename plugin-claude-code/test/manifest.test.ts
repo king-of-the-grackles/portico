@@ -16,9 +16,12 @@ test("marketplace, manifest, package and server agree on the name and version", 
   expect(manifest.name).toBe("agent-bridge");
   expect(manifest.version).toBe(pkg.version);
   expect(SERVER_VERSION).toBe(pkg.version);
+  expect(pkg.version).toBe("0.3.0");
+  const lock = readFileSync(join(ROOT, "bun.lock"), "utf8");
+  expect(/"name": "@agent-bridge\/plugin-claude-code",\s*"version": "([^"]+)"/.exec(lock)?.[1]).toBe(pkg.version);
 });
 
-test(".mcp.json starts the server from the plugin folder and passes the three settings through", () => {
+test(".mcp.json starts the server from the plugin folder and passes the two settings through", () => {
   expect(json(join(PLUGIN, ".mcp.json"))).toEqual({
     mcpServers: {
       bridge: {
@@ -27,7 +30,6 @@ test(".mcp.json starts the server from the plugin folder and passes the three se
         env: {
           BRIDGE_URL: "${BRIDGE_URL}",
           BRIDGE_TOKEN: "${BRIDGE_TOKEN}",
-          BRIDGE_PERMISSION_RELAY: "${BRIDGE_PERMISSION_RELAY:-on}",
         },
       },
     },
@@ -71,6 +73,7 @@ test("join never puts the join line in a ! line: Claude checks the line, then ru
   expect(text).not.toContain("allowed-tools");
   expect(text).toContain("Join my agent bridge: ");
   expect(text).toContain(`bun "\${CLAUDE_PLUGIN_ROOT}/src/cli.ts" join '<address>'`);
+  expect(text).toContain("--no-allow");
 });
 
 test("the address shape in join.md accepts real join addresses and nothing a shell would act on", () => {
@@ -114,10 +117,18 @@ test("the import check finds every form of import", () => {
   expect(importSpecs(sample)).toEqual(["a", "b", "c", "d", "e", "name"]);
 });
 
-test("cli.ts, cli-run.ts, join.ts and machine.ts import only node built-ins and each other, so they run before bun install", () => {
-  for (const file of ["cli.ts", "cli-run.ts", "join.ts", "machine.ts"]) {
+test("cli.ts, cli-run.ts, join.ts, machine.ts and claude-settings.ts import only node built-ins and each other, so they run before bun install", () => {
+  for (const file of ["cli.ts", "cli-run.ts", "join.ts", "machine.ts", "claude-settings.ts"]) {
     const imports = importSpecs(readFileSync(join(PLUGIN, "src", file), "utf8"));
     expect(imports.length).toBeGreaterThan(0);
-    for (const spec of imports) expect(spec).toMatch(/^(node:[a-z_/]+|\.\/(cli-run|join|machine))$/);
+    for (const spec of imports) expect(spec).toMatch(/^(node:[a-z_/]+|\.\/(cli-run|join|machine|claude-settings))$/);
   }
+});
+
+test("the plugin declares no Claude Code channel anywhere", () => {
+  const src = join(PLUGIN, "src");
+  for (const file of readdirSync(src).filter((name) => name.endsWith(".ts"))) {
+    expect(readFileSync(join(src, file), "utf8")).not.toContain("claude/channel");
+  }
+  expect(readFileSync(join(PLUGIN, ".mcp.json"), "utf8")).not.toContain("PERMISSION_RELAY");
 });

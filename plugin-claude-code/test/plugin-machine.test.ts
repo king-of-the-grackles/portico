@@ -54,7 +54,7 @@ async function machinePlugin(opts: SessionOpts): Promise<{ sock: FakeInboxSocket
     pollMs: 20,
   });
   const plugin = createBridgePlugin({
-    config: { url: hub.url, token: opts.token, permissionRelay: false, source: "machine", machine: "macbook" },
+    config: { url: hub.url, token: opts.token, source: "machine", machine: "macbook" },
     client,
     log: logs.log,
     socket: sock.socket,
@@ -142,7 +142,7 @@ test("the status watcher starts on the first hello, resends on a later hello, an
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
   const plugin = createBridgePlugin({
-    config: { url: hub.url, token, permissionRelay: false, source: "machine", machine: "macbook" },
+    config: { url: hub.url, token, source: "machine", machine: "macbook" },
     client: new HubClient({ url: hub.url, token, sessionKey: "key-aaaaaaaa" }),
     log: logs.log,
     socket: sock.socket,

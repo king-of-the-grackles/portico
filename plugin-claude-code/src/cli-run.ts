@@ -1,6 +1,7 @@
 // Runs before the plugin's dependencies are installed (the join, off and on commands, and the hub's `bridge join`), so
 // it imports only node:* and the files beside it. No side effects: src/cli.ts is the entry that calls runCli.
 import { resolve } from "node:path";
+import { allowBridgeTools, allowLine, claudeSettingsPath } from "./claude-settings";
 import { JoinError, joinMachine } from "./join";
 import { isOff, MachineFileError, machineConfigPath, readMachineFile, realFolder, setFolderOff } from "./machine";
 
@@ -18,14 +19,14 @@ export interface CliDeps {
   hostname?: () => string;
 }
 
-const JOIN_USAGE = "join <line> [--code <code>] [--name <machine>] [--replace]";
-const JOIN_OPTIONS = ["--code", "--name", "--replace"];
+const JOIN_USAGE = "join <line> [--code <code>] [--name <machine>] [--replace] [--no-allow]";
+const JOIN_OPTIONS = ["--code", "--name", "--replace", "--no-allow"];
 
 const USAGE = `Usage: bun src/cli.ts <command>
 
 Commands:
   ${JOIN_USAGE}
-                  Join this machine to a hub with a join line, and write the machine file.
+                  Join this machine to a hub with a join line, write the machine file, and allow the network tools in Claude Code.
   off [folder]    Keep new sessions in a folder (default: the current folder) off the network.
   on [folder]     Put a folder back on the network for new sessions.
   status          Show the machine, the hub and the folders off the network.
@@ -83,10 +84,13 @@ async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
   let code: string | undefined;
   let name: string | undefined;
   let replace = false;
+  let noAllow = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--replace") {
       replace = true;
+    } else if (arg === "--no-allow") {
+      noAllow = true;
     } else if (arg === "--code" || arg === "--name") {
       // Only another option counts as a missing value: a join code may itself start with "-".
       const value = args[++i];
@@ -110,6 +114,10 @@ async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
   io.out(`Wrote ${joined.path} (mode 600).`);
   io.out("New Claude Code sessions on this machine now appear on the network. Sessions already open join after a restart.");
   io.out("To keep a folder off the network, run /agent-bridge:off in a Claude Code session in that folder.");
+  if (!noAllow) {
+    const line = allowLine(allowBridgeTools(claudeSettingsPath(io.env)));
+    if (line) io.out(line);
+  }
   return 0;
 }
 

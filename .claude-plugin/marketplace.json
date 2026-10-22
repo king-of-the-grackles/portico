@@ -6,7 +6,7 @@
     {
       "name": "agent-bridge",
       "source": "./plugin-claude-code",
-      "description": "Bridge tasks and permission prompts in a Claude Code session."
+      "description": "Bridge tasks, messages and approval pop-ups in a Claude Code session."
     }
   ]
 }

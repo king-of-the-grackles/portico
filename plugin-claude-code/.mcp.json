@@ -5,8 +5,7 @@
       "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "--shell=bun", "--silent", "start"],
       "env": {
         "BRIDGE_URL": "${BRIDGE_URL}",
-        "BRIDGE_TOKEN": "${BRIDGE_TOKEN}",
-        "BRIDGE_PERMISSION_RELAY": "${BRIDGE_PERMISSION_RELAY:-on}"
+        "BRIDGE_TOKEN": "${BRIDGE_TOKEN}"
       }
     }
   }

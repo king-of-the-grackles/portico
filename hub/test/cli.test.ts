@@ -219,8 +219,8 @@ describe("bridge CLI dispatch", () => {
     expect(await proc.exited).toBe(0);
     const usage = await new Response(proc.stdout).text();
     expect(usage).toContain("\n  invite            Make a one-time join line for a new machine");
-    expect(usage).toContain("\n  join <line> [--code <code>] [--name <machine>] [--replace]\n");
-    expect(usage).toContain("Join this machine to a hub with a join line.");
+    expect(usage).toContain("\n  join <line> [--code <code>] [--name <machine>] [--replace] [--no-allow]\n");
+    expect(usage).toContain("Join this machine to a hub with a join line, and allow the network tools in Claude Code.");
   });
 
   test("an unknown command prints the usage to stderr and exits 1", async () => {
@@ -236,7 +236,7 @@ describe("bridge join", () => {
     const { code } = ctx.networkService.createJoinCode();
     const dir = tempDir();
     const path = join(dir, "agent-bridge", "machine.json");
-    const run = io(dir, { BRIDGE_MACHINE_CONFIG: path });
+    const run = io(dir, { BRIDGE_MACHINE_CONFIG: path, BRIDGE_CLAUDE_HOME: join(dir, ".claude") });
     const fetch = ((url: string | URL | Request, init?: RequestInit) => ctx.app.request(url, init)) as typeof globalThis.fetch;
     const line = `Join my agent bridge: https://bridge.test/join#${code}`;
     expect(await joinCommand([line], run.io, { fetch, hostname: () => "studio.local" })).toBe(0);
@@ -248,9 +248,14 @@ describe("bridge join", () => {
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(run.out.join("\n")).not.toContain(file.token);
     expect(ctx.networkService.listMachines().map((machine) => machine.name)).toEqual(["studio"]);
+    const settings = join(dir, ".claude", "settings.json");
+    expect(run.out).toContain(
+      `Added mcp__plugin_agent-bridge_bridge to permissions.allow in ${settings}, so Claude Code runs the network tools without asking. To skip this step, join with --no-allow.`,
+    );
+    expect(JSON.parse(readFileSync(settings, "utf8")).permissions.allow).toEqual(["mcp__plugin_agent-bridge_bridge"]);
 
     // A second join refuses to overwrite the file, and the hub sees no request.
-    const again = io(dir, { BRIDGE_MACHINE_CONFIG: path });
+    const again = io(dir, { BRIDGE_MACHINE_CONFIG: path, BRIDGE_CLAUDE_HOME: join(dir, ".claude") });
     expect(await joinCommand([line, "--name", "macbook"], again.io, { fetch })).toBe(1);
     expect(again.err.join("\n")).toContain("Run again with --replace");
     expect(ctx.networkService.listMachines()).toHaveLength(1);

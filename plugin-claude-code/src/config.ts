@@ -4,7 +4,6 @@ export interface PluginConfig {
   /** The hub's base URL, without a trailing slash. */
   url: string;
   token: string;
-  permissionRelay: boolean;
   /** "env": BRIDGE_URL and BRIDGE_TOKEN, for one session. "machine": machine.json, written when this machine joined. */
   source: "env" | "machine";
   /** This machine's name in machine mode, otherwise null. */
@@ -55,7 +54,6 @@ function parseHubUrl(raw: string, label: string): { url: string } | { problem: s
 export function parsePluginConfig(env: Env, machineFile: MachineFile | null = null): PluginConfig | null {
   const rawUrl = read(env, "BRIDGE_URL");
   const token = read(env, "BRIDGE_TOKEN");
-  const relay = (read(env, "BRIDGE_PERMISSION_RELAY") || "on").toLowerCase();
   if (!rawUrl && !token && !machineFile) return null;
 
   const problems: string[] = [];
@@ -78,11 +76,9 @@ export function parsePluginConfig(env: Env, machineFile: MachineFile | null = nu
     if ("problem" in hub) problems.push(hub.problem);
     else url = hub.url;
   }
-  if (relay !== "on" && relay !== "off") problems.push(`BRIDGE_PERMISSION_RELAY must be "on" or "off", not "${relay}".`);
   if (problems.length > 0) throw new PluginConfigError(problems);
 
-  const permissionRelay = relay === "on";
-  if (rawUrl || token) return { url, token, permissionRelay, source: "env", machine: null };
+  if (rawUrl || token) return { url, token, source: "env", machine: null };
   const file = machineFile!;
-  return { url, token: file.token, permissionRelay, source: "machine", machine: file.machine };
+  return { url, token: file.token, source: "machine", machine: file.machine };
 }

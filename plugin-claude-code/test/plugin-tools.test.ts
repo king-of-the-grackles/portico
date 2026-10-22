@@ -20,7 +20,7 @@ afterEach(async () => {
 
 function plugin(): BridgePlugin {
   const p = createBridgePlugin({
-    config: { url: hub.url, token: TOKENS["claude-code"], permissionRelay: false, source: "env", machine: null },
+    config: { url: hub.url, token: TOKENS["claude-code"], source: "env", machine: null },
     client: hubClient(hub, "claude-code"),
     log: captureLog().log,
     socket: sock.socket,
@@ -40,7 +40,7 @@ function text(result: unknown): string {
 }
 
 describe("the plugin's MCP server", () => {
-  test("declares the tools, and no Claude Code channel without permission relay", async () => {
+  test("declares tools only, and no Claude Code channel", async () => {
     const { host } = await connected();
     expect(host.getServerCapabilities()).toMatchObject({ tools: {} });
     expect(host.getServerCapabilities()?.experimental).toBeUndefined();

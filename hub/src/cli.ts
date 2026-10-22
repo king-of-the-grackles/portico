@@ -16,8 +16,8 @@ Commands:
   doctor            Check the config, the public URL, and each agent's token on the running hub.
   invite            Make a one-time join line for a new machine (runs where the hub's
                     config and database are).
-  join <line> [--code <code>] [--name <machine>] [--replace]
-                    Join this machine to a hub with a join line.
+  join <line> [--code <code>] [--name <machine>] [--replace] [--no-allow]
+                    Join this machine to a hub with a join line, and allow the network tools in Claude Code.
   help              Show this message.
 `;
 

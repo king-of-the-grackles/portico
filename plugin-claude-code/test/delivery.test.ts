@@ -29,11 +29,11 @@ afterEach(async () => {
 });
 
 async function connect(
-  opts: { agent?: TestAgent; client?: HubClient; relay?: boolean; retryMs?: number[]; socket?: Pick<InboxSocket, "post"> } = {},
+  opts: { agent?: TestAgent; client?: HubClient; retryMs?: number[]; socket?: Pick<InboxSocket, "post"> } = {},
 ) {
   const sock = await fakeInboxSocket();
   const plugin = createBridgePlugin({
-    config: { url: hub.url, token: TOKENS[opts.agent ?? "claude-code"], permissionRelay: opts.relay ?? false, source: "env", machine: null },
+    config: { url: hub.url, token: TOKENS[opts.agent ?? "claude-code"], source: "env", machine: null },
     client: opts.client ?? hubClient(hub, opts.agent ?? "claude-code"),
     log: logs.log,
     socket: opts.socket ?? sock.socket,
@@ -257,11 +257,9 @@ describe("inbox socket delivery", () => {
     expect(peeks).toBe(2);
   });
 
-  test("declares the channel only for permission relay", async () => {
-    const off = await connect();
-    expect(off.host.getServerCapabilities()?.experimental).toBeUndefined();
-    const on = await connect({ relay: true });
-    expect(on.host.getServerCapabilities()?.experimental).toEqual({ "claude/channel": {}, "claude/channel/permission": {} });
+  test("never declares a Claude Code channel", async () => {
+    const { host } = await connect();
+    expect(host.getServerCapabilities()?.experimental).toBeUndefined();
   });
 
   test("tells the session through the socket when another session takes the stream over", async () => {
@@ -273,8 +271,6 @@ describe("inbox socket delivery", () => {
       expect(sock.posts[0]!.content).toContain("<bridge-notice>");
       expect(sock.posts[0]!.content).toContain("another Claude Code session");
       expect(channel).toEqual([]);
-      // Relay is off in this setup, so there is nothing to switch off and nothing to warn about.
-      expect(logs.lines.some((line) => line.msg === "permission_relay_off")).toBe(false);
     } finally {
       await other.body?.cancel();
     }

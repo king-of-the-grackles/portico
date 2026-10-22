@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { PRONOUNS } from "../../hub/test/helpers";
 import { type CliIo, runCli } from "../src/cli-run";
 import { readMachineFile, writeMachineFile } from "../src/machine";
@@ -32,7 +32,7 @@ async function cli(argv: string[], opts: { path: string; cwd: string; deps?: Par
   const err: string[] = [];
   const lines: string[] = [];
   const io: CliIo = {
-    env: { BRIDGE_MACHINE_CONFIG: opts.path },
+    env: { BRIDGE_MACHINE_CONFIG: opts.path, BRIDGE_CLAUDE_HOME: join(dirname(opts.path), ".claude") },
     cwd: opts.cwd,
     out: (line) => {
       out.push(line);
@@ -100,7 +100,52 @@ describe("plugin CLI", () => {
     expect(posted).toEqual([{ code: `--${"A".repeat(20)}`, machine: "studio" }]);
     const missing = await cli(["join", "https://bridge.example.com", "--name", "--replace"], { path: other.path, cwd: other.dir });
     expect(missing.code).toBe(1);
-    expect(missing.err).toEqual(["--name needs a value. Usage: join <line> [--code <code>] [--name <machine>] [--replace]"]);
+    expect(missing.err).toEqual(["--name needs a value. Usage: join <line> [--code <code>] [--name <machine>] [--replace] [--no-allow]"]);
+  });
+
+  test("join allows the network tools in Claude Code's settings once, and --no-allow skips it", async () => {
+    const h = hub();
+    const line = () => `${h.url}/join#${h.networkService.createJoinCode().code}`;
+    const deps = { hostname: () => "macbook" };
+    const { dir, path } = machineDir();
+    const settings = join(dir, ".claude", "settings.json");
+    const first = await cli(["join", line()], { path, cwd: dir, deps });
+    expect(first.code).toBe(0);
+    expect(first.out).toContain(
+      `Added mcp__plugin_agent-bridge_bridge to permissions.allow in ${settings}, so Claude Code runs the network tools without asking. To skip this step, join with --no-allow.`,
+    );
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: ["mcp__plugin_agent-bridge_bridge"] } });
+    const again = await cli(["join", line(), "--replace"], { path, cwd: dir, deps });
+    expect(again.code).toBe(0);
+    expect(again.out.some((text) => text.includes("permissions.allow"))).toBe(false);
+
+    const other = machineDir();
+    const skipped = await cli(["join", line(), "--no-allow"], { path: other.path, cwd: other.dir, deps });
+    expect(skipped.code).toBe(0);
+    expect(existsSync(join(other.dir, ".claude", "settings.json"))).toBe(false);
+    expect(skipped.out.some((text) => text.includes("permissions.allow"))).toBe(false);
+  });
+
+  test("a settings file with invalid JSON is left alone, the rule to add by hand is printed, and the join still succeeds", async () => {
+    const h = hub();
+    const { dir, path } = machineDir();
+    const settings = join(dir, ".claude", "settings.json");
+    mkdirSync(join(dir, ".claude"));
+    writeFileSync(settings, "{ broken");
+    const run = await cli(["join", `${h.url}/join#${h.networkService.createJoinCode().code}`], { path, cwd: dir, deps: { hostname: () => "macbook" } });
+    expect(run.code).toBe(0);
+    expect(readFileSync(settings, "utf8")).toBe("{ broken");
+    expect(run.out).toContain(
+      `${settings} was left unchanged (not valid JSON). To let Claude Code run the network tools without asking, add "mcp__plugin_agent-bridge_bridge" to permissions.allow in that file.`,
+    );
+  });
+
+  test("a failed join never touches the settings", async () => {
+    const { dir, path } = machineDir();
+    const fetch = (async () => Response.json({ error: "not_found", message: "That join code isn't valid." }, { status: 404 })) as unknown as typeof globalThis.fetch;
+    const run = await cli(["join", `https://bridge.example.com/join#${"B".repeat(22)}`], { path, cwd: dir, deps: { fetch } });
+    expect(run.code).toBe(1);
+    expect(existsSync(join(dir, ".claude"))).toBe(false);
   });
 
   test("join prints no control characters from the hub", async () => {

@@ -81,25 +81,6 @@ export interface DeliveryAck {
   messages: string[];
 }
 
-export interface PermissionPrompt {
-  request_id: string;
-  tool_name: string;
-  description: string;
-  input_preview: string;
-}
-
-/** A permission request as the hub returns it. */
-export interface PermissionView {
-  agent: string;
-  request_id: string;
-  tool_name: string;
-  description: string;
-  input_preview: string;
-  created_at: string;
-  expires_at: string;
-  answer: string | null;
-}
-
 /** What a session's stream open registers, in machine mode (spec §5.2). Only basenames and an HMAC leave the machine. */
 export interface StreamRegistration {
   /** The repo basename. */
@@ -192,10 +173,6 @@ export class HubClient {
 
   reportEvent(body: { name: string; details?: string }): Promise<{ event: unknown; tasks: TaskView[] }> {
     return this.call("POST", "/api/events", body);
-  }
-
-  relayPermission(prompt: PermissionPrompt): Promise<{ request: PermissionView }> {
-    return this.call("POST", "/api/permission-requests", prompt);
   }
 
   /** Reports this session's status. Push members only. */

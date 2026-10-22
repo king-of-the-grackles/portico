@@ -14,22 +14,19 @@ function problems(env: Record<string, string>, machineFile: typeof MACHINE | nul
 }
 
 describe("parsePluginConfig", () => {
-  test("reads the hub address and token; relay is on by default", () => {
+  test("reads the hub address and token", () => {
     expect(parsePluginConfig({ BRIDGE_URL: "https://bridge.example.com/", BRIDGE_TOKEN: "t".repeat(30) })).toEqual({
       url: "https://bridge.example.com",
       token: "t".repeat(30),
-      permissionRelay: true,
       source: "env",
       machine: null,
     });
   });
 
-  test("BRIDGE_PERMISSION_RELAY=off turns the relay off; other values are refused", () => {
+  test("BRIDGE_PERMISSION_RELAY is no longer read: any value is ignored", () => {
     const base = { BRIDGE_URL: "https://bridge.example.com", BRIDGE_TOKEN: "token-0123456789" };
-    expect(parsePluginConfig({ ...base, BRIDGE_PERMISSION_RELAY: "OFF" })?.permissionRelay).toBe(false);
-    expect(problems({ ...base, BRIDGE_PERMISSION_RELAY: "maybe" })).toEqual([
-      'BRIDGE_PERMISSION_RELAY must be "on" or "off", not "maybe".',
-    ]);
+    expect(parsePluginConfig({ ...base, BRIDGE_PERMISSION_RELAY: "maybe" })).toEqual(parsePluginConfig(base));
+    expect(parsePluginConfig(base)).not.toHaveProperty("permissionRelay");
   });
 
   test("returns null when neither the address nor the token is set, so the plugin can idle", () => {
@@ -90,7 +87,6 @@ describe("machine mode", () => {
     expect(parsePluginConfig(env, MACHINE)).toEqual({
       url: "https://other.example.com",
       token: "token-0123456789",
-      permissionRelay: true,
       source: "env",
       machine: null,
     });
@@ -104,11 +100,9 @@ describe("machine mode", () => {
       token: MACHINE.token,
       source: "machine",
       machine: "macbook",
-      permissionRelay: true,
     });
     // Claude Code's unset ${VAR} placeholders count as unset.
     expect(parsePluginConfig({ BRIDGE_URL: "${BRIDGE_URL}", BRIDGE_TOKEN: "${BRIDGE_TOKEN}" }, MACHINE)?.source).toBe("machine");
-    expect(parsePluginConfig({ BRIDGE_PERMISSION_RELAY: "off" }, MACHINE)?.permissionRelay).toBe(false);
     expect(parsePluginConfig({}, { ...MACHINE, hub: "http://localhost:8790/" })?.url).toBe("http://localhost:8790");
   });
 

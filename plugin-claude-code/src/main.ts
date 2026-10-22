@@ -14,7 +14,7 @@ import { findTranscript } from "./transcript";
 
 type Running = { server: Server; stop: () => Promise<void> };
 
-/** No tools and no channel. The note is fixed text: never a folder or a path. */
+/** No tools. The note is fixed text: never a folder or a path. */
 function idle(note: string): Running {
   log("info", "plugin_idle", { note });
   return { server: createIdleServer(), stop: async () => {} };
@@ -53,12 +53,7 @@ function setUp(): Running {
   const cwd = locator.current()?.cwd ?? env.CLAUDE_PROJECT_DIR ?? env.PWD ?? process.cwd();
   // The env-var override ignores the off list (spec §9).
   if (config.source === "machine" && machineFile && isOff(machineFile, cwd)) return idle("this folder is off the network");
-  log("info", "plugin_started", {
-    origin: new URL(config.url).origin,
-    mode: config.source,
-    machine: config.machine,
-    permission_relay: config.permissionRelay,
-  });
+  log("info", "plugin_started", { origin: new URL(config.url).origin, mode: config.source, machine: config.machine });
 
   // Stable for this process: a reconnect is the same session, a restart a new one.
   const sessionKey = crypto.randomUUID();
