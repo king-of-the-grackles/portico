@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import type { ApprovalDesk } from "./approvals/desk";
+import { approvalRoutes } from "./approvals/routes";
 import { pageRoutes } from "./page/routes";
 import type { Directory } from "./core/directory";
 import type { NetworkService } from "./core/network";
@@ -23,6 +25,7 @@ export interface AppDeps {
   presence: Presence;
   sessions: SessionRegistry;
   streams: StreamHub;
+  desk: ApprovalDesk;
   now: () => Date;
   heartbeatMs?: number;
 }
@@ -50,6 +53,7 @@ export function buildApp(deps: AppDeps): Hono {
       heartbeatMs: deps.heartbeatMs,
     }),
   );
+  app.route("/api/approvals", approvalRoutes({ config, service, directory, desk: deps.desk, resolvers: deps.resolvers }));
   app.route("/api", restRoutes(service, config, deps.resolvers, directory, { presence, sessions, now: deps.now }));
   app.route("/mcp", mcpRoutes(service, config, resolveAgent, directory));
   app.route("/a2a", a2aRoutes(service, config, resolveAgent, directory, deps.resolvers.principal));

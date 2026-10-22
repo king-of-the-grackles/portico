@@ -167,7 +167,9 @@ function callTool(
         instructions: arg("instructions") ?? "",
         idempotencyKey: arg("idempotency_key"),
       });
-      return json({ task: taskView(task), delivery: service.deliveryFor(task) });
+      const approval = service.approvalFor(task);
+      const content = json({ task: taskView(task), delivery: service.deliveryFor(task), approval });
+      return approval ? [...content, { type: "text", text: approval.note }] : content;
     }
     case "send_message": {
       const { message, delivery } = service.sendMessage(agent, {

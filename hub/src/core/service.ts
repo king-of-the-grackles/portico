@@ -7,6 +7,7 @@ import { resolveRule } from "./rules";
 import { renderTemplate } from "./templates";
 import { isFinal } from "./types";
 import type {
+  ApprovalInfo,
   BridgeConfig,
   BridgeEvent,
   DeliveryTier,
@@ -28,6 +29,8 @@ export interface ServiceDeps {
   newId?: () => string;
   notify?: (notice: Notice) => void;
   log?: (msg: string, fields: Record<string, unknown>) => void;
+  /** Where and how the owner can approve a waiting task (the approval desk). */
+  approvalInfo?: (task: Task) => ApprovalInfo | null;
 }
 
 /** The most of each kind one deliveries list holds, and one ack may name, so a single ack always covers a list. */
@@ -52,6 +55,7 @@ export class BridgeService {
   private readonly notify: (notice: Notice) => void;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
   private readonly presence: Presence;
+  private readonly approvalInfo: ((task: Task) => ApprovalInfo | null) | undefined;
 
   constructor(deps: ServiceDeps) {
     this.store = deps.store;
@@ -62,6 +66,7 @@ export class BridgeService {
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.notify = deps.notify ?? (() => {});
     this.log = deps.log ?? (() => {});
+    this.approvalInfo = deps.approvalInfo;
   }
 
   /** The live directory: every member but the caller, connected members first. */
@@ -85,6 +90,11 @@ export class BridgeService {
   /** How a queued task will reach its receiver; null for a task in any other state. */
   deliveryFor(task: Task): DeliveryTier | null {
     return task.status === "queued" ? this.directory.tier(task.toAgent) : null;
+  }
+
+  /** Where and how the owner can approve a waiting task; null for any other status. */
+  approvalFor(task: Task): ApprovalInfo | null {
+    return task.status === "waiting_approval" ? (this.approvalInfo?.(task) ?? null) : null;
   }
 
   sendTask(caller: string, input: { to: string; instructions: string; idempotencyKey?: string }): Task {

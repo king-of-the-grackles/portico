@@ -72,7 +72,7 @@ describe("OpenAPI document", () => {
 
   test("leaves out the plugin-only routes and the join route", () => {
     const paths = Object.keys(openApiDocument(testConfig()).paths);
-    for (const path of ["/api/deliveries", "/api/deliveries/ack", "/api/status", "/api/join", "/api/stream"]) {
+    for (const path of ["/api/deliveries", "/api/deliveries/ack", "/api/status", "/api/join", "/api/stream", "/api/approvals/{taskId}"]) {
       expect(paths).not.toContain(path);
     }
   });

@@ -11,7 +11,7 @@ import type { Assistant, AssistantKind, BridgeConfig, Machine, Notice, SessionRe
 import { OWNER } from "../src/core/types";
 import { openDb, Store } from "../src/db";
 import { NetworkStore } from "../src/network-store";
-import type { HelloEvent } from "../src/ways-in/stream";
+import type { HelloEvent, StreamConnection } from "../src/ways-in/stream";
 
 export const T0 = new Date("2026-10-20T12:00:00.000Z");
 export const HOUR = 3_600_000;
@@ -167,24 +167,40 @@ export async function callAs(
   return await ctx.app.request(path, { method, headers, body: payload });
 }
 
-/** Opens a session's live stream as the plugin does in machine mode, and reads its hello. */
+/** Opens a session's live stream as the plugin does in machine mode, and reads its hello. `popup` declares pop-ups. */
 export async function openSessionStream(
   ctx: { app: Hono },
   token: string,
-  opts: { key: string; repo: string; folderId?: string },
+  opts: { key: string; repo: string; folderId?: string; popup?: boolean },
 ): Promise<{ res: Response; events: ReturnType<typeof sseReader>; hello: HelloEvent }> {
-  const res = await ctx.app.request(`/api/stream?repo=${encodeURIComponent(opts.repo)}`, {
-    headers: {
-      authorization: `Bearer ${token}`,
-      "x-bridge-session": opts.key,
-      "x-bridge-folder": opts.folderId ?? "a".repeat(64),
-    },
-  });
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${token}`,
+    "x-bridge-session": opts.key,
+    "x-bridge-folder": opts.folderId ?? "a".repeat(64),
+  };
+  if (opts.popup) headers["x-bridge-popup"] = "1";
+  const res = await ctx.app.request(`/api/stream?repo=${encodeURIComponent(opts.repo)}`, { headers });
   if (res.status !== 200) throw new Error(`stream open failed with ${res.status}: ${await res.text()}`);
   const events = sseReader(res);
   const first = await events.next();
   if (first.event !== "hello") throw new Error(`expected hello, got ${first.event}`);
   return { res, events, hello: first.data as HelloEvent };
+}
+
+/** A stream connection that records what it's sent, and throws once closed, as a dead stream does. */
+export function fakeConnection() {
+  const sent: { event: string; data: Record<string, unknown> }[] = [];
+  let closed = false;
+  const conn: StreamConnection = {
+    send: (event, data) => {
+      if (closed) throw new Error("closed");
+      sent.push({ event, data });
+    },
+    close: () => {
+      closed = true;
+    },
+  };
+  return { conn, sent, isClosed: () => closed };
 }
 
 /** Runs fn and returns the BridgeError code it threw, or null if it didn't throw. */
@@ -198,7 +214,8 @@ export function errorCode(fn: () => unknown): string | null {
   return null;
 }
 
-export function makeApp(config: BridgeConfig = testConfig()) {
+/** A hub over an in-memory database with a fake clock. `newNonce` replaces the approval nonces' random source. */
+export function makeApp(config: BridgeConfig = testConfig(), opts: { newNonce?: () => string } = {}) {
   const clock = testClock();
   const notices: Notice[] = [];
   let counter = 0;
@@ -206,6 +223,7 @@ export function makeApp(config: BridgeConfig = testConfig()) {
     db: openDb(":memory:"),
     now: clock.now,
     newId: () => `id-${++counter}`,
+    newNonce: opts.newNonce,
     heartbeatMs: 50,
     onNotice: (notice) => notices.push(notice),
   });

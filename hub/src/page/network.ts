@@ -70,12 +70,11 @@ export function networkRoutes(deps: NetworkRouteDeps): Hono {
 
   app.post("/machines/:name/remove", (c) => {
     // The rows are gone first, so each closing stream's last-seen write finds nothing to update. The sessions' live
-    // status goes too, so a later session under the same address starts with none.
+    // status goes too, so a later session under the same address starts with none. The streams close together, so
+    // an approval request never moves to another session of the machine on its way out.
     const { sessionAddresses } = network.removeMachine(c.req.param("name"));
-    for (const address of sessionAddresses) {
-      streams.close(address);
-      presence.forget(address);
-    }
+    streams.closeAll(sessionAddresses);
+    for (const address of sessionAddresses) presence.forget(address);
     return c.redirect(NETWORK_PATH, 303);
   });
 

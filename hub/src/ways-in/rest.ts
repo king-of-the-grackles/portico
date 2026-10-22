@@ -70,7 +70,7 @@ export function restRoutes(
       instructions: body.instructions,
       idempotencyKey: body.idempotency_key,
     });
-    return c.json({ task: taskView(task), delivery: service.deliveryFor(task) }, 201);
+    return c.json({ task: taskView(task), delivery: service.deliveryFor(task), approval: service.approvalFor(task) }, 201);
   });
 
   api.post("/messages", async (c) => {

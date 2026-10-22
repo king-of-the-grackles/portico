@@ -7,7 +7,7 @@ import { errorName, log } from "../log";
 import type { PrincipalResolver } from "./auth";
 import { handleError } from "./rest";
 
-export type StreamEvent = "hello" | "nudge" | "replaced";
+export type StreamEvent = "hello" | "nudge" | "replaced" | "approval_request" | "approval_closed";
 
 /** "notify" tells the old stream it was `replaced` (bridge.yaml agents); "quiet" just closes it (a session's own reconnect). */
 export type ReplaceMode = "notify" | "quiet";
@@ -27,26 +27,57 @@ export interface StreamConnection {
   close(): void;
 }
 
+/** What the hub knows about a stream: the session's machine, and whether its plugin can show approval pop-ups. */
+export interface StreamInfo {
+  machine: string | null;
+  popup: boolean;
+}
+
+/** `opened` for every connection, reconnects included; `closed` only when the address loses its stream. */
+export interface StreamChange {
+  kind: "opened" | "closed";
+  address: string;
+  machine: string | null;
+  popup: boolean;
+}
+
+interface OpenStream extends StreamInfo {
+  conn: StreamConnection;
+  /** Grows with every connect, so a lower number is an older connection. */
+  order: number;
+}
+
 /** Each push member's live stream. One per address: a new stream replaces the old one (spec §9.4, §5.2). */
 export class StreamHub {
-  private readonly open = new Map<string, StreamConnection>();
+  private readonly open = new Map<string, OpenStream>();
+  private readonly listeners: ((change: StreamChange) => void)[] = [];
+  private connections = 0;
 
   /** Registers the address's stream, closing any older one. Returns a function to call when this stream ends. */
-  connect(address: string, conn: StreamConnection, mode: ReplaceMode = "notify"): () => void {
+  connect(
+    address: string,
+    conn: StreamConnection,
+    mode: ReplaceMode = "notify",
+    info: StreamInfo = { machine: null, popup: false },
+  ): () => void {
+    const entry: OpenStream = { conn, machine: info.machine, popup: info.popup, order: ++this.connections };
     const old = this.open.get(address);
-    this.open.set(address, conn);
+    this.open.set(address, entry);
     if (old) {
       if (mode === "notify") {
         try {
-          old.send("replaced", {});
+          old.conn.send("replaced", {});
         } catch {
           // already gone
         }
       }
-      old.close();
+      old.conn.close();
     }
+    this.emit({ kind: "opened", address, machine: entry.machine, popup: entry.popup });
     return () => {
-      if (this.open.get(address) === conn) this.open.delete(address);
+      if (this.open.get(address) !== entry) return;
+      this.open.delete(address);
+      this.emit({ kind: "closed", address, machine: entry.machine, popup: entry.popup });
     };
   }
 
@@ -56,28 +87,77 @@ export class StreamHub {
 
   /** Closes and forgets the address's stream, e.g. once its session is removed. */
   close(address: string): void {
-    const conn = this.open.get(address);
-    if (!conn) return;
-    this.open.delete(address);
-    conn.close();
+    this.closeAll([address]);
+  }
+
+  /** Closes and forgets every named stream, then reports each closed: no listener sees one of them still open. */
+  closeAll(addresses: string[]): void {
+    const removed: [string, OpenStream][] = [];
+    for (const address of addresses) {
+      const entry = this.open.get(address);
+      if (!entry) continue;
+      this.open.delete(address);
+      entry.conn.close();
+      removed.push([address, entry]);
+    }
+    for (const [address, entry] of removed) this.emit({ kind: "closed", address, machine: entry.machine, popup: entry.popup });
   }
 
   /** "Your inbox has something." Returns false if the address has no open stream. */
   nudge(address: string): boolean {
-    return this.deliver(address, "nudge", {});
+    return this.send(address, "nudge", {});
   }
 
-  private deliver(address: string, event: StreamEvent, data: Record<string, unknown>): boolean {
-    const conn = this.open.get(address);
-    if (!conn) return false;
+  /** Sends one event. Returns false when the address has no open stream, or the send failed and dropped it. */
+  send(address: string, event: StreamEvent, data: Record<string, unknown>): boolean {
+    const entry = this.open.get(address);
+    if (!entry) return false;
     try {
-      conn.send(event, data);
+      entry.conn.send(event, data);
       return true;
     } catch {
-      this.open.delete(address);
+      if (this.open.get(address) === entry) {
+        this.open.delete(address);
+        this.emit({ kind: "closed", address, machine: entry.machine, popup: entry.popup });
+      }
       return false;
     }
   }
+
+  /** The machine's pop-up sessions, oldest connection first. */
+  popupSessions(machine: string): string[] {
+    return [...this.open]
+      .filter(([, entry]) => isPopup(entry) && entry.machine === machine)
+      .sort(([, a], [, b]) => a.order - b.order)
+      .map(([address]) => address);
+  }
+
+  /** Machines with at least one pop-up session, sorted. */
+  popupMachines(): string[] {
+    const machines = new Set<string>();
+    for (const entry of this.open.values()) if (isPopup(entry)) machines.add(entry.machine);
+    return [...machines].sort();
+  }
+
+  /** Listeners run in order, synchronously. One that throws is logged and never breaks the hub or the others. */
+  onChange(listener: (change: StreamChange) => void): void {
+    this.listeners.push(listener);
+  }
+
+  private emit(change: StreamChange): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(change);
+      } catch (err) {
+        log("error", "stream_listener_failed", { error: errorName(err) });
+      }
+    }
+  }
+}
+
+/** Only a stream with a machine counts as a pop-up session: a session's plugin is the only one that can answer. */
+function isPopup(entry: StreamInfo): entry is StreamInfo & { machine: string } {
+  return entry.popup && entry.machine !== null;
 }
 
 /** Below the server's 60-second idle timeout, so quiet streams stay open through proxies. */
@@ -109,6 +189,7 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
     let machine: string | null = null;
     let sessionId: string | null = null;
     let mode: ReplaceMode = "notify";
+    let info: StreamInfo | undefined;
     if (principal.type === "machine") {
       // A machine token registers (or finds) the session named by its key and folder (spec §5.2).
       const reg = parseRegistration(c.req.header("x-bridge-session"), c.req.header("x-bridge-folder"), c.req.query("repo"));
@@ -117,6 +198,8 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
       machine = principal.machine.name;
       sessionId = registered.session.id;
       mode = "quiet";
+      // Only a machine's session can answer an approval, so only its stream may declare pop-ups.
+      info = { machine, popup: c.req.header("x-bridge-popup") === "1" };
     } else {
       address = principal.address;
       if (!directory.isPush(address)) {
@@ -147,7 +230,8 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
       };
       stream.onAbort(() => end());
       // Connected in the same tick as the registration above, so no other registration can take this session as stale.
-      const disconnect = streams.connect(address, conn, mode);
+      // An approval request sent from inside connect waits in `early` too.
+      const disconnect = streams.connect(address, conn, mode, info);
       log("info", "stream_opened", { agent: address });
       try {
         // Flushes the response headers now; otherwise a client's fetch() waits for the first event or heartbeat.

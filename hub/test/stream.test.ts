@@ -1,25 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { Task } from "../src/core/types";
+import { captureLogs } from "../src/log";
 import { makeNotifier } from "../src/notifier";
-import { type StreamConnection, StreamHub } from "../src/ways-in/stream";
-import { T0, callAs, flush, joinMachine, makeApp, mintAssistant, openSessionStream, sseReader } from "./helpers";
+import { type StreamChange, StreamHub } from "../src/ways-in/stream";
+import { T0, TOKENS, callAs, fakeConnection, flush, joinMachine, makeApp, mintAssistant, openSessionStream, sseReader } from "./helpers";
 
 const AGENT_HELLO = { event: "hello", data: { address: "claude-code", name: "claude-code", machine: null } };
-
-function fakeConnection() {
-  const sent: { event: string; data: Record<string, unknown> }[] = [];
-  let closed = false;
-  const conn: StreamConnection = {
-    send: (event, data) => {
-      if (closed) throw new Error("closed");
-      sent.push({ event, data });
-    },
-    close: () => {
-      closed = true;
-    },
-  };
-  return { conn, sent, isClosed: () => closed };
-}
 
 describe("StreamHub", () => {
   test("delivers nudges to the agent's open stream", () => {
@@ -75,6 +61,92 @@ describe("StreamHub", () => {
     conn.close();
     expect(hub.nudge("claude-code")).toBe(false);
     expect(hub.isConnected("claude-code")).toBe(false);
+  });
+
+  test("popupSessions lists a machine's pop-up sessions, oldest connection first; popupMachines lists machines with one", () => {
+    const hub = new StreamHub();
+    const popup = { machine: "macbook", popup: true };
+    hub.connect("web-claude@macbook", fakeConnection().conn, "quiet", popup);
+    hub.connect("api-claude@macbook", fakeConnection().conn, "quiet", popup);
+    hub.connect("cli-claude@mini", fakeConnection().conn, "quiet", { machine: "mini", popup: false });
+    hub.connect("claude-code", fakeConnection().conn);
+    expect(hub.popupSessions("macbook")).toEqual(["web-claude@macbook", "api-claude@macbook"]);
+    expect(hub.popupSessions("mini")).toEqual([]);
+    expect(hub.popupMachines()).toEqual(["macbook"]);
+    hub.connect("web-claude@macbook", fakeConnection().conn, "quiet", popup); // a reconnect is a newer connection
+    expect(hub.popupSessions("macbook")).toEqual(["api-claude@macbook", "web-claude@macbook"]);
+  });
+
+  test("a stream with no machine never counts as a pop-up session, whatever it declares", () => {
+    const hub = new StreamHub();
+    hub.connect("claude-code", fakeConnection().conn, "notify", { machine: null, popup: true });
+    expect(hub.popupMachines()).toEqual([]);
+  });
+
+  test("onChange reports opened for every connection, and closed only when the address loses its stream", () => {
+    const hub = new StreamHub();
+    const changes: StreamChange[] = [];
+    hub.onChange((change) => changes.push(change));
+    const info = { machine: "macbook", popup: true };
+    const endFirst = hub.connect("api-claude@macbook", fakeConnection().conn, "quiet", info);
+    const endSecond = hub.connect("api-claude@macbook", fakeConnection().conn, "quiet", info);
+    endFirst(); // the replaced stream ending changes nothing
+    endSecond();
+    const dead = fakeConnection();
+    hub.connect("web-claude@macbook", dead.conn, "quiet", info);
+    dead.conn.close();
+    expect(hub.send("web-claude@macbook", "nudge", {})).toBe(false); // a failed send drops the stream
+    hub.connect("cli-claude@macbook", fakeConnection().conn, "quiet", info);
+    hub.close("cli-claude@macbook");
+    expect(changes.map((change) => `${change.kind} ${change.address}`)).toEqual([
+      "opened api-claude@macbook",
+      "opened api-claude@macbook",
+      "closed api-claude@macbook",
+      "opened web-claude@macbook",
+      "closed web-claude@macbook",
+      "opened cli-claude@macbook",
+      "closed cli-claude@macbook",
+    ]);
+    expect(changes[0]).toEqual({ kind: "opened", address: "api-claude@macbook", machine: "macbook", popup: true });
+  });
+
+  test("closeAll forgets every stream it names before reporting any of them closed", () => {
+    const hub = new StreamHub();
+    const info = { machine: "macbook", popup: true };
+    const one = fakeConnection();
+    const two = fakeConnection();
+    hub.connect("api-claude@macbook", one.conn, "quiet", info);
+    hub.connect("web-claude@macbook", two.conn, "quiet", info);
+    hub.connect("notes-claude@studio", fakeConnection().conn, "quiet", { machine: "studio", popup: true });
+    const seen: string[] = [];
+    hub.onChange((change) => seen.push(`${change.kind} ${change.address} [${hub.popupSessions("macbook").join(", ")}]`));
+    hub.closeAll(["api-claude@macbook", "web-claude@macbook", "gone-claude@macbook"]);
+    expect(seen).toEqual(["closed api-claude@macbook []", "closed web-claude@macbook []"]);
+    expect(one.isClosed()).toBe(true);
+    expect(two.isClosed()).toBe(true);
+    expect(hub.popupMachines()).toEqual(["studio"]);
+  });
+
+  test("a listener that throws is logged and never stops the others or the hub", () => {
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    try {
+      const hub = new StreamHub();
+      const later: string[] = [];
+      hub.onChange(() => {
+        throw new TypeError("listener bug");
+      });
+      hub.onChange((change) => later.push(`${change.kind} ${change.address}`));
+      const { conn, sent } = fakeConnection();
+      hub.connect("claude-code", conn);
+      expect(hub.nudge("claude-code")).toBe(true);
+      expect(sent).toEqual([{ event: "nudge", data: {} }]);
+      expect(later).toEqual(["opened claude-code"]);
+    } finally {
+      captureLogs(null);
+    }
+    const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(logged).toContainEqual(expect.objectContaining({ level: "error", msg: "stream_listener_failed", error: "TypeError" }));
   });
 });
 
@@ -335,6 +407,34 @@ describe("session streams", () => {
       expect((await callAs(ctx, { token, key: "nope-nope-1" }, "GET", "/api/agents")).status).toBe(401);
       // A machine token alone serves only the stream.
       expect((await callAs(ctx, { token }, "GET", "/api/agents")).status).toBe(401);
+    } finally {
+      await events.cancel();
+    }
+  });
+
+  test("a machine's stream opened with X-Bridge-Popup: 1 counts as a pop-up session", async () => {
+    const ctx = makeApp();
+    const { token } = joinMachine(ctx);
+    const plain = await openSessionStream(ctx, token, { key: "key-plain-0001", repo: "api" });
+    const popup = await openSessionStream(ctx, token, { key: "key-popup-0001", repo: "web", folderId: "b".repeat(64), popup: true });
+    try {
+      expect(ctx.streams.popupSessions("macbook")).toEqual(["web-claude@macbook"]);
+    } finally {
+      await plain.events.cancel();
+      await popup.events.cancel();
+    }
+  });
+
+  test("a bridge.yaml agent's X-Bridge-Popup is ignored", async () => {
+    const ctx = makeApp();
+    const res = await ctx.app.request("/api/stream", {
+      headers: { authorization: `Bearer ${TOKENS["claude-code"]}`, "x-bridge-popup": "1" },
+    });
+    const events = sseReader(res);
+    try {
+      expect(await events.next()).toEqual(AGENT_HELLO);
+      expect(ctx.streams.isConnected("claude-code")).toBe(true);
+      expect(ctx.streams.popupMachines()).toEqual([]);
     } finally {
       await events.cancel();
     }

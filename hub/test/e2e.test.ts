@@ -78,4 +78,37 @@ describe("end to end over HTTP", () => {
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("Draft a reply");
   });
+
+  test("an ask task pops up on a joined machine's session, and the pop-up's Approve queues the task", async () => {
+    const { base, api, signIn } = startHub();
+    const cookie = await signIn();
+    const page = await (await fetch(`${base}/hub/network/join-codes`, { method: "POST", headers: { cookie } })).text();
+    const code = /\/join#([A-Za-z0-9_-]+)/.exec(page)![1]!;
+    const joined = await (
+      await fetch(`${base}/api/join`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, machine: "macbook" }) })
+    ).json();
+    const session = { authorization: `Bearer ${joined.token}`, "x-bridge-session": "e2e-session-key-1" };
+    const stream = await fetch(`${base}/api/stream?repo=api`, {
+      headers: { ...session, "x-bridge-folder": "a".repeat(64), "x-bridge-popup": "1" },
+    });
+    const events = sseReader(stream);
+    try {
+      expect((await events.next()).event).toBe("hello");
+      const sent = await (await api("grok-bot", "POST", "/api/tasks", { to: "muse", instructions: "Summarize the inbox" })).json();
+      expect(sent.approval.popups).toEqual(["macbook"]);
+      const asked = await events.next();
+      expect(asked.event).toBe("approval_request");
+      const answered = await fetch(`${base}/api/approvals/${sent.task.id}`, {
+        method: "POST",
+        headers: { ...session, "content-type": "application/json" },
+        body: JSON.stringify({ nonce: (asked.data as { nonce: string }).nonce, decision: "approve" }),
+      });
+      expect(answered.status).toBe(200);
+      expect(await events.next()).toEqual({ event: "approval_closed", data: { taskId: sent.task.id, outcome: "approved" } });
+      const inbox = await (await api("muse", "GET", "/api/inbox")).json();
+      expect(inbox.tasks.map((t: { id: string }) => t.id)).toEqual([sent.task.id]);
+    } finally {
+      await events.cancel();
+    }
+  });
 });

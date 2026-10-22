@@ -218,6 +218,17 @@ describe("messages, the live directory and the unread line", () => {
     expect(JSON.parse(result.content[0]!.text)).toMatchObject({ task: { status: "queued" }, delivery: "offline" });
   });
 
+  test("send_task for an ask pair adds the approval info, and its note as a second line", async () => {
+    const app = makeApp();
+    const result = await callTool(app, "grok-bot", "send_task", { to: "muse", instructions: "Summarize the inbox" });
+    const body = JSON.parse(result.content[0]!.text);
+    expect(body.approval).toMatchObject({ popups: [], url: `https://bridge.test/hub/tasks/${body.task.id}` });
+    expect(result.content[1]!.text).toBe(body.approval.note);
+    const queued = await callTool(app, "grok-bot", "send_task", { to: "claude-code", instructions: "x" });
+    expect(JSON.parse(queued.content[0]!.text).approval).toBeNull();
+    expect(queued.content).toHaveLength(1);
+  });
+
   test("a pull caller with mail waiting gets the unread line after any tool but check_inbox, errors included", async () => {
     const app = makeApp();
     app.service.sendTask("claude-code", { to: "grok-bot", instructions: "Research this" });

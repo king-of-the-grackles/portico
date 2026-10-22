@@ -228,6 +228,16 @@ export interface BridgeEvent {
 /** How a task that was waiting for approval was decided. */
 export type ApprovalOutcome = "approved" | "denied" | "expired";
 
+/** Where and how the owner can approve a waiting task, for the sender's send_task result. */
+export interface ApprovalInfo {
+  /** The task's hub page, which needs sign-in. */
+  url: string;
+  /** Machines showing a pop-up for the task, sorted. */
+  popups: string[];
+  /** One sentence for the agent. */
+  note: string;
+}
+
 /** Things the outside world may need to act on. notifier.ts turns these into nudges and approval callbacks. */
 export type Notice =
   | { kind: "queued"; task: Task }

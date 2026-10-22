@@ -215,13 +215,23 @@ export function openApiDocument(config: BridgeConfig): OpenApiDocument {
           responses: {
             "201": jsonResponse("The task, with its status after the rules were checked", {
               type: "object",
-              required: ["task", "delivery"],
+              required: ["task", "delivery", "approval"],
               properties: {
                 task: { $ref: "#/components/schemas/Task" },
                 delivery: {
                   type: ["string", "null"],
                   enum: ["pushed", "queued", "offline", null],
                   description: `How a queued task will arrive: ${TIERS}. Null when the task isn't queued.`,
+                },
+                approval: {
+                  type: ["object", "null"],
+                  required: ["url", "popups", "note"],
+                  description: "Set while the task waits for the owner's approval; null otherwise.",
+                  properties: {
+                    url: { type: "string", description: "The task's hub page, where the owner can approve it after signing in." },
+                    popups: { type: "array", items: { type: "string" }, description: "Machines showing an approval pop-up." },
+                    note: { type: "string", description: "One sentence for the agent: where the approval can be given." },
+                  },
                 },
               },
             }),
