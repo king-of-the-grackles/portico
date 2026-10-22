@@ -39,16 +39,6 @@ describe("HubClient", () => {
     expect(read.task).toMatchObject({ status: "done", result: "Friday" });
   });
 
-  test("relays a permission prompt", async () => {
-    await hubClient(hub, "claude-code").relayPermission({
-      request_id: "abcde",
-      tool_name: "Bash",
-      description: "List files",
-      input_preview: '{"command":"ls"}',
-    });
-    expect(hub.relay.pending().map((r) => r.requestId)).toEqual(["abcde"]);
-  });
-
   test("turns hub errors into HubError with the hub's code and message", async () => {
     const wrongToken = new HubClient({ url: hub.url, token: "wrong-token-0123456789abcdef" });
     expect(await hubError(wrongToken.listAgents())).toMatchObject({ status: 401, code: "unauthorized" });

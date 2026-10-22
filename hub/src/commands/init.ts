@@ -14,7 +14,6 @@ export interface Secrets {
   publicUrl: string;
   signingSecret: string;
   adminPassword: string;
-  ntfyTopic: string;
   /** Agent name → token. */
   tokens: Record<string, string>;
 }
@@ -24,7 +23,6 @@ export function generateSecrets(agents: string[]): Secrets {
     publicUrl: `http://localhost:${DEFAULT_PORT}`,
     signingSecret: randomBytes(32).toString("hex"),
     adminPassword: randomBytes(18).toString("base64url"),
-    ntfyTopic: `bridge-${randomBytes(18).toString("base64url")}`,
     tokens: Object.fromEntries(agents.map((name) => [name, randomBytes(24).toString("hex")])),
   };
 }
@@ -55,7 +53,6 @@ function secretLines(secrets: Secrets): [string, string][] {
     ["BRIDGE_PUBLIC_URL", secrets.publicUrl],
     ["BRIDGE_SIGNING_SECRET", secrets.signingSecret],
     ["BRIDGE_ADMIN_PASSWORD", secrets.adminPassword],
-    ["BRIDGE_NTFY_TOPIC", secrets.ntfyTopic],
     ...Object.entries(secrets.tokens).map(([name, token]): [string, string] => [tokenEnvName(name), token]),
   ];
 }
@@ -106,13 +103,12 @@ export async function initCommand(args: string[], io: CliIo): Promise<number> {
       ? `Using ${configName} (${names.length} agents: ${names.join(", ")}).`
       : `Wrote ${configName}: a starter config with ${names.length} agents (${names.join(", ")}).`,
   );
-  io.out(`Wrote ${secretsName} (mode 600): a signing secret, an admin password, an ntfy topic and a token for each agent.`);
+  io.out(`Wrote ${secretsName} (mode 600): a signing secret, an admin password and a token for each agent.`);
   io.out("");
   io.out("Next:");
   const steps = [
     ...(configExists ? [] : [`Edit ${configName}: agents, rules and triggers.`]),
     `Set BRIDGE_PUBLIC_URL in ${secretsName} to the hub's public https address.`,
-    `Subscribe to the topic in BRIDGE_NTFY_TOPIC in the ntfy app, to get approval pushes.`,
     ...(shell ? ["Run: source bridge-secrets.sh (the hub loads .env automatically, but not this file)."] : []),
     "Run: bridge doctor, then bridge serve.",
   ];

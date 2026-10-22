@@ -2,7 +2,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { rulePatternProblem } from "./core/rules";
 import { unknownPlaceholders } from "./core/templates";
-import type { AgentConfig, BridgeConfig, Limits, NtfyConfig } from "./core/types";
+import type { AgentConfig, BridgeConfig, Limits } from "./core/types";
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {
@@ -30,7 +30,6 @@ export const AGENT_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const MIN_TOKEN_LENGTH = 24;
 const MIN_SECRET_LENGTH = 32;
 const MIN_PASSWORD_LENGTH = 12;
-const NTFY_TOPIC = /^[A-Za-z0-9_-]{20,64}$/;
 
 const positiveInt = z.number().int().positive();
 
@@ -91,30 +90,11 @@ export function tokenEnvName(agent: string): string {
   return `BRIDGE_TOKEN_${agent.toUpperCase().replace(/-/g, "_")}`;
 }
 
-function parseNtfy(env: Env, problems: string[]): NtfyConfig | null {
-  const topic = env.BRIDGE_NTFY_TOPIC?.trim();
-  if (!topic) return null;
-  if (!NTFY_TOPIC.test(topic)) {
-    problems.push(
-      "BRIDGE_NTFY_TOPIC must be 20–64 letters, digits, - or _, because anyone who knows a public topic can read every push sent to the topic",
-    );
-  }
-  const url = (env.BRIDGE_NTFY_URL?.trim() || "https://ntfy.sh").replace(/\/+$/, "");
-  try {
-    const parsed = new URL(url);
-    if (!["http:", "https:"].includes(parsed.protocol)) {
-      problems.push(`BRIDGE_NTFY_URL "${url}" is not a valid http(s) URL`);
-    } else {
-      const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-      // BRIDGE_NTFY_TOKEN would travel in clear over plain http.
-      if (parsed.protocol !== "https:" && !local) {
-        problems.push("BRIDGE_NTFY_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)");
-      }
-    }
-  } catch {
-    problems.push(`BRIDGE_NTFY_URL "${url}" is not a valid http(s) URL`);
-  }
-  return { url, topic, token: env.BRIDGE_NTFY_TOKEN?.trim() || null };
+/** Set BRIDGE_NTFY_* variables, by name. Phone pushes are gone: the hub ignores these and says so once at startup. */
+function ntfyLeftovers(env: Env): string[] {
+  return Object.keys(env)
+    .filter((name) => name.startsWith("BRIDGE_NTFY_") && (env[name]?.trim() ?? "") !== "")
+    .sort();
 }
 
 function requireSecret(env: Env, name: string, minLength: number, problems: string[]): string {
@@ -213,7 +193,6 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
 
   const signingSecret = requireSecret(env, "BRIDGE_SIGNING_SECRET", MIN_SECRET_LENGTH, problems);
   const adminPassword = requireSecret(env, "BRIDGE_ADMIN_PASSWORD", MIN_PASSWORD_LENGTH, problems);
-  const ntfy = parseNtfy(env, problems);
   if (signingSecret && (Object.values(tokens).includes(signingSecret) || signingSecret === adminPassword)) {
     problems.push("BRIDGE_SIGNING_SECRET must differ from every agent token and from BRIDGE_ADMIN_PASSWORD");
   }
@@ -247,7 +226,7 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
     port,
     signingSecret,
     adminPassword,
-    ntfy,
+    ntfyIgnored: ntfyLeftovers(env),
     pluginSource: env.BRIDGE_PLUGIN_SOURCE?.trim() || null,
   };
 }

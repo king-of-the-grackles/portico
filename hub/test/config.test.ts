@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { ConfigError, loadConfig, parseConfig, tokenEnvName } from "../src/config";
-import { PRONOUNS } from "./helpers";
 
 const YAML = `
 agents:
@@ -68,7 +67,7 @@ describe("parseConfig", () => {
     expect(config.port).toBe(8790);
     expect(config.signingSecret).toBe("s".repeat(32));
     expect(config.adminPassword).toBe("correct horse battery");
-    expect(config.ntfy).toBeNull();
+    expect(config.ntfyIgnored).toEqual([]);
     expect(config.dbPath).toBe("./bridge.db");
   });
 
@@ -241,7 +240,7 @@ rules:
   });
 });
 
-describe("parseConfig: secrets, ntfy and strictness", () => {
+describe("parseConfig: secrets and strictness", () => {
   test("requires a signing secret and an admin password of a minimum length", () => {
     expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: undefined })).toContain("missing BRIDGE_SIGNING_SECRET");
     expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: "short" })).toContain(
@@ -253,17 +252,6 @@ describe("parseConfig: secrets, ntfy and strictness", () => {
     );
   });
 
-  test("BRIDGE_NTFY_URL must be https, except http for localhost", () => {
-    const topic = "t".repeat(24);
-    const withUrl = (url: string) => problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: topic, BRIDGE_NTFY_URL: url });
-    expect(withUrl("http://ntfy.example.com")).toContain(
-      "BRIDGE_NTFY_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)",
-    );
-    expect(withUrl("http://127.0.0.1:9999")).toEqual([]);
-    expect(withUrl("http://localhost:9999")).toEqual([]);
-    expect(withUrl("not a url")).toEqual(['BRIDGE_NTFY_URL "not a url" is not a valid http(s) URL']);
-  });
-
   test("the signing secret must differ from every agent token and the admin password", () => {
     const message = "BRIDGE_SIGNING_SECRET must differ from every agent token and from BRIDGE_ADMIN_PASSWORD";
     expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: ENV.BRIDGE_TOKEN_GROK_BOT })).toContain(message);
@@ -273,32 +261,16 @@ describe("parseConfig: secrets, ntfy and strictness", () => {
     expect(problems(YAML)).not.toContain(message);
   });
 
-  test("ntfy is on only when a topic is set", () => {
-    const topic = "t".repeat(24);
-    expect(parseConfig(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: topic }).ntfy).toEqual({
-      url: "https://ntfy.sh",
-      topic,
-      token: null,
+  test("BRIDGE_NTFY_* variables are ignored, never refused, and listed by name", () => {
+    const config = parseConfig(YAML, {
+      ...ENV,
+      BRIDGE_NTFY_TOPIC: "mytopic", // refused before v1.2: too short
+      BRIDGE_NTFY_URL: "http://ntfy.example.com", // refused before v1.2: not https
+      BRIDGE_NTFY_TOKEN: "  ",
     });
-    expect(
-      parseConfig(YAML, {
-        ...ENV,
-        BRIDGE_NTFY_TOPIC: topic,
-        BRIDGE_NTFY_URL: "https://ntfy.example.com/",
-        BRIDGE_NTFY_TOKEN: "tk_abc",
-      }).ntfy,
-    ).toEqual({ url: "https://ntfy.example.com", topic, token: "tk_abc" });
-  });
-
-  test("rejects a short or oddly formed ntfy topic and a bad ntfy URL", () => {
-    const message =
-      "BRIDGE_NTFY_TOPIC must be 20–64 letters, digits, - or _, because anyone who knows a public topic can read every push sent to the topic";
-    expect(message).not.toMatch(PRONOUNS);
-    expect(problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: "mytopic" })).toContain(message);
-    expect(problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: `${"t".repeat(24)}/x` })).toContain(message);
-    expect(problems(YAML, { ...ENV, BRIDGE_NTFY_TOPIC: "t".repeat(24), BRIDGE_NTFY_URL: "not a url" })).toContain(
-      'BRIDGE_NTFY_URL "not a url" is not a valid http(s) URL',
-    );
+    expect(config.ntfyIgnored).toEqual(["BRIDGE_NTFY_TOPIC", "BRIDGE_NTFY_URL"]);
+    expect(config).not.toHaveProperty("ntfy");
+    expect(parseConfig(YAML, ENV).ntfyIgnored).toEqual([]);
   });
 
   test("rejects unknown keys, so typos aren't silently ignored", () => {

@@ -74,7 +74,7 @@ export function layout(title: string, body: Html, opts: { nav?: boolean } = {}):
 <body>${opts.nav ? NAV : ""}<main>${body}</main></body></html>`;
 }
 
-/** Sends a page with the headers every hub and approval page uses. */
+/** Sends a page with the headers every hub page uses. */
 export function sendPage(
   c: Context,
   status: 200 | 400 | 401 | 403 | 404 | 413 | 429,
@@ -83,7 +83,7 @@ export function sendPage(
   opts: { nav?: boolean } = {},
 ): Response | Promise<Response> {
   c.header("Cache-Control", "no-store");
-  // same-origin keeps signed links out of other sites' logs. Not no-referrer: under it, browsers send
+  // same-origin keeps task URLs out of other sites' logs. Not no-referrer: under it, browsers send
   // `Origin: null` even on the page's own form posts, and sameOrigin() refuses them.
   c.header("Referrer-Policy", "same-origin");
   c.header("X-Frame-Options", "DENY");

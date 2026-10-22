@@ -13,9 +13,7 @@ Commands:
                     and secrets from the environment (./.env is loaded too).
   init [--shell]    Write a starter bridge.yaml if there is none, and generate every secret
                     into ./.env, or with --shell into ./bridge-secrets.sh as export lines.
-  doctor [--no-push]
-                    Check the config, the public URL, each agent's token on the running hub,
-                    and send a test push.
+  doctor            Check the config, the public URL, and each agent's token on the running hub.
   invite            Make a one-time join line for a new machine (runs where the hub's
                     config and database are).
   join <line> [--code <code>] [--name <machine>] [--replace]

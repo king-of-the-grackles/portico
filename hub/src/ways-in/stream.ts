@@ -7,7 +7,7 @@ import { errorName, log } from "../log";
 import type { PrincipalResolver } from "./auth";
 import { handleError } from "./rest";
 
-export type StreamEvent = "hello" | "nudge" | "permission" | "replaced";
+export type StreamEvent = "hello" | "nudge" | "replaced";
 
 /** "notify" tells the old stream it was `replaced` (bridge.yaml agents); "quiet" just closes it (a session's own reconnect). */
 export type ReplaceMode = "notify" | "quiet";
@@ -67,10 +67,6 @@ export class StreamHub {
     return this.deliver(address, "nudge", {});
   }
 
-  sendPermissionAnswer(address: string, requestId: string, behavior: "allow" | "deny"): boolean {
-    return this.deliver(address, "permission", { request_id: requestId, behavior });
-  }
-
   private deliver(address: string, event: StreamEvent, data: Record<string, unknown>): boolean {
     const conn = this.open.get(address);
     if (!conn) return false;
@@ -95,8 +91,6 @@ export interface StreamRouteDeps {
   resolvePrincipal: PrincipalResolver;
   sessions: SessionRegistry;
   heartbeatMs?: number;
-  /** Runs after a stream opens, e.g. to re-send permission answers given while it was disconnected. */
-  onConnect?: (address: string) => void;
 }
 
 export function streamRoutes(deps: StreamRouteDeps): Hono {
@@ -166,7 +160,6 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
         if (open && !waiting.some((item) => item.event === "nudge") && service.hasWaiting(address)) {
           conn.send("nudge", {});
         }
-        deps.onConnect?.(address);
         while (open) {
           let timer: ReturnType<typeof setTimeout> | undefined;
           await Promise.race([new Promise<void>((resolve) => (timer = setTimeout(resolve, heartbeatMs))), ended]);

@@ -42,7 +42,7 @@ function readSecrets(text: string): Record<string, string> {
   return env;
 }
 
-const SECRET_KEY = /^BRIDGE_(SIGNING_SECRET|ADMIN_PASSWORD|NTFY_TOPIC|TOKEN_.+)$/;
+const SECRET_KEY = /^BRIDGE_(SIGNING_SECRET|ADMIN_PASSWORD|TOKEN_.+)$/;
 
 describe("bridge init", () => {
   test("writes the starter config and a private .env that the hub accepts", async () => {
@@ -58,10 +58,12 @@ describe("bridge init", () => {
     const config = parseConfig(yaml, env);
     expect(Object.keys(config.tokens).sort()).toEqual(["claude-code", "codex", "grok-bot", "muse"]);
     expect(new Set(Object.values(config.tokens)).size).toBe(4);
-    expect(config.ntfy?.topic).toMatch(/^bridge-[A-Za-z0-9_-]{24}$/);
     expect(config.publicUrl).toBe("http://localhost:8790");
 
     const printed = run.out.join("\n");
+    expect(Object.keys(env).some((key) => key.startsWith("BRIDGE_NTFY_"))).toBe(false);
+    expect(config.ntfyIgnored).toEqual([]);
+    expect(printed).not.toMatch(/ntfy|phone|push/i);
     for (const [key, value] of Object.entries(env)) if (SECRET_KEY.test(key)) expect(printed).not.toContain(value);
     expect(printed).toContain("Wrote bridge.yaml");
     expect(printed).toContain("Wrote .env");

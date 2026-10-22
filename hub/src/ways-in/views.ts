@@ -1,5 +1,4 @@
 import { frameMessage, frameResult, frameTask } from "../core/framing";
-import type { PermissionRequest } from "../core/permissions";
 import type { BridgeEvent, Delivery, DirectoryEntry, LiveStatus, Message, Task, TaskStatus } from "../core/types";
 
 export interface TaskView {
@@ -106,18 +105,5 @@ export function directoryEntryView(e: DirectoryEntry): DirectoryEntryView {
     status: e.status,
     doing: e.doing,
     last_seen: e.lastSeen,
-  };
-}
-
-export function permissionView(request: PermissionRequest) {
-  return {
-    agent: request.agent,
-    request_id: request.requestId,
-    tool_name: request.toolName,
-    description: request.description,
-    input_preview: request.inputPreview,
-    created_at: request.createdAt,
-    expires_at: request.expiresAt,
-    answer: request.answer,
   };
 }

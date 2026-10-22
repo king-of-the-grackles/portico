@@ -1,15 +1,14 @@
 import { Hono } from "hono";
 import { deleteCookie, setCookie } from "hono/cookie";
 import { html } from "hono/html";
-import { answerPermission, decideTask } from "../approvals/routes";
 import type { Directory } from "../core/directory";
 import type { NetworkService } from "../core/network";
-import type { PermissionRelay } from "../core/permissions";
 import type { Presence } from "../core/presence";
 import type { BridgeService } from "../core/service";
 import { type BridgeConfig, TASK_STATUSES, type TaskStatus } from "../core/types";
 import { log } from "../log";
 import type { StreamHub } from "../ways-in/stream";
+import { decideTask } from "./decide";
 import { formBodyLimit, sendPage } from "./layout";
 import { networkRoutes } from "./network";
 import {
@@ -29,7 +28,6 @@ export interface PageDeps {
   service: BridgeService;
   directory: Directory;
   network: NetworkService;
-  relay: PermissionRelay;
   streams: StreamHub;
   presence: Presence;
   config: BridgeConfig;
@@ -41,7 +39,7 @@ const WAITING_SHOWN = 100;
 const formText = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
 export function pageRoutes(deps: PageDeps): Hono {
-  const { service, directory, network, relay, streams, presence, config, now } = deps;
+  const { service, directory, network, streams, presence, config, now } = deps;
   const page = new Hono();
   const limiter = new LoginLimiter(now);
 
@@ -100,7 +98,7 @@ export function pageRoutes(deps: PageDeps): Hono {
     const rows = service.listTasks({ status: "waiting_approval", limit: WAITING_SHOWN + 1, oldestFirst: true });
     const waiting = rows.slice(0, WAITING_SHOWN).map((task) => ({ task, chain: service.chainOf(task) }));
     const entries = directory.entries();
-    return sendPage(c, 200, "Waiting", homeView(waiting, relay.pending(), entries, rows.length > WAITING_SHOWN), { nav: true });
+    return sendPage(c, 200, "Waiting", homeView(waiting, entries, rows.length > WAITING_SHOWN), { nav: true });
   });
 
   page.route("/network", networkRoutes({ network, presence, streams, config }));
@@ -122,21 +120,12 @@ export function pageRoutes(deps: PageDeps): Hono {
     return sendPage(c, 200, "Task", taskDetailView(task, service.chainOf(task)), { nav: true });
   });
 
-  page.post("/tasks/:id/approve", (c) => decideTask(c, service, c.req.param("id"), "approve", undefined, true));
+  page.post("/tasks/:id/approve", (c) => decideTask(c, service, c.req.param("id"), "approve", undefined));
 
   page.post("/tasks/:id/deny", async (c) => {
     const form = await c.req.parseBody();
-    return decideTask(c, service, c.req.param("id"), "deny", formText(form.note), true);
+    return decideTask(c, service, c.req.param("id"), "deny", formText(form.note));
   });
-
-  for (const [path, action] of [
-    ["allow", "approve"],
-    ["deny", "deny"],
-  ] as const) {
-    page.post(`/permissions/:agent/:requestId/${path}`, (c) =>
-      answerPermission(c, relay, c.req.param("agent"), c.req.param("requestId"), action, true),
-    );
-  }
 
   return page;
 }

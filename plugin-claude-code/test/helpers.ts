@@ -14,7 +14,7 @@ import { InboxSocket } from "../src/socket";
 
 export { TOKENS };
 
-/** A real hub (in-memory database, fake clock, recorded pushes, 50 ms heartbeats) on a random local port. */
+/** A real hub (in-memory database, fake clock, 50 ms heartbeats) on a random local port. */
 export function startHub(config: BridgeConfig = testConfig()) {
   const hub = makeApp(config);
   const server = Bun.serve({ port: 0, fetch: hub.app.fetch, idleTimeout: 60 });

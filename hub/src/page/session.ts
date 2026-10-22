@@ -1,7 +1,6 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
-import { signToken, verifyToken } from "../approvals/links";
 import type { BridgeConfig } from "../core/types";
 
 export const SESSION_COOKIE = "bridge_session";
@@ -9,6 +8,35 @@ export const SESSION_DAYS = 7;
 const DAY_MS = 86_400_000;
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest();
+
+/** Every session token has been signed with this purpose since v1; old approval links used "link". */
+const PURPOSE = "session";
+
+function mac(secret: string, payload: string): Buffer {
+  return createHmac("sha256", secret).update(`${PURPOSE}:${payload}`).digest();
+}
+
+/** `<base64url JSON claims>.<base64url HMAC>`, the same bytes every hub has signed since v1. */
+function signSession(secret: string, expiresAt: string): string {
+  const payload = Buffer.from(JSON.stringify({ expiresAt })).toString("base64url");
+  return `${payload}.${mac(secret, payload).toString("base64url")}`;
+}
+
+/** Well formed, signed for sessions with this secret, and not expired. */
+function validSession(secret: string, token: string, now: Date): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return false;
+  const [payload, signature] = parts as [string, string];
+  const expected = mac(secret, payload);
+  const given = Buffer.from(signature, "base64url");
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return false;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { expiresAt?: unknown } | null;
+    return typeof claims?.expiresAt === "string" && Date.parse(claims.expiresAt) > now.getTime();
+  } catch {
+    return false;
+  }
+}
 
 const NEXT_PATH = /^\/hub(\/[A-Za-z0-9._~%-]+)*\/?(\?[A-Za-z0-9._~%=&+-]*)?$/;
 
@@ -46,12 +74,12 @@ export function passwordMatches(config: BridgeConfig, given: string): boolean {
 /** A signed, stateless session token. Changing BRIDGE_SIGNING_SECRET signs everyone out. */
 export function newSessionToken(config: BridgeConfig, now: Date): string {
   const expiresAt = new Date(now.getTime() + SESSION_DAYS * DAY_MS).toISOString();
-  return signToken(config.signingSecret, "session", { expiresAt });
+  return signSession(config.signingSecret, expiresAt);
 }
 
 export function hasSession(c: Context, config: BridgeConfig, now: Date): boolean {
   const token = getCookie(c, SESSION_COOKIE);
-  return token !== undefined && verifyToken(config.signingSecret, "session", token, now) !== null;
+  return token !== undefined && validSession(config.signingSecret, token, now);
 }
 
 /** Ten failed sign-ins in fifteen minutes lock sign-in until the window passes (spec §11). */

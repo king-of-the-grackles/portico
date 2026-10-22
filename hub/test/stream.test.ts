@@ -1,9 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { PushMessage } from "../src/approvals/ntfy";
 import type { Task } from "../src/core/types";
 import { makeNotifier } from "../src/notifier";
 import { type StreamConnection, StreamHub } from "../src/ways-in/stream";
-import { captureLogs } from "../src/log";
 import { T0, callAs, flush, joinMachine, makeApp, mintAssistant, openSessionStream, sseReader } from "./helpers";
 
 const AGENT_HELLO = { event: "hello", data: { address: "claude-code", name: "claude-code", machine: null } };
@@ -24,18 +22,14 @@ function fakeConnection() {
 }
 
 describe("StreamHub", () => {
-  test("delivers nudges and permission answers to the agent's open stream", () => {
+  test("delivers nudges to the agent's open stream", () => {
     const hub = new StreamHub();
     expect(hub.nudge("claude-code")).toBe(false);
     const { conn, sent } = fakeConnection();
     hub.connect("claude-code", conn);
     expect(hub.isConnected("claude-code")).toBe(true);
     expect(hub.nudge("claude-code")).toBe(true);
-    expect(hub.sendPermissionAnswer("claude-code", "abcde", "allow")).toBe(true);
-    expect(sent).toEqual([
-      { event: "nudge", data: {} },
-      { event: "permission", data: { request_id: "abcde", behavior: "allow" } },
-    ]);
+    expect(sent).toEqual([{ event: "nudge", data: {} }]);
   });
 
   test("a new stream replaces the old one, which is told and closed", () => {
@@ -122,78 +116,42 @@ describe("notifier", () => {
     expect(claude.sent).toHaveLength(1);
   });
 
-  test("sends an approval push for an ask pair", async () => {
-    const { service, pushes } = makeApp();
-    service.sendTask("grok-bot", { to: "muse", instructions: "Summarize the inbox" });
-    expect(pushes).toEqual([]);
+  test("calls approvalNeeded once an ask task is committed, and approvalDecided with the outcome", async () => {
+    const { service, store, directory, streams } = makeApp();
+    const calls: string[] = [];
+    const notify = makeNotifier({
+      store,
+      directory,
+      streams,
+      approvalNeeded: (task) => calls.push(`needed ${task.id}`),
+      approvalDecided: (task, outcome) => calls.push(`${outcome} ${task.id}`),
+    });
+    const task = service.sendTask("grok-bot", { to: "muse", instructions: "x" });
+    notify({ kind: "approval_needed", task });
+    expect(calls).toEqual([]); // only after the current transaction
     await flush();
-    expect(pushes).toHaveLength(1);
-    expect(pushes[0]!.title).toBe("grok-bot → muse");
+    notify({ kind: "approval_decided", task: service.approveTask(task.id), outcome: "approved" });
+    await flush();
+    expect(calls).toEqual([`needed ${task.id}`, `approved ${task.id}`]);
   });
 
   test("skips a notice whose task isn't in the database, because its transaction rolled back", async () => {
-    const { store, config, directory, streams } = makeApp();
-    const pushes: PushMessage[] = [];
-    const notify = makeNotifier({ store, config, directory, streams, push: async (m) => (pushes.push(m), true) });
+    const { store, directory, streams } = makeApp();
+    const claude = fakeConnection();
+    streams.connect("claude-code", claude.conn);
+    let needed = 0;
+    const notify = makeNotifier({ store, directory, streams, approvalNeeded: () => needed++ });
     const at = T0.toISOString();
     const ghost: Task = {
-      id: "ghost", fromAgent: "grok-bot", toAgent: "muse", instructions: "x", status: "waiting_approval",
+      id: "ghost", fromAgent: "grok-bot", toAgent: "claude-code", instructions: "x", status: "queued",
       result: null, reason: null, parentTaskId: null, chainLength: 1, eventId: null, triggerName: null,
       senderNotifiedAt: null, createdAt: at, updatedAt: at, expiresAt: at, idempotencyKey: null,
     };
-    notify({ kind: "approval_needed", task: ghost });
+    notify({ kind: "queued", task: ghost });
+    notify({ kind: "approval_needed", task: { ...ghost, status: "waiting_approval" } });
     await flush();
-    expect(pushes).toEqual([]);
-  });
-});
-
-describe("push failures", () => {
-  test("a push that rejects is logged as an error and causes no unhandled rejection", async () => {
-    const ctx = makeApp();
-    const task = ctx.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
-    const notify = makeNotifier({
-      store: ctx.store, config: ctx.config, directory: ctx.directory, streams: ctx.streams,
-      push: async () => {
-        throw new TypeError("boom SECRET");
-      },
-    });
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => void unhandled.push(reason);
-    process.on("unhandledRejection", onUnhandled);
-    const lines: string[] = [];
-    captureLogs((line) => lines.push(line));
-    try {
-      notify({ kind: "approval_needed", task: ctx.store.getTask(task.id)! });
-      await flush();
-      await flush();
-    } finally {
-      captureLogs(null);
-      process.off("unhandledRejection", onUnhandled);
-    }
-    expect(unhandled).toEqual([]);
-    const entries = lines.map((line) => JSON.parse(line));
-    expect(entries).toContainEqual(
-      expect.objectContaining({ level: "error", msg: "approval_push_failed", task_id: task.id, error: "TypeError" }),
-    );
-    expect(lines.join("\n")).not.toContain("SECRET");
-  });
-
-  test("with ntfy off, a push that sends nothing logs no failure", async () => {
-    const ctx = makeApp();
-    expect(ctx.config.ntfy).toBeNull();
-    const task = ctx.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
-    const notify = makeNotifier({
-      store: ctx.store, config: ctx.config, directory: ctx.directory, streams: ctx.streams, push: async () => false,
-    });
-    const lines: string[] = [];
-    captureLogs((line) => lines.push(line));
-    try {
-      notify({ kind: "approval_needed", task: ctx.store.getTask(task.id)! });
-      await flush();
-    } finally {
-      captureLogs(null);
-    }
-    expect(lines.filter((line) => line.includes("push_failed"))).toEqual([]);
+    expect(claude.sent).toEqual([]);
+    expect(needed).toBe(0);
   });
 });
 

@@ -1,5 +1,4 @@
 import { html } from "hono/html";
-import type { PermissionRequest } from "../core/permissions";
 import { type BridgeEvent, type DirectoryEntry, TASK_STATUSES, type Task, type TaskStatus } from "../core/types";
 import { kindLabel } from "./connect";
 import { formatTime, type Html, STATUS_WORDS } from "./layout";
@@ -41,13 +40,6 @@ function waitingTask({ task, chain }: { task: Task; chain: Task[] }): Html {
 <pre>${task.instructions}</pre>${chainBlock(chain)}${decisionForms(task)}</div>`;
 }
 
-function waitingPermission(request: PermissionRequest): Html {
-  const base = `/hub/permissions/${encodeURIComponent(request.agent)}/${encodeURIComponent(request.requestId)}`;
-  return html`<div class="card"><div class="meta">${request.agent} wants to use <strong>${request.toolName}</strong> · expires ${formatTime(request.expiresAt)}</div>
-${request.description ? html`<p>${request.description}</p>` : ""}${request.inputPreview ? html`<pre>${request.inputPreview}</pre>` : ""}
-<div class="actions"><form method="post" action="${base}/allow"><button type="submit" class="primary">Allow</button></form><form method="post" action="${base}/deny"><button type="submit" class="danger">Deny</button></form></div></div>`;
-}
-
 /** Where a member is: `machine · repo@branch`, leaving out the parts it doesn't have. */
 function whereOf(entry: DirectoryEntry): string {
   const place = [entry.repo, entry.branch].filter(Boolean).join("@");
@@ -74,15 +66,9 @@ ${entries.map(
 </tbody></table>`;
 }
 
-export function homeView(
-  waiting: { task: Task; chain: Task[] }[],
-  permissions: PermissionRequest[],
-  entries: DirectoryEntry[],
-  moreWaiting = false,
-): Html {
+export function homeView(waiting: { task: Task; chain: Task[] }[], entries: DirectoryEntry[], moreWaiting = false): Html {
   return html`<h1>Waiting</h1>
-${waiting.length === 0 && permissions.length === 0 ? html`<p class="meta">Nothing waiting.</p>` : ""}
-${permissions.length > 0 ? html`<h2>Permission prompts</h2>${permissions.map(waitingPermission)}` : ""}
+${waiting.length === 0 ? html`<p class="meta">Nothing waiting.</p>` : ""}
 ${waiting.length > 0 ? html`<h2>Tasks waiting for approval</h2>${waiting.map(waitingTask)}${moreWaiting ? html`<p class="meta">Showing the oldest ${waiting.length} tasks. More are waiting.</p>` : ""}` : ""}
 <h2>Directory</h2>
 ${directoryTable(entries)}`;

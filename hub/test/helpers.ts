@@ -1,5 +1,4 @@
 import type { Hono } from "hono";
-import type { PushMessage } from "../src/approvals/ntfy";
 import { createHub } from "../src/hub";
 import { parseConfig } from "../src/config";
 import { addressOf, Directory } from "../src/core/directory";
@@ -202,16 +201,11 @@ export function errorCode(fn: () => unknown): string | null {
 export function makeApp(config: BridgeConfig = testConfig()) {
   const clock = testClock();
   const notices: Notice[] = [];
-  const pushes: PushMessage[] = [];
   let counter = 0;
   const hub = createHub(config, {
     db: openDb(":memory:"),
     now: clock.now,
     newId: () => `id-${++counter}`,
-    push: async (message) => {
-      pushes.push(message);
-      return true;
-    },
     heartbeatMs: 50,
     onNotice: (notice) => notices.push(notice),
   });
@@ -226,7 +220,7 @@ export function makeApp(config: BridgeConfig = testConfig()) {
     }
     return await app.request(path, { method, headers, body: payload });
   }
-  return { ...hub, config, clock, notices, pushes, call };
+  return { ...hub, config, clock, notices, call };
 }
 
 /** Lets queued microtasks and zero-delay timers run, e.g. the notifier's work after a transaction. */

@@ -163,13 +163,6 @@ export interface Limits {
   messagesPerHourPerAgent: number;
 }
 
-export interface NtfyConfig {
-  /** ntfy server base URL, without a trailing slash. */
-  url: string;
-  topic: string;
-  token: string | null;
-}
-
 export interface BridgeConfig {
   agents: AgentConfig[];
   rules: RuleConfig[];
@@ -181,11 +174,11 @@ export interface BridgeConfig {
   tokens: Record<string, string>;
   dbPath: string;
   port: number;
-  /** HMAC key for approval links and hub page sessions. */
+  /** HMAC key for hub page sessions. */
   signingSecret: string;
   adminPassword: string;
-  /** Null when BRIDGE_NTFY_TOPIC isn't set: no pushes are sent. */
-  ntfy: NtfyConfig | null;
+  /** Names of set BRIDGE_NTFY_* variables, sorted. Ignored since v1.2; startServer logs them once. */
+  ntfyIgnored: string[];
   /** BRIDGE_PLUGIN_SOURCE: the marketplace source the /join page tells machines to install from. Null when unset. */
   pluginSource: string | null;
 }
@@ -232,11 +225,14 @@ export interface BridgeEvent {
   createdAt: string;
 }
 
-/** Things the outside world may need to act on. notifier.ts turns these into nudges and pushes. */
+/** How a task that was waiting for approval was decided. */
+export type ApprovalOutcome = "approved" | "denied" | "expired";
+
+/** Things the outside world may need to act on. notifier.ts turns these into nudges and approval callbacks. */
 export type Notice =
   | { kind: "queued"; task: Task }
   | { kind: "approval_needed"; task: Task }
   | { kind: "result_ready"; task: Task }
-  /** A task that was waiting_approval got its outcome (by link, hub page or expiry). */
-  | { kind: "approval_decided"; task: Task; outcome: "approved" | "denied" | "expired" }
+  /** A task that was waiting_approval got its outcome (by a pop-up, the hub page or expiry). */
+  | { kind: "approval_decided"; task: Task; outcome: ApprovalOutcome }
   | { kind: "message_queued"; message: Message };

@@ -1,4 +1,3 @@
-import type { Pusher } from "./approvals/ntfy";
 import { unknownRuleNames } from "./core/rules";
 import type { BridgeService } from "./core/service";
 import type { BridgeConfig } from "./core/types";
@@ -18,9 +17,9 @@ const DAY_MS = 86_400_000;
 /** Sessions not seen for this long, and not connected, are deleted by the daily sweep. */
 const SESSION_RETENTION_DAYS = 7;
 
-export function startServer(config: BridgeConfig, opts: { port?: number; push?: Pusher } = {}): RunningServer {
+export function startServer(config: BridgeConfig, opts: { port?: number } = {}): RunningServer {
   const db = openDb(config.dbPath);
-  const hub = createHub(config, { db, push: opts.push });
+  const hub = createHub(config, { db });
   const service: BridgeService = hub.service;
   let server: ReturnType<typeof Bun.serve>;
   try {
@@ -42,7 +41,6 @@ export function startServer(config: BridgeConfig, opts: { port?: number; push?: 
     try {
       const expired = service.expireDue();
       if (expired.length > 0) log("info", "tasks_expired", { count: expired.length });
-      hub.relay.sweep();
     } catch (err) {
       log("error", "expiry_sweep_failed", { error: errorName(err) });
     }
@@ -79,8 +77,11 @@ export function startServer(config: BridgeConfig, opts: { port?: number; push?: 
 
   const port = server.port as number;
   log("info", "bridge_started", { port, agents: config.agents.length, public_url: config.publicUrl });
-  if (!config.ntfy) {
-    log("warn", "ntfy_disabled", { note: "BRIDGE_NTFY_TOPIC is not set; approvals happen on the hub page only" });
+  if (config.ntfyIgnored.length > 0) {
+    log("warn", "ntfy_ignored", {
+      vars: config.ntfyIgnored,
+      note: "Phone pushes were removed; approvals pop up on joined machines and wait on the hub page.",
+    });
   }
   // Rules may name agents that join later; at startup, say which exact names nothing knows yet.
   const unknownNames = unknownRuleNames(config.rules, (name) => hub.directory.find(name) !== null);

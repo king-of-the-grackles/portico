@@ -1,26 +1,26 @@
-import { approvalPush, taskApprovedPush, taskDeniedPush, taskExpiredPush } from "./approvals/messages";
-import type { Pusher } from "./approvals/ntfy";
 import type { Directory } from "./core/directory";
-import type { BridgeConfig, Notice } from "./core/types";
+import type { ApprovalOutcome, Notice, Task } from "./core/types";
 import type { Store } from "./db";
 import { errorName, log } from "./log";
 import type { StreamHub } from "./ways-in/stream";
 
 export interface NotifierDeps {
   store: Store;
-  config: BridgeConfig;
   directory: Directory;
   streams: StreamHub;
-  push: Pusher;
+  /** Runs once a task waiting for approval is committed. */
+  approvalNeeded?: (task: Task) => void;
+  /** Runs once a waiting task was approved, denied or expired. */
+  approvalDecided?: (task: Task, outcome: ApprovalOutcome) => void;
 }
 
 /**
- * Turns service notices into stream nudges and approval pushes. The service raises notices inside its
+ * Turns service notices into stream nudges and approval callbacks. The service raises notices inside its
  * synchronous transactions; this does its work in a microtask, after the transaction has committed or
  * rolled back. It never throws.
  */
 export function makeNotifier(deps: NotifierDeps): (notice: Notice) => void {
-  const { store, config, directory, streams, push } = deps;
+  const { store, directory, streams } = deps;
   return (notice) => {
     queueMicrotask(() => {
       try {
@@ -42,26 +42,11 @@ export function makeNotifier(deps: NotifierDeps): (notice: Notice) => void {
             if (directory.isPush(task.fromAgent)) streams.nudge(task.fromAgent);
             break;
           case "approval_needed":
-            void push(approvalPush(config, task))
-              .then((ok) => {
-                // With ntfy off nothing was attempted (startup already logged ntfy_disabled).
-                if (ok || config.ntfy) {
-                  log(ok ? "info" : "warn", ok ? "approval_pushed" : "approval_push_failed", { task_id: task.id });
-                }
-              })
-              .catch((err) => log("error", "approval_push_failed", { task_id: task.id, error: errorName(err) }));
+            deps.approvalNeeded?.(task);
             break;
-          case "approval_decided": {
-            const followUp = { approved: taskApprovedPush, denied: taskDeniedPush, expired: taskExpiredPush }[notice.outcome];
-            void push(followUp(notice.task))
-              .then((ok) => {
-                if (ok || config.ntfy) {
-                  log(ok ? "info" : "warn", ok ? "approval_push_updated" : "approval_push_update_failed", { task_id: task.id });
-                }
-              })
-              .catch((err) => log("error", "approval_push_update_failed", { task_id: task.id, error: errorName(err) }));
+          case "approval_decided":
+            deps.approvalDecided?.(notice.task, notice.outcome);
             break;
-          }
         }
       } catch (err) {
         log("error", "notify_failed", { kind: notice.kind, error: errorName(err) });

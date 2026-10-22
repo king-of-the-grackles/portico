@@ -1,37 +1,24 @@
 import { resolve } from "node:path";
-import { makePusher, type PushMessage, type Pusher } from "../approvals/ntfy";
 import { ConfigError, loadConfig } from "../config";
 import type { BridgeConfig } from "../core/types";
-import { captureLogs, errorName } from "../log";
+import { listOf } from "../core/words";
+import { errorName } from "../log";
 import type { CliIo } from "./io";
 
 export interface DoctorDeps {
   fetch?: (url: string, init?: RequestInit) => Promise<Response>;
-  /** Defaults to an ntfy pusher built from the config. */
-  push?: Pusher;
   timeoutMs?: number;
 }
 
 type Mark = "ok" | "warn" | "fail";
 const MARKS: Record<Mark, string> = { ok: "✓", warn: "!", fail: "✗" };
 
-function testPush(config: BridgeConfig): PushMessage {
-  const open = `${config.publicUrl}/hub`;
-  return {
-    title: "Test push",
-    message: "A test from bridge doctor. Approval requests arrive like this, with Approve and Deny buttons.",
-    click: open,
-    priority: 3,
-    tags: ["white_check_mark"],
-    actions: [{ action: "view", label: "Open", url: open }],
-  };
-}
-
-/** Checks the config, the public URL, each agent's token on the running hub, and a test push (spec §13). */
+/** Checks the config, the public URL and each agent's token on the running hub. */
 export async function doctorCommand(args: string[], io: CliIo, deps: DoctorDeps = {}): Promise<number> {
+  // --no-push skipped the test push, which is gone; it's still accepted so older scripts keep working.
   const unknown = args.find((arg) => arg !== "--no-push");
   if (unknown !== undefined) {
-    io.err(`Unknown option: ${unknown}. Usage: bridge doctor [--no-push]`);
+    io.err(`Unknown option: ${unknown}. Usage: bridge doctor`);
     return 1;
   }
   const doFetch = deps.fetch ?? ((url: string, init?: RequestInit) => fetch(url, init));
@@ -63,6 +50,15 @@ export async function doctorCommand(args: string[], io: CliIo, deps: DoctorDeps 
   const count = config.agents.length;
   report("ok", `Config: ${count} agents, ${config.rules.length} rules, ${config.triggers.length} triggers.`);
   report("ok", `Tokens are set for all ${count} agents.`);
+  const leftovers = config.ntfyIgnored;
+  if (leftovers.length > 0) {
+    const one = leftovers.length === 1;
+    report(
+      "warn",
+      `${listOf(leftovers)} ${one ? "is" : "are"} set but no longer used: approvals pop up on joined machines and wait on the hub page. ` +
+        `Remove ${one ? "the variable" : "the variables"} from the hub's environment.`,
+    );
+  }
 
   // 2. A local address
   const base = config.publicUrl;
@@ -95,24 +91,6 @@ export async function doctorCommand(args: string[], io: CliIo, deps: DoctorDeps 
       }
     }
     if (accepted === count) report("ok", `The hub at ${base} accepts the tokens of all ${count} agents.`);
-  }
-
-  // 5. Push
-  if (!config.ntfy) {
-    report("warn", "BRIDGE_NTFY_TOPIC isn't set: approvals happen on the hub page only.");
-  } else if (args.includes("--no-push")) {
-    report("warn", "Test push skipped.");
-  } else {
-    const push = deps.push ?? makePusher(config.ntfy);
-    captureLogs(() => {}); // the pusher's own log lines would interleave with this report
-    let sent: boolean;
-    try {
-      sent = await push(testPush(config));
-    } finally {
-      captureLogs(null);
-    }
-    if (sent) report("ok", "Test push sent. Check that the push arrived on the phone.");
-    else report("fail", "The test push failed. Check BRIDGE_NTFY_URL, BRIDGE_NTFY_TOPIC and BRIDGE_NTFY_TOKEN.");
   }
 
   io.out(failed ? "Some checks failed." : "All checks passed.");

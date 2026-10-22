@@ -98,6 +98,35 @@ describe("startup warnings", () => {
   });
 });
 
+describe("leftover ntfy settings", () => {
+  test("a set BRIDGE_NTFY_TOPIC logs one ntfy_ignored line, by name only, and the hub still starts", async () => {
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    try {
+      const config = { ...testConfig(undefined, { BRIDGE_NTFY_TOPIC: "old-topic-value" }), dbPath: join(tempDir(), "bridge.db") };
+      running = startServer(config, { port: 0 });
+      expect((await fetch(`http://127.0.0.1:${running.port}/healthz`)).status).toBe(200);
+    } finally {
+      captureLogs(null);
+    }
+    const ignored = lines.map((line) => JSON.parse(line)).filter((line) => line.msg === "ntfy_ignored");
+    expect(ignored).toHaveLength(1);
+    expect(ignored[0]).toMatchObject({ level: "warn", vars: ["BRIDGE_NTFY_TOPIC"] });
+    expect(lines.join("\n")).not.toContain("old-topic-value");
+  });
+
+  test("without ntfy settings, nothing about ntfy is logged", () => {
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    try {
+      running = startServer({ ...testConfig(), dbPath: join(tempDir(), "bridge.db") }, { port: 0 });
+    } finally {
+      captureLogs(null);
+    }
+    expect(lines.some((line) => line.includes("ntfy"))).toBe(false);
+  });
+});
+
 describe("network sweep", () => {
   test("deletes sessions unseen for 7 days and join codes past a day, at startup, logging the counts", () => {
     const dbPath = join(tempDir(), "bridge.db");

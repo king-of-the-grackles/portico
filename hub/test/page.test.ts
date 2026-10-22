@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { safeNext } from "../src/page/session";
 import { ASSISTANT_KINDS } from "../src/core/types";
-import { ADMIN_PASSWORD, BASE_YAML, HOUR, PRONOUNS, addSession, flush, makeApp, mintAssistant, signIn, testConfig, visibleCopy } from "./helpers";
+import { ADMIN_PASSWORD, BASE_YAML, HOUR, PRONOUNS, TOKENS, addSession, makeApp, mintAssistant, signIn, testConfig, visibleCopy } from "./helpers";
 
 const login = (password: string) => ({ method: "POST", body: new URLSearchParams({ password }) });
 
@@ -79,22 +79,16 @@ describe("hub page sign-in", () => {
 });
 
 describe("hub page", () => {
-  test("lists waiting tasks, permission prompts, and the directory with last check-ins", async () => {
+  test("lists waiting tasks and the directory with last check-ins", async () => {
     const ctx = makeApp();
     const cookie = await signIn(ctx.app);
     ctx.service.sendTask("grok-bot", { to: "muse", instructions: "Summarize the <b>inbox</b>" });
-    await ctx.call("claude-code", "POST", "/api/permission-requests", {
-      request_id: "abcde",
-      tool_name: "Bash",
-      input_preview: "bun test",
-    });
     ctx.service.checkInbox("codex");
     const res = await ctx.app.request("/hub", { headers: { cookie } });
     expect(res.headers.get("cache-control")).toBe("no-store");
     const page = await res.text();
     expect(page).toContain("Summarize the &lt;b&gt;inbox&lt;/b&gt;");
-    expect(page).toContain("claude-code wants to use <strong>Bash</strong>");
-    expect(page).toContain("bun test");
+    expect(page).not.toContain("Permission prompts");
     expect(page).toContain("2026-10-20 12:00 UTC"); // codex's check-in
     expect(page).toContain("Not since the last restart");
     // claude-code is a push agent with no stream open; the others are pull agents.
@@ -166,13 +160,64 @@ describe("hub page", () => {
     expect((await approve({ cookie, origin: "https://bridge.test" })).status).toBe(200);
   });
 
-  test("allow a permission prompt from the page", async () => {
+  test("a second approve post shows the no-longer-waiting page and changes nothing; an unknown task gets a 404 page", async () => {
     const ctx = makeApp();
     const cookie = await signIn(ctx.app);
-    await ctx.call("claude-code", "POST", "/api/permission-requests", { request_id: "abcde", tool_name: "Bash" });
-    const res = await ctx.app.request("/hub/permissions/claude-code/abcde/allow", { method: "POST", headers: { cookie } });
-    expect(res.status).toBe(200);
-    expect(ctx.relay.get("claude-code", "abcde")?.answer).toBe("allow");
+    const post = (path: string, fields: Record<string, string> = {}) =>
+      ctx.app.request(path, { method: "POST", headers: { cookie }, body: new URLSearchParams(fields) });
+    const task = ctx.service.sendTask("grok-bot", { to: "muse", instructions: "one" });
+    const first = await post(`/hub/tasks/${task.id}/approve`);
+    expect(first.status).toBe(200);
+    expect(await first.text()).toContain("Approved.");
+    expect(ctx.service.findTask(task.id)?.status).toBe("queued");
+    for (const again of [await post(`/hub/tasks/${task.id}/approve`), await post(`/hub/tasks/${task.id}/deny`, { note: "Too late" })]) {
+      expect(again.status).toBe(200);
+      const page = await again.text();
+      expect(page).toContain("This task is no longer waiting for approval.");
+      expect(page).toContain("Nothing was changed.");
+    }
+    expect(ctx.service.findTask(task.id)).toMatchObject({ status: "queued", reason: null });
+    // A task that failed later never shows its failure reason on that page.
+    ctx.service.checkInbox("muse");
+    ctx.service.finishTask("muse", { taskId: task.id, failedReason: "SECRET-FAILURE" });
+    const failed = await (await post(`/hub/tasks/${task.id}/approve`)).text();
+    expect(failed).toContain("This task is no longer waiting for approval.");
+    expect(failed).not.toContain("SECRET-FAILURE");
+    const unknown = await post("/hub/tasks/no-such-task/approve");
+    expect(unknown.status).toBe(404);
+    expect(await unknown.text()).toContain("No such task.");
+  });
+
+  test("hub pages carry the security headers", async () => {
+    const ctx = makeApp();
+    const cookie = await signIn(ctx.app);
+    const task = ctx.service.sendTask("grok-bot", { to: "muse", instructions: "one" });
+    for (const res of [
+      await ctx.app.request("/hub", { headers: { cookie } }),
+      await ctx.app.request(`/hub/tasks/${task.id}/approve`, { method: "POST", headers: { cookie } }),
+    ]) {
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      // Not "no-referrer": under it, browsers send `Origin: null` on the page's own form posts, which the hub page refuses.
+      expect(res.headers.get("referrer-policy")).toBe("same-origin");
+      expect(res.headers.get("x-frame-options")).toBe("DENY");
+      expect(res.headers.get("content-security-policy")).toContain("default-src 'none'");
+    }
+  });
+
+  test("the approval link and permission routes are gone", async () => {
+    const ctx = makeApp();
+    const cookie = await signIn(ctx.app);
+    for (const [method, path] of [
+      ["GET", "/approve/some-token"],
+      ["POST", "/deny/some-token"],
+      ["POST", "/hub/permissions/claude-code/abcde/allow"],
+      ["POST", "/api/permission-requests"],
+    ] as const) {
+      const res = await ctx.app.request(path, { method, headers: { cookie, authorization: `Bearer ${TOKENS["claude-code"]}` } });
+      expect(`${method} ${path} -> ${res.status}`).toBe(`${method} ${path} -> 404`);
+      // The hub's own JSON 404 for an unknown endpoint, not a page that still handles the route.
+      expect(await res.json()).toEqual({ error: "not_found", message: "No such endpoint." });
+    }
   });
 
   test("history filters by agent and status, and ignores unknown filter values", async () => {
@@ -224,13 +269,6 @@ describe("hub page", () => {
     const ctx = makeApp();
     const cookie = await signIn(ctx.app);
     const task = ctx.service.sendTask("grok-bot", { to: "muse", instructions: "Summarize the inbox" });
-    await ctx.call("claude-code", "POST", "/api/permission-requests", {
-      request_id: "abcde",
-      tool_name: "Bash",
-      description: "Run the tests",
-    });
-    await flush();
-    const approvePath = new URL(ctx.pushes[0]!.actions[0]!.url).pathname;
     addSession(ctx, { name: "dialog-claude", machine: "macbook" });
     mintAssistant(ctx, "helper", "muse");
     const form = (path: string, fields: Record<string, string> = {}) =>
@@ -248,11 +286,8 @@ describe("hub page", () => {
       await (await ctx.app.request("/hub", { headers: { cookie } })).text(),
       await (await ctx.app.request("/hub/history", { headers: { cookie } })).text(),
       await (await ctx.app.request(`/hub/tasks/${task.id}`, { headers: { cookie } })).text(),
-      await (await ctx.app.request(approvePath)).text(),
-      await (await ctx.app.request(approvePath, { method: "POST" })).text(),
-      await (await ctx.app.request(approvePath, { method: "POST" })).text(),
-      await (await ctx.app.request("/approve/not-a-token")).text(),
-      await (await ctx.app.request("/hub/permissions/claude-code/abcde/deny", { method: "POST", headers: { cookie } })).text(),
+      await (await form(`/hub/tasks/${task.id}/deny`, { note: "Not now" })).text(),
+      await (await form(`/hub/tasks/${task.id}/approve`)).text(), // the "no longer waiting" page
       await (await ctx.app.request("/hub/login", login("nope"))).text(),
     ];
     for (const page of pages) {
