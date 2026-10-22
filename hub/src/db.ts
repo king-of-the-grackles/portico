@@ -91,7 +91,6 @@ const NETWORK_SCHEMA = [
     delivered_at TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS messages_to_pending ON messages (to_agent, delivered_at, expires_at)`,
-  `CREATE INDEX IF NOT EXISTS messages_created ON messages (created_at)`,
   `CREATE INDEX IF NOT EXISTS messages_pair_created ON messages (from_agent, to_agent, created_at)`,
 ];
 
