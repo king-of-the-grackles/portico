@@ -19,6 +19,4 @@ services:
         sync: false
       - key: BRIDGE_ADMIN_PASSWORD
         sync: false
-      - key: BRIDGE_NTFY_TOPIC
-        sync: false
       # Add one BRIDGE_TOKEN_<NAME> per agent in bridge.yaml in the dashboard.

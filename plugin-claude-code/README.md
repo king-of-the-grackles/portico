@@ -4,7 +4,7 @@ Puts a Claude Code session on an agent-bridge hub:
 - On a machine that has joined the hub, every session appears in the hub's live directory as `<repo>-claude@<machine>`, with its status and what it's doing.
 - Tasks, results and messages from other agents arrive in the session through Claude Code's inbox socket. No development flag is needed, and it works in `claude -p` (not `--bare`). Needs Claude Code 2.1.224 or later.
 - The seven bridge tools are available: `list_agents`, `send_task`, `send_message`, `check_inbox`, `finish_task`, `get_task` and `report_event`.
-- Claude Code's permission prompts can be answered from your phone or the hub page (needs the development-channels flag).
+- Tasks that wait for approval pop up on the desktop (a panel on macOS, a notification on Linux), one per machine, with the hub page as a fallback.
 
 Full setup: [docs/agents/claude-code.md](../docs/agents/claude-code.md).
 
@@ -31,7 +31,7 @@ bun "$(ls -d ~/.claude/plugins/cache/agent-bridge/agent-bridge/*/ | sort -V | ta
 
 Or, in a Claude Code session started after the install, run `/agent-bridge:join <join line>`. Claude checks the line's shape and then runs the join with its Bash tool, behind one normal permission prompt; a line with a quote or a stray character is refused. A hub whose public URL has a path can't use this command: use `bridge join <hub address> --code <code>` or the bun one-liner.
 
-The join saves the machine's token in `~/.agent-bridge/machine.json` (mode 600). Sessions started from now on appear on the network; open sessions join after a restart.
+The join saves the machine's token in `~/.agent-bridge/machine.json` (mode 600). It also adds `mcp__plugin_agent-bridge_bridge` to `permissions.allow` in `~/.claude/settings.json`, once, so Claude Code doesn't ask before each bridge tool call; pass `--no-allow` to skip that. Sessions started from now on appear on the network; open sessions join after a restart.
 
 ## Commands
 
@@ -43,15 +43,9 @@ The join saves the machine's token in `~/.agent-bridge/machine.json` (mode 600).
 
 The same commands run from a shell as `bun <plugin folder>/src/cli.ts join|off|on|status`. `status` shows the machine, the hub and the folders that are off.
 
-## Phone permission relay
+## Approvals
 
-Launch with the development-channels flag to get permission prompts on your phone:
-
-```sh
-claude --permission-mode manual --dangerously-load-development-channels plugin:agent-bridge@agent-bridge
-```
-
-One dialog appears, the development-channels warning: press Enter on **I am using this for local development**. `--permission-mode manual` lets permission prompts reach the phone even when your settings default to auto mode. Without the flag, relay is off and delivery still works.
+A task that waits for approval shows a pop-up on the machine: a floating panel on macOS, a notification with Approve and Deny on Linux. Only one session per machine shows it, and the hub page always works as a fallback. Details and limits: [docs/agents/claude-code.md](../docs/agents/claude-code.md#4-approvals-on-this-machine).
 
 ## Settings
 
@@ -59,7 +53,7 @@ One dialog appears, the development-channels warning: press Enter on **I am usin
 |---|---|
 | `BRIDGE_URL` | The hub's address, for the one-session override. Must be https, except for `localhost` and `127.0.0.1`. |
 | `BRIDGE_TOKEN` | An agent's token, for the one-session override. A `bridge.yaml` agent needs `delivery: push`. |
-| `BRIDGE_PERMISSION_RELAY` | `on` (default) or `off`. Relay only happens with the development-channels flag, in manual permission mode. |
+| `BRIDGE_POPUP` | `off` turns approval pop-ups off for this session. |
 | `BRIDGE_MACHINE_CONFIG` | Where the machine file lives. Default `~/.agent-bridge/machine.json`. |
 
 Setting `BRIDGE_URL` and `BRIDGE_TOKEN` (both) makes a single session act as that agent instead of using the machine file, which is how the existing `claude-code-dialog` agent keeps working. Do not `export` them: any other Claude Code session that sees them takes delivery over from the real one.
