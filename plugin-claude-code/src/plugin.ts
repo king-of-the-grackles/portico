@@ -1,10 +1,12 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { ApprovalPanels } from "./approvals";
 import type { PluginConfig } from "./config";
 import { frameNotice, InboxDelivery, stopNotice } from "./delivery";
 import type { HubClient, StreamRegistration } from "./hub-client";
 import { INSTRUCTIONS } from "./instructions";
 import { errorName, type Logger } from "./log";
+import type { DialogRunner } from "./popup";
 import { type InboxSocket, SocketError } from "./socket";
 import type { SessionWatcher } from "./status";
 import { StreamClient, type StreamClientOptions, type StreamStop } from "./stream";
@@ -23,6 +25,10 @@ export interface BridgePluginDeps {
   registration?: () => Promise<StreamRegistration>;
   /** Reports the session's status. Started by the first hello, told to resend on each later one, stopped with the plugin. */
   watcher?: Pick<SessionWatcher, "start" | "stop" | "resend"> | null;
+  /** Shows approval pop-ups. Machine mode only: null or absent, the session never declares pop-ups. */
+  popup?: DialogRunner | null;
+  /** Test override for the pauses before retrying a pop-up's answer. */
+  answerRetryMs?: number[];
   /** Test override for the pauses before retrying a post the socket didn't take. */
   deliveryRetryMs?: number[];
   /** Test overrides for the live stream. */
@@ -67,12 +73,27 @@ export function createBridgePlugin(deps: BridgePluginDeps): BridgePlugin {
     }
   };
 
+  const panels = new ApprovalPanels({
+    client,
+    runner: deps.popup ?? null,
+    log,
+    retryMs: deps.answerRetryMs,
+    // A panel failed to show: reconnect without declaring pop-ups, so the hub hands the request to another session.
+    onUnavailable: () => stream.reconnect(),
+  });
+
   const stream: StreamClient = new StreamClient({
-    open: async (signal) => client.openStream(signal, deps.registration ? await deps.registration() : undefined),
+    // Pop-ups are declared on each open, so a session whose panel failed stops declaring them on its next connection.
+    open: async (signal) =>
+      client.openStream(signal, deps.registration ? await deps.registration() : undefined, { popup: panels.available }),
     onEvent: (event, data) => {
       if (event === "hello") onHello(data);
       else if (event === "nudge") void delivery.run();
+      else if (event === "approval_request") panels.request(data);
+      else if (event === "approval_closed") panels.closed(data);
     },
+    // The hub sends open requests again on reconnect, to whichever session it then elects on the machine.
+    onDisconnect: () => panels.closeAll(),
     onStop: (stop) => {
       // Delivery is over for good too: a retry armed by an earlier socket failure must not peek, post or ack now.
       delivery.stop();
@@ -96,6 +117,7 @@ export function createBridgePlugin(deps: BridgePluginDeps): BridgePlugin {
     stop: async () => {
       watcher?.stop();
       delivery.stop();
+      panels.closeAll();
       await stream.stop();
     },
   };

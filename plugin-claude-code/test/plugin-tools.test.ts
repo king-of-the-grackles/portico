@@ -126,6 +126,15 @@ describe("the plugin's MCP server", () => {
     expect(text(inbox)).toContain("Write the changelog");
   });
 
+  test("send_task for an ask pair returns the approval info and its note as a second line", async () => {
+    const { host } = await connected();
+    const sent = await host.callTool({ name: "send_task", arguments: { to: "muse", instructions: "Summarize the inbox" } });
+    const content = sent.content as { type: string; text: string }[];
+    const body = JSON.parse(content[0]!.text);
+    expect(body.approval.note).toBe(`Waiting for the owner's approval at https://bridge.test/hub/tasks/${body.task.id}. No joined machine is online to show a pop-up.`);
+    expect(content[1]!.text).toBe(body.approval.note);
+  });
+
   test("hub errors and missing arguments come back as tool errors", async () => {
     const { host } = await connected();
     const unknown = await host.callTool({ name: "send_task", arguments: { to: "nobody", instructions: "x" } });

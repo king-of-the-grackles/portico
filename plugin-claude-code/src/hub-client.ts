@@ -40,6 +40,16 @@ export interface InboxTask extends TaskView {
 /** How a message or a queued task will arrive. */
 export type DeliveryTier = "pushed" | "queued" | "offline";
 
+/** Where and how the owner can approve a task waiting for approval, as send_task's result carries it. */
+export interface ApprovalInfo {
+  /** The task's hub page, which needs sign-in. */
+  url: string;
+  /** Machines showing a pop-up for the task. */
+  popups: string[];
+  /** One sentence for the agent. */
+  note: string;
+}
+
 export interface MessageView {
   id: string;
   from_agent: string;
@@ -137,7 +147,7 @@ export class HubClient {
     to: string;
     instructions: string;
     idempotency_key?: string;
-  }): Promise<{ task: TaskView; delivery: DeliveryTier | null }> {
+  }): Promise<{ task: TaskView; delivery: DeliveryTier | null; approval?: ApprovalInfo | null }> {
     return this.call("POST", "/api/tasks", body);
   }
 
@@ -180,17 +190,24 @@ export class HubClient {
     return this.call("POST", "/api/status", report);
   }
 
+  /** A pop-up's answer, with the nonce the request came with. Sessions on a joined machine only. */
+  answerApproval(taskId: string, body: { nonce: string; decision: "approve" | "deny"; note?: string }): Promise<{ task: TaskView }> {
+    return this.call("POST", `/api/approvals/${encodeURIComponent(taskId)}`, body);
+  }
+
   /**
-   * Opens `GET /api/stream`, registering the session when given a registration. Doesn't throw for HTTP errors: the
-   * caller checks `status`, reads the body, and aborts with `signal`.
+   * Opens `GET /api/stream`, registering the session when given a registration, and declaring that this session can
+   * show approval pop-ups when `popup` is set. Doesn't throw for HTTP errors: the caller checks `status`, reads the
+   * body, and aborts with `signal`.
    */
-  openStream(signal: AbortSignal, registration?: StreamRegistration): Promise<Response> {
+  openStream(signal: AbortSignal, registration?: StreamRegistration, opts: { popup?: boolean } = {}): Promise<Response> {
     const headers = this.headers("text/event-stream");
     let path = "/api/stream";
     if (registration) {
       path += `?repo=${encodeURIComponent(registration.repo)}`;
       headers["x-bridge-folder"] = registration.folderId;
     }
+    if (opts.popup) headers["x-bridge-popup"] = "1";
     return this.doFetch(`${this.opts.url}${path}`, { headers, signal });
   }
 

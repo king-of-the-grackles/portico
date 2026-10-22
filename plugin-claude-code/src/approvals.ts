@@ -1,0 +1,184 @@
+import { type HubClient, HubError } from "./hub-client";
+import { errorName, type Logger } from "./log";
+import { type DialogRunner, type PanelOutcome, panelText, type RunningPanel } from "./popup";
+
+/** The longest note sent with Deny, in code points. */
+export const NOTE_MAX = 2_000;
+const NONCE = /^[A-Za-z0-9_-]{16,128}$/;
+/** setTimeout's longest delay. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** An `approval_request` stream event. */
+export interface ApprovalRequest {
+  taskId: string;
+  nonce: string;
+  from: string;
+  to: string;
+  instructions: string;
+  expiresAt: string;
+}
+
+export function parseApprovalRequest(data: unknown): ApprovalRequest | null {
+  if (!data || typeof data !== "object") return null;
+  const { taskId, nonce, from, to, instructions, expiresAt } = data as Record<string, unknown>;
+  const named = (value: unknown): value is string => typeof value === "string" && value !== "";
+  if (!named(taskId) || !named(from) || !named(to)) return null;
+  if (typeof nonce !== "string" || !NONCE.test(nonce)) return null;
+  if (typeof instructions !== "string") return null;
+  if (typeof expiresAt !== "string" || Number.isNaN(Date.parse(expiresAt))) return null;
+  return { taskId, nonce, from, to, instructions, expiresAt };
+}
+
+export interface ApprovalPanelsDeps {
+  client: Pick<HubClient, "answerApproval">;
+  /** Null when this session can't show pop-ups. */
+  runner: DialogRunner | null;
+  log: Logger;
+  /** The pauses before retrying an answer the hub couldn't take. Default [1000, 2000]. */
+  retryMs?: number[];
+  now?: () => number;
+  /**
+   * Called once, when a panel fails to show. Pop-ups are then off for the rest of the process: the plugin reconnects
+   * its stream without declaring them, so the hub moves the request to another session on the machine.
+   */
+  onUnavailable?: () => void;
+}
+
+interface OpenPanel {
+  /** The newest nonce the hub sent for the task. Never logged. */
+  nonce: string;
+  panel: RunningPanel;
+  timer: ReturnType<typeof setTimeout>;
+  /** Each open panel's offset, so none hides another. */
+  slot: number;
+}
+
+/** One panel per open approval request, keyed by task. The answer goes back with the request's nonce. */
+export class ApprovalPanels {
+  private readonly panels = new Map<string, OpenPanel>();
+  private readonly now: () => number;
+  private readonly retryMs: number[];
+  private ignoredLogged = false;
+  private failed = false;
+
+  constructor(private readonly deps: ApprovalPanelsDeps) {
+    this.now = deps.now ?? Date.now;
+    this.retryMs = deps.retryMs ?? [1_000, 2_000];
+  }
+
+  /** Whether this session declares pop-ups: it has a runner, and no panel has failed to show. */
+  get available(): boolean {
+    return this.deps.runner !== null && !this.failed;
+  }
+
+  get openCount(): number {
+    return this.panels.size;
+  }
+
+  /** An `approval_request` event. */
+  request(data: unknown): void {
+    const request = parseApprovalRequest(data);
+    if (!request) return void this.deps.log("warn", "approval_request_invalid", {});
+    const open = this.panels.get(request.taskId);
+    if (open) {
+      open.nonce = request.nonce; // the same request again, say after a reconnect: keep the panel, take the newest nonce
+      return;
+    }
+    const runner = this.available ? this.deps.runner : null;
+    if (!runner) {
+      if (!this.ignoredLogged) this.deps.log("warn", "approval_request_ignored", { task_id: request.taskId, reason: "no_popup" });
+      this.ignoredLogged = true;
+      return;
+    }
+    const remaining = Date.parse(request.expiresAt) - this.now();
+    if (!(remaining > 0)) return;
+    const slot = this.freeSlot();
+    const panel = runner({
+      taskId: request.taskId,
+      from: request.from,
+      to: request.to,
+      instructions: panelText(request.instructions),
+      expiresAt: request.expiresAt,
+      slot,
+    });
+    const timer = setTimeout(() => this.dismiss(request.taskId), Math.min(remaining, MAX_TIMER_MS));
+    timer.unref?.(); // an open panel never keeps the process alive by itself
+    const entry: OpenPanel = { nonce: request.nonce, panel, timer, slot };
+    this.panels.set(request.taskId, entry);
+    this.deps.log("info", "approval_popup_shown", { task_id: request.taskId });
+    void panel.result.then((outcome) => this.settled(request.taskId, entry, outcome));
+  }
+
+  /** An `approval_closed` event: the task was decided, here or elsewhere. */
+  closed(data: unknown): void {
+    const taskId = (data as { taskId?: unknown } | null)?.taskId;
+    if (typeof taskId === "string") this.dismiss(taskId);
+  }
+
+  /** The stream dropped, or the plugin stops. The hub sends the request again on reconnect. */
+  closeAll(): void {
+    for (const taskId of [...this.panels.keys()]) this.dismiss(taskId);
+  }
+
+  private dismiss(taskId: string): void {
+    const entry = this.panels.get(taskId);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    this.panels.delete(taskId); // forgotten first, so the kill's "dismissed" outcome sends nothing
+    entry.panel.kill();
+  }
+
+  /** The lowest offset no open panel holds. */
+  private freeSlot(): number {
+    const taken = new Set([...this.panels.values()].map((entry) => entry.slot));
+    let slot = 0;
+    while (taken.has(slot)) slot++;
+    return slot;
+  }
+
+  /** Never throws. */
+  private async settled(taskId: string, entry: OpenPanel, outcome: PanelOutcome): Promise<void> {
+    if (this.panels.get(taskId) !== entry) return; // closed, expired or dropped first
+    clearTimeout(entry.timer);
+    this.panels.delete(taskId);
+    if (outcome.kind === "dismissed") return;
+    if (outcome.kind === "failed") {
+      this.deps.log("warn", "approval_popup_failed", { task_id: taskId, code: outcome.code });
+      this.turnOff();
+      return;
+    }
+    const body: { nonce: string; decision: "approve" | "deny"; note?: string } = { nonce: entry.nonce, decision: outcome.decision };
+    if (outcome.decision === "deny") {
+      // The note is a reason for Deny only, as on the hub page.
+      const note = Array.from(outcome.note.trim()).slice(0, NOTE_MAX).join("");
+      if (note) body.note = note;
+    }
+    await this.answer(taskId, body);
+  }
+
+  /** Retries when the hub can't be reached or answers 5xx. Any 4xx is final. */
+  private async answer(taskId: string, body: { nonce: string; decision: "approve" | "deny"; note?: string }): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.deps.client.answerApproval(taskId, body);
+        this.deps.log("info", "approval_answered", { task_id: taskId, decision: body.decision });
+        return;
+      } catch (err) {
+        const status = err instanceof HubError ? err.status : null;
+        const retry = status !== null && (status === 0 || status >= 500) ? this.retryMs[attempt] : undefined;
+        if (retry === undefined) {
+          this.deps.log("warn", "approval_answer_failed", status === null ? { task_id: taskId, error: errorName(err) } : { task_id: taskId, status });
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, retry));
+      }
+    }
+  }
+
+  private turnOff(): void {
+    if (this.failed) return;
+    this.failed = true;
+    this.deps.log("warn", "approval_popup_unavailable", { reason: "failed" });
+    this.deps.onUnavailable?.();
+  }
+}

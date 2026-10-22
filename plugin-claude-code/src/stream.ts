@@ -10,6 +10,8 @@ export interface StreamClientOptions {
   onEvent: (event: string, data: unknown) => void;
   /** Called once, when the client stops for good: another session took over, or the hub refused the stream. */
   onStop: (stop: StreamStop) => void;
+  /** Called whenever a connection that reached the hub ends, however it ends. Not for a refused or failed open. */
+  onDisconnect?: () => void;
   log: Logger;
   /** A connection open this long counts as healthy, and the backoff starts over. Default 30 s, longer than the hub's 25 s heartbeat. */
   healthyMs?: number;
@@ -74,6 +76,7 @@ export class StreamClient {
     this.current = controller;
     const silenceMs = this.opts.silenceMs ?? SILENCE_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let connected = false;
     const arm = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
@@ -100,6 +103,7 @@ export class StreamClient {
         return "retry";
       }
       this.opts.log("info", "stream_connected", {});
+      connected = true;
       const opened = Date.now();
       const healthyMs = this.opts.healthyMs ?? HEALTHY_MS;
       let healthy = false;
@@ -137,6 +141,7 @@ export class StreamClient {
       clearTimeout(timer);
       controller.abort();
       if (this.current === controller) this.current = null;
+      if (connected) this.opts.onDisconnect?.();
     }
   }
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -7,6 +8,7 @@ import { HubClient, type StreamRegistration } from "./hub-client";
 import { errorName, stderrLog as log } from "./log";
 import { claudeHome, isOff, type MachineFile, MachineFileError, machineConfigPath, readMachineFile } from "./machine";
 import { createBridgePlugin, createIdleServer } from "./plugin";
+import { popupPlatform, systemRunner } from "./popup";
 import { SessionLocator } from "./registry";
 import { InboxSocket, socketTarget } from "./socket";
 import { folderId, gitInfo, SessionWatcher } from "./status";
@@ -53,7 +55,20 @@ function setUp(): Running {
   const cwd = locator.current()?.cwd ?? env.CLAUDE_PROJECT_DIR ?? env.PWD ?? process.cwd();
   // The env-var override ignores the off list (spec §9).
   if (config.source === "machine" && machineFile && isOff(machineFile, cwd)) return idle("this folder is off the network");
-  log("info", "plugin_started", { origin: new URL(config.url).origin, mode: config.source, machine: config.machine });
+
+  const popupOff = (env.BRIDGE_POPUP ?? "").trim().toLowerCase() === "off";
+  const platform = popupPlatform(process.platform, env, existsSync);
+  // Only a session on a joined machine can answer an approval, so env mode never shows pop-ups.
+  const runner = config.source === "machine" && !popupOff && platform ? systemRunner(platform, env) : null;
+  if (config.source === "machine" && !runner) {
+    log("warn", "approval_popup_unavailable", { platform: process.platform, reason: popupOff ? "off" : "no_desktop" });
+  }
+  log("info", "plugin_started", {
+    origin: new URL(config.url).origin,
+    mode: config.source,
+    machine: config.machine,
+    popup: runner !== null,
+  });
 
   // Stable for this process: a reconnect is the same session, a restart a new one.
   const sessionKey = crypto.randomUUID();
@@ -73,6 +88,7 @@ function setUp(): Running {
     client,
     log,
     watcher,
+    popup: runner,
     // CLAUDE_CODE_MESSAGING_SOCKET names the inbox socket; without it, the session's registry file does.
     socket: new InboxSocket(socketTarget(env, () => locator.current())),
     registration: () =>

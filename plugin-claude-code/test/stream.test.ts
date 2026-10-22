@@ -127,6 +127,22 @@ describe("StreamClient against the hub", () => {
     await Bun.sleep(800);
     expect(quiet.opens()).toBe(1);
   });
+
+  test("reports each dropped connection through onDisconnect, but not a refused open", async () => {
+    let drops = 0;
+    const watched = watch(openAs("claude-code"), { onDisconnect: () => drops++ });
+    const hellos = () => watched.events.filter((item) => item.event === "hello").length;
+    await waitFor(() => hellos() === 1);
+    watched.client.reconnect();
+    await waitFor(() => drops === 1);
+    await waitFor(() => hellos() === 2); // the second connection reached the hub before the stop
+    await watched.client.stop();
+    expect(drops).toBe(2);
+    let refused = 0;
+    const pull = watch(openAs("grok-bot"), { onDisconnect: () => refused++ });
+    await waitFor(() => pull.stops.length === 1);
+    expect(refused).toBe(0);
+  });
 });
 
 /** A server that sends ": connected" and then either ends the stream or goes silent. */

@@ -72,4 +72,35 @@ describe("HubClient", () => {
     expect(res.headers.get("content-type")).toContain("text/event-stream");
     controller.abort();
   });
+
+  test("openStream declares pop-ups only when asked", async () => {
+    const seen: Record<string, string>[] = [];
+    const fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      seen.push(init?.headers as Record<string, string>);
+      return new Response("", { status: 204 });
+    }) as unknown as typeof globalThis.fetch;
+    const client = new HubClient({ url: "https://bridge.test", token: "t".repeat(24), sessionKey: "key-0001", fetch });
+    await client.openStream(new AbortController().signal);
+    await client.openStream(new AbortController().signal, undefined, { popup: true });
+    expect(seen[0]!["x-bridge-popup"]).toBeUndefined();
+    expect(seen[1]!["x-bridge-popup"]).toBe("1");
+  });
+
+  test("answerApproval posts the answer as the session", async () => {
+    const seen: { url: string; method: string | undefined; headers: Record<string, string>; body: unknown }[] = [];
+    const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: String(url), method: init?.method, headers: init?.headers as Record<string, string>, body: JSON.parse(String(init?.body)) });
+      return Response.json({ task: { id: "t/1" } });
+    }) as unknown as typeof globalThis.fetch;
+    const client = new HubClient({ url: "https://bridge.test", token: "t".repeat(24), sessionKey: "key-0001", fetch });
+    expect(await client.answerApproval("t/1", { nonce: "n".repeat(32), decision: "deny", note: "No" })).toEqual({ task: { id: "t/1" } } as never);
+    expect(seen).toEqual([
+      {
+        url: "https://bridge.test/api/approvals/t%2F1",
+        method: "POST",
+        headers: expect.objectContaining({ "x-bridge-session": "key-0001", "content-type": "application/json" }),
+        body: { nonce: "n".repeat(32), decision: "deny", note: "No" },
+      },
+    ]);
+  });
 });

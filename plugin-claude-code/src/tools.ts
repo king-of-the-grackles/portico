@@ -129,13 +129,15 @@ export async function runTool(client: HubClient, name: string, args: Args): Prom
         return json(await client.listAgents());
       case "send_task": {
         const key = optional(args, "idempotency_key");
-        return json(
-          await client.sendTask({
-            to: required(args, "to"),
-            instructions: required(args, "instructions"),
-            ...(key !== undefined ? { idempotency_key: key } : {}),
-          }),
-        );
+        const sent = await client.sendTask({
+          to: required(args, "to"),
+          instructions: required(args, "instructions"),
+          ...(key !== undefined ? { idempotency_key: key } : {}),
+        });
+        const result = json(sent);
+        // Where the owner can approve it, as its own line, as on the hub's /mcp.
+        if (sent.approval?.note) result.content.push({ type: "text", text: sent.approval.note });
+        return result;
       }
       case "send_message": {
         const to = optional(args, "to");

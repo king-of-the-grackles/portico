@@ -10,13 +10,14 @@ import type { BridgeConfig } from "../../hub/src/core/types";
 import { joinMachine, makeApp, TOKENS, type TestAgent, testConfig } from "../../hub/test/helpers";
 import { HubClient } from "../src/hub-client";
 import type { Logger } from "../src/log";
+import type { ApprovalPrompt, DialogRunner, PanelOutcome } from "../src/popup";
 import { InboxSocket } from "../src/socket";
 
 export { TOKENS };
 
 /** A real hub (in-memory database, fake clock, 50 ms heartbeats) on a random local port. */
-export function startHub(config: BridgeConfig = testConfig()) {
-  const hub = makeApp(config);
+export function startHub(config: BridgeConfig = testConfig(), opts: { newNonce?: () => string } = {}) {
+  const hub = makeApp(config, opts);
   const server = Bun.serve({ port: 0, fetch: hub.app.fetch, idleTimeout: 60 });
   return { ...hub, url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
 }
@@ -153,4 +154,29 @@ export async function fakeInboxSocket(opts: { token?: string | null; settleMs?: 
   fake.socket = new InboxSocket({ path: () => path, token: () => token, settleMs: opts.settleMs ?? 20 });
   fake.close = () => new Promise<void>((resolve) => server.close(() => resolve()));
   return fake;
+}
+
+export interface FakePanel {
+  prompt: ApprovalPrompt;
+  killed: boolean;
+  answer(outcome: PanelOutcome): void;
+}
+
+/** A dialog runner that shows nothing: each panel waits for the test to answer it, or for a kill. */
+export function fakeRunner(): { runner: DialogRunner; panels: FakePanel[] } {
+  const panels: FakePanel[] = [];
+  const runner: DialogRunner = (prompt) => {
+    let settle!: (outcome: PanelOutcome) => void;
+    const result = new Promise<PanelOutcome>((resolve) => (settle = resolve));
+    const panel: FakePanel = { prompt, killed: false, answer: (outcome) => settle(outcome) };
+    panels.push(panel);
+    return {
+      result,
+      kill: () => {
+        panel.killed = true;
+        settle({ kind: "dismissed" });
+      },
+    };
+  };
+  return { runner, panels };
 }

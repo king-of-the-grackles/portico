@@ -39,7 +39,8 @@ function tempFolder(prefix: string): string {
 
 /**
  * The child's environment, built from scratch: never the test run's own, which inside a Claude Code session carries
- * CLAUDE_CODE_MESSAGING_SOCKET and would post into that session.
+ * CLAUDE_CODE_MESSAGING_SOCKET and would post into that session. BRIDGE_POPUP=off: a launched plugin never starts a
+ * real approval panel.
  */
 function childEnv(extra: Record<string, string> = {}): Record<string, string> {
   const home = tempFolder("bridge-home-");
@@ -48,8 +49,18 @@ function childEnv(extra: Record<string, string> = {}): Record<string, string> {
     HOME: home,
     BRIDGE_CLAUDE_HOME: join(home, ".claude"),
     BRIDGE_MACHINE_CONFIG: join(home, "machine.json"),
+    BRIDGE_POPUP: "off",
     ...extra,
   };
+}
+
+/** The plugin's stderr log lines with this msg. */
+function logged(stderr: string, msg: string): Record<string, unknown>[] {
+  return stderr
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((line) => line.msg === msg);
 }
 
 async function launch(env: Record<string, string>) {
@@ -85,7 +96,7 @@ describe("the plugin over stdio", () => {
       CLAUDE_CODE_MESSAGING_SOCKET: sock.path,
       CLAUDE_CODE_MESSAGING_TOKEN: "stdio-inbox-token",
     });
-    const { host, channel, errors } = await launch(env);
+    const { host, channel, errors, stderr } = await launch(env);
     try {
       expect((await host.listTools()).tools).toHaveLength(7);
       await waitFor(() => hub!.streams.isConnected("claude-code"), 5000);
@@ -94,6 +105,9 @@ describe("the plugin over stdio", () => {
       expect(sock.posts[0]).toEqual({ auth: "stdio-inbox-token", content: expect.stringContaining("Over stdio\n</bridge-task>") });
       await waitFor(() => hub!.service.findTask(task.id)?.status === "working", 5000);
       expect(channel).toEqual([]);
+      // Env mode never has pop-ups, and says nothing about them.
+      expect(logged(stderr(), "approval_popup_unavailable")).toEqual([]);
+      expect(logged(stderr(), "plugin_started")).toEqual([expect.objectContaining({ mode: "env", popup: false })]);
       expect(errors).toEqual([]);
     } finally {
       await host.close();
@@ -185,6 +199,12 @@ describe("the plugin over stdio", () => {
       // Outside git, the repo is the folder's basename; never the path.
       expect(hub.presence.get(address)).toMatchObject({ repo: basename(project), branch: null });
       expect(hub.network.sessionByAddress(sessionBaseName(basename(project)), "macbook")?.folder).toBe(basename(project));
+      // BRIDGE_POPUP=off: no pop-ups, said once at start, and the stream never declares them.
+      expect(logged(stderr(), "approval_popup_unavailable")).toEqual([
+        expect.objectContaining({ level: "warn", platform: process.platform, reason: "off" }),
+      ]);
+      expect(logged(stderr(), "plugin_started")).toEqual([expect.objectContaining({ mode: "machine", popup: false })]);
+      expect(hub.streams.popupSessions("macbook")).toEqual([]);
       expect(errors).toEqual([]);
       for (const secret of [token, project, realpathSync(project)]) expect(stderr()).not.toContain(secret);
     } finally {
