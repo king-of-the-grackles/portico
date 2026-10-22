@@ -65,6 +65,8 @@ export class ApprovalPanels {
   private readonly queue = new Map<string, ApprovalRequest>();
   /** Tasks whose answer is being sent or retried: a request the hub sends again meanwhile opens no second panel. */
   private readonly answering = new Set<string>();
+  /** The latest request the hub sent again while its task was being answered: shown if that answer fails. */
+  private readonly resent = new Map<string, ApprovalRequest>();
   private readonly now: () => number;
   private readonly retryMs: number[];
   private ignoredLogged = false;
@@ -94,7 +96,12 @@ export class ApprovalPanels {
       open.nonce = request.nonce;
       return;
     }
-    if (this.answering.has(request.taskId)) return; // answered here already: the hub's approval_closed follows
+    if (this.answering.has(request.taskId)) {
+      // Answered here already, and the hub's approval_closed follows. Kept in case that answer fails: say the hub
+      // restarted and sent a new nonce, so the old one gets 403.
+      this.resent.set(request.taskId, request);
+      return;
+    }
     if (!this.available) {
       if (!this.ignoredLogged) this.deps.log("warn", "approval_request_ignored", { task_id: request.taskId, reason: "no_popup" });
       this.ignoredLogged = true;
@@ -133,12 +140,14 @@ export class ApprovalPanels {
     const taskId = (data as { taskId?: unknown } | null)?.taskId;
     if (typeof taskId !== "string") return;
     this.queue.delete(taskId);
+    this.resent.delete(taskId);
     this.dismiss(taskId);
   }
 
   /** The stream dropped, or the plugin stops. The hub sends open requests again on reconnect. */
   closeAll(): void {
     this.queue.clear(); // first, so closing the panels opens none of the waiting requests
+    this.resent.clear(); // the hub sends open requests again on reconnect
     for (const taskId of [...this.panels.keys()]) this.dismiss(taskId);
   }
 
@@ -186,26 +195,31 @@ export class ApprovalPanels {
       const note = Array.from(outcome.note.trim()).slice(0, NOTE_MAX).join("");
       if (note) body.note = note;
     }
+    let answered = false;
     try {
-      await this.answer(taskId, body);
+      answered = await this.answer(taskId, body);
     } finally {
       this.answering.delete(taskId);
+      const again = this.resent.get(taskId);
+      this.resent.delete(taskId);
+      // The answer didn't land, but the hub asked again meanwhile: show that request, with its nonce.
+      if (!answered && again) this.request(again);
     }
   }
 
-  /** Retries when the hub can't be reached or answers 5xx. Any 4xx is final. */
-  private async answer(taskId: string, body: { nonce: string; decision: "approve" | "deny"; note?: string }): Promise<void> {
+  /** Retries when the hub can't be reached or answers 5xx. Any 4xx is final. True once the hub took the answer. */
+  private async answer(taskId: string, body: { nonce: string; decision: "approve" | "deny"; note?: string }): Promise<boolean> {
     for (let attempt = 0; ; attempt++) {
       try {
         await this.deps.client.answerApproval(taskId, body);
         this.deps.log("info", "approval_answered", { task_id: taskId, decision: body.decision });
-        return;
+        return true;
       } catch (err) {
         const status = err instanceof HubError ? err.status : null;
         const retry = status !== null && (status === 0 || status >= 500) ? this.retryMs[attempt] : undefined;
         if (retry === undefined) {
           this.deps.log("warn", "approval_answer_failed", status === null ? { task_id: taskId, error: errorName(err) } : { task_id: taskId, status });
-          return;
+          return false;
         }
         await new Promise((resolve) => setTimeout(resolve, retry));
       }

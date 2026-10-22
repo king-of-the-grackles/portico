@@ -78,17 +78,19 @@ export function childEnv(env: Record<string, string | undefined>): Record<string
 
 /**
  * The hub already defanged the text; this cleans it again for a panel: line separators become newlines, hidden
- * format characters (bidi controls, zero-width) and control characters other than newline and tab go, tabs become
- * spaces, lines of nothing but spaces (Unicode spaces too) count as blank, runs of blank lines shrink to one, and the
- * result is clipped with "…". So no run of blank-looking lines can push the rest of the text out of sight.
+ * format characters (bidi controls, zero-width), other characters that draw nothing (fillers, variation selectors)
+ * and control characters other than newline and tab go, tabs and braille blanks become spaces, lines of nothing but
+ * spaces (Unicode spaces too) count as blank, runs of blank lines shrink to one, and the result is clipped with "…".
+ * So no run of blank-looking lines can push the rest of the text out of sight.
  */
 export function panelText(text: string, max = PANEL_TEXT_MAX): string {
   const cleaned = text
     .replace(/\r\n?/g, "\n")
     .replace(/[\u2028\u2029]/g, "\n")
     .replace(/\p{Cf}/gu, "") // bidi controls, zero-width and other hidden format characters
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, "") // Hangul fillers, variation selectors and others that draw nothing
     .replace(/[^\P{Cc}\n\t]/gu, "") // control characters, except newline and tab
-    .replace(/\t/g, " ")
+    .replace(/[\t\u2800]/g, " ") // tabs, and braille blanks, which draw as spaces
     .replace(/^[^\S\n]+$/gm, "") // a line of only spaces, NBSP and other Unicode spaces included, is blank
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -266,9 +268,11 @@ if (typeof input.deadline === "number") {
   $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(seconds, target, "expire:", null, false);
 }
 
-// Buttons get no key equivalents: only a click answers, so Return typed in a terminal can never approve.
+// Buttons get no key equivalents and refuse the keyboard focus: only a click answers, so Return typed in a terminal
+// can never approve, and neither can Tab then Space with Full Keyboard Access on.
 function addButton(title, x, action) {
   var button = $.NSButton.buttonWithTitleTargetAction(title, target, action);
+  button.refusesFirstResponder = true;
   button.frame = $.NSMakeRect(x, 16, 100, 32);
   view.addSubview(button);
 }

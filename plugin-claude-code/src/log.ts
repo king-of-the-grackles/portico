@@ -2,7 +2,7 @@ export type Logger = (level: "info" | "warn" | "error", msg: string, fields?: Re
 
 /**
  * One JSON object per line on stderr: stdout carries the MCP protocol. Callers pass IDs, names and statuses only,
- * never task text, results, reasons, permission descriptions or previews, or tokens.
+ * never task text, results, reasons, approval nonces or deny notes, or tokens.
  */
 export const stderrLog: Logger = (level, msg, fields = {}) => {
   process.stderr.write(`${JSON.stringify({ time: new Date().toISOString(), level, msg, ...fields })}\n`);

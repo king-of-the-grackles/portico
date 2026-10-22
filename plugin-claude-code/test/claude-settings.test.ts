@@ -112,6 +112,22 @@ describe("the allow rule in Claude Code's settings", () => {
     }
   });
 
+  test("a read-only file is left alone, with no backup, even in a folder that can be written", () => {
+    if (process.getuid?.() === 0) return; // root writes anyway
+    const dir = folder();
+    const path = join(dir, "settings.json");
+    writeFileSync(path, '{ "theme": "dark" }\n');
+    chmodSync(path, 0o444);
+    try {
+      expect(allowBridgeTools(path)).toEqual({ kind: "manual", path, why: "not writable (EACCES)" });
+      expect(readFileSync(path, "utf8")).toBe('{ "theme": "dark" }\n');
+      expect(statSync(path).mode & 0o777).toBe(0o444);
+      expect(existsSync(`${path}.agent-bridge.bak`)).toBe(false);
+    } finally {
+      chmodSync(path, 0o644);
+    }
+  });
+
   test("the CLI lines: one for an added rule, none when present, the rule to add by hand otherwise, and no pronouns", () => {
     const path = "/h/.claude/settings.json";
     const added: AllowOutcome = { kind: "added", path, backup: null };

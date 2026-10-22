@@ -49,7 +49,7 @@ Design: [docs/superpowers/specs/2026-10-19-agent-bridge-design.md](docs/superpow
 When a task is sent between a pair set to `ask`, it waits for your answer:
 - **A pop-up on each joined machine** that has a Claude Code session open, one per machine: a floating panel on macOS, a notification with Approve and Deny on Linux. Windows machines show no pop-up; use the hub page there.
 - **The hub page** lists the waiting task with Approve and Deny, and a note field.
-- **The first answer wins**, from any machine or from the page. The other pop-ups close.
+- **The first answer wins**, from any machine or from the page. The other pop-ups close (on Linux, a notification stays on screen until dismissed, and its buttons do nothing).
 - **The agent's result** names the machines showing a pop-up and links the task page, which needs sign-in.
 
 Software with full control of a joined machine can answer its pop-up: it's a speed bump that keeps approval out of the agents' tool path, not a guarantee. See [the spec's security notes](docs/superpowers/specs/2026-10-21-desktop-approvals-design.md#7-security-notes). Setup and details: [docs/agents/claude-code.md](docs/agents/claude-code.md#4-approvals-on-this-machine).

@@ -165,6 +165,50 @@ describe("approval panels", () => {
     expect(fake.panels).toHaveLength(2);
   });
 
+  test("a request re-sent while an answer is on its way opens a panel with its new nonce if that answer fails", async () => {
+    const calls: { nonce: string; settle(err: Error | null): void }[] = [];
+    const fake = fakeRunner();
+    const panels = new ApprovalPanels({
+      client: {
+        answerApproval: (_taskId, body) =>
+          new Promise<{ task: never }>((resolve, reject) =>
+            calls.push({ nonce: body.nonce, settle: (err) => (err ? reject(err) : resolve({ task: {} as never })) }),
+          ),
+      },
+      runner: fake.runner,
+      log: captureLog().log,
+      retryMs: [],
+    });
+    panels.request(REQUEST);
+    fake.panels[0]!.answer({ kind: "answered", decision: "approve", note: "" });
+    await waitFor(() => calls.length === 1);
+    panels.request({ ...REQUEST, nonce: "nonce-bbbbbbbbbbbbbbbb" }); // a restarted hub re-sends with a new nonce
+    panels.request({ ...REQUEST, nonce: "nonce-cccccccccccccccc" }); // the latest one is kept
+    expect(fake.panels).toHaveLength(1);
+    calls[0]!.settle(new HubError(403, "not_allowed", "No approval request for this session matches."));
+    await waitFor(() => fake.panels.length === 2);
+    expect(fake.panels[1]!.prompt.taskId).toBe("t1");
+    fake.panels[1]!.answer({ kind: "answered", decision: "approve", note: "" });
+    await waitFor(() => calls.length === 2);
+    expect(calls[1]!.nonce).toBe("nonce-cccccccccccccccc");
+    calls[1]!.settle(null);
+
+    // A kept request is dropped when the answer lands, or when the task is closed meanwhile.
+    panels.request({ ...REQUEST, taskId: "t2" });
+    fake.panels[2]!.answer({ kind: "answered", decision: "approve", note: "" });
+    await waitFor(() => calls.length === 3);
+    panels.request({ ...REQUEST, taskId: "t2", nonce: "nonce-dddddddddddddddd" });
+    calls[2]!.settle(null);
+    panels.request({ ...REQUEST, taskId: "t3" });
+    fake.panels[3]!.answer({ kind: "answered", decision: "deny", note: "" });
+    await waitFor(() => calls.length === 4);
+    panels.request({ ...REQUEST, taskId: "t3", nonce: "nonce-eeeeeeeeeeeeeeee" });
+    panels.closed({ taskId: "t3", outcome: "approved" });
+    calls[3]!.settle(new HubError(409, "wrong_status", "decided"));
+    await Bun.sleep(20);
+    expect(fake.panels).toHaveLength(4);
+  });
+
   test("closeAll kills every panel, as when the stream drops", () => {
     const { panels, fake } = setup();
     panels.request(REQUEST);

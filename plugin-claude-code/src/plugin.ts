@@ -134,7 +134,7 @@ function stopText(stop: StreamStop, config: PluginConfig): string {
   return stopNotice(stop);
 }
 
-/** For sessions not on the bridge (BRIDGE_URL and BRIDGE_TOKEN both unset): no tools, no channel. */
+/** For sessions not on the bridge (BRIDGE_URL and BRIDGE_TOKEN both unset): no tools. */
 export function createIdleServer(): Server {
   return new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: {} });
 }

@@ -18,4 +18,4 @@ Check the join line before running anything:
 
    `bun "${CLAUDE_PLUGIN_ROOT}/src/cli.ts" join '<address>'`
 
-   Then show the output to the user unchanged. If the machine joined, add that Claude Code sessions started from now on appear on the network, and that this session joins after a restart. The output also says whether the network tools were allowed in Claude Code's settings.
+   Then show the output to the user unchanged. If the machine joined, add that Claude Code sessions started from now on appear on the network, and that this session joins after a restart. When the join adds the network tools to Claude Code's settings, or can't and gives the rule to add by hand, the output says so; when they were already allowed, it says nothing about them.

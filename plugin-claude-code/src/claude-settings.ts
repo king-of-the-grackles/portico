@@ -1,5 +1,5 @@
 // Runs before the plugin's dependencies are installed (the join), so it imports only node:* and machine.ts.
-import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { claudeHome, writeFileAtomically } from "./machine";
 
@@ -57,6 +57,8 @@ export function allowBridgeTools(path: string): AllowOutcome {
   const next = { ...settings, permissions: { ...permissions, allow: [...allow, BRIDGE_ALLOW_RULE] } };
   const backupPath = `${path}.agent-bridge.bak`;
   try {
+    // A read-only file is left alone: the rename below would replace it even so, in a folder that can be written.
+    if (text !== null) accessSync(target, constants.W_OK);
     const backup = text !== null && keepBackup(backupPath, text) ? backupPath : null;
     mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
     writeFileAtomically(target, `${JSON.stringify(next, null, 2)}\n`, text === null ? 0o600 : statSync(target).mode & 0o777);
