@@ -13,9 +13,10 @@ const STYLE = `
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
 main{max-width:860px;margin:0 auto;padding:24px 16px 48px}
-nav{display:flex;gap:16px;align-items:center;max-width:860px;margin:0 auto;padding:12px 16px;border-bottom:1px solid var(--line)}
+nav{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;max-width:860px;margin:0 auto;padding:12px 16px;border-bottom:1px solid var(--line)}
 nav a{color:var(--ink);text-decoration:none;font-weight:600}
 nav form{margin-left:auto}
+nav button{white-space:nowrap}
 h1{font-size:22px;margin:8px 0 16px}
 h2{font-size:17px;margin:28px 0 10px}
 a{color:var(--accent)}
@@ -47,6 +48,7 @@ details.confirm button{padding:6px 8px;font-size:13px}
 .message{overflow-wrap:anywhere}
 .message .meta a{white-space:nowrap}
 .body{white-space:pre-wrap;overflow-wrap:anywhere;max-height:24em;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0 0;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
+.body:focus-visible{outline:2px solid var(--accent)}
 .error{border-left:3px solid var(--danger)}
 @media (max-width:600px){.narrow-hide{display:none}}
 `;

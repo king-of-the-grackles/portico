@@ -60,6 +60,7 @@ Open `<BRIDGE_PUBLIC_URL>/hub` and sign in with `BRIDGE_ADMIN_PASSWORD`. The pag
 - the live directory: every Claude Code session, assistant and `bridge.yaml` agent, with status, what each is doing and when each was last seen
 - tasks waiting for approval
 - history, filterable by agent and status
+- messages between agents, newest first and read-only (`/hub/messages`), including any a receiver never read; kept for `history_days`
 
 **Network** (`/hub/network`) lists machines and assistants, with **Add a machine** (a fresh join line) and **Connect an assistant** (a token and a connect prompt). Removing a machine drops its sessions at once. The public `/join` page walks a new machine through installing the plugin and joining.
 

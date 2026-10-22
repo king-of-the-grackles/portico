@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "../src/core/types";
-import { PRONOUNS, makeApp, signIn, visibleCopy } from "./helpers";
+import { BASE_YAML, PRONOUNS, makeApp, testConfig, signIn, visibleCopy } from "./helpers";
 
 function message(overrides: Partial<Message> = {}): Message {
   return {
@@ -48,6 +48,19 @@ describe("hub page: Messages", () => {
     const page = await get();
     expect(page).toContain("No messages.");
     expect(page).toContain("Messages are kept for 30 days.");
+  });
+
+  test("the kept-for line says 1 day, not 1 days", async () => {
+    const ctx = makeApp(testConfig(`${BASE_YAML}\nlimits:\n  history_days: 1\n`));
+    const cookie = await signIn(ctx.app);
+    const page = await (await ctx.app.request("/hub/messages", { headers: { cookie } })).text();
+    expect(page).toContain("Messages are kept for 1 day.");
+  });
+
+  test("the text box can take keyboard focus", async () => {
+    const { store, get } = await setup();
+    store.insertMessage(message({ id: "m1" }));
+    expect(await get()).toContain('class="body" tabindex="0"');
   });
 
   test("lists newest first with sender, receiver, short id and anchor", async () => {
@@ -130,12 +143,12 @@ describe("hub page: Messages", () => {
     const { store, get } = await setup();
     const long = "x".repeat(5000);
     store.insertMessage(
-      message({ id: "m1", createdAt: minute(1), text: `<script>alert(1)</script>‮evil\u001b[31mred\nsecond line ${long}` }),
+      message({ id: "m1", createdAt: minute(1), text: `<script>alert(1)</script>\u202Eevil\u001b[31mred\nsecond line ${long}` }),
     );
     const page = await get();
     expect(page).not.toContain("<script>alert(1)");
     expect(page).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
-    expect(page).not.toContain("‮");
+    expect(page).not.toContain("\u202E");
     expect(page).not.toContain("\u001b");
     expect(page).toContain("evilred");
     expect(page).toContain("second line");

@@ -132,7 +132,7 @@ function messageEntry(m: Message, now: string): Html {
   return html`<article class="card message" id="m-${m.id}"><div class="meta">${formatTime(m.createdAt)} · ${m.fromAgent} → ${m.toAgent} · ${messageStatus(m, now)} · ${m.id.slice(0, 8)}${
     m.replyTo !== null ? html` · Reply to <a href="#m-${m.replyTo}">${m.replyTo.slice(0, 8)}</a>` : ""
   }</div>
-<div class="body">${defang(m.text)}</div></article>`;
+<div class="body" tabindex="0">${defang(m.text)}</div></article>`;
 }
 
 /** The owner's read-only list of messages between agents, newest first. `messages` is already one page. */
@@ -142,7 +142,7 @@ export function messagesView(
 ): Html {
   const last = messages[messages.length - 1];
   return html`<h1>Messages</h1>
-<p class="meta">Messages are kept for ${opts.historyDays} days.</p>
+<p class="meta">Messages are kept for ${opts.historyDays} ${opts.historyDays === 1 ? "day" : "days"}.</p>
 ${opts.paged ? html`<p><a href="/hub/messages">Newest messages</a></p>` : ""}
 ${messages.length === 0 ? html`<p class="meta">No messages.</p>` : messages.map((m) => messageEntry(m, opts.now))}
 ${opts.more && last ? html`<p><a href="/hub/messages?before=${encodeURIComponent(last.id)}">Older messages</a></p>` : ""}`;

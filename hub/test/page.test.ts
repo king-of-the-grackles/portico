@@ -8,7 +8,7 @@ const login = (password: string) => ({ method: "POST", body: new URLSearchParams
 describe("hub page sign-in", () => {
   test("pages redirect to sign-in without a session", async () => {
     const { app } = makeApp();
-    for (const path of ["/hub", "/hub/history", "/hub/tasks/x"]) {
+    for (const path of ["/hub", "/hub/history", "/hub/messages", "/hub/tasks/x"]) {
       const res = await app.request(path);
       expect(res.status).toBe(303);
       expect(res.headers.get("location")).toBe(
@@ -276,7 +276,23 @@ describe("hub page", () => {
     const assistantPages = await Promise.all(
       ASSISTANT_KINDS.map(async (kind) => (await form("/hub/network/assistants", { kind, name: `copy-${kind}` })).text()),
     );
+    for (let i = 0; i < 101; i++) {
+      const at = `2026-10-20T10:${String(i % 60).padStart(2, "0")}:00.000Z`;
+      ctx.store.insertMessage({
+        id: `sweep-${String(i).padStart(4, "0")}`,
+        fromAgent: "grok-bot",
+        toAgent: "muse",
+        text: "sweep body",
+        replyTo: i === 100 ? "sweep-0000" : null,
+        createdAt: at,
+        expiresAt: i === 1 ? "2026-10-20T00:00:00.000Z" : "2026-10-22T00:00:00.000Z",
+        deliveredAt: i === 2 ? "2026-10-20T11:00:00.000Z" : null,
+      });
+    }
+    const newest = ctx.store.listMessages({ limit: 100 });
     const pages = [
+      await (await ctx.app.request("/hub/messages", { headers: { cookie } })).text(),
+      await (await ctx.app.request(`/hub/messages?before=${newest[99]!.id}`, { headers: { cookie } })).text(),
       await (await ctx.app.request("/hub/network", { headers: { cookie } })).text(),
       await (await form("/hub/network/join-codes")).text(),
       ...assistantPages,

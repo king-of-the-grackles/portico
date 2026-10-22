@@ -261,14 +261,14 @@ describe("Store: listMessages", () => {
 
   test("newest first, ties by insert order descending, keyset by before", () => {
     store.insertMessage(msg("m1", "2026-10-20T12:00:00.000Z"));
-    store.insertMessage(msg("m2", "2026-10-20T12:01:00.000Z"));
     store.insertMessage(msg("m3", "2026-10-20T12:01:00.000Z"));
+    store.insertMessage(msg("m2", "2026-10-20T12:01:00.000Z"));
     store.insertMessage(msg("m4", "2026-10-20T12:02:00.000Z"));
-    expect(store.listMessages({ limit: 10 }).map((m) => m.id)).toEqual(["m4", "m3", "m2", "m1"]);
-    expect(store.listMessages({ limit: 2 }).map((m) => m.id)).toEqual(["m4", "m3"]);
-    expect(store.listMessages({ before: "m3", limit: 10 }).map((m) => m.id)).toEqual(["m2", "m1"]);
-    expect(store.listMessages({ before: "m2", limit: 10 }).map((m) => m.id)).toEqual(["m1"]);
-    expect(store.listMessages({ before: "unknown", limit: 10 }).map((m) => m.id)).toEqual(["m4", "m3", "m2", "m1"]);
+    expect(store.listMessages({ limit: 10 }).map((m) => m.id)).toEqual(["m4", "m2", "m3", "m1"]);
+    expect(store.listMessages({ limit: 2 }).map((m) => m.id)).toEqual(["m4", "m2"]);
+    expect(store.listMessages({ before: "m2", limit: 10 }).map((m) => m.id)).toEqual(["m3", "m1"]);
+    expect(store.listMessages({ before: "m3", limit: 10 }).map((m) => m.id)).toEqual(["m1"]);
+    expect(store.listMessages({ before: "unknown", limit: 10 }).map((m) => m.id)).toEqual(["m4", "m2", "m3", "m1"]);
   });
 });
 
