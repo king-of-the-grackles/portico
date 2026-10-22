@@ -114,12 +114,14 @@ describe("the network page", () => {
       const page = await getPage(ctx, "/hub/network", cookie);
       expect(page).toContain('<nav><a href="/hub">Waiting</a><a href="/hub/network">Network</a><a href="/hub/history">History</a>');
       expect(page).toContain("Add a machine");
-      expect(page).toMatch(/<td>macbook<\/td><td><time[^>]*>2026-10-20 12:00 UTC<\/time><\/td><td><time[^>]*>2026-10-20 12:00 UTC<\/time><\/td><td>1<\/td>/);
-      for (const heading of ["<th>Assistant</th>", "<th>Kind</th>", "<th>Added</th>", "<th>Last checked in</th>"]) {
+      // Joined and Added hide on narrow screens, so the five-column tables fit a 320 px phone.
+      expect(page).toContain('<th>Machine</th><th class="narrow-hide">Joined</th><th>Last seen</th>');
+      expect(page).toMatch(/<td>macbook<\/td><td class="narrow-hide"><time[^>]*>2026-10-20 12:00 UTC<\/time><\/td><td><time[^>]*>2026-10-20 12:00 UTC<\/time><\/td><td>1<\/td>/);
+      for (const heading of ["<th>Assistant</th>", "<th>Kind</th>", '<th class="narrow-hide">Added</th>', "<th>Last checked in</th>"]) {
         expect(page).toContain(heading);
       }
       expect(page).not.toContain("<th>Connected</th>");
-      expect(page).toMatch(/<td>helper<\/td><td>Codex<\/td><td><time[^>]*>2026-10-20 12:30 UTC<\/time><\/td><td>Not since the last restart<\/td>/);
+      expect(page).toMatch(/<td>helper<\/td><td>Codex<\/td><td class="narrow-hide"><time[^>]*>2026-10-20 12:30 UTC<\/time><\/td><td>Not since the last restart<\/td>/);
       expect(page).toContain("Connect an assistant");
       // The browser checks the name with the server's rule before posting.
       const nameInput = page.match(/<input id="name"[^>]*>/)?.[0] ?? "";
@@ -283,12 +285,12 @@ describe("the network page", () => {
     const cookie = await signIn(ctx.app);
     mintAssistant(ctx, "helper", "muse");
     ctx.presence.checkedIn("helper", T0.toISOString());
-    expect(await getPage(ctx, "/hub/network", cookie)).toMatch(/<td>helper<\/td><td>Muse<\/td><td><time[^>]*>[^<]*<\/time><\/td><td><time/);
+    expect(await getPage(ctx, "/hub/network", cookie)).toMatch(/<td>helper<\/td><td>Muse<\/td><td class="narrow-hide"><time[^>]*>[^<]*<\/time><\/td><td><time/);
     expect((await post(ctx, "/hub/network/assistants/helper/remove", cookie)).status).toBe(303);
     expect(ctx.presence.lastCheckIn("helper")).toBeNull();
     expect((await post(ctx, "/hub/network/assistants", cookie, { kind: "muse", name: "helper" })).status).toBe(200);
     expect(await getPage(ctx, "/hub/network", cookie)).toMatch(
-      /<td>helper<\/td><td>Muse<\/td><td><time[^>]*>[^<]*<\/time><\/td><td>Not since the last restart<\/td>/,
+      /<td>helper<\/td><td>Muse<\/td><td class="narrow-hide"><time[^>]*>[^<]*<\/time><\/td><td>Not since the last restart<\/td>/,
     );
     expect(await getPage(ctx, "/hub", cookie)).toContain(
       '<td>helper</td><td class="narrow-hide">Muse</td><td></td><td><span class="status">checks in</span></td><td class="narrow-hide"></td><td>Not since the last restart</td>',

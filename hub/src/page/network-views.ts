@@ -39,9 +39,9 @@ function machinesSection(machines: (Machine & { sessions: number })[]): Html {
 ${
   machines.length === 0
     ? html`<p class="meta">No machines yet.</p>`
-    : html`<table><thead><tr><th>Machine</th><th>Joined</th><th>Last seen</th><th>Sessions</th><th></th></tr></thead><tbody>${machines.map(
+    : html`<table><thead><tr><th>Machine</th><th class="narrow-hide">Joined</th><th>Last seen</th><th>Sessions</th><th></th></tr></thead><tbody>${machines.map(
         (machine) =>
-          html`<tr><td>${machine.name}</td><td>${formatTime(machine.createdAt)}</td><td>${
+          html`<tr><td>${machine.name}</td><td class="narrow-hide">${formatTime(machine.createdAt)}</td><td>${
             machine.lastSeenAt ? formatTime(machine.lastSeenAt) : "Not yet"
           }</td><td>${machine.sessions}</td><td>${confirmRemove(
             removePath("machines", machine.name),
@@ -57,9 +57,9 @@ function assistantsSection(assistants: (Assistant & { lastCheckIn: string | null
 ${
   assistants.length === 0
     ? html`<p class="meta">No assistants yet.</p>`
-    : html`<table><thead><tr><th>Assistant</th><th>Kind</th><th>Added</th><th>Last checked in</th><th></th></tr></thead><tbody>${assistants.map(
+    : html`<table><thead><tr><th>Assistant</th><th>Kind</th><th class="narrow-hide">Added</th><th>Last checked in</th><th></th></tr></thead><tbody>${assistants.map(
         (assistant) =>
-          html`<tr><td>${assistant.name}</td><td>${kindLabel(assistant.kind)}</td><td>${formatTime(assistant.createdAt)}</td><td>${
+          html`<tr><td>${assistant.name}</td><td>${kindLabel(assistant.kind)}</td><td class="narrow-hide">${formatTime(assistant.createdAt)}</td><td>${
             assistant.lastCheckIn ? formatTime(assistant.lastCheckIn) : "Not since the last restart"
           }</td><td>${confirmRemove(
             removePath("assistants", assistant.name),
