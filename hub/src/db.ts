@@ -493,6 +493,28 @@ export class Store {
     return row ? toMessage(row) : null;
   }
 
+  /**
+   * One page of messages, newest first (ties broken by insert order). With `before`, only those strictly older than
+   * that message; an unknown ID is ignored and the first page comes back.
+   */
+  listMessages(filter: { before?: string; limit: number }): Message[] {
+    const anchor = filter.before
+      ? (this.db.query("SELECT created_at, rowid AS rid FROM messages WHERE id = $id").get({ id: filter.before }) as {
+          created_at: string;
+          rid: number;
+        } | null)
+      : null;
+    const rows = anchor
+      ? this.db
+          .query(
+            `SELECT * FROM messages WHERE created_at < $at OR (created_at = $at AND rowid < $rid)
+             ORDER BY created_at DESC, rowid DESC LIMIT $limit`,
+          )
+          .all({ at: anchor.created_at, rid: anchor.rid, limit: filter.limit })
+      : this.db.query("SELECT * FROM messages ORDER BY created_at DESC, rowid DESC LIMIT $limit").all({ limit: filter.limit });
+    return (rows as MessageRow[]).map(toMessage);
+  }
+
   /** Undelivered, unexpired messages to the address, oldest first. The default `limit` of -1 means no limit. */
   listPendingMessagesFor(address: string, now: string, limit = -1): Message[] {
     const rows = this.db

@@ -364,6 +364,10 @@ export class BridgeService {
     return this.store.listTasks(filter);
   }
 
+  listMessages(filter: { before?: string; limit: number }): Message[] {
+    return this.store.listMessages(filter);
+  }
+
   listEvents(filter: { agent?: string; limit: number }): BridgeEvent[] {
     return this.store.listEvents(filter);
   }

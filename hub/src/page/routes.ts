@@ -22,7 +22,7 @@ import {
   SESSION_DAYS,
   sameOrigin,
 } from "./session";
-import { historyView, homeView, loginView, taskDetailView } from "./views";
+import { historyView, homeView, loginView, messagesView, taskDetailView } from "./views";
 
 export interface PageDeps {
   service: BridgeService;
@@ -35,6 +35,7 @@ export interface PageDeps {
 }
 
 const WAITING_SHOWN = 100;
+const MESSAGES_SHOWN = 100;
 
 const formText = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
@@ -112,6 +113,24 @@ export function pageRoutes(deps: PageDeps): Hono {
     const events = service.listEvents({ agent, limit: 50 });
     const names = config.agents.map((a) => a.name);
     return sendPage(c, 200, "History", historyView(tasks, events, { agent, status }, names), { nav: true });
+  });
+
+  page.get("/messages", (c) => {
+    // One more than shown, to know whether older ones exist.
+    const rows = service.listMessages({ before: c.req.query("before") || undefined, limit: MESSAGES_SHOWN + 1 });
+    const shown = rows.slice(0, MESSAGES_SHOWN);
+    return sendPage(
+      c,
+      200,
+      "Messages",
+      messagesView(shown, {
+        more: rows.length > MESSAGES_SHOWN,
+        paged: Boolean(c.req.query("before")),
+        now: now().toISOString(),
+        historyDays: config.limits.historyDays,
+      }),
+      { nav: true },
+    );
   });
 
   page.get("/tasks/:id", (c) => {

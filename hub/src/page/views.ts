@@ -1,5 +1,6 @@
 import { html } from "hono/html";
-import { type BridgeEvent, type DirectoryEntry, TASK_STATUSES, type Task, type TaskStatus } from "../core/types";
+import { type BridgeEvent, type DirectoryEntry, type Message, TASK_STATUSES, type Task, type TaskStatus } from "../core/types";
+import { defang } from "../core/framing";
 import { kindLabel } from "./connect";
 import { formatTime, type Html, STATUS_WORDS } from "./layout";
 
@@ -120,4 +121,29 @@ ${task.result !== null ? html`<h2>Result</h2><pre>${task.result}</pre>` : ""}
 ${task.reason !== null ? html`<h2>Reason</h2><p>${task.reason}</p>` : ""}
 ${task.status === "waiting_approval" ? decisionForms(task) : ""}</div>
 ${chainBlock(chain)}`;
+}
+
+function messageStatus(m: Message, now: string): Html {
+  if (m.deliveredAt !== null) return html`<span class="status live">Delivered</span> ${formatTime(m.deliveredAt)}`;
+  return m.expiresAt > now ? html`<span class="status">Waiting</span>` : html`<span class="status">Expired unread</span>`;
+}
+
+function messageEntry(m: Message, now: string): Html {
+  return html`<article class="card message" id="m-${m.id}"><div class="meta">${formatTime(m.createdAt)} · ${m.fromAgent} → ${m.toAgent} · ${messageStatus(m, now)} · ${m.id.slice(0, 8)}${
+    m.replyTo !== null ? html` · Reply to <a href="#m-${m.replyTo}">${m.replyTo.slice(0, 8)}</a>` : ""
+  }</div>
+<div class="body">${defang(m.text)}</div></article>`;
+}
+
+/** The owner's read-only list of messages between agents, newest first. `messages` is already one page. */
+export function messagesView(
+  messages: Message[],
+  opts: { more: boolean; paged: boolean; now: string; historyDays: number },
+): Html {
+  const last = messages[messages.length - 1];
+  return html`<h1>Messages</h1>
+<p class="meta">Messages are kept for ${opts.historyDays} days.</p>
+${opts.paged ? html`<p><a href="/hub/messages">Newest messages</a></p>` : ""}
+${messages.length === 0 ? html`<p class="meta">No messages.</p>` : messages.map((m) => messageEntry(m, opts.now))}
+${opts.more && last ? html`<p><a href="/hub/messages?before=${encodeURIComponent(last.id)}">Older messages</a></p>` : ""}`;
 }

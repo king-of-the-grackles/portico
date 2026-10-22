@@ -44,6 +44,9 @@ td summary{overflow-wrap:normal}
 details.confirm summary{cursor:pointer;font-weight:600;color:var(--danger)}
 details.confirm form{margin-top:6px}
 details.confirm button{padding:6px 8px;font-size:13px}
+.message{overflow-wrap:anywhere}
+.message .meta a{white-space:nowrap}
+.body{white-space:pre-wrap;overflow-wrap:anywhere;max-height:24em;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0 0;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
 .error{border-left:3px solid var(--danger)}
 @media (max-width:600px){.narrow-hide{display:none}}
 `;
@@ -66,7 +69,7 @@ export function formatTime(iso: string): Html {
   return html`<time datetime="${iso}">${iso.slice(0, 16).replace("T", " ")} UTC</time>`;
 }
 
-const NAV = html`<nav><a href="/hub">Waiting</a><a href="/hub/network">Network</a><a href="/hub/history">History</a><form method="post" action="/hub/logout"><button type="submit">Sign out</button></form></nav>`;
+const NAV = html`<nav><a href="/hub">Waiting</a><a href="/hub/network">Network</a><a href="/hub/history">History</a><a href="/hub/messages">Messages</a><form method="post" action="/hub/logout"><button type="submit">Sign out</button></form></nav>`;
 
 export function layout(title: string, body: Html, opts: { nav?: boolean } = {}): Html {
   return html`<!doctype html>

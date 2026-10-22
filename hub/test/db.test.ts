@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb, SCHEMA_VERSION, SchemaTooNewError, Store } from "../src/db";
 import { NetworkStore } from "../src/network-store";
-import type { Machine, SessionRecord, Task } from "../src/core/types";
+import type { Machine, Message, SessionRecord, Task } from "../src/core/types";
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -244,6 +244,31 @@ describe("Store: lists for the hub page", () => {
     store.insertEvent({ id: "e2", agent: "grok-bot", name: "b", details: "", createdAt: "2026-10-20T12:01:00.000Z" });
     expect(store.listEvents({ limit: 10 }).map((e) => e.id)).toEqual(["e2", "e1"]);
     expect(store.listEvents({ agent: "muse", limit: 10 }).map((e) => e.id)).toEqual(["e1"]);
+  });
+});
+
+describe("Store: listMessages", () => {
+  const msg = (id: string, createdAt: string): Message => ({
+    id,
+    fromAgent: "a",
+    toAgent: "b",
+    text: id,
+    replyTo: null,
+    createdAt,
+    expiresAt: "2026-10-21T12:00:00.000Z",
+    deliveredAt: null,
+  });
+
+  test("newest first, ties by insert order descending, keyset by before", () => {
+    store.insertMessage(msg("m1", "2026-10-20T12:00:00.000Z"));
+    store.insertMessage(msg("m2", "2026-10-20T12:01:00.000Z"));
+    store.insertMessage(msg("m3", "2026-10-20T12:01:00.000Z"));
+    store.insertMessage(msg("m4", "2026-10-20T12:02:00.000Z"));
+    expect(store.listMessages({ limit: 10 }).map((m) => m.id)).toEqual(["m4", "m3", "m2", "m1"]);
+    expect(store.listMessages({ limit: 2 }).map((m) => m.id)).toEqual(["m4", "m3"]);
+    expect(store.listMessages({ before: "m3", limit: 10 }).map((m) => m.id)).toEqual(["m2", "m1"]);
+    expect(store.listMessages({ before: "m2", limit: 10 }).map((m) => m.id)).toEqual(["m1"]);
+    expect(store.listMessages({ before: "unknown", limit: 10 }).map((m) => m.id)).toEqual(["m4", "m3", "m2", "m1"]);
   });
 });
 
