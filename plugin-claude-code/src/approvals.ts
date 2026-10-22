@@ -4,6 +4,8 @@ import { type DialogRunner, type PanelOutcome, panelText, type RunningPanel } fr
 
 /** The longest note sent with Deny, in code points. */
 export const NOTE_MAX = 2_000;
+/** The most panels open at once. Later requests wait, in order, for one to close. */
+export const MAX_OPEN_PANELS = 5;
 const NONCE = /^[A-Za-z0-9_-]{16,128}$/;
 /** setTimeout's longest delay. */
 const MAX_TIMER_MS = 2_147_483_647;
@@ -53,9 +55,16 @@ interface OpenPanel {
   slot: number;
 }
 
-/** One panel per open approval request, keyed by task. The answer goes back with the request's nonce. */
+/**
+ * One panel per open approval request, keyed by task, and at most MAX_OPEN_PANELS at once. The answer goes back with
+ * the request's nonce.
+ */
 export class ApprovalPanels {
   private readonly panels = new Map<string, OpenPanel>();
+  /** Requests waiting for a free panel, oldest first. */
+  private readonly queue = new Map<string, ApprovalRequest>();
+  /** Tasks whose answer is being sent or retried: a request the hub sends again meanwhile opens no second panel. */
+  private readonly answering = new Set<string>();
   private readonly now: () => number;
   private readonly retryMs: number[];
   private ignoredLogged = false;
@@ -79,19 +88,29 @@ export class ApprovalPanels {
   request(data: unknown): void {
     const request = parseApprovalRequest(data);
     if (!request) return void this.deps.log("warn", "approval_request_invalid", {});
-    const open = this.panels.get(request.taskId);
+    // The same request again, say after a reconnect: keep the panel or the queued request, and take the newest nonce.
+    const open = this.panels.get(request.taskId) ?? this.queue.get(request.taskId);
     if (open) {
-      open.nonce = request.nonce; // the same request again, say after a reconnect: keep the panel, take the newest nonce
+      open.nonce = request.nonce;
       return;
     }
-    const runner = this.available ? this.deps.runner : null;
-    if (!runner) {
+    if (this.answering.has(request.taskId)) return; // answered here already: the hub's approval_closed follows
+    if (!this.available) {
       if (!this.ignoredLogged) this.deps.log("warn", "approval_request_ignored", { task_id: request.taskId, reason: "no_popup" });
       this.ignoredLogged = true;
       return;
     }
+    if (this.panels.size >= MAX_OPEN_PANELS) {
+      this.queue.set(request.taskId, request);
+      return;
+    }
+    this.show(request);
+  }
+
+  private show(request: ApprovalRequest): void {
+    const runner = this.deps.runner;
     const remaining = Date.parse(request.expiresAt) - this.now();
-    if (!(remaining > 0)) return;
+    if (!runner || !(remaining > 0)) return;
     const slot = this.freeSlot();
     const panel = runner({
       taskId: request.taskId,
@@ -112,11 +131,14 @@ export class ApprovalPanels {
   /** An `approval_closed` event: the task was decided, here or elsewhere. */
   closed(data: unknown): void {
     const taskId = (data as { taskId?: unknown } | null)?.taskId;
-    if (typeof taskId === "string") this.dismiss(taskId);
+    if (typeof taskId !== "string") return;
+    this.queue.delete(taskId);
+    this.dismiss(taskId);
   }
 
-  /** The stream dropped, or the plugin stops. The hub sends the request again on reconnect. */
+  /** The stream dropped, or the plugin stops. The hub sends open requests again on reconnect. */
   closeAll(): void {
+    this.queue.clear(); // first, so closing the panels opens none of the waiting requests
     for (const taskId of [...this.panels.keys()]) this.dismiss(taskId);
   }
 
@@ -126,6 +148,16 @@ export class ApprovalPanels {
     clearTimeout(entry.timer);
     this.panels.delete(taskId); // forgotten first, so the kill's "dismissed" outcome sends nothing
     entry.panel.kill();
+    this.openQueued();
+  }
+
+  /** Opens waiting requests, oldest first, while a panel is free. Without pop-ups they're dropped: none can show. */
+  private openQueued(): void {
+    for (const [taskId, request] of this.queue) {
+      if (this.panels.size >= MAX_OPEN_PANELS) return;
+      this.queue.delete(taskId);
+      if (this.available) this.show(request);
+    }
   }
 
   /** The lowest offset no open panel holds. */
@@ -141,19 +173,24 @@ export class ApprovalPanels {
     if (this.panels.get(taskId) !== entry) return; // closed, expired or dropped first
     clearTimeout(entry.timer);
     this.panels.delete(taskId);
-    if (outcome.kind === "dismissed") return;
     if (outcome.kind === "failed") {
       this.deps.log("warn", "approval_popup_failed", { task_id: taskId, code: outcome.code });
       this.turnOff();
-      return;
     }
+    if (outcome.kind === "answered") this.answering.add(taskId);
+    this.openQueued();
+    if (outcome.kind !== "answered") return;
     const body: { nonce: string; decision: "approve" | "deny"; note?: string } = { nonce: entry.nonce, decision: outcome.decision };
     if (outcome.decision === "deny") {
       // The note is a reason for Deny only, as on the hub page.
       const note = Array.from(outcome.note.trim()).slice(0, NOTE_MAX).join("");
       if (note) body.note = note;
     }
-    await this.answer(taskId, body);
+    try {
+      await this.answer(taskId, body);
+    } finally {
+      this.answering.delete(taskId);
+    }
   }
 
   /** Retries when the hub can't be reached or answers 5xx. Any 4xx is final. */
@@ -178,7 +215,7 @@ export class ApprovalPanels {
   private turnOff(): void {
     if (this.failed) return;
     this.failed = true;
-    this.deps.log("warn", "approval_popup_unavailable", { reason: "failed" });
+    this.deps.log("warn", "approval_popup_unavailable", { platform: process.platform, reason: "failed" });
     this.deps.onUnavailable?.();
   }
 }

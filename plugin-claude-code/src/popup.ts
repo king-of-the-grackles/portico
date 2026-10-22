@@ -79,7 +79,8 @@ export function childEnv(env: Record<string, string | undefined>): Record<string
 /**
  * The hub already defanged the text; this cleans it again for a panel: line separators become newlines, hidden
  * format characters (bidi controls, zero-width) and control characters other than newline and tab go, tabs become
- * spaces, runs of blank lines shrink to one, and the result is clipped with "…".
+ * spaces, lines of nothing but spaces (Unicode spaces too) count as blank, runs of blank lines shrink to one, and the
+ * result is clipped with "…". So no run of blank-looking lines can push the rest of the text out of sight.
  */
 export function panelText(text: string, max = PANEL_TEXT_MAX): string {
   const cleaned = text
@@ -88,6 +89,7 @@ export function panelText(text: string, max = PANEL_TEXT_MAX): string {
     .replace(/\p{Cf}/gu, "") // bidi controls, zero-width and other hidden format characters
     .replace(/[^\P{Cc}\n\t]/gu, "") // control characters, except newline and tab
     .replace(/\t/g, " ")
+    .replace(/^[^\S\n]+$/gm, "") // a line of only spaces, NBSP and other Unicode spaces included, is blank
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   const chars = Array.from(cleaned);
@@ -103,10 +105,14 @@ function lastLine(stdout: string): string {
   return stdout.trim().split("\n").at(-1)?.trim() ?? "";
 }
 
-/** The macOS panel writes one JSON line, `{ decision, note }`. Anything else is a failure. */
+/**
+ * The macOS panel writes one JSON line: `{ decision, note }`, or `{ expired: true }` when it closed itself at the
+ * deadline, which answers nothing. Anything else is a failure.
+ */
 export function parsePanelOutput(stdout: string): PanelOutcome {
   try {
-    const answer = JSON.parse(lastLine(stdout)) as { decision?: unknown; note?: unknown } | null;
+    const answer = JSON.parse(lastLine(stdout)) as { decision?: unknown; note?: unknown; expired?: unknown } | null;
+    if (answer?.expired === true) return { kind: "dismissed" };
     if (answer && (answer.decision === "approve" || answer.decision === "deny")) {
       return { kind: "answered", decision: answer.decision, note: typeof answer.note === "string" ? answer.note : "" };
     }
@@ -146,12 +152,13 @@ function runChild(
     settle({ kind: "failed", code: null });
     return { result, kill: () => {} };
   }
-  let stdout = "";
+  // Kept as bytes and decoded once at the end, so a character split across chunks reads whole.
+  const chunks: Buffer[] = [];
   child.stdout?.on("data", (chunk) => {
-    stdout += chunk.toString();
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
   });
   child.on("error", () => settle({ kind: "failed", code: null }));
-  child.on("close", (code) => settle(code === 0 ? parse(stdout) : { kind: "failed", code }));
+  child.on("close", (code) => settle(code === 0 ? parse(Buffer.concat(chunks).toString("utf8")) : { kind: "failed", code }));
   child.stdin?.on("error", () => {}); // a child that exits early closes the pipe
   child.stdin?.end(stdin);
   return {
@@ -167,7 +174,9 @@ function runChild(
 /**
  * The macOS panel, run by `osascript -l JavaScript`. A titled, utility, non-activating NSPanel at floating level on
  * every Space, with no close button and no key equivalents: it never takes the keyboard by itself, and only a click
- * answers. The request is read from stdin as JSON, never from argv; the answer is one JSON line on stdout.
+ * answers. The body scrolls in a read-only text view, so none of the text is out of sight. The request is read from
+ * stdin as JSON, never from argv; the answer is one JSON line on stdout. At the deadline the panel closes itself,
+ * answering nothing, so a plugin killed outright never leaves it up.
  * A String.raw template, so its escapes stay escapes; it has no backticks and no template placeholders.
  */
 export const MAC_PANEL_SCRIPT = String.raw`
@@ -200,16 +209,45 @@ function addLabel(text, y, height, bold) {
   view.addSubview(label);
 }
 addLabel(input.heading, HEIGHT - 44, 22, true);
-addLabel(input.body, 100, HEIGHT - 152, false);
+
+// The body scrolls, so none of the (already clipped) text is ever out of sight. A legacy scroller is always drawn,
+// and a knob shorter than its track says there is more. Read-only: the text can be selected and copied, never edited.
+// Like the note field, the text view takes the keyboard only when clicked; the panel is never made key on its own.
+var scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(20, 100, WIDTH - 40, HEIGHT - 152));
+scroll.borderType = 2; // bezel
+scroll.scrollerStyle = 0; // legacy: drawn all the time, unlike an overlay scroller
+scroll.hasVerticalScroller = true;
+scroll.hasHorizontalScroller = false;
+scroll.autohidesScrollers = false;
+var area = scroll.contentSize;
+var body = $.NSTextView.alloc.initWithFrame($.NSMakeRect(0, 0, area.width, area.height));
+body.editable = false;
+body.selectable = true;
+body.richText = false;
+body.font = $.NSFont.systemFontOfSize(12);
+body.minSize = $.NSMakeSize(0, area.height);
+body.maxSize = $.NSMakeSize(area.width, 10000000);
+body.verticallyResizable = true;
+body.horizontallyResizable = false;
+body.autoresizingMask = 2; // the width follows the scroll view
+body.textContainer.containerSize = $.NSMakeSize(area.width, 10000000);
+body.textContainer.widthTracksTextView = true;
+body.string = input.body;
+scroll.documentView = body;
+view.addSubview(scroll);
 
 var note = $.NSTextField.alloc.initWithFrame($.NSMakeRect(20, 60, WIDTH - 40, 24));
 note.placeholderString = input.notePlaceholder;
 view.addSubview(note);
 
-function finish(decision) {
-  var line = JSON.stringify({ decision: decision, note: note.stringValue.js }) + "\n";
+function reply(answer) {
+  var line = JSON.stringify(answer) + "\n";
   $.NSFileHandle.fileHandleWithStandardOutput.writeData($(line).dataUsingEncoding($.NSUTF8StringEncoding));
   $.exit(0);
+}
+
+function finish(decision) {
+  reply({ decision: decision, note: note.stringValue.js });
 }
 
 ObjC.registerSubclass({
@@ -217,9 +255,16 @@ ObjC.registerSubclass({
   methods: {
     "approve:": { types: ["void", ["id"]], implementation: function () { finish("approve"); } },
     "deny:": { types: ["void", ["id"]], implementation: function () { finish("deny"); } },
+    "expire:": { types: ["void", ["id"]], implementation: function () { reply({ expired: true }); } },
   },
 });
 var target = $.BridgeApprovalTarget.alloc.init;
+
+// At the deadline the panel closes itself and answers nothing, even if the plugin that opened it is gone.
+if (typeof input.deadline === "number") {
+  var seconds = Math.max(0, input.deadline - Date.now()) / 1000;
+  $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(seconds, target, "expire:", null, false);
+}
 
 // Buttons get no key equivalents: only a click answers, so Return typed in a terminal can never approve.
 function addButton(title, x, action) {
@@ -252,6 +297,7 @@ export function macPanelRunner(env: Record<string, string | undefined>, spawnFn:
         approve: "Approve",
         deny: "Deny",
         slot: prompt.slot,
+        deadline: Date.parse(prompt.expiresAt),
       }),
       parsePanelOutput,
     );

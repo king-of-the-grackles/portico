@@ -12,7 +12,7 @@ const REQUEST = {
   expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
 };
 
-function setup(opts: { fail?: (attempt: number) => Error | null; runner?: boolean } = {}) {
+function setup(opts: { fail?: (attempt: number) => Error | null; runner?: boolean; retryMs?: number[] } = {}) {
   const answers: { taskId: string; body: unknown }[] = [];
   let attempts = 0;
   let unavailable = 0;
@@ -31,7 +31,7 @@ function setup(opts: { fail?: (attempt: number) => Error | null; runner?: boolea
     client,
     runner: opts.runner === false ? null : fake.runner,
     log: logs.log,
-    retryMs: [5, 5],
+    retryMs: opts.retryMs ?? [5, 5],
     onUnavailable: () => unavailable++,
   });
   return { panels, fake, answers, logs, attempts: () => attempts, unavailable: () => unavailable };
@@ -95,6 +95,76 @@ describe("approval panels", () => {
     expect(answers).toEqual([]);
   });
 
+  test("at most five panels are open at once; later requests wait in order, and a closed one leaves the queue", async () => {
+    const { panels, fake } = setup();
+    for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) panels.request({ ...REQUEST, taskId: `t${n}` });
+    expect(fake.panels.map((panel) => [panel.prompt.taskId, panel.prompt.slot])).toEqual([
+      ["t1", 0],
+      ["t2", 1],
+      ["t3", 2],
+      ["t4", 3],
+      ["t5", 4],
+    ]);
+    expect(panels.openCount).toBe(5);
+    panels.request({ ...REQUEST, taskId: "t6", nonce: "nonce-bbbbbbbbbbbbbbbb" }); // a repeat while queued: still one entry
+    panels.closed({ taskId: "t7", outcome: "approved" }); // decided while waiting: it never shows
+    panels.closed({ taskId: "t2", outcome: "denied" });
+    expect(fake.panels.slice(5).map((panel) => [panel.prompt.taskId, panel.prompt.slot])).toEqual([["t6", 1]]);
+    fake.panels[0]!.answer({ kind: "dismissed" });
+    await waitFor(() => fake.panels.length === 7);
+    expect(fake.panels.at(-1)!.prompt).toMatchObject({ taskId: "t8", slot: 0 });
+    expect(panels.openCount).toBe(5);
+  });
+
+  test("closeAll empties the queue too, so nothing opens after it", async () => {
+    const { panels, fake } = setup();
+    for (const n of [1, 2, 3, 4, 5, 6]) panels.request({ ...REQUEST, taskId: `t${n}` });
+    panels.closeAll();
+    await Bun.sleep(20);
+    expect(fake.panels).toHaveLength(5);
+    expect(fake.panels.every((panel) => panel.killed)).toBe(true);
+    expect(panels.openCount).toBe(0);
+  });
+
+  test("a queued request is answered with its newest nonce once it shows", async () => {
+    const { panels, fake, answers } = setup();
+    for (const n of [1, 2, 3, 4, 5, 6]) panels.request({ ...REQUEST, taskId: `t${n}` });
+    panels.request({ ...REQUEST, taskId: "t6", nonce: "nonce-cccccccccccccccc" });
+    panels.closed({ taskId: "t1", outcome: "approved" });
+    fake.panels[5]!.answer({ kind: "answered", decision: "approve", note: "" });
+    await waitFor(() => answers.length === 1);
+    expect(answers[0]).toEqual({ taskId: "t6", body: { nonce: "nonce-cccccccccccccccc", decision: "approve" } });
+  });
+
+  test("no second panel opens for a task whose answer is on its way or being retried", async () => {
+    const pending = setup({ fail: (n) => (n === 1 ? new HubError(0, "unreachable", "x") : null), retryMs: [200] });
+    pending.panels.request(REQUEST);
+    pending.fake.panels[0]!.answer({ kind: "answered", decision: "approve", note: "" });
+    await waitFor(() => pending.attempts() === 1);
+    pending.panels.request({ ...REQUEST, nonce: "nonce-bbbbbbbbbbbbbbbb" }); // re-sent after a reconnect, mid-retry
+    expect(pending.fake.panels).toHaveLength(1);
+    await waitFor(() => pending.answers.length === 1);
+    expect(pending.fake.panels).toHaveLength(1);
+    expect((pending.answers[0]!.body as { nonce: string }).nonce).toBe(REQUEST.nonce);
+
+    let land!: () => void;
+    const fake = fakeRunner();
+    const slow = new ApprovalPanels({
+      client: { answerApproval: () => new Promise<{ task: never }>((resolve) => (land = () => resolve({ task: {} as never }))) },
+      runner: fake.runner,
+      log: captureLog().log,
+    });
+    slow.request(REQUEST);
+    fake.panels[0]!.answer({ kind: "answered", decision: "deny", note: "" });
+    await waitFor(() => land !== undefined);
+    slow.request(REQUEST); // the answer is in flight
+    expect(fake.panels).toHaveLength(1);
+    land();
+    await Bun.sleep(10);
+    slow.request({ ...REQUEST, nonce: "nonce-dddddddddddddddd" }); // answered and done: a request still open shows again
+    expect(fake.panels).toHaveLength(2);
+  });
+
   test("closeAll kills every panel, as when the stream drops", () => {
     const { panels, fake } = setup();
     panels.request(REQUEST);
@@ -135,7 +205,7 @@ describe("approval panels", () => {
     expect(logs.lines.find((line) => line.msg === "approval_popup_unavailable")).toEqual({
       level: "warn",
       msg: "approval_popup_unavailable",
-      fields: { reason: "failed" },
+      fields: { platform: process.platform, reason: "failed" },
     });
     fake.panels[1]!.answer({ kind: "failed", code: 1 });
     await Bun.sleep(20);
