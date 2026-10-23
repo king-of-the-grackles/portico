@@ -151,30 +151,30 @@ export class InboxDelivery {
   }
 }
 
-/** Wraps the plugin's own notices about the bridge connection. */
+/** Wraps the plugin's own notices about the hub connection. */
 export function frameNotice(text: string): string {
-  return `<bridge-notice>\n${text}\n</bridge-notice>`;
+  return `<portico-notice>\n${text}\n</portico-notice>`;
 }
 
 /** What the session is told when live delivery stops for good. */
 export function stopNotice(stop: StreamStop): string {
   if (stop.reason === "replaced") {
     return (
-      "Bridge delivery stopped: another Claude Code session connected with the same agent token, so tasks for this " +
-      "agent now go there. Restart this session to take delivery back. The bridge tools still work."
+      "Portico delivery stopped: another Claude Code session connected with the same agent token, so tasks for this " +
+      "agent now go there. Restart this session to take delivery back. The Portico tools still work."
     );
   }
   if (stop.status === 404) {
     return (
-      "Bridge delivery is off: the hub address BRIDGE_URL has no live stream (404). Set BRIDGE_URL to the hub's base " +
-      "address, e.g. https://bridge.example.com, without /mcp or /api, and restart this session."
+      "Portico delivery is off: the hub address PORTICO_URL has no live stream (404). Set PORTICO_URL to the hub's base " +
+      "address, e.g. https://portico.example.com, without /mcp or /api, and restart this session."
     );
   }
   if (stop.status === 403) {
     return (
-      `Bridge delivery is off: the hub refused the live stream (${stop.message}). Set this agent to delivery: push ` +
-      "in bridge.yaml, restart the hub, then restart this session. The bridge tools still work."
+      `Portico delivery is off: the hub refused the live stream (${stop.message}). Set this agent to delivery: push ` +
+      "in portico.yaml, restart the hub, then restart this session. The Portico tools still work."
     );
   }
-  return `Bridge delivery is off: the hub rejected BRIDGE_TOKEN (${stop.message}). Fix the token and restart this session.`;
+  return `Portico delivery is off: the hub rejected PORTICO_TOKEN (${stop.message}). Fix the token and restart this session.`;
 }

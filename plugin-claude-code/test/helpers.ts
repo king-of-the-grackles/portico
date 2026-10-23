@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
-import type { BridgeConfig } from "../../hub/src/core/types";
+import type { PorticoConfig } from "../../hub/src/core/types";
 import { joinMachine, makeApp, TOKENS, type TestAgent, testConfig } from "../../hub/test/helpers";
 import { HubClient } from "../src/hub-client";
 import type { Logger } from "../src/log";
@@ -16,7 +16,7 @@ import { InboxSocket } from "../src/socket";
 export { TOKENS };
 
 /** A real hub (in-memory database, fake clock, 50 ms heartbeats) on a random local port. */
-export function startHub(config: BridgeConfig = testConfig(), opts: { newNonce?: () => string } = {}) {
+export function startHub(config: PorticoConfig = testConfig(), opts: { newNonce?: () => string } = {}) {
   const hub = makeApp(config, opts);
   const server = Bun.serve({ port: 0, fetch: hub.app.fetch, idleTimeout: 60 });
   return { ...hub, url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };

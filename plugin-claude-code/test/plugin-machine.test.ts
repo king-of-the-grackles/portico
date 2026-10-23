@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { BASE_YAML, testConfig } from "../../hub/test/helpers";
 import { HubClient } from "../src/hub-client";
-import { createBridgePlugin } from "../src/plugin";
+import { createPorticoPlugin } from "../src/plugin";
 import type { OwnSession } from "../src/registry";
 import { SessionWatcher } from "../src/status";
 import { runTool } from "../src/tools";
@@ -53,7 +53,7 @@ async function machinePlugin(opts: SessionOpts): Promise<{ sock: FakeInboxSocket
     log: logs.log,
     pollMs: 20,
   });
-  const plugin = createBridgePlugin({
+  const plugin = createPorticoPlugin({
     config: { url: hub.url, token: opts.token, source: "machine", machine: "macbook" },
     client,
     log: logs.log,
@@ -109,7 +109,7 @@ test("tasks for the session arrive through its socket", async () => {
   const task = hub.service.sendTask("grok-bot", { to: "dialog-claude@macbook", instructions: "Check the login page" });
   expect(task.status).toBe("queued");
   await waitFor(() => sock.posts.length === 1, 3000);
-  expect(sock.posts[0]!.content).toContain("Check the login page\n</bridge-task>");
+  expect(sock.posts[0]!.content).toContain("Check the login page\n</portico-task>");
   await waitFor(() => hub.service.findTask(task.id)?.status === "working", 3000);
 });
 
@@ -141,7 +141,7 @@ test("the status watcher starts on the first hello, resends on a later hello, an
   // The stream can't open, so no hello comes, until the gate is released.
   let release!: () => void;
   const gate = new Promise<void>((resolve) => (release = resolve));
-  const plugin = createBridgePlugin({
+  const plugin = createPorticoPlugin({
     config: { url: hub.url, token, source: "machine", machine: "macbook" },
     client: new HubClient({ url: hub.url, token, sessionKey: "key-aaaaaaaa" }),
     log: logs.log,

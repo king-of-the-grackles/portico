@@ -253,14 +253,14 @@ function finish(decision) {
 }
 
 ObjC.registerSubclass({
-  name: "BridgeApprovalTarget",
+  name: "PorticoApprovalTarget",
   methods: {
     "approve:": { types: ["void", ["id"]], implementation: function () { finish("approve"); } },
     "deny:": { types: ["void", ["id"]], implementation: function () { finish("deny"); } },
     "expire:": { types: ["void", ["id"]], implementation: function () { reply({ expired: true }); } },
   },
 });
-var target = $.BridgeApprovalTarget.alloc.init;
+var target = $.PorticoApprovalTarget.alloc.init;
 
 // At the deadline the panel closes itself and answers nothing, even if the plugin that opened it is gone.
 if (typeof input.deadline === "number") {

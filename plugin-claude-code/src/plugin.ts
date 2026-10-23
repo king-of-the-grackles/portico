@@ -12,10 +12,10 @@ import type { SessionWatcher } from "./status";
 import { StreamClient, type StreamClientOptions, type StreamStop } from "./stream";
 import { runTool, TOOLS } from "./tools";
 
-export const SERVER_NAME = "agent-bridge";
-export const SERVER_VERSION = "0.3.0";
+export const SERVER_NAME = "portico";
+export const SERVER_VERSION = "0.4.0";
 
-export interface BridgePluginDeps {
+export interface PorticoPluginDeps {
   config: PluginConfig;
   client: HubClient;
   log: Logger;
@@ -35,15 +35,15 @@ export interface BridgePluginDeps {
   stream?: Partial<Pick<StreamClientOptions, "silenceMs" | "initialBackoffMs" | "maxBackoffMs" | "random">>;
 }
 
-export interface BridgePlugin {
+export interface PorticoPlugin {
   server: Server;
   /** Opens the live stream. Runs by itself once the MCP handshake completes. */
   start(): void;
   stop(): Promise<void>;
 }
 
-/** The plugin's MCP server: the seven bridge tools, and delivery through Claude Code's inbox socket. */
-export function createBridgePlugin(deps: BridgePluginDeps): BridgePlugin {
+/** The plugin's MCP server: the seven Portico tools, and delivery through Claude Code's inbox socket. */
+export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
   const { config, client, log, socket } = deps;
   const watcher = deps.watcher ?? null;
   let watching = false;
@@ -127,14 +127,14 @@ export function createBridgePlugin(deps: BridgePluginDeps): BridgePlugin {
 function stopText(stop: StreamStop, config: PluginConfig): string {
   if (config.source === "machine" && stop.reason === "rejected" && stop.status === 401) {
     return (
-      "Bridge delivery is off: the hub no longer accepts this machine's token (the machine may have been removed on " +
+      "Portico delivery is off: the hub no longer accepts this machine's token (the machine may have been removed on " +
       "the hub page). Join again with a new join line, then restart this session."
     );
   }
   return stopNotice(stop);
 }
 
-/** For sessions not on the bridge (BRIDGE_URL and BRIDGE_TOKEN both unset): no tools. */
+/** For sessions not on a hub (PORTICO_URL and PORTICO_TOKEN both unset): no tools. */
 export function createIdleServer(): Server {
   return new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: {} });
 }

@@ -1,4 +1,4 @@
-// Runs before the plugin's dependencies are installed (the join command, and the hub's `bridge join`), so it imports
+// Runs before the plugin's dependencies are installed (the join command, and the hub's `portico join`), so it imports
 // only node:* and machine.ts.
 import { hostname as systemHostname } from "node:os";
 import { type MachineFile, MachineFileError, readMachineFile, writeMachineFile } from "./machine";
@@ -22,7 +22,7 @@ export interface JoinTarget {
 }
 
 /**
- * Finds the hub and the code in a join line (`Join my agent bridge: https://<hub>/join#<code>`), a bare link, or a hub
+ * Finds the hub and the code in a join line (`Join my Portico hub: https://<hub>/join#<code>`), a bare link, or a hub
  * address with the code passed separately.
  */
 export function parseJoinLine(line: string, code?: string): JoinTarget {

@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, w
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
-/** `~/.agent-bridge/machine.json`, written when this machine joins a hub. */
+/** `~/.portico/machine.json`, written when this machine joins a hub. */
 export interface MachineFile {
   /** The hub's base URL. */
   hub: string;
@@ -26,11 +26,11 @@ export class MachineFileError extends Error {
 type Env = Record<string, string | undefined>;
 
 export function machineConfigPath(env: Env): string {
-  return env.BRIDGE_MACHINE_CONFIG?.trim() || join(homedir(), ".agent-bridge", "machine.json");
+  return env.PORTICO_MACHINE_CONFIG?.trim() || join(homedir(), ".portico", "machine.json");
 }
 
 export function claudeHome(env: Env): string {
-  return env.BRIDGE_CLAUDE_HOME?.trim() || join(homedir(), ".claude");
+  return env.PORTICO_CLAUDE_HOME?.trim() || join(homedir(), ".claude");
 }
 
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && value.trim() !== "";
@@ -68,14 +68,14 @@ export function readMachineFile(path: string): MachineFile | null {
   return { hub: record.hub.trim(), machine: record.machine.trim(), token: record.token.trim(), off: off as string[] };
 }
 
-/** The folder machine.json lives in by default, `~/.agent-bridge`: kept at mode 700 even when it already exists. */
-const OWN_FOLDER = ".agent-bridge";
+/** The folder machine.json lives in by default, `~/.portico`: kept at mode 700 even when it already exists. */
+const OWN_FOLDER = ".portico";
 
 /** Writes the file with mode 600 through a temp file and a rename, creating its folder with mode 700. */
 export function writeMachineFile(path: string, file: MachineFile): void {
   const dir = dirname(path);
-  // A folder made here, or the .agent-bridge folder itself, gets mode 700. Any other existing folder is left alone:
-  // BRIDGE_MACHINE_CONFIG may point into a shared one.
+  // A folder made here, or the .portico folder itself, gets mode 700. Any other existing folder is left alone:
+  // PORTICO_MACHINE_CONFIG may point into a shared one.
   const made = mkdirSync(dir, { recursive: true, mode: 0o700 }) !== undefined;
   if (made || basename(dir) === OWN_FOLDER) chmodSync(dir, 0o700);
   writeFileAtomically(path, `${JSON.stringify(file, null, 2)}\n`, 0o600);

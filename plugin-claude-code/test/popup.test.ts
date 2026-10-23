@@ -52,7 +52,7 @@ describe("where pop-ups run", () => {
 
   test("the child's environment keeps only what a desktop needs", () => {
     expect(
-      childEnv({ HOME: "/h", PATH: "/evil:/usr/bin", BRIDGE_TOKEN: "secret", CLAUDE_CODE_MESSAGING_SOCKET: "/s", DISPLAY: ":0", LANG: "en_US.UTF-8" }),
+      childEnv({ HOME: "/h", PATH: "/evil:/usr/bin", PORTICO_TOKEN: "secret", CLAUDE_CODE_MESSAGING_SOCKET: "/s", DISPLAY: ":0", LANG: "en_US.UTF-8" }),
     ).toEqual({ PATH: "/usr/bin:/bin", HOME: "/h", DISPLAY: ":0", LANG: "en_US.UTF-8" });
   });
 });
@@ -126,7 +126,7 @@ describe("the macOS panel", () => {
 
   test("runs /usr/bin/osascript with the fixed script and passes the request on stdin only", async () => {
     const fake = fakeSpawn();
-    const panel = macPanelRunner({ HOME: "/h", BRIDGE_TOKEN: "secret", PATH: "/evil" }, fake.spawn)(PROMPT);
+    const panel = macPanelRunner({ HOME: "/h", PORTICO_TOKEN: "secret", PATH: "/evil" }, fake.spawn)(PROMPT);
     const call = fake.calls[0]!;
     expect(call.command).toBe("/usr/bin/osascript");
     expect(call.args).toEqual(["-l", "JavaScript", "-e", MAC_PANEL_SCRIPT]);
@@ -177,7 +177,7 @@ describe("the macOS panel", () => {
 describe("the Linux notification", () => {
   test("runs /usr/bin/notify-send with Approve and Deny actions and an escaped, clipped body", async () => {
     const fake = fakeSpawn();
-    const env = { DISPLAY: ":0", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus", BRIDGE_TOKEN: "secret" };
+    const env = { DISPLAY: ":0", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus", PORTICO_TOKEN: "secret" };
     const runner = linuxNotifyRunner(env, fake.spawn, () => Date.parse(PROMPT.expiresAt) - 60_000);
     const panel = runner({ ...PROMPT, instructions: `Fix <b>this</b> & ${"x".repeat(300)}` });
     const call = fake.calls[0]!;

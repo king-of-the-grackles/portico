@@ -13,26 +13,26 @@ import {
 } from "../src/machine";
 import { tempDir } from "./helpers";
 
-const FILE = { hub: "https://bridge.example.com", machine: "macbook", token: "bm_x", off: [] as string[] };
+const FILE = { hub: "https://portico.example.com", machine: "macbook", token: "bm_x", off: [] as string[] };
 const PRONOUNS = /\b(i|me|my|we|us|our|you|your|it|its|they|them|their)\b/i;
 
 describe("machine.json", () => {
   test("writes machine.json with mode 600 in a folder with mode 700, and reads it back", () => {
     const path = join(tempDir(), "nested", "machine.json");
-    writeMachineFile(path, { hub: "https://bridge.example.com", machine: "macbook", token: "bm_x", off: [] });
+    writeMachineFile(path, { hub: "https://portico.example.com", machine: "macbook", token: "bm_x", off: [] });
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
-    expect(readMachineFile(path)).toEqual({ hub: "https://bridge.example.com", machine: "macbook", token: "bm_x", off: [] });
+    expect(readMachineFile(path)).toEqual({ hub: "https://portico.example.com", machine: "macbook", token: "bm_x", off: [] });
   });
 
-  test("an existing .agent-bridge folder is tightened to mode 700; any other existing folder is left alone", () => {
-    const own = join(tempDir(), ".agent-bridge");
+  test("an existing .portico folder is tightened to mode 700; any other existing folder is left alone", () => {
+    const own = join(tempDir(), ".portico");
     mkdirSync(own);
     chmodSync(own, 0o755);
     writeMachineFile(join(own, "machine.json"), FILE);
     expect(statSync(own).mode & 0o777).toBe(0o700);
 
-    // BRIDGE_MACHINE_CONFIG may point into a shared folder.
+    // PORTICO_MACHINE_CONFIG may point into a shared folder.
     const shared = join(tempDir(), "shared");
     mkdirSync(shared);
     chmodSync(shared, 0o755);
@@ -61,7 +61,7 @@ describe("machine.json", () => {
     expect(() => readMachineFile(broken)).toThrow(broken);
 
     const wrongShape = join(dir, "wrong.json");
-    writeFileSync(wrongShape, JSON.stringify({ hub: "https://bridge.example.com", machine: "macbook", off: [] }));
+    writeFileSync(wrongShape, JSON.stringify({ hub: "https://portico.example.com", machine: "macbook", off: [] }));
     expect(() => readMachineFile(wrongShape)).toThrow(MachineFileError);
     // The messages are CLI output: no pronouns (the path itself aside).
     for (const path of [broken, wrongShape]) {
@@ -95,11 +95,11 @@ describe("machine.json", () => {
     expect(readMachineFile(path)?.off).toEqual([]);
   });
 
-  test("the paths come from BRIDGE_MACHINE_CONFIG and BRIDGE_CLAUDE_HOME, defaulting under the home folder", () => {
-    expect(machineConfigPath({ BRIDGE_MACHINE_CONFIG: "/x/machine.json" })).toBe("/x/machine.json");
-    expect(machineConfigPath({})).toBe(join(homedir(), ".agent-bridge", "machine.json"));
-    expect(claudeHome({ BRIDGE_CLAUDE_HOME: "/x/.claude" })).toBe("/x/.claude");
-    expect(claudeHome({ BRIDGE_CLAUDE_HOME: "  " })).toBe(join(homedir(), ".claude"));
+  test("the paths come from PORTICO_MACHINE_CONFIG and PORTICO_CLAUDE_HOME, defaulting under the home folder", () => {
+    expect(machineConfigPath({ PORTICO_MACHINE_CONFIG: "/x/machine.json" })).toBe("/x/machine.json");
+    expect(machineConfigPath({})).toBe(join(homedir(), ".portico", "machine.json"));
+    expect(claudeHome({ PORTICO_CLAUDE_HOME: "/x/.claude" })).toBe("/x/.claude");
+    expect(claudeHome({ PORTICO_CLAUDE_HOME: "  " })).toBe(join(homedir(), ".claude"));
   });
 });
 

@@ -1,5 +1,5 @@
 ---
-description: Put this folder back on the agent bridge for new Claude Code sessions
+description: Put this folder back on the Portico network for new Claude Code sessions
 allowed-tools: Bash(bun:*)
 ---
 

@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, type Mock, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import { dirname, join } from "node:path";
 import { PRONOUNS } from "../../hub/test/helpers";
 import { type CliIo, runCli } from "../src/cli-run";
@@ -7,10 +8,17 @@ import { readMachineFile, writeMachineFile } from "../src/machine";
 import { startHub, tempDir, type TestHub } from "./helpers";
 
 const CLI = join(import.meta.dir, "../src/cli.ts");
-const FILE = { hub: "https://bridge.example.com", machine: "macbook", token: "bm_secret-token", off: [] as string[] };
+const FILE = { hub: "https://portico.example.com", machine: "macbook", token: "bm_secret-token", off: [] as string[] };
 
 const hubs: TestHub[] = [];
+// Every run sets PORTICO_MACHINE_CONFIG and PORTICO_CLAUDE_HOME. The home folder is stubbed too, so an override name the
+// CLI doesn't read falls back into a temp folder, never into the real ~/.portico or ~/.claude.
+let home: Mock<typeof os.homedir>;
+beforeEach(() => {
+  home = spyOn(os, "homedir").mockReturnValue(tempDir());
+});
 afterEach(() => {
+  home.mockRestore();
   for (const hub of hubs.splice(0)) hub.stop();
 });
 
@@ -20,7 +28,7 @@ function hub(): TestHub {
   return started;
 }
 
-/** A temp folder with the machine file's path inside it. Tests never touch the real ~/.agent-bridge. */
+/** A temp folder with the machine file's path inside it. Tests never touch the real ~/.portico. */
 function machineDir(): { dir: string; path: string } {
   const dir = realpathSync(tempDir());
   return { dir, path: join(dir, "machine.json") };
@@ -32,7 +40,7 @@ async function cli(argv: string[], opts: { path: string; cwd: string; deps?: Par
   const err: string[] = [];
   const lines: string[] = [];
   const io: CliIo = {
-    env: { BRIDGE_MACHINE_CONFIG: opts.path, BRIDGE_CLAUDE_HOME: join(dirname(opts.path), ".claude") },
+    env: { PORTICO_MACHINE_CONFIG: opts.path, PORTICO_CLAUDE_HOME: join(dirname(opts.path), ".claude") },
     cwd: opts.cwd,
     out: (line) => {
       out.push(line);
@@ -59,7 +67,7 @@ describe("plugin CLI", () => {
     const h = hub();
     const { code } = h.networkService.createJoinCode();
     const { dir, path } = machineDir();
-    const run = await cli(["join", `Join my agent bridge: ${h.url}/join#${code}`], {
+    const run = await cli(["join", `Join my Portico hub: ${h.url}/join#${code}`], {
       path,
       cwd: dir,
       deps: { hostname: () => "macbook.local" },
@@ -69,7 +77,7 @@ describe("plugin CLI", () => {
     expect(run.out[0]).toBe(`Joined ${h.url} as machine "macbook".`);
     expect(run.out).toContain(`Wrote ${path} (mode 600).`);
     expect(run.out.some((line) => line.startsWith("New Claude Code sessions on this machine now appear on the network."))).toBe(true);
-    expect(run.out.some((line) => line.includes("/agent-bridge:off"))).toBe(true);
+    expect(run.out.some((line) => line.includes("/portico:off"))).toBe(true);
     const file = readMachineFile(path)!;
     expect(file.machine).toBe("macbook");
     expect(run.lines.join("\n")).not.toContain(file.token);
@@ -79,7 +87,7 @@ describe("plugin CLI", () => {
     const h = hub();
     const { code } = h.networkService.createJoinCode();
     const { dir, path } = machineDir();
-    const run = await cli(["join", "Join", "my", "agent", "bridge:", h.url, "--code", code, "--name", "Studio"], { path, cwd: dir });
+    const run = await cli(["join", "Join", "my", "Portico", "hub:", h.url, "--code", code, "--name", "Studio"], { path, cwd: dir });
     expect(run.code).toBe(0);
     expect(run.out[0]).toBe(`Joined ${h.url} as machine "studio".`);
     expect(readMachineFile(path)?.machine).toBe("studio");
@@ -91,14 +99,14 @@ describe("plugin CLI", () => {
       return Response.json({ machine: { name: "studio" }, token: "bm_x" }, { status: 201 });
     }) as unknown as typeof globalThis.fetch;
     const other = machineDir();
-    const dashed = await cli(["join", "https://bridge.example.com", "--code", `--${"A".repeat(20)}`, "--name", "studio"], {
+    const dashed = await cli(["join", "https://portico.example.com", "--code", `--${"A".repeat(20)}`, "--name", "studio"], {
       path: other.path,
       cwd: other.dir,
       deps: { fetch },
     });
     expect(dashed.code).toBe(0);
     expect(posted).toEqual([{ code: `--${"A".repeat(20)}`, machine: "studio" }]);
-    const missing = await cli(["join", "https://bridge.example.com", "--name", "--replace"], { path: other.path, cwd: other.dir });
+    const missing = await cli(["join", "https://portico.example.com", "--name", "--replace"], { path: other.path, cwd: other.dir });
     expect(missing.code).toBe(1);
     expect(missing.err).toEqual(["--name needs a value. Usage: join <line> [--code <code>] [--name <machine>] [--replace] [--no-allow]"]);
   });
@@ -112,9 +120,9 @@ describe("plugin CLI", () => {
     const first = await cli(["join", line()], { path, cwd: dir, deps });
     expect(first.code).toBe(0);
     expect(first.out).toContain(
-      `Added mcp__plugin_agent-bridge_bridge to permissions.allow in ${settings}, so Claude Code runs the network tools without asking. To skip this step, join with --no-allow.`,
+      `Added mcp__plugin_portico_portico to permissions.allow in ${settings}, so Claude Code runs the network tools without asking. To skip this step, join with --no-allow.`,
     );
-    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: ["mcp__plugin_agent-bridge_bridge"] } });
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: ["mcp__plugin_portico_portico"] } });
     const again = await cli(["join", line(), "--replace"], { path, cwd: dir, deps });
     expect(again.code).toBe(0);
     expect(again.out.some((text) => text.includes("permissions.allow"))).toBe(false);
@@ -136,14 +144,14 @@ describe("plugin CLI", () => {
     expect(run.code).toBe(0);
     expect(readFileSync(settings, "utf8")).toBe("{ broken");
     expect(run.out).toContain(
-      `${settings} was left unchanged (not valid JSON). To let Claude Code run the network tools without asking, add "mcp__plugin_agent-bridge_bridge" to permissions.allow in that file.`,
+      `${settings} was left unchanged (not valid JSON). To let Claude Code run the network tools without asking, add "mcp__plugin_portico_portico" to permissions.allow in that file.`,
     );
   });
 
   test("a failed join never touches the settings", async () => {
     const { dir, path } = machineDir();
     const fetch = (async () => Response.json({ error: "not_found", message: "That join code isn't valid." }, { status: 404 })) as unknown as typeof globalThis.fetch;
-    const run = await cli(["join", `https://bridge.example.com/join#${"B".repeat(22)}`], { path, cwd: dir, deps: { fetch } });
+    const run = await cli(["join", `https://portico.example.com/join#${"B".repeat(22)}`], { path, cwd: dir, deps: { fetch } });
     expect(run.code).toBe(1);
     expect(existsSync(join(dir, ".claude"))).toBe(false);
   });
@@ -152,9 +160,9 @@ describe("plugin CLI", () => {
     const { dir, path } = machineDir();
     const fetch = (async () =>
       Response.json({ machine: { name: "studio\u001b[2J" }, token: "bm_x" }, { status: 201 })) as unknown as typeof globalThis.fetch;
-    const run = await cli(["join", `https://bridge.example.com/join#${"B".repeat(22)}`], { path, cwd: dir, deps: { fetch } });
+    const run = await cli(["join", `https://portico.example.com/join#${"B".repeat(22)}`], { path, cwd: dir, deps: { fetch } });
     expect(run.code).toBe(0);
-    expect(run.out[0]).toBe('Joined https://bridge.example.com as machine "studio[2J".');
+    expect(run.out[0]).toBe('Joined https://portico.example.com as machine "studio[2J".');
     for (const line of run.lines) expect(line).not.toMatch(/\p{Cc}/u);
   });
 
@@ -211,7 +219,7 @@ describe("plugin CLI", () => {
     let result = await cli(["status"], { path, cwd: dir });
     expect(result.code).toBe(0);
     expect(result.out).toEqual([
-      'Machine "macbook" on https://bridge.example.com.',
+      'Machine "macbook" on https://portico.example.com.',
       `Machine file: ${path}`,
       "Folders off the network: none.",
     ]);
@@ -219,7 +227,7 @@ describe("plugin CLI", () => {
     writeMachineFile(path, { ...FILE, off: ["/work/a", "/work/b"] });
     result = await cli(["status"], { path, cwd: dir });
     expect(result.out).toEqual([
-      'Machine "macbook" on https://bridge.example.com.',
+      'Machine "macbook" on https://portico.example.com.',
       `Machine file: ${path}`,
       "Folders off the network:",
       "  /work/a",
@@ -238,7 +246,7 @@ describe("plugin CLI", () => {
     const runs = [
       await cli(["off"], { path, cwd: work }),
       await cli(["status"], { path, cwd: work }),
-      await cli(["join", `Join my agent bridge: ${h.url}/join#${code()}`], { path, cwd: work, deps: { hostname: () => "macbook" } }),
+      await cli(["join", `Join my Portico hub: ${h.url}/join#${code()}`], { path, cwd: work, deps: { hostname: () => "macbook" } }),
       await cli(["join", `${h.url}/join#${code()}`], { path, cwd: work }),
       await cli(["off"], { path, cwd: work }),
       await cli(["off"], { path, cwd: work }),
@@ -260,9 +268,9 @@ describe("plugin CLI", () => {
     for (const line of [
       "no address here",
       "https://[bad/join#AAAAAAAAAAAAAAAAAAAAAA",
-      "http://bridge.example.com/join#AAAAAAAAAAAAAAAAAAAAAA",
-      "https://u:p@bridge.example.com/join#AAAAAAAAAAAAAAAAAAAAAA",
-      "https://bridge.example.com/join#short",
+      "http://portico.example.com/join#AAAAAAAAAAAAAAAAAAAAAA",
+      "https://u:p@portico.example.com/join#AAAAAAAAAAAAAAAAAAAAAA",
+      "https://portico.example.com/join#short",
       `${h.url}/join#${"B".repeat(22)}`,
       `http://127.0.0.1:1/join#${"B".repeat(22)}`,
     ]) {
@@ -271,7 +279,7 @@ describe("plugin CLI", () => {
     const bare = (async () => new Response("", { status: 502 })) as unknown as typeof fetch;
     const odd = (async () => Response.json({}, { status: 201 })) as unknown as typeof fetch;
     for (const fetch of [bare, odd]) {
-      runs.push(await cli(["join", `https://bridge.example.com/join#${"B".repeat(22)}`], { path: other.path, cwd: other.dir, deps: { fetch } }));
+      runs.push(await cli(["join", `https://portico.example.com/join#${"B".repeat(22)}`], { path: other.path, cwd: other.dir, deps: { fetch } }));
     }
     writeFileSync(other.path, "{ not json");
     runs.push(await cli(["status"], { path: other.path, cwd: other.dir }));
@@ -309,18 +317,18 @@ describe("plugin CLI", () => {
     // The env is built from scratch, so the child never inherits this session's settings.
     const proc = Bun.spawn(["bun", CLI, "status"], {
       cwd: dir,
-      env: { PATH: process.env.PATH ?? "", HOME: dir, BRIDGE_MACHINE_CONFIG: path },
+      env: { PATH: process.env.PATH ?? "", HOME: dir, PORTICO_MACHINE_CONFIG: path },
       stdout: "pipe",
       stderr: "pipe",
     });
     expect(await proc.exited).toBe(0);
     expect(await new Response(proc.stdout).text()).toBe(
-      `Machine "macbook" on https://bridge.example.com.\nMachine file: ${path}\nFolders off the network: none.\n`,
+      `Machine "macbook" on https://portico.example.com.\nMachine file: ${path}\nFolders off the network: none.\n`,
     );
 
     const missing = Bun.spawn(["bun", CLI, "off"], {
       cwd: dir,
-      env: { PATH: process.env.PATH ?? "", HOME: dir, BRIDGE_MACHINE_CONFIG: join(dir, "none.json") },
+      env: { PATH: process.env.PATH ?? "", HOME: dir, PORTICO_MACHINE_CONFIG: join(dir, "none.json") },
       stdout: "pipe",
       stderr: "pipe",
     });

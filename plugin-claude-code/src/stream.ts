@@ -87,7 +87,7 @@ export class StreamClient {
     try {
       arm(); // the hub must answer within the window too
       const res = await this.opts.open(controller.signal);
-      // 401 and 403 are final. A 404 is final only when the hub itself sent it ({"error":"not_found"}): BRIDGE_URL then
+      // 401 and 403 are final. A 404 is final only when the hub itself sent it ({"error":"not_found"}): PORTICO_URL then
       // points at the wrong path (e.g. ends in /mcp). A proxy may answer 404 briefly during a redeploy, and that is retried.
       if (res.status === 401 || res.status === 403 || res.status === 404) {
         const { code, message } = await readError(res);

@@ -4,7 +4,7 @@ export interface PluginConfig {
   /** The hub's base URL, without a trailing slash. */
   url: string;
   token: string;
-  /** "env": BRIDGE_URL and BRIDGE_TOKEN, for one session. "machine": machine.json, written when this machine joined. */
+  /** "env": PORTICO_URL and PORTICO_TOKEN, for one session. "machine": machine.json, written when this machine joined. */
   source: "env" | "machine";
   /** This machine's name in machine mode, otherwise null. */
   machine: string | null;
@@ -12,7 +12,7 @@ export interface PluginConfig {
 
 export class PluginConfigError extends Error {
   constructor(public readonly problems: string[]) {
-    super(`agent-bridge plugin settings are incomplete:\n- ${problems.join("\n- ")}`);
+    super(`Portico plugin settings are incomplete:\n- ${problems.join("\n- ")}`);
     this.name = "PluginConfigError";
   }
 }
@@ -47,13 +47,13 @@ function parseHubUrl(raw: string, label: string): { url: string } | { problem: s
 }
 
 /**
- * Reads the plugin's settings (spec §5.1). BRIDGE_URL and BRIDGE_TOKEN win, for one session; otherwise the machine
+ * Reads the plugin's settings (spec §5.1). PORTICO_URL and PORTICO_TOKEN win, for one session; otherwise the machine
  * file gives machine mode. Returns null when there are neither: the plugin is enabled in every session, and sessions
- * not on the bridge should see nothing. Throws when the settings are half there or wrong.
+ * not on a hub should see nothing. Throws when the settings are half there or wrong.
  */
 export function parsePluginConfig(env: Env, machineFile: MachineFile | null = null): PluginConfig | null {
-  const rawUrl = read(env, "BRIDGE_URL");
-  const token = read(env, "BRIDGE_TOKEN");
+  const rawUrl = read(env, "PORTICO_URL");
+  const token = read(env, "PORTICO_TOKEN");
   if (!rawUrl && !token && !machineFile) return null;
 
   const problems: string[] = [];
@@ -61,15 +61,15 @@ export function parsePluginConfig(env: Env, machineFile: MachineFile | null = nu
   if (rawUrl || token) {
     if (!rawUrl) {
       problems.push(
-        "BRIDGE_URL is not set. Set it to the hub's public address, e.g. https://bridge.example.com, in the environment Claude Code starts from.",
+        "PORTICO_URL is not set. Set it to the hub's public address, e.g. https://portico.example.com, in the environment Claude Code starts from.",
       );
     } else {
-      const hub = parseHubUrl(rawUrl, "BRIDGE_URL");
+      const hub = parseHubUrl(rawUrl, "PORTICO_URL");
       if ("problem" in hub) problems.push(hub.problem);
       else url = hub.url;
     }
     if (!token) {
-      problems.push("BRIDGE_TOKEN is not set. Use the token of this session's agent (BRIDGE_TOKEN_<NAME> in the hub's environment).");
+      problems.push("PORTICO_TOKEN is not set. Use the token of this session's agent (PORTICO_TOKEN_<NAME> in the hub's environment).");
     }
   } else if (machineFile) {
     const hub = parseHubUrl(machineFile.hub, "the hub address in machine.json");

@@ -32,7 +32,7 @@ describe("HubClient", () => {
 
     const inbox = await grok.checkInbox();
     expect(inbox.tasks.map((t) => t.id)).toEqual([task.id]);
-    expect(inbox.tasks[0]!.framed_message).toContain(`**Task \`${task.id}\` from agent \`claude-code\` via the bridge.**`);
+    expect(inbox.tasks[0]!.framed_message).toContain(`**Task \`${task.id}\` from agent \`claude-code\` via Portico.**`);
 
     await grok.finishTask(task.id, { result: "Friday" });
     const read = await claude.getTask(task.id);
@@ -79,11 +79,11 @@ describe("HubClient", () => {
       seen.push(init?.headers as Record<string, string>);
       return new Response("", { status: 204 });
     }) as unknown as typeof globalThis.fetch;
-    const client = new HubClient({ url: "https://bridge.test", token: "t".repeat(24), sessionKey: "key-0001", fetch });
+    const client = new HubClient({ url: "https://portico.test", token: "t".repeat(24), sessionKey: "key-0001", fetch });
     await client.openStream(new AbortController().signal);
     await client.openStream(new AbortController().signal, undefined, { popup: true });
-    expect(seen[0]!["x-bridge-popup"]).toBeUndefined();
-    expect(seen[1]!["x-bridge-popup"]).toBe("1");
+    expect(seen[0]!["x-portico-popup"]).toBeUndefined();
+    expect(seen[1]!["x-portico-popup"]).toBe("1");
   });
 
   test("answerApproval posts the answer as the session", async () => {
@@ -92,13 +92,13 @@ describe("HubClient", () => {
       seen.push({ url: String(url), method: init?.method, headers: init?.headers as Record<string, string>, body: JSON.parse(String(init?.body)) });
       return Response.json({ task: { id: "t/1" } });
     }) as unknown as typeof globalThis.fetch;
-    const client = new HubClient({ url: "https://bridge.test", token: "t".repeat(24), sessionKey: "key-0001", fetch });
+    const client = new HubClient({ url: "https://portico.test", token: "t".repeat(24), sessionKey: "key-0001", fetch });
     expect(await client.answerApproval("t/1", { nonce: "n".repeat(32), decision: "deny", note: "No" })).toEqual({ task: { id: "t/1" } } as never);
     expect(seen).toEqual([
       {
-        url: "https://bridge.test/api/approvals/t%2F1",
+        url: "https://portico.test/api/approvals/t%2F1",
         method: "POST",
-        headers: expect.objectContaining({ "x-bridge-session": "key-0001", "content-type": "application/json" }),
+        headers: expect.objectContaining({ "x-portico-session": "key-0001", "content-type": "application/json" }),
         body: { nonce: "n".repeat(32), decision: "deny", note: "No" },
       },
     ]);

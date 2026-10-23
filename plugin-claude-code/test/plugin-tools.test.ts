@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { createBridgePlugin, createIdleServer, type BridgePlugin } from "../src/plugin";
+import { createIdleServer, createPorticoPlugin, type PorticoPlugin } from "../src/plugin";
 import { captureLog, fakeHost, fakeInboxSocket, type FakeInboxSocket, hubClient, startHub, type TestHub, TOKENS, waitFor } from "./helpers";
 
 let hub: TestHub;
@@ -18,8 +18,8 @@ afterEach(async () => {
   await sock.close();
 });
 
-function plugin(): BridgePlugin {
-  const p = createBridgePlugin({
+function plugin(): PorticoPlugin {
+  const p = createPorticoPlugin({
     config: { url: hub.url, token: TOKENS["claude-code"], source: "env", machine: null },
     client: hubClient(hub, "claude-code"),
     log: captureLog().log,
@@ -69,7 +69,7 @@ describe("the plugin's MCP server", () => {
     }
   });
 
-  test("lists the seven bridge tools", async () => {
+  test("lists the seven Portico tools", async () => {
     const { host } = await connected();
     const { tools } = await host.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
@@ -131,7 +131,7 @@ describe("the plugin's MCP server", () => {
     const sent = await host.callTool({ name: "send_task", arguments: { to: "muse", instructions: "Summarize the inbox" } });
     const content = sent.content as { type: string; text: string }[];
     const body = JSON.parse(content[0]!.text);
-    expect(body.approval.note).toBe(`Waiting for the owner's approval at https://bridge.test/hub/tasks/${body.task.id}. No joined machine is online to show a pop-up.`);
+    expect(body.approval.note).toBe(`Waiting for the owner's approval at https://portico.test/hub/tasks/${body.task.id}. No joined machine is online to show a pop-up.`);
     expect(content[1]!.text).toBe(body.approval.note);
   });
 

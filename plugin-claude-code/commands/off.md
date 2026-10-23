@@ -1,5 +1,5 @@
 ---
-description: Keep new Claude Code sessions in this folder off the agent bridge
+description: Keep new Claude Code sessions in this folder off the Portico network
 allowed-tools: Bash(bun:*)
 ---
 

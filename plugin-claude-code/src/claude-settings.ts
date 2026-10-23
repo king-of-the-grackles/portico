@@ -3,11 +3,11 @@ import { accessSync, chmodSync, constants, lstatSync, mkdirSync, readFileSync, r
 import { dirname, join } from "node:path";
 import { claudeHome, writeFileAtomically } from "./machine";
 
-/** Lets Claude Code run every tool of the plugin's MCP server (`bridge`) without asking. */
-export const BRIDGE_ALLOW_RULE = "mcp__plugin_agent-bridge_bridge";
+/** Lets Claude Code run every tool of the plugin's MCP server (`portico`) without asking. */
+export const PORTICO_ALLOW_RULE = "mcp__plugin_portico_portico";
 
 export type AllowOutcome =
-  /** `backup`: the `.agent-bridge.bak` written by this run, or null (no original, or an older backup kept). */
+  /** `backup`: the `.portico.bak` written by this run, or null (no original, or an older backup kept). */
   | { kind: "added"; path: string; backup: string | null }
   | { kind: "present"; path: string }
   | { kind: "manual"; path: string; why: string };
@@ -21,12 +21,12 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
- * Adds the bridge's allow rule to Claude Code's user settings, once. Other keys and their order are kept. The file is
+ * Adds Portico's allow rule to Claude Code's user settings, once. Other keys and their order are kept. The file is
  * written atomically, through a symlink to its target, after a one-time backup kept beside `path` (so a dotfiles
  * folder never gets one). When the file can't be read, parsed or written safely, it's left alone and the outcome says
  * why.
  */
-export function allowBridgeTools(path: string): AllowOutcome {
+export function allowPorticoTools(path: string): AllowOutcome {
   let target = path;
   let text: string | null = null;
   try {
@@ -52,10 +52,10 @@ export function allowBridgeTools(path: string): AllowOutcome {
   if (!isObject(permissions)) return { kind: "manual", path, why: "permissions is not an object" };
   const allow = permissions.allow ?? [];
   if (!Array.isArray(allow)) return { kind: "manual", path, why: "permissions.allow is not a list" };
-  if (allow.includes(BRIDGE_ALLOW_RULE)) return { kind: "present", path };
+  if (allow.includes(PORTICO_ALLOW_RULE)) return { kind: "present", path };
 
-  const next = { ...settings, permissions: { ...permissions, allow: [...allow, BRIDGE_ALLOW_RULE] } };
-  const backupPath = `${path}.agent-bridge.bak`;
+  const next = { ...settings, permissions: { ...permissions, allow: [...allow, PORTICO_ALLOW_RULE] } };
+  const backupPath = `${path}.portico.bak`;
   try {
     // A read-only file is left alone: the rename below would replace it even so, in a folder that can be written.
     if (text !== null) accessSync(target, constants.W_OK);
@@ -73,7 +73,7 @@ export function allowLine(outcome: AllowOutcome): string | null {
   switch (outcome.kind) {
     case "added":
       return (
-        `Added ${BRIDGE_ALLOW_RULE} to permissions.allow in ${outcome.path}, so Claude Code runs the network tools ` +
+        `Added ${PORTICO_ALLOW_RULE} to permissions.allow in ${outcome.path}, so Claude Code runs the network tools ` +
         "without asking. To skip this step, join with --no-allow."
       );
     case "present":
@@ -81,7 +81,7 @@ export function allowLine(outcome: AllowOutcome): string | null {
     case "manual":
       return (
         `${outcome.path} was left unchanged (${outcome.why}). To let Claude Code run the network tools without asking, ` +
-        `add "${BRIDGE_ALLOW_RULE}" to permissions.allow in that file.`
+        `add "${PORTICO_ALLOW_RULE}" to permissions.allow in that file.`
       );
   }
 }

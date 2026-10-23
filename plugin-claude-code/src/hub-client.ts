@@ -68,12 +68,12 @@ export interface Inbox {
 }
 
 export interface ResultDelivery extends TaskView {
-  /** The result wrapped in the hub's `<bridge-result>` frame. */
+  /** The result wrapped in the hub's `<portico-result>` frame. */
   framed_message: string;
 }
 
 export interface MessageDelivery extends MessageView {
-  /** The message wrapped in the hub's `<bridge-message>` frame. */
+  /** The message wrapped in the hub's `<portico-message>` frame. */
   framed_message: string;
 }
 
@@ -125,7 +125,7 @@ export interface HubClientOptions {
   fetch?: typeof fetch;
   /** For ordinary calls. The live stream has no timeout. Default 15 s. */
   timeoutMs?: number;
-  /** This session's key in machine mode, sent as X-Bridge-Session on every request and on the stream. */
+  /** This session's key in machine mode, sent as X-Portico-Session on every request and on the stream. */
   sessionKey?: string;
 }
 
@@ -205,15 +205,15 @@ export class HubClient {
     let path = "/api/stream";
     if (registration) {
       path += `?repo=${encodeURIComponent(registration.repo)}`;
-      headers["x-bridge-folder"] = registration.folderId;
+      headers["x-portico-folder"] = registration.folderId;
     }
-    if (opts.popup) headers["x-bridge-popup"] = "1";
+    if (opts.popup) headers["x-portico-popup"] = "1";
     return this.doFetch(`${this.opts.url}${path}`, { headers, signal });
   }
 
   private headers(accept: string): Record<string, string> {
     const headers: Record<string, string> = { authorization: `Bearer ${this.opts.token}`, accept };
-    if (this.opts.sessionKey) headers["x-bridge-session"] = this.opts.sessionKey;
+    if (this.opts.sessionKey) headers["x-portico-session"] = this.opts.sessionKey;
     return headers;
   }
 

@@ -9,7 +9,7 @@ import {
   type MessageDelivery,
   type ResultDelivery,
 } from "../src/hub-client";
-import { createBridgePlugin } from "../src/plugin";
+import { createPorticoPlugin } from "../src/plugin";
 import { InboxSocket, SocketError } from "../src/socket";
 import { captureLog, fakeHost, fakeInboxSocket, hubClient, startHub, type TestHub, TOKENS, waitFor } from "./helpers";
 
@@ -32,7 +32,7 @@ async function connect(
   opts: { agent?: TestAgent; client?: HubClient; retryMs?: number[]; socket?: Pick<InboxSocket, "post"> } = {},
 ) {
   const sock = await fakeInboxSocket();
-  const plugin = createBridgePlugin({
+  const plugin = createPorticoPlugin({
     config: { url: hub.url, token: TOKENS[opts.agent ?? "claude-code"], source: "env", machine: null },
     client: opts.client ?? hubClient(hub, opts.agent ?? "claude-code"),
     log: logs.log,
@@ -58,9 +58,9 @@ describe("inbox socket delivery", () => {
     expect(instructions).toContain("not from the user");
     expect(instructions).toContain("finish_task");
     expect(instructions).toContain("list_agents");
-    expect(instructions).toContain("<bridge-task");
-    expect(instructions).toContain("<bridge-result");
-    expect(instructions).toContain("<bridge-message");
+    expect(instructions).toContain("<portico-task");
+    expect(instructions).toContain("<portico-result");
+    expect(instructions).toContain("<portico-message");
     expect(instructions).toContain("send_message");
     expect(instructions).toContain("Act once per ID");
   });
@@ -70,8 +70,8 @@ describe("inbox socket delivery", () => {
     await waitFor(() => hub.streams.isConnected("claude-code"));
     const { message } = hub.service.sendMessage("muse", { to: "claude-code", text: "Which branch is the release on?" });
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<bridge-message id="${message.id}" from="muse">`);
-    expect(sock.posts[0]!.content).toEndWith("Which branch is the release on?\n</bridge-message>");
+    expect(sock.posts[0]!.content).toStartWith(`<portico-message id="${message.id}" from="muse">`);
+    expect(sock.posts[0]!.content).toEndWith("Which branch is the release on?\n</portico-message>");
     await waitFor(() => hub.store.getMessage(message.id)?.deliveredAt != null);
     expect(logs.lines.find((line) => line.msg === "message_delivered")?.fields).toEqual({ message_id: message.id });
     expect(JSON.stringify(logs.lines)).not.toContain("Which branch");
@@ -83,8 +83,8 @@ describe("inbox socket delivery", () => {
     await waitFor(() => hub.streams.isConnected("claude-code"));
     const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Write the changelog" });
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<bridge-task id="${task.id}" from="grok-bot">`);
-    expect(sock.posts[0]!.content).toEndWith("Write the changelog\n</bridge-task>");
+    expect(sock.posts[0]!.content).toStartWith(`<portico-task id="${task.id}" from="grok-bot">`);
+    expect(sock.posts[0]!.content).toEndWith("Write the changelog\n</portico-task>");
     expect(sock.posts[0]!.auth).toBe("inbox-token");
     await waitFor(() => status(task.id) === "working");
     expect(channel).toEqual([]);
@@ -94,7 +94,7 @@ describe("inbox socket delivery", () => {
     const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Waiting already" });
     const { sock } = await connect();
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<bridge-task id="${task.id}" from="grok-bot">`);
+    expect(sock.posts[0]!.content).toStartWith(`<portico-task id="${task.id}" from="grok-bot">`);
     await waitFor(() => status(task.id) === "working");
   });
 
@@ -106,9 +106,9 @@ describe("inbox socket delivery", () => {
     hub.service.checkInbox("grok-bot");
     hub.service.finishTask("grok-bot", { taskId: task.id, result: "Found: Friday" });
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<bridge-result task_id="${task.id}" from="grok-bot" status="done">`);
+    expect(sock.posts[0]!.content).toStartWith(`<portico-result task_id="${task.id}" from="grok-bot" status="done">`);
     expect(sock.posts[0]!.content).toContain("not from the user");
-    expect(sock.posts[0]!.content).toEndWith("Found: Friday\n</bridge-result>");
+    expect(sock.posts[0]!.content).toEndWith("Found: Friday\n</portico-result>");
     await waitFor(() => hub.service.findTask(task.id)?.senderNotifiedAt != null);
   });
 
@@ -119,7 +119,7 @@ describe("inbox socket delivery", () => {
     await waitFor(() => sock.posts.length === 5);
     await Bun.sleep(100);
     expect(sock.posts).toHaveLength(5);
-    const posted = sock.posts.map((post) => /^<bridge-task id="([^"]+)"/.exec(post.content)?.[1]);
+    const posted = sock.posts.map((post) => /^<portico-task id="([^"]+)"/.exec(post.content)?.[1]);
     expect(posted.sort()).toEqual([...ids].sort());
     for (const id of ids) expect(status(id)).toBe("working");
   });
@@ -135,7 +135,7 @@ describe("inbox socket delivery", () => {
     expect(logs.lines.some((line) => line.msg === "inbox_post_failed" && line.fields.code === "refused")).toBe(true);
     sock.mode = "accept";
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<bridge-task id="${task.id}"`);
+    expect(sock.posts[0]!.content).toStartWith(`<portico-task id="${task.id}"`);
     await waitFor(() => status(task.id) === "working");
   });
 
@@ -182,7 +182,7 @@ describe("inbox socket delivery", () => {
     const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Try again" });
     const { sock } = await connect({ client: flaky });
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<bridge-task id="${task.id}"`);
+    expect(sock.posts[0]!.content).toStartWith(`<portico-task id="${task.id}"`);
     expect(logs.lines.some((line) => line.msg === "inbox_check_failed")).toBe(true);
   });
 
@@ -268,7 +268,7 @@ describe("inbox socket delivery", () => {
     const other = await fetch(`${hub.url}/api/stream`, { headers: { authorization: `Bearer ${TOKENS["claude-code"]}` } });
     try {
       await waitFor(() => sock.posts.length === 1);
-      expect(sock.posts[0]!.content).toContain("<bridge-notice>");
+      expect(sock.posts[0]!.content).toContain("<portico-notice>");
       expect(sock.posts[0]!.content).toContain("another Claude Code session");
       expect(channel).toEqual([]);
     } finally {
@@ -279,8 +279,8 @@ describe("inbox socket delivery", () => {
   test("tells the session when the hub refuses the stream", async () => {
     const { sock } = await connect({ client: new HubClient({ url: hub.url, token: "not-a-real-token-123456789" }) });
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toContain("<bridge-notice>");
-    expect(sock.posts[0]!.content).toContain("rejected BRIDGE_TOKEN");
+    expect(sock.posts[0]!.content).toContain("<portico-notice>");
+    expect(sock.posts[0]!.content).toContain("rejected PORTICO_TOKEN");
   });
 
   test("logs carry IDs, never task text", async () => {
@@ -316,7 +316,7 @@ describe("message text", () => {
     expect(stopNotice({ reason: "rejected", status: 403, message: "Only push agents can open the live stream." })).toContain(
       "delivery: push",
     );
-    expect(stopNotice({ reason: "rejected", status: 404, message: "HTTP 404" })).toContain("BRIDGE_URL has no live stream (404)");
-    expect(stopNotice({ reason: "rejected", status: 401, message: "Missing or invalid token." })).toContain("BRIDGE_TOKEN");
+    expect(stopNotice({ reason: "rejected", status: 404, message: "HTTP 404" })).toContain("PORTICO_URL has no live stream (404)");
+    expect(stopNotice({ reason: "rejected", status: 401, message: "Missing or invalid token." })).toContain("PORTICO_TOKEN");
   });
 });

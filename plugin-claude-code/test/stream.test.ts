@@ -78,7 +78,7 @@ describe("StreamClient against the hub", () => {
     expect(unknown.opens()).toBe(1);
   });
 
-  test("stops for good on a 404, which means BRIDGE_URL points at the wrong path (the hub answered not_found)", async () => {
+  test("stops for good on a 404, which means PORTICO_URL points at the wrong path (the hub answered not_found)", async () => {
     const server = Bun.serve({ port: 0, fetch: () => Response.json({ error: "not_found", message: "No such endpoint." }, { status: 404 }) });
     try {
       const watched = watch((signal) => fetch(`http://127.0.0.1:${server.port}/api/stream`, { signal }));

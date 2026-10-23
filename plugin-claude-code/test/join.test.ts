@@ -31,25 +31,25 @@ async function joinError(promise: Promise<unknown>): Promise<JoinError> {
 describe("parseJoinLine", () => {
   test("parseJoinLine accepts the whole line, a bare /join#code link, or a hub address plus a code", () => {
     const code = "A".repeat(22);
-    expect(parseJoinLine(`Join my agent bridge: https://bridge.example.com/join#${code}`)).toEqual({
-      hub: "https://bridge.example.com",
+    expect(parseJoinLine(`Join my Portico hub: https://portico.example.com/join#${code}`)).toEqual({
+      hub: "https://portico.example.com",
       code,
     });
-    expect(parseJoinLine(`https://bridge.example.com/base/join#${code}`)).toEqual({
-      hub: "https://bridge.example.com/base",
+    expect(parseJoinLine(`https://portico.example.com/base/join#${code}`)).toEqual({
+      hub: "https://portico.example.com/base",
       code,
     });
-    expect(parseJoinLine("https://bridge.example.com", code)).toEqual({ hub: "https://bridge.example.com", code });
+    expect(parseJoinLine("https://portico.example.com", code)).toEqual({ hub: "https://portico.example.com", code });
     expect(parseJoinLine(`http://localhost:8790/join#${code}`).hub).toBe("http://localhost:8790");
   });
 
   test("parseJoinLine refuses plain http to a remote host, credentials in the address, and a missing or malformed code", () => {
     for (const bad of [
       "no address here",
-      "http://bridge.example.com/join#AAAAAAAAAAAAAAAAAAAAAA",
-      "https://u:p@bridge.example.com/join#AAAAAAAAAAAAAAAAAAAAAA",
-      "https://bridge.example.com/join",
-      "https://bridge.example.com/join#short",
+      "http://portico.example.com/join#AAAAAAAAAAAAAAAAAAAAAA",
+      "https://u:p@portico.example.com/join#AAAAAAAAAAAAAAAAAAAAAA",
+      "https://portico.example.com/join",
+      "https://portico.example.com/join#short",
     ]) {
       expect(() => parseJoinLine(bad)).toThrow(JoinError);
     }
@@ -61,7 +61,7 @@ describe("joinMachine", () => {
     const h = hub();
     const { code } = h.networkService.createJoinCode();
     const path = configPath();
-    const joined = await joinMachine({ line: `Join my agent bridge: ${h.url}/join#${code}` }, { configPath: path, hostname });
+    const joined = await joinMachine({ line: `Join my Portico hub: ${h.url}/join#${code}` }, { configPath: path, hostname });
     expect(joined).toEqual({ hub: h.url, machine: "macbook-pro", path });
     expect(readMachineFile(path)).toEqual({ hub: h.url, machine: "macbook-pro", token: expect.stringMatching(/^bm_/), off: [] });
     expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -72,12 +72,12 @@ describe("joinMachine", () => {
     const h = hub();
     const { code } = h.networkService.createJoinCode();
     const path = configPath();
-    writeMachineFile(path, { hub: "https://bridge.example.com", machine: "studio", token: "bm_old", off: ["/work/private"] });
+    writeMachineFile(path, { hub: "https://portico.example.com", machine: "studio", token: "bm_old", off: ["/work/private"] });
     const before = readFileSync(path, "utf8");
 
     const err = await joinError(joinMachine({ line: `${h.url}/join#${code}` }, { configPath: path, hostname }));
     expect(err.message).toBe(
-      `${path} already exists (machine "studio" on https://bridge.example.com). Nothing was written. Run again with --replace to join again.`,
+      `${path} already exists (machine "studio" on https://portico.example.com). Nothing was written. Run again with --replace to join again.`,
     );
     expect(readFileSync(path, "utf8")).toBe(before);
     expect(h.networkService.listMachines()).toEqual([]); // refused before the code was sent
@@ -115,22 +115,22 @@ describe("joinMachine", () => {
     // Without a message in the answer, the HTTP status.
     const bare = async () => new Response("Bad gateway", { status: 502 });
     const status = await joinError(
-      joinMachine({ line: `https://bridge.example.com/join#${"B".repeat(22)}` }, { configPath: path, hostname, fetch: bare as unknown as typeof fetch }),
+      joinMachine({ line: `https://portico.example.com/join#${"B".repeat(22)}` }, { configPath: path, hostname, fetch: bare as unknown as typeof fetch }),
     );
-    expect(status.message).toBe("The hub at https://bridge.example.com answered HTTP 502.");
+    expect(status.message).toBe("The hub at https://portico.example.com answered HTTP 502.");
 
     // A 2xx answer that isn't a join result writes nothing.
     const odd = async () => Response.json({ ok: true }, { status: 201 });
     const oddErr = await joinError(
-      joinMachine({ line: `https://bridge.example.com/join#${"B".repeat(22)}` }, { configPath: path, hostname, fetch: odd as unknown as typeof fetch }),
+      joinMachine({ line: `https://portico.example.com/join#${"B".repeat(22)}` }, { configPath: path, hostname, fetch: odd as unknown as typeof fetch }),
     );
-    expect(oddErr.message).toBe("The hub at https://bridge.example.com sent an answer that isn't a join result. Nothing was written.");
+    expect(oddErr.message).toBe("The hub at https://portico.example.com sent an answer that isn't a join result. Nothing was written.");
     expect(existsSync(path)).toBe(false);
   });
 
   test("control characters from the hub are stripped from its error text and from the machine name", async () => {
     const ESC = "\u001b";
-    const line = `https://bridge.example.com/join#${"B".repeat(22)}`;
+    const line = `https://portico.example.com/join#${"B".repeat(22)}`;
     const path = configPath();
     const refusing = (async () =>
       Response.json({ error: "bad_request", message: `${ESC}[2J${ESC}]0;title\u0007Bad code\u009b31m` }, { status: 400 })) as unknown as typeof fetch;

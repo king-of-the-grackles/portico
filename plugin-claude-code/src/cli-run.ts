@@ -1,7 +1,7 @@
-// Runs before the plugin's dependencies are installed (the join, off and on commands, and the hub's `bridge join`), so
+// Runs before the plugin's dependencies are installed (the join, off and on commands, and the hub's `portico join`), so
 // it imports only node:* and the files beside it. No side effects: src/cli.ts is the entry that calls runCli.
 import { resolve } from "node:path";
-import { allowBridgeTools, allowLine, claudeSettingsPath } from "./claude-settings";
+import { allowLine, allowPorticoTools, claudeSettingsPath } from "./claude-settings";
 import { JoinError, joinMachine } from "./join";
 import { isOff, MachineFileError, machineConfigPath, readMachineFile, realFolder, setFolderOff } from "./machine";
 
@@ -113,9 +113,9 @@ async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
   io.out(`Joined ${joined.hub} as machine "${joined.machine}".`);
   io.out(`Wrote ${joined.path} (mode 600).`);
   io.out("New Claude Code sessions on this machine now appear on the network. Sessions already open join after a restart.");
-  io.out("To keep a folder off the network, run /agent-bridge:off in a Claude Code session in that folder.");
+  io.out("To keep a folder off the network, run /portico:off in a Claude Code session in that folder.");
   if (!noAllow) {
-    const line = allowLine(allowBridgeTools(claudeSettingsPath(io.env)));
+    const line = allowLine(allowPorticoTools(claudeSettingsPath(io.env)));
     if (line) io.out(line);
   }
   return 0;

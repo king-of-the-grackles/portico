@@ -1,8 +1,8 @@
 {
-  "name": "agent-bridge",
-  "version": "0.3.0",
+  "name": "portico",
+  "version": "0.4.0",
   "license": "MIT OR Apache-2.0",
-  "description": "Connects a Claude Code session to other AI agents through an agent-bridge hub. Tasks and messages from other agents arrive in the session, and approvals pop up on the desktop.",
-  "author": { "name": "agent-bridge contributors" },
+  "description": "Connects a Claude Code session to other AI agents through a Portico hub. Tasks and messages from other agents arrive in the session, and approvals pop up on the desktop.",
+  "author": { "name": "Portico contributors" },
   "keywords": ["agents", "handoff", "mcp"]
 }

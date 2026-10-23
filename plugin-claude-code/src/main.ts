@@ -7,7 +7,7 @@ import { type PluginConfig, PluginConfigError, parsePluginConfig } from "./confi
 import { HubClient, type StreamRegistration } from "./hub-client";
 import { errorName, stderrLog as log } from "./log";
 import { claudeHome, isOff, type MachineFile, MachineFileError, machineConfigPath, readMachineFile } from "./machine";
-import { createBridgePlugin, createIdleServer } from "./plugin";
+import { createIdleServer, createPorticoPlugin } from "./plugin";
 import { popupPlatform, systemRunner } from "./popup";
 import { SessionLocator } from "./registry";
 import { InboxSocket, socketTarget } from "./socket";
@@ -47,7 +47,7 @@ function setUp(): Running {
     log("error", "machine_file_invalid", { error: "MachineFileError" });
     process.exit(1);
   }
-  if (!config) return idle("BRIDGE_URL and BRIDGE_TOKEN are not set and this machine hasn't joined; no tools in this session");
+  if (!config) return idle("PORTICO_URL and PORTICO_TOKEN are not set and this machine hasn't joined; no tools in this session");
 
   const home = claudeHome(env);
   const locator = new SessionLocator({ sessionsDir: join(home, "sessions") });
@@ -56,7 +56,7 @@ function setUp(): Running {
   // The env-var override ignores the off list (spec §9).
   if (config.source === "machine" && machineFile && isOff(machineFile, cwd)) return idle("this folder is off the network");
 
-  const popupOff = (env.BRIDGE_POPUP ?? "").trim().toLowerCase() === "off";
+  const popupOff = (env.PORTICO_POPUP ?? "").trim().toLowerCase() === "off";
   const platform = popupPlatform(process.platform, env, existsSync);
   // Only a session on a joined machine can answer an approval, so env mode never shows pop-ups.
   const runner = config.source === "machine" && !popupOff && platform ? systemRunner(platform, env) : null;
@@ -83,7 +83,7 @@ function setUp(): Running {
   });
   const token = config.token;
   let registration: Promise<StreamRegistration> | null = null;
-  return createBridgePlugin({
+  return createPorticoPlugin({
     config,
     client,
     log,

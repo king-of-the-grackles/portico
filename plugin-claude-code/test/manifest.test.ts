@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { SERVER_VERSION } from "../src/plugin";
+import { joinLine } from "../../hub/src/core/network";
+import { SERVER_NAME, SERVER_VERSION } from "../src/plugin";
 
 const ROOT = join(import.meta.dir, "../..");
 const PLUGIN = join(ROOT, "plugin-claude-code");
@@ -11,25 +12,26 @@ test("marketplace, manifest, package and server agree on the name and version", 
   const marketplace = json(join(ROOT, ".claude-plugin/marketplace.json"));
   const manifest = json(join(PLUGIN, ".claude-plugin/plugin.json"));
   const pkg = json(join(PLUGIN, "package.json"));
-  expect(marketplace.name).toBe("agent-bridge");
-  expect(marketplace.plugins).toEqual([expect.objectContaining({ name: "agent-bridge", source: "./plugin-claude-code" })]);
-  expect(manifest.name).toBe("agent-bridge");
+  expect(marketplace.name).toBe("portico");
+  expect(marketplace.plugins).toEqual([expect.objectContaining({ name: "portico", source: "./plugin-claude-code" })]);
+  expect(manifest.name).toBe("portico");
   expect(manifest.version).toBe(pkg.version);
+  expect(SERVER_NAME).toBe("portico");
   expect(SERVER_VERSION).toBe(pkg.version);
-  expect(pkg.version).toBe("0.3.0");
+  expect(pkg.version).toBe("0.4.0");
   const lock = readFileSync(join(ROOT, "bun.lock"), "utf8");
-  expect(/"name": "@agent-bridge\/plugin-claude-code",\s*"version": "([^"]+)"/.exec(lock)?.[1]).toBe(pkg.version);
+  expect(/"name": "@portico\/plugin-claude-code",\s*"version": "([^"]+)"/.exec(lock)?.[1]).toBe(pkg.version);
 });
 
 test(".mcp.json starts the server from the plugin folder and passes the two settings through", () => {
   expect(json(join(PLUGIN, ".mcp.json"))).toEqual({
     mcpServers: {
-      bridge: {
+      portico: {
         command: "bun",
         args: ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "--shell=bun", "--silent", "start"],
         env: {
-          BRIDGE_URL: "${BRIDGE_URL}",
-          BRIDGE_TOKEN: "${BRIDGE_TOKEN}",
+          PORTICO_URL: "${PORTICO_URL}",
+          PORTICO_TOKEN: "${PORTICO_TOKEN}",
         },
       },
     },
@@ -71,9 +73,15 @@ test("join never puts the join line in a ! line: Claude checks the line, then ru
   for (const block of text.matchAll(/(?:^|\s)!`([^`]*)`/gm)) expect(block[1]).not.toContain("$ARGUMENTS");
   expect(text).not.toMatch(/(?:^|\s)!`/m);
   expect(text).not.toContain("allowed-tools");
-  expect(text).toContain("Join my agent bridge: ");
+  expect(text).toContain("Join my Portico hub: ");
   expect(text).toContain(`bun "\${CLAUDE_PLUGIN_ROOT}/src/cli.ts" join '<address>'`);
   expect(text).toContain("--no-allow");
+});
+
+test("join.md accepts the join line the hub hands out", () => {
+  const prefix = joinLine("https://h.example", "c").split("https://")[0]!; // "Join my Portico hub: "
+  expect(prefix).not.toBe("");
+  expect(readCommand("join")).toContain(`\`${prefix}\``);
 });
 
 test("the address shape in join.md accepts real join addresses and nothing a shell would act on", () => {
@@ -82,19 +90,19 @@ test("the address shape in join.md accepts real join addresses and nothing a she
   const shape = new RegExp(source!);
   const code = `${"Ab_-".repeat(5)}cd`;
   for (const good of [
-    `https://bridge.example.com/join#${code}`,
-    `https://bridge.example.com:8443/join#${code}`,
+    `https://portico.example.com/join#${code}`,
+    `https://portico.example.com:8443/join#${code}`,
     `http://localhost:8790/join#${code}`,
     `http://127.0.0.1/join#${code}`,
   ]) {
     expect(good).toMatch(shape);
   }
-  const base = `https://bridge.example.com/join#${code}`;
+  const base = `https://portico.example.com/join#${code}`;
   for (const bad of [
-    `http://bridge.example.com/join#${code}`,
-    `https://u:p@bridge.example.com/join#${code}`,
-    "https://bridge.example.com/join#short",
-    `Join my agent bridge: ${base}`,
+    `http://portico.example.com/join#${code}`,
+    `https://u:p@portico.example.com/join#${code}`,
+    "https://portico.example.com/join#short",
+    `Join my Portico hub: ${base}`,
     ...[" x", "\tx", "\nid", "'", '"', "`id`", "$(id)", ";id", "&id", "|id", "<x", ">x", "\\"].map((tail) => base + tail),
   ]) {
     expect(bad).not.toMatch(shape);

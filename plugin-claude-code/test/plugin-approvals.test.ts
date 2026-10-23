@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { signIn, testConfig } from "../../hub/test/helpers";
 import { HubClient } from "../src/hub-client";
-import { createBridgePlugin } from "../src/plugin";
+import { createPorticoPlugin } from "../src/plugin";
 import type { DialogRunner } from "../src/popup";
 import { captureLog, fakeHost, fakeInboxSocket, fakeRunner, hubClient, joinTestMachine, startHub, type TestHub, waitFor } from "./helpers";
 
@@ -29,7 +29,7 @@ afterEach(async () => {
 async function session(token: string, key: string, repo: string, folderId: string, runner: DialogRunner | null) {
   const sock = await fakeInboxSocket();
   const client = new HubClient({ url: hub.url, token, sessionKey: key });
-  const plugin = createBridgePlugin({
+  const plugin = createPorticoPlugin({
     config: { url: hub.url, token, source: "machine", machine: "macbook" },
     client,
     log: captureLog().log,
