@@ -12,7 +12,7 @@ Beyond the agents named in `portico.yaml`, the hub runs a personal agent network
 
 Join a machine: install the plugin, then run `portico join '<join line>'` there (or `/portico:join <join line>` in Claude Code). Keep a folder off the network with `/portico:off`. Full steps: [docs/agents/claude-code.md](docs/agents/claude-code.md).
 
-Design: [docs/superpowers/specs/2026-10-19-agent-bridge-design.md](docs/superpowers/specs/2026-10-19-agent-bridge-design.md). Status: early development.
+Design specs and plans: [docs/superpowers/](docs/superpowers/). Test results: [docs/feasibility/](docs/feasibility/). Status: early development.
 
 ## Run it locally
 
