@@ -87,7 +87,7 @@ process.on("exit", () => {
 });
 
 /** A new empty folder under the system temp folder, removed when the test run exits. Short, so socket paths fit. */
-export function tempDir(prefix = "ab-"): string {
+export function tempDir(prefix = "po-"): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;

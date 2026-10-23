@@ -148,7 +148,7 @@ describe("GET /join", () => {
     const page = await (await makeApp().app.request("/join")).text();
     // Run the folder pick from the page as a shell would, against a temporary home, never the real ~/.claude.
     const pick = /<pre>bun "\$\((.+?)\)src\/cli\.ts" join/.exec(page)![1]!;
-    const home = mkdtempSync(join(tmpdir(), "ab-"));
+    const home = mkdtempSync(join(tmpdir(), "po-"));
     try {
       const cache = join(home, ".claude/plugins/cache/portico/portico");
       for (const version of ["0.2.0", "0.9.0", "0.10.0"]) mkdirSync(join(cache, version), { recursive: true });

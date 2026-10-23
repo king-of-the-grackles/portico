@@ -345,7 +345,7 @@ afterEach(() => {
 });
 
 function v1Database(statements: string[]): string {
-  const dir = mkdtempSync(join(tmpdir(), "ab-db-"));
+  const dir = mkdtempSync(join(tmpdir(), "po-db-"));
   v1Dirs.push(dir);
   const path = join(dir, "portico.db");
   const db = new Database(path, { create: true });

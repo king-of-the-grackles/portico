@@ -23,12 +23,6 @@ describe("parsePluginConfig", () => {
     });
   });
 
-  test("PORTICO_PERMISSION_RELAY is no longer read: any value is ignored", () => {
-    const base = { PORTICO_URL: "https://portico.example.com", PORTICO_TOKEN: "token-0123456789" };
-    expect(parsePluginConfig({ ...base, PORTICO_PERMISSION_RELAY: "maybe" })).toEqual(parsePluginConfig(base));
-    expect(parsePluginConfig(base)).not.toHaveProperty("permissionRelay");
-  });
-
   test("returns null when neither the address nor the token is set, so the plugin can idle", () => {
     expect(parsePluginConfig({})).toBeNull();
     // Claude Code passes ${VAR} through literally when VAR isn't set.

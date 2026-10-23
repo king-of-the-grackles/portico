@@ -79,9 +79,17 @@ test("join never puts the join line in a ! line: Claude checks the line, then ru
 });
 
 test("join.md accepts the join line the hub hands out", () => {
-  const prefix = joinLine("https://h.example", "c").split("https://")[0]!; // "Join my Portico hub: "
+  const text = readCommand("join");
+  const hub = "https://portico.example.com";
+  const code = `${"Ab_-".repeat(5)}cd`;
+  const address = `${hub}/join#${code}`;
+  const line = joinLine(hub, code);
+  // The line is the prefix plus the address, nothing after it, as join.md requires.
+  expect(line.endsWith(address)).toBe(true);
+  const prefix = line.slice(0, -address.length); // "Join my Portico hub: "
   expect(prefix).not.toBe("");
-  expect(readCommand("join")).toContain(`\`${prefix}\``);
+  expect(text).toContain(`\`${prefix}\``);
+  expect(address).toMatch(new RegExp(/`(\^\(https:[^`]*\$)`/.exec(text)![1]!));
 });
 
 test("the address shape in join.md accepts real join addresses and nothing a shell would act on", () => {
