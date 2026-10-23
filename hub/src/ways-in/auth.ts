@@ -76,7 +76,7 @@ export function makeResolvers(
 
 /**
  * Whether a check_inbox call takes the caller's messages. A 0.1.x plugin (a portico.yaml push agent in env mode) reads
- * the inbox but shows only tasks and results, and never sends X-Portico-Session; the 0.2 plugin always does. So a push
+ * the inbox but shows only tasks and results, and never sends the session header; 0.2 and later always do. So a push
  * caller without the header gets no messages, and they stay pending for its deliveries. Pull callers always get them.
  */
 export function inboxTakesMessages(directory: Directory, agent: string, sessionKey: string | undefined): boolean {

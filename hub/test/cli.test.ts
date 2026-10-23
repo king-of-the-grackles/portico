@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initCommand, generateSecrets, agentNames, InitError } from "../src/commands/init";
@@ -230,32 +231,40 @@ describe("portico CLI dispatch", () => {
 
 describe("portico join", () => {
   test("joins through the plugin's join and writes the machine file", async () => {
-    const ctx = makeApp();
-    const { code } = ctx.networkService.createJoinCode();
-    const dir = tempDir();
-    const path = join(dir, "portico", "machine.json");
-    const run = io(dir, { PORTICO_MACHINE_CONFIG: path, PORTICO_CLAUDE_HOME: join(dir, ".claude") });
-    const fetch = ((url: string | URL | Request, init?: RequestInit) => ctx.app.request(url, init)) as typeof globalThis.fetch;
-    const line = `Join my Portico hub: https://portico.test/join#${code}`;
-    expect(await joinCommand([line], run.io, { fetch, hostname: () => "studio.local" })).toBe(0);
-    expect(run.err).toEqual([]);
-    expect(run.out[0]).toBe('Joined https://portico.test as machine "studio".');
-    expect(run.out).toContain(`Wrote ${path} (mode 600).`);
-    const file = JSON.parse(readFileSync(path, "utf8"));
-    expect(file).toEqual({ hub: "https://portico.test", machine: "studio", token: expect.stringMatching(/^bm_/), off: [] });
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(run.out.join("\n")).not.toContain(file.token);
-    expect(ctx.networkService.listMachines().map((machine) => machine.name)).toEqual(["studio"]);
-    const settings = join(dir, ".claude", "settings.json");
-    expect(run.out).toContain(
-      `Added mcp__plugin_portico_portico to permissions.allow in ${settings}, so Claude Code runs the network tools without asking. To skip this step, join with --no-allow.`,
-    );
-    expect(JSON.parse(readFileSync(settings, "utf8")).permissions.allow).toEqual(["mcp__plugin_portico_portico"]);
+    // The plugin falls back to ~/.portico and ~/.claude when an override name doesn't match what it reads.
+    // Stub the home folder too, so a mismatch lands in the temp folder, never in the real home.
+    const dirForHome = tempDir();
+    const home = spyOn(os, "homedir").mockReturnValue(dirForHome);
+    try {
+      const ctx = makeApp();
+      const { code } = ctx.networkService.createJoinCode();
+      const dir = tempDir();
+      const path = join(dir, "portico", "machine.json");
+      const run = io(dir, { PORTICO_MACHINE_CONFIG: path, PORTICO_CLAUDE_HOME: join(dir, ".claude") });
+      const fetch = ((url: string | URL | Request, init?: RequestInit) => ctx.app.request(url, init)) as typeof globalThis.fetch;
+      const line = `Join my Portico hub: https://portico.test/join#${code}`;
+      expect(await joinCommand([line], run.io, { fetch, hostname: () => "studio.local" })).toBe(0);
+      expect(run.err).toEqual([]);
+      expect(run.out[0]).toBe('Joined https://portico.test as machine "studio".');
+      expect(run.out).toContain(`Wrote ${path} (mode 600).`);
+      const file = JSON.parse(readFileSync(path, "utf8"));
+      expect(file).toEqual({ hub: "https://portico.test", machine: "studio", token: expect.stringMatching(/^bm_/), off: [] });
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      expect(run.out.join("\n")).not.toContain(file.token);
+      expect(ctx.networkService.listMachines().map((machine) => machine.name)).toEqual(["studio"]);
+      const settings = join(dir, ".claude", "settings.json");
+      expect(run.out).toContain(
+        `Added mcp__plugin_portico_portico to permissions.allow in ${settings}, so Claude Code runs the network tools without asking. To skip this step, join with --no-allow.`,
+      );
+      expect(JSON.parse(readFileSync(settings, "utf8")).permissions.allow).toEqual(["mcp__plugin_portico_portico"]);
 
-    // A second join refuses to overwrite the file, and the hub sees no request.
-    const again = io(dir, { PORTICO_MACHINE_CONFIG: path, PORTICO_CLAUDE_HOME: join(dir, ".claude") });
-    expect(await joinCommand([line, "--name", "macbook"], again.io, { fetch })).toBe(1);
-    expect(again.err.join("\n")).toContain("Run again with --replace");
-    expect(ctx.networkService.listMachines()).toHaveLength(1);
+      // A second join refuses to overwrite the file, and the hub sees no request.
+      const again = io(dir, { PORTICO_MACHINE_CONFIG: path, PORTICO_CLAUDE_HOME: join(dir, ".claude") });
+      expect(await joinCommand([line, "--name", "macbook"], again.io, { fetch })).toBe(1);
+      expect(again.err.join("\n")).toContain("Run again with --replace");
+      expect(ctx.networkService.listMachines()).toHaveLength(1);
+    } finally {
+      home.mockRestore();
+    }
   });
 });
