@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
-import type { BridgeConfig, TaskStatus } from "../core/types";
+import type { PorticoConfig, TaskStatus } from "../core/types";
 
 export type Html = HtmlEscapedString | Promise<HtmlEscapedString>;
 
@@ -97,7 +97,7 @@ export function sendPage(
 }
 
 /** Like jsonBodyLimit, but answers with an HTML page, because these forms are posted from a browser. */
-export function formBodyLimit(config: BridgeConfig) {
+export function formBodyLimit(config: PorticoConfig) {
   const maxBodyBytes = config.limits.maxTextKb * 1024 * 3;
   return bodyLimit({
     maxSize: maxBodyBytes,

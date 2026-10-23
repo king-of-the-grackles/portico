@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { resolve } from "node:path";
 import { ConfigError, loadConfig } from "../config";
 import { joinLine, NetworkService } from "../core/network";
-import type { BridgeConfig } from "../core/types";
+import type { PorticoConfig } from "../core/types";
 import { openDb } from "../db";
 import { NetworkStore } from "../network-store";
 import type { CliIo } from "./io";
@@ -14,12 +14,12 @@ import { startupProblem } from "./serve";
  */
 export async function inviteCommand(args: string[], io: CliIo, deps: { now?: () => Date } = {}): Promise<number> {
   if (args.length > 0) {
-    io.err(`Unknown option: ${args[0]}. Usage: bridge invite`);
+    io.err(`Unknown option: ${args[0]}. Usage: portico invite`);
     return 1;
   }
-  let config: BridgeConfig;
+  let config: PorticoConfig;
   try {
-    config = await loadConfig({ ...io.env, BRIDGE_CONFIG: resolve(io.cwd, io.env.BRIDGE_CONFIG?.trim() || "bridge.yaml") });
+    config = await loadConfig({ ...io.env, PORTICO_CONFIG: resolve(io.cwd, io.env.PORTICO_CONFIG?.trim() || "portico.yaml") });
   } catch (err) {
     if (!(err instanceof ConfigError)) throw err;
     for (const problem of err.problems) io.err(problem);

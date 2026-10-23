@@ -1,5 +1,5 @@
 import { html } from "hono/html";
-import { type BridgeEvent, type DirectoryEntry, type Message, TASK_STATUSES, type Task, type TaskStatus } from "../core/types";
+import { type DirectoryEntry, type Message, type PorticoEvent, TASK_STATUSES, type Task, type TaskStatus } from "../core/types";
 import { defang } from "../core/framing";
 import { kindLabel } from "./connect";
 import { formatTime, type Html, STATUS_WORDS } from "./layout";
@@ -81,7 +81,7 @@ function historyRow(task: Task): Html {
 
 export function historyView(
   tasks: Task[],
-  events: BridgeEvent[],
+  events: PorticoEvent[],
   filter: { agent?: string; status?: TaskStatus },
   agentNames: string[],
 ): Html {

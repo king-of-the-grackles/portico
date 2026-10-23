@@ -1,7 +1,7 @@
 import type { Store } from "../db";
 import type { NetworkStore } from "../network-store";
 import { addressOf } from "./directory";
-import { BridgeError } from "./errors";
+import { PorticoError } from "./errors";
 import { defang } from "./framing";
 import { slugify } from "./network";
 import { OWNER } from "./types";
@@ -32,16 +32,16 @@ export interface Registration {
 /** The registration headers and query, checked. The repo defaults to "session". */
 export function parseRegistration(key: unknown, folderId: unknown, repo: unknown): Registration {
   if (typeof key !== "string" || !KEY.test(key)) {
-    throw new BridgeError("bad_request", "X-Bridge-Session must be 8 to 100 letters, digits, hyphens or underscores.");
+    throw new PorticoError("bad_request", "X-Portico-Session must be 8 to 100 letters, digits, hyphens or underscores.");
   }
   if (typeof folderId !== "string" || !FOLDER_ID.test(folderId)) {
-    throw new BridgeError("bad_request", "X-Bridge-Folder must be 64 lowercase hex characters.");
+    throw new PorticoError("bad_request", "X-Portico-Folder must be 64 lowercase hex characters.");
   }
   if (repo !== undefined && repo !== null && typeof repo !== "string") {
-    throw new BridgeError("bad_request", "repo must be a string.");
+    throw new PorticoError("bad_request", "repo must be a string.");
   }
   if (typeof repo === "string" && repo.length > MAX_REPO) {
-    throw new BridgeError("bad_request", `repo must be at most ${MAX_REPO} characters.`);
+    throw new PorticoError("bad_request", `repo must be at most ${MAX_REPO} characters.`);
   }
   // Stored as the session's folder and shown in its directory description, so it gets the same cleaning as status
   // text, and only its last path segment is kept, even if a client sends a path.
@@ -113,7 +113,7 @@ export class SessionRegistry {
       const taken = new Set(this.network.sessionsOnMachine(machine.id).map((s) => s.name));
       let name = base;
       for (let n = 2; taken.has(name); n++) {
-        if (n > MAX_DEDUPE) throw new BridgeError("rate_limited", `Too many sessions named ${base} on ${machine.name}.`);
+        if (n > MAX_DEDUPE) throw new PorticoError("rate_limited", `Too many sessions named ${base} on ${machine.name}.`);
         name = `${base}-${n}`;
       }
       const session: SessionRecord = {

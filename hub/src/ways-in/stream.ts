@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { Directory } from "../core/directory";
-import type { BridgeService } from "../core/service";
+import type { PorticoService } from "../core/service";
 import { parseRegistration, type SessionRegistry } from "../core/sessions";
 import { errorName, log } from "../log";
 import type { PrincipalResolver } from "./auth";
@@ -9,7 +9,7 @@ import { handleError } from "./rest";
 
 export type StreamEvent = "hello" | "nudge" | "replaced" | "approval_request" | "approval_closed";
 
-/** "notify" tells the old stream it was `replaced` (bridge.yaml agents); "quiet" just closes it (a session's own reconnect). */
+/** "notify" tells the old stream it was `replaced` (portico.yaml agents); "quiet" just closes it (a session's own reconnect). */
 export type ReplaceMode = "notify" | "quiet";
 
 /** The first event on every stream: who the hub took the caller for. */
@@ -164,7 +164,7 @@ function isPopup(entry: StreamInfo): entry is StreamInfo & { machine: string } {
 export const HEARTBEAT_MS = 25_000;
 
 export interface StreamRouteDeps {
-  service: BridgeService;
+  service: PorticoService;
   directory: Directory;
   streams: StreamHub;
   /** Resolved without the session key, so a machine token stays a machine and can register a new session. */
@@ -192,14 +192,14 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
     let info: StreamInfo | undefined;
     if (principal.type === "machine") {
       // A machine token registers (or finds) the session named by its key and folder (spec §5.2).
-      const reg = parseRegistration(c.req.header("x-bridge-session"), c.req.header("x-bridge-folder"), c.req.query("repo"));
+      const reg = parseRegistration(c.req.header("x-portico-session"), c.req.header("x-portico-folder"), c.req.query("repo"));
       const registered = deps.sessions.register(principal.machine, reg);
       address = registered.address;
       machine = principal.machine.name;
       sessionId = registered.session.id;
       mode = "quiet";
       // Only a machine's session can answer an approval, so only its stream may declare pop-ups.
-      info = { machine, popup: c.req.header("x-bridge-popup") === "1" };
+      info = { machine, popup: c.req.header("x-portico-popup") === "1" };
     } else {
       address = principal.address;
       if (!directory.isPush(address)) {
@@ -261,7 +261,7 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
     });
   });
 
-  // A bad registration is a BridgeError: answer it as JSON, as the rest of the API does.
+  // A bad registration is a PorticoError: answer it as JSON, as the rest of the API does.
   route.onError(handleError);
   return route;
 }

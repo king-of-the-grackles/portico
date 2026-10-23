@@ -9,27 +9,27 @@ import { openDb } from "../src/db";
 import { NetworkStore } from "../src/network-store";
 import { BASE_YAML, PRONOUNS, T0, testConfig, testEnv } from "./helpers";
 
-const JOIN_LINE = /^Join my agent bridge: https:\/\/bridge\.test\/join#[A-Za-z0-9_-]{22}$/;
+const JOIN_LINE = /^Join my Portico hub: https:\/\/portico\.test\/join#[A-Za-z0-9_-]{22}$/;
 
 const dirs: string[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** A folder with bridge.yaml, and env pointing the config and database there. */
+/** A folder with portico.yaml, and env pointing the config and database there. */
 function setup(extraEnv: Record<string, string> = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "bridge-invite-"));
+  const dir = mkdtempSync(join(tmpdir(), "portico-invite-"));
   dirs.push(dir);
-  writeFileSync(join(dir, "bridge.yaml"), BASE_YAML);
-  const dbPath = join(dir, "bridge.db");
-  const env = testEnv({ BRIDGE_DB_PATH: dbPath, BRIDGE_CONFIG: join(dir, "bridge.yaml"), ...extraEnv });
+  writeFileSync(join(dir, "portico.yaml"), BASE_YAML);
+  const dbPath = join(dir, "portico.db");
+  const env = testEnv({ PORTICO_DB_PATH: dbPath, PORTICO_CONFIG: join(dir, "portico.yaml"), ...extraEnv });
   const out: string[] = [];
   const err: string[] = [];
   const io: CliIo = { env, cwd: dir, out: (line) => out.push(line), err: (line) => err.push(line) };
   return { dir, dbPath, io, out, err };
 }
 
-describe("bridge invite", () => {
+describe("portico invite", () => {
   test("prints a join line that redeems on the hub, valid for 24 hours", async () => {
     const run = setup();
     expect(await inviteCommand([], run.io, { now: () => T0 })).toBe(0);
@@ -53,15 +53,13 @@ describe("bridge invite", () => {
     const ok = setup();
     expect(await inviteCommand([], ok.io, { now: () => T0 })).toBe(0);
     const code = ok.out[1]!.split("#")[1]!;
-    const broken = setup({ BRIDGE_PUBLIC_URL: "" });
+    const broken = setup({ PORTICO_PUBLIC_URL: "" });
     expect(await inviteCommand([], broken.io)).toBe(1);
-    const leftover = setup({ BRIDGE_NTFY_TOPIC: "mytopic" }); // ignored since v1.2, never a config error
-    expect(await inviteCommand([], leftover.io, { now: () => T0 })).toBe(0);
     const unknown = setup();
     expect(await inviteCommand(["--force"], unknown.io)).toBe(1);
 
-    const lines = [ok, broken, leftover, unknown].flatMap((run) => [...run.out, ...run.err]).filter((line) => !JOIN_LINE.test(line));
-    expect(lines.length).toBeGreaterThanOrEqual(5);
+    const lines = [ok, broken, unknown].flatMap((run) => [...run.out, ...run.err]).filter((line) => !JOIN_LINE.test(line));
+    expect(lines.length).toBeGreaterThanOrEqual(4);
     for (const line of lines) {
       expect(line).not.toMatch(PRONOUNS);
       expect(line).not.toContain(code);
@@ -69,13 +67,13 @@ describe("bridge invite", () => {
   });
 
   test("a config problem is reported, and nothing is created", async () => {
-    const run = setup({ BRIDGE_PUBLIC_URL: "" });
+    const run = setup({ PORTICO_PUBLIC_URL: "" });
     expect(await inviteCommand([], run.io)).toBe(1);
-    expect(run.err.join("\n")).toContain("missing BRIDGE_PUBLIC_URL");
+    expect(run.err.join("\n")).toContain("missing PORTICO_PUBLIC_URL");
     expect(run.out).toEqual([]);
     expect(existsSync(run.dbPath)).toBe(false);
 
-    const missing = setup({ BRIDGE_CONFIG: "nowhere.yaml" });
+    const missing = setup({ PORTICO_CONFIG: "nowhere.yaml" });
     expect(await inviteCommand([], missing.io)).toBe(1);
     expect(missing.err.join("\n")).toContain("config file not found");
     expect(existsSync(missing.dbPath)).toBe(false);
@@ -84,7 +82,7 @@ describe("bridge invite", () => {
   test("an unknown option prints the usage and exits 1", async () => {
     const run = setup();
     expect(await inviteCommand(["--force"], run.io)).toBe(1);
-    expect(run.err).toEqual(["Unknown option: --force. Usage: bridge invite"]);
+    expect(run.err).toEqual(["Unknown option: --force. Usage: portico invite"]);
     expect(run.out).toEqual([]);
     expect(existsSync(run.dbPath)).toBe(false);
   });

@@ -27,17 +27,17 @@ export function generateSecrets(agents: string[]): Secrets {
   };
 }
 
-/** The agent names in a bridge.yaml, so init can make a token for each. */
+/** The agent names in a portico.yaml, so init can make a token for each. */
 export function agentNames(yamlText: string): string[] {
   let raw: unknown;
   try {
     raw = parseYaml(yamlText);
   } catch {
-    throw new InitError("bridge.yaml is not valid YAML. Fix the file, or move the file aside to start from the example.");
+    throw new InitError("portico.yaml is not valid YAML. Fix the file, or move the file aside to start from the example.");
   }
   const agents = (raw as { agents?: unknown } | null)?.agents;
   if (!Array.isArray(agents) || agents.length === 0) {
-    throw new InitError("bridge.yaml lists no agents. Add at least one under agents:, or move the file aside to start from the example.");
+    throw new InitError("portico.yaml lists no agents. Add at least one under agents:, or move the file aside to start from the example.");
   }
   const names = agents.map((agent) => (agent as { name?: unknown } | null)?.name);
   for (const name of names) {
@@ -50,17 +50,17 @@ export function agentNames(yamlText: string): string[] {
 
 function secretLines(secrets: Secrets): [string, string][] {
   return [
-    ["BRIDGE_PUBLIC_URL", secrets.publicUrl],
-    ["BRIDGE_SIGNING_SECRET", secrets.signingSecret],
-    ["BRIDGE_ADMIN_PASSWORD", secrets.adminPassword],
+    ["PORTICO_PUBLIC_URL", secrets.publicUrl],
+    ["PORTICO_SIGNING_SECRET", secrets.signingSecret],
+    ["PORTICO_ADMIN_PASSWORD", secrets.adminPassword],
     ...Object.entries(secrets.tokens).map(([name, token]): [string, string] => [tokenEnvName(name), token]),
   ];
 }
 
 function render(secrets: Secrets, shell: boolean): string {
   const header = [
-    "# Written by bridge init. Every secret the hub uses is in this file: keep it private and out of git.",
-    "# Change BRIDGE_PUBLIC_URL to the hub's public https address before agents connect.",
+    "# Written by portico init. Every secret the hub uses is in this file: keep it private and out of git.",
+    "# Change PORTICO_PUBLIC_URL to the hub's public https address before agents connect.",
   ];
   const lines = secretLines(secrets).map(([key, value]) => (shell ? `export ${key}='${value}'` : `${key}=${value}`));
   return `${[...header, ...lines].join("\n")}\n`;
@@ -69,13 +69,13 @@ function render(secrets: Secrets, shell: boolean): string {
 export async function initCommand(args: string[], io: CliIo): Promise<number> {
   const unknown = args.find((arg) => arg !== "--shell");
   if (unknown !== undefined) {
-    io.err(`Unknown option: ${unknown}. Usage: bridge init [--shell]`);
+    io.err(`Unknown option: ${unknown}. Usage: portico init [--shell]`);
     return 1;
   }
   const shell = args.includes("--shell");
-  const secretsName = shell ? "bridge-secrets.sh" : ".env";
+  const secretsName = shell ? "portico-secrets.sh" : ".env";
   const secretsPath = resolve(io.cwd, secretsName);
-  const configPath = resolve(io.cwd, io.env.BRIDGE_CONFIG?.trim() || "bridge.yaml");
+  const configPath = resolve(io.cwd, io.env.PORTICO_CONFIG?.trim() || "portico.yaml");
   const configName = basename(configPath);
 
   if (existsSync(secretsPath)) {
@@ -108,9 +108,9 @@ export async function initCommand(args: string[], io: CliIo): Promise<number> {
   io.out("Next:");
   const steps = [
     ...(configExists ? [] : [`Edit ${configName}: agents, rules and triggers.`]),
-    `Set BRIDGE_PUBLIC_URL in ${secretsName} to the hub's public https address.`,
-    ...(shell ? ["Run: source bridge-secrets.sh (the hub loads .env automatically, but not this file)."] : []),
-    "Run: bridge doctor, then bridge serve.",
+    `Set PORTICO_PUBLIC_URL in ${secretsName} to the hub's public https address.`,
+    ...(shell ? ["Run: source portico-secrets.sh (the hub loads .env automatically, but not this file)."] : []),
+    "Run: portico doctor, then portico serve.",
   ];
   steps.forEach((step, i) => io.out(`  ${i + 1}. ${step}`));
   return 0;

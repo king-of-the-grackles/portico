@@ -64,8 +64,8 @@ test("doing is defanged, made one line and clipped to 120 code points; repo keep
       branch: "main",
     });
     // Missing and empty fields become null; frame tags lose their "<".
-    await report({ status: "idle", doing: "  ", branch: "<bridge-task>" });
-    expect(ctx.presence.get(ADDRESS)).toMatchObject({ status: "idle", doing: null, repo: null, branch: "‹bridge-task>" });
+    await report({ status: "idle", doing: "  ", branch: "<portico-task>" });
+    expect(ctx.presence.get(ADDRESS)).toMatchObject({ status: "idle", doing: null, repo: null, branch: "‹portico-task>" });
   } finally {
     await stream.events.cancel();
   }
@@ -112,7 +112,7 @@ test("a session's reports write last_seen_at at most once a minute, and nothing 
   expect(lines.join("\n")).not.toContain("Secret plan");
 });
 
-test("a bridge.yaml push agent reports too", async () => {
+test("a portico.yaml push agent reports too", async () => {
   const ctx = makeApp();
   const res = await ctx.call("claude-code", "POST", "/api/status", { status: "waiting", doing: "Asking a question" });
   expect(res.status).toBe(200);

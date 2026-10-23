@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Directory } from "../core/directory";
-import { BridgeError } from "../core/errors";
-import type { BridgeService } from "../core/service";
-import type { BridgeConfig, Task } from "../core/types";
+import { PorticoError } from "../core/errors";
+import type { PorticoService } from "../core/service";
+import type { PorticoConfig, Task } from "../core/types";
 import { clip, log } from "../log";
 import { type AgentEnv, type AgentResolver, type PrincipalResolver, requireAgent } from "../ways-in/auth";
 import { jsonBodyLimit } from "../ways-in/limits";
@@ -21,8 +21,8 @@ const AnswerBody = z.object({
 });
 
 export interface ApprovalRouteDeps {
-  config: BridgeConfig;
-  service: BridgeService;
+  config: PorticoConfig;
+  service: PorticoService;
   directory: Directory;
   desk: Pick<ApprovalDesk, "check">;
   resolvers: { agent: AgentResolver; principal: PrincipalResolver };
@@ -39,7 +39,7 @@ export function approvalRoutes(deps: ApprovalRouteDeps): Hono<AgentEnv> {
   route.use("*", requireAgent(resolvers.agent, resolvers.principal));
   route.post("/:taskId", async (c) => {
     const agent = c.get("agent");
-    if (directory.find(agent)?.source !== "session") throw new BridgeError("not_allowed", ONLY_SESSIONS);
+    if (directory.find(agent)?.source !== "session") throw new PorticoError("not_allowed", ONLY_SESSIONS);
     const body = AnswerBody.parse(await readJson(c));
     const taskId = c.req.param("taskId");
     const refused = (why: "decided" | "no_request") =>
@@ -47,8 +47,8 @@ export function approvalRoutes(deps: ApprovalRouteDeps): Hono<AgentEnv> {
     const state = desk.check(taskId, agent, body.nonce);
     if (state !== "open") {
       refused(state === "closed" ? "decided" : "no_request");
-      if (state === "closed") throw new BridgeError("wrong_status", `Task ${taskId} was already decided.`);
-      throw new BridgeError("not_allowed", NO_REQUEST);
+      if (state === "closed") throw new PorticoError("wrong_status", `Task ${taskId} was already decided.`);
+      throw new PorticoError("not_allowed", NO_REQUEST);
     }
     let task: Task;
     try {
@@ -56,7 +56,7 @@ export function approvalRoutes(deps: ApprovalRouteDeps): Hono<AgentEnv> {
       task = body.decision === "approve" ? service.approveTask(taskId) : service.denyTask(taskId, body.note);
     } catch (err) {
       // Decided a moment ago, by another pop-up or the hub page, before the desk heard of it.
-      if (err instanceof BridgeError && err.code === "wrong_status") refused("decided");
+      if (err instanceof PorticoError && err.code === "wrong_status") refused("decided");
       throw err;
     }
     log("info", "approval_answered", { task_id: taskId, agent, decision: body.decision });

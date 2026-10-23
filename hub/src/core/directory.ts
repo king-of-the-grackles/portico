@@ -1,16 +1,16 @@
 import type { NetworkStore } from "../network-store";
-import { BridgeError } from "./errors";
+import { PorticoError } from "./errors";
 import { isBroadcast } from "./guards";
 import type { Presence } from "./presence";
 import type {
   AgentConfig,
   Assistant,
-  BridgeConfig,
   DeliveryTier,
   DirectoryEntry,
   LiveStatus,
   Member,
   MemberRef,
+  PorticoConfig,
   SessionRecord,
 } from "./types";
 
@@ -78,7 +78,7 @@ function sessionMember(session: SessionRecord): Member {
 }
 
 export interface DirectoryDeps {
-  config: BridgeConfig;
+  config: PorticoConfig;
   network: NetworkStore;
   /** Whether the address has an open stream. A connected session stays listed however long ago its row was written. */
   isConnected?: (address: string) => boolean;
@@ -88,11 +88,11 @@ export interface DirectoryDeps {
 }
 
 /**
- * Everyone a task can be addressed to: bridge.yaml agents, hub-page assistants and sessions. An assistant whose name
- * a bridge.yaml agent also has is shadowed: left out everywhere, so the bridge.yaml agent wins.
+ * Everyone a task can be addressed to: portico.yaml agents, hub-page assistants and sessions. An assistant whose name
+ * a portico.yaml agent also has is shadowed: left out everywhere, so the portico.yaml agent wins.
  */
 export class Directory {
-  private readonly config: BridgeConfig;
+  private readonly config: PorticoConfig;
   private readonly network: NetworkStore;
   private readonly isConnected: (address: string) => boolean;
   private readonly presence: Presence;
@@ -106,7 +106,7 @@ export class Directory {
     this.now = deps.now ?? (() => new Date());
   }
 
-  /** The bridge.yaml agents in file order, then unshadowed assistants, then sessions seen in the last 24 hours. */
+  /** The portico.yaml agents in file order, then unshadowed assistants, then sessions seen in the last 24 hours. */
   members(): Member[] {
     return this.listed().map(({ member }) => member);
   }
@@ -130,7 +130,7 @@ export class Directory {
 
   /** The member at exactly this address, including any stored session however long ago it was seen. */
   find(address: string): Member | null {
-    // bridge.yaml agents come first, so a shadowed assistant is never found.
+    // portico.yaml agents come first, so a shadowed assistant is never found.
     const agent = this.config.agents.find((a) => a.name === address);
     if (agent) return configMember(agent);
     const at = address.indexOf("@");
@@ -147,9 +147,9 @@ export class Directory {
    * Patterns are refused, since a task goes to one agent.
    */
   resolve(to: unknown, caller: string): Member {
-    if (typeof to !== "string" || to.trim() === "") throw new BridgeError("bad_request", "to must be an agent name.");
+    if (typeof to !== "string" || to.trim() === "") throw new PorticoError("bad_request", "to must be an agent name.");
     if (isBroadcast(to)) {
-      throw new BridgeError(
+      throw new PorticoError(
         "bad_request",
         `"${to}" is a pattern. Broadcasts aren't supported: name one agent from list_agents.`,
       );
@@ -161,14 +161,14 @@ export class Directory {
       if (named.length === 1) return sessionMember(named[0]!);
       if (named.length > 1) {
         const addresses = named.map((session) => addressOf(session.name, session.machine)).join(", ");
-        throw new BridgeError("unknown_agent", `"${to}" is on ${named.length} machines. Use one of: ${addresses}.`);
+        throw new PorticoError("unknown_agent", `"${to}" is on ${named.length} machines. Use one of: ${addresses}.`);
       }
     }
     const valid = this.members()
       .filter((member) => member.address !== caller)
       .map((member) => this.displayName(member.address))
       .join(", ");
-    throw new BridgeError("unknown_agent", `No agent named "${to}". Valid agents: ${valid}.`);
+    throw new PorticoError("unknown_agent", `No agent named "${to}". Valid agents: ${valid}.`);
   }
 
   /** Push members get nudged on their stream; everyone else checks in. */

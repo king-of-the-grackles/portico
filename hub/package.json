@@ -1,11 +1,11 @@
 {
-  "name": "@agent-bridge/hub",
+  "name": "@portico/hub",
   "license": "MIT OR Apache-2.0",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "bridge": "src/cli.ts"
+    "portico": "src/cli.ts"
   },
   "scripts": {
     "start": "bun src/cli.ts serve",

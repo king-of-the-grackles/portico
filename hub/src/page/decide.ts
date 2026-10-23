@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { html } from "hono/html";
-import { BridgeError } from "../core/errors";
-import type { BridgeService } from "../core/service";
+import { PorticoError } from "../core/errors";
+import type { PorticoService } from "../core/service";
 import type { Task } from "../core/types";
 import { type Html, sendPage, STATUS_WORDS } from "./layout";
 
@@ -19,7 +19,7 @@ function alreadyDecided(task: Task): Html {
  */
 export function decideTask(
   c: Context,
-  service: BridgeService,
+  service: PorticoService,
   taskId: string,
   action: "approve" | "deny",
   note: string | undefined,
@@ -33,7 +33,7 @@ export function decideTask(
     const task = service.denyTask(taskId, note);
     return sendPage(c, 200, "Denied", html`<h1>Denied.</h1><p>The outcome goes back to <strong>${task.fromAgent}</strong>.</p>${BACK_LINK}`, withNav);
   } catch (err) {
-    if (err instanceof BridgeError) {
+    if (err instanceof PorticoError) {
       const task = service.findTask(taskId);
       if (err.code === "wrong_status" && task) return sendPage(c, 200, "Already decided", alreadyDecided(task), withNav);
       if (err.code === "not_found") return sendPage(c, 404, "Not found", html`<h1>No such task.</h1>`, withNav);

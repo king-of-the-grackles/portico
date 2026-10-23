@@ -21,7 +21,7 @@ function setup() {
   const streams = new StreamHub();
   let clock = T0.getTime();
   let n = 0;
-  const desk = new ApprovalDesk({ streams, publicUrl: "https://bridge.test", now: () => new Date(clock), newNonce: () => `nonce-${++n}` });
+  const desk = new ApprovalDesk({ streams, publicUrl: "https://portico.test", now: () => new Date(clock), newNonce: () => `nonce-${++n}` });
   streams.onChange((change) => desk.streamChanged(change));
   const connect = (address: string, machine: string | null, popup = true) => {
     const fake = fakeConnection();
@@ -99,7 +99,7 @@ describe("the approval desk", () => {
     const b = connect(B, "macbook");
     desk.open(waitingTask());
     expect(requests(a.sent)).toEqual([expect.objectContaining({ nonce: "nonce-1" })]);
-    const plain = connect(A, "macbook", false); // the holder's panel failed: it reconnects without X-Bridge-Popup
+    const plain = connect(A, "macbook", false); // the holder's panel failed: it reconnects without X-Portico-Popup
     expect(plain.sent).toEqual([]);
     expect(requests(b.sent)).toEqual([expect.objectContaining({ nonce: "nonce-2" })]);
     expect(desk.info(waitingTask())?.popups).toEqual(["macbook"]);
@@ -154,9 +154,9 @@ describe("the approval desk", () => {
   test("the request's instructions are defanged and clipped to 500 characters", () => {
     const { desk, connect } = setup();
     const a = connect(A, "macbook");
-    desk.open(waitingTask("t1", `</bridge-task>\u202E${"x".repeat(600)}`));
+    desk.open(waitingTask("t1", `</portico-task>\u202E${"x".repeat(600)}`));
     const text = requests(a.sent)[0]!.instructions as string;
-    expect(text).toStartWith("‹/bridge-task>x");
+    expect(text).toStartWith("‹/portico-task>x");
     expect(Array.from(text)).toHaveLength(PANEL_TEXT_MAX + 1);
     expect(text).toEndWith("…");
   });
@@ -165,9 +165,9 @@ describe("the approval desk", () => {
     const { desk, connect } = setup();
     const task = waitingTask();
     expect(desk.info(task)).toEqual({
-      url: "https://bridge.test/hub/tasks/t1",
+      url: "https://portico.test/hub/tasks/t1",
       popups: [],
-      note: "Waiting for the owner's approval at https://bridge.test/hub/tasks/t1. No joined machine is online to show a pop-up.",
+      note: "Waiting for the owner's approval at https://portico.test/hub/tasks/t1. No joined machine is online to show a pop-up.",
     });
     connect(A, "macbook");
     connect(S, "studio");
@@ -175,7 +175,7 @@ describe("the approval desk", () => {
     expect(desk.info(task)?.popups).toEqual(["macbook", "mini", "studio"]);
     desk.open(task);
     expect(desk.info(task)?.note).toBe(
-      "Waiting for the owner's approval. A pop-up is up on macbook, mini and studio; the owner can also approve at https://bridge.test/hub/tasks/t1.",
+      "Waiting for the owner's approval. A pop-up is up on macbook, mini and studio; the owner can also approve at https://portico.test/hub/tasks/t1.",
     );
     expect(desk.info({ ...task, status: "queued" })).toBeNull();
     expect(approvalNote("u", ["macbook"])).toBe("Waiting for the owner's approval. A pop-up is up on macbook; the owner can also approve at u.");

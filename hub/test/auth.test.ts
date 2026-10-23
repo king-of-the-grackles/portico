@@ -63,7 +63,7 @@ test("a machine's last_seen_at is written at most once a minute", () => {
   expect(lastSeen()).toBe(new Date(T0.getTime() + 60_000).toISOString());
 });
 
-test("the session header is ignored for bridge.yaml and assistant tokens", () => {
+test("the session header is ignored for portico.yaml and assistant tokens", () => {
   const ctx = makeApp();
   const { token } = mintAssistant(ctx, "chatgpt", "chatgpt");
   addSession(ctx, { name: "dialog-claude", machine: "macbook", key: "key-12345678" });
@@ -73,7 +73,7 @@ test("the session header is ignored for bridge.yaml and assistant tokens", () =>
   expect(ctx.resolvers.agent(`Bearer ${token}`, "unknown-key-1")).toBe("chatgpt");
 });
 
-test("an assistant shadowed by a bridge.yaml agent of the same name doesn't resolve", () => {
+test("an assistant shadowed by a portico.yaml agent of the same name doesn't resolve", () => {
   const ctx = makeApp();
   const token = "ba_imposter-token-0123456789abcdefghijklmnopq";
   ctx.network.insertAssistant(
@@ -85,15 +85,15 @@ test("an assistant shadowed by a bridge.yaml agent of the same name doesn't reso
   expect(ctx.resolvers.agent(`Bearer ${TOKENS.muse}`)).toBe("muse");
 });
 
-test("REST calls with a machine token act as the session named by X-Bridge-Session", async () => {
+test("REST calls with a machine token act as the session named by X-Portico-Session", async () => {
   const ctx = makeApp();
   const { token } = ctx.networkService.redeemJoinCode(ctx.networkService.createJoinCode().code, "macbook");
   addSession(ctx, { name: "dialog-claude", machine: "macbook", key: "key-12345678" });
   const agents = (headers: Record<string, string>) =>
     ctx.app.request("/api/agents", { headers: { authorization: `Bearer ${token}`, ...headers } });
   expect((await agents({})).status).toBe(401);
-  expect((await agents({ "x-bridge-session": "unknown-key-1" })).status).toBe(401);
-  const res = await agents({ "x-bridge-session": "key-12345678" });
+  expect((await agents({ "x-portico-session": "unknown-key-1" })).status).toBe(401);
+  const res = await agents({ "x-portico-session": "key-12345678" });
   expect(res.status).toBe(200);
   const names = ((await res.json()) as { agents: { name: string }[] }).agents.map((agent) => agent.name);
   // Everyone but the session itself, in the directory's order: pull agents, then claude-code (offline).
@@ -113,7 +113,7 @@ test("a joined machine's session that hasn't registered gets a 401 saying so, no
     expect(await res.json()).toEqual({ error: "unauthorized", message: notRegistered });
   }
   expect(notRegistered).not.toMatch(PRONOUNS);
-  expect(notRegistered.toLowerCase()).not.toContain("agent-bridge");
+  expect(notRegistered.toLowerCase()).not.toContain("portico");
   // A token that isn't a machine's, or a removed machine's, still reads as a bad token.
   const missing = { error: "unauthorized", message: "Missing or invalid bearer token." };
   expect(await (await callAs(ctx, { token: "bm_not-a-real-token" }, "GET", "/api/agents")).json()).toEqual(missing);

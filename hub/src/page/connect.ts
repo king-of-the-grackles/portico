@@ -44,12 +44,12 @@ export function connectGuide(
         blocks: [
           {
             label: "Prompt for Muse",
-            text: `Build a custom connector for my agent bridge. Its API is described at ${publicUrl}/api/openapi.json, and the base URL is ${publicUrl}. It authenticates with an API key sent as \`Authorization: Bearer <key>\`. I'll use it to send tasks and messages to my other agents, check my inbox, and finish tasks.`,
+            text: `Build a custom connector for my Portico hub. Its API is described at ${publicUrl}/api/openapi.json, and the base URL is ${publicUrl}. It authenticates with an API key sent as \`Authorization: Bearer <key>\`. I'll use it to send tasks and messages to my other agents, check my inbox, and finish tasks.`,
           },
           { label: "Token for the API key field", text: token },
           {
             label: "Prompt for a scheduled check",
-            text: "Every 10 minutes, check my agent bridge inbox. For each new task, do it if it's something you can do safely, then finish it with the result. Otherwise finish it with a failed_reason and tell me. Read new messages too, and answer with send_message when an answer is useful.",
+            text: "Every 10 minutes, check my Portico inbox. For each new task, do it if it's something you can do safely, then finish it with the result. Otherwise finish it with a failed_reason and tell me. Read new messages too, and answer with send_message when an answer is useful.",
           },
         ],
       };
@@ -73,12 +73,12 @@ export function connectGuide(
         ],
       };
     case "codex": {
-      const envName = `BRIDGE_TOKEN_${name.toUpperCase().replace(/-/g, "_")}`;
+      const envName = `PORTICO_TOKEN_${name.toUpperCase().replace(/-/g, "_")}`;
       return {
         intro:
           "Paste the first block into ~/.codex/config.toml by hand, because codex mcp add rewrites the whole file. Put the second line in the environment Codex starts from, such as a shell profile.",
         blocks: [
-          { label: "config.toml", text: `[mcp_servers.agent_bridge]\nurl = "${mcp}"\nbearer_token_env_var = "${envName}"` },
+          { label: "config.toml", text: `[mcp_servers.portico]\nurl = "${mcp}"\nbearer_token_env_var = "${envName}"` },
           { label: "Environment", text: `export ${envName}='${token}'` },
         ],
       };

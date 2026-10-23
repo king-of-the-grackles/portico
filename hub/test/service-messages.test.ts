@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BridgeError } from "../src/core/errors";
+import { PorticoError } from "../src/core/errors";
 import { BASE_YAML, HOUR, T0, errorCode, makeService, testConfig } from "./helpers";
 
 // BASE_YAML blocks codex → claude-code by rule, has no rule at all for muse → codex, and asks for anything → muse.
@@ -8,10 +8,10 @@ function errorMessage(fn: () => unknown): string {
   try {
     fn();
   } catch (err) {
-    if (err instanceof BridgeError) return err.message;
+    if (err instanceof PorticoError) return err.message;
     throw err;
   }
-  throw new Error("expected a BridgeError");
+  throw new Error("expected a PorticoError");
 }
 
 test("a message reaches the receiver's check_inbox once, marked delivered", () => {

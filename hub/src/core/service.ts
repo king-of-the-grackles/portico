@@ -1,6 +1,6 @@
 import type { Store } from "../db";
 import type { Directory } from "./directory";
-import { BridgeError } from "./errors";
+import { PorticoError } from "./errors";
 import { LOOP_LIMIT, LOOP_WINDOW_MS, loopGuardRetryAt } from "./guards";
 import type { Presence } from "./presence";
 import { resolveRule } from "./rules";
@@ -8,20 +8,20 @@ import { renderTemplate } from "./templates";
 import { isFinal } from "./types";
 import type {
   ApprovalInfo,
-  BridgeConfig,
-  BridgeEvent,
   DeliveryTier,
   DirectoryEntry,
   Message,
   Notice,
+  PorticoConfig,
+  PorticoEvent,
   Task,
   TaskStatus,
 } from "./types";
 
 export interface ServiceDeps {
   store: Store;
-  config: BridgeConfig;
-  /** Recipients and rule refs: bridge.yaml agents, hub-page assistants and sessions. */
+  config: PorticoConfig;
+  /** Recipients and rule refs: portico.yaml agents, hub-page assistants and sessions. */
   directory: Directory;
   /** Where check-ins are recorded. */
   presence: Presence;
@@ -46,9 +46,9 @@ const EXPIRY_REASON: Record<"waiting_approval" | "queued" | "working", string> =
   working: "expired: not finished in time",
 };
 
-export class BridgeService {
+export class PorticoService {
   private readonly store: Store;
-  private readonly config: BridgeConfig;
+  private readonly config: PorticoConfig;
   private readonly directory: Directory;
   private readonly now: () => Date;
   private readonly newId: () => string;
@@ -104,7 +104,7 @@ export class BridgeService {
       const existing = this.store.findByIdempotencyKey(caller, key);
       if (existing) {
         if (!this.isSameReceiver(existing.toAgent, input.to, caller) || existing.instructions !== input.instructions) {
-          throw new BridgeError(
+          throw new PorticoError(
             "bad_request",
             "idempotency_key was already used for a different task. Use a new key for a new task.",
           );
@@ -135,23 +135,23 @@ export class BridgeService {
     if (input.replyTo !== undefined && input.replyTo !== null && input.replyTo !== "") {
       const original = typeof input.replyTo === "string" ? this.store.getMessage(input.replyTo) : null;
       if (!original || (original.toAgent !== caller && original.fromAgent !== caller)) {
-        throw new BridgeError("bad_request", "reply_to must be the ID of a message sent to or by this agent.");
+        throw new PorticoError("bad_request", "reply_to must be the ID of a message sent to or by this agent.");
       }
       replyTo = original.id;
       to ??= original.toAgent === caller ? original.fromAgent : original.toAgent;
     }
-    if (!to) throw new BridgeError("bad_request", "to is required unless reply_to is given.");
+    if (!to) throw new PorticoError("bad_request", "to is required unless reply_to is given.");
     const receiver = this.directory.resolve(to, caller); // refuses broadcasts and unknown names
-    if (receiver.address === caller) throw new BridgeError("bad_request", "An agent can't send a message to itself.");
+    if (receiver.address === caller) throw new PorticoError("bad_request", "An agent can't send a message to itself.");
     const limit = this.config.limits.messagesPerHourPerAgent;
     if (this.store.countMessagesFromSince(caller, this.iso(-HOUR_MS)) >= limit) {
-      throw new BridgeError("rate_limited", `${caller} has reached the limit of ${limit} messages per hour.`);
+      throw new PorticoError("rate_limited", `${caller} has reached the limit of ${limit} messages per hour.`);
     }
     const retryAt = loopGuardRetryAt(this.store.messageTimesBetween(caller, receiver.address, this.iso(-LOOP_WINDOW_MS)));
     if (retryAt) {
       // Rounded up to the minute, so a retry at the time named is never refused again.
       const retryMinute = new Date(Math.ceil(Date.parse(retryAt) / MINUTE_MS) * MINUTE_MS).toISOString();
-      throw new BridgeError(
+      throw new PorticoError(
         "rate_limited",
         `Loop guard: ${LOOP_LIMIT} messages between ${caller} and ${receiver.address} in 10 minutes. ` +
           `Try again after ${retryMinute.slice(0, 16).replace("T", " ")} UTC.`,
@@ -234,15 +234,15 @@ export class BridgeService {
     const hasResult = typeof input.result === "string" && input.result.trim() !== "";
     const hasReason = typeof input.failedReason === "string" && input.failedReason.trim() !== "";
     if (hasResult === hasReason) {
-      throw new BridgeError("bad_request", "Provide exactly one of result or failed_reason.");
+      throw new PorticoError("bad_request", "Provide exactly one of result or failed_reason.");
     }
     const text = hasResult ? input.result! : input.failedReason!;
     this.requireSize(hasResult ? "result" : "failed_reason", text);
     const task = this.requireTask(input.taskId);
-    if (task.toAgent !== caller) throw new BridgeError("not_allowed", "Only the receiving agent can finish a task.");
+    if (task.toAgent !== caller) throw new PorticoError("not_allowed", "Only the receiving agent can finish a task.");
     if (isFinal(task.status)) return task;
     if (task.status !== "working") {
-      throw new BridgeError(
+      throw new PorticoError(
         "wrong_status",
         `Task ${task.id} is ${task.status}; only a working task can be finished. Call check_inbox to pick it up first.`,
       );
@@ -260,10 +260,10 @@ export class BridgeService {
   getTask(caller: string, taskId: string, opts?: { expectedReceiver?: string }): Task {
     const task = this.requireTask(taskId);
     if (opts?.expectedReceiver !== undefined && task.toAgent !== opts.expectedReceiver) {
-      throw new BridgeError("not_found", `No task ${taskId}.`);
+      throw new PorticoError("not_found", `No task ${taskId}.`);
     }
     if (task.fromAgent !== caller && task.toAgent !== caller) {
-      throw new BridgeError("not_allowed", "Only the sender or receiver can read this task.");
+      throw new PorticoError("not_allowed", "Only the sender or receiver can read this task.");
     }
     if (task.fromAgent === caller && isFinal(task.status) && task.senderNotifiedAt === null) {
       return this.store.updateTask(task.id, { senderNotifiedAt: this.iso() });
@@ -271,20 +271,20 @@ export class BridgeService {
     return task;
   }
 
-  reportEvent(caller: string, input: { name: string; details: string }): { event: BridgeEvent; tasks: Task[] } {
+  reportEvent(caller: string, input: { name: string; details: string }): { event: PorticoEvent; tasks: Task[] } {
     if (typeof input.name !== "string" || !EVENT_NAME.test(input.name)) {
-      throw new BridgeError("bad_request", "name must be 1–100 characters: letters, digits, _ . -");
+      throw new PorticoError("bad_request", "name must be 1–100 characters: letters, digits, _ . -");
     }
     const details = input.details ?? "";
-    if (typeof details !== "string") throw new BridgeError("bad_request", "details must be a string.");
+    if (typeof details !== "string") throw new PorticoError("bad_request", "details must be a string.");
     this.requireSize("details", details);
 
     const eventLimit = this.config.limits.eventsPerHourPerAgent;
     if (this.store.countEventsFromSince(caller, this.iso(-HOUR_MS)) >= eventLimit) {
-      throw new BridgeError("rate_limited", `${caller} has reached the limit of ${eventLimit} events per hour.`);
+      throw new PorticoError("rate_limited", `${caller} has reached the limit of ${eventLimit} events per hour.`);
     }
 
-    const event: BridgeEvent = { id: this.newId(), agent: caller, name: input.name, details, createdAt: this.iso() };
+    const event: PorticoEvent = { id: this.newId(), agent: caller, name: input.name, details, createdAt: this.iso() };
     const planned = this.config.triggers
       .filter((trigger) => trigger.when.agent === caller && trigger.when.event === input.name)
       .map((trigger) => ({ trigger, instructions: renderTemplate(trigger.send.instructions, event) }));
@@ -307,7 +307,7 @@ export class BridgeService {
   approveTask(taskId: string): Task {
     const task = this.requireTask(taskId);
     if (task.status !== "waiting_approval") {
-      throw new BridgeError("wrong_status", `Task ${task.id} is already ${task.status}.`);
+      throw new PorticoError("wrong_status", `Task ${task.id} is already ${task.status}.`);
     }
     const updated = this.store.updateTask(task.id, { status: "queued", updatedAt: this.iso() });
     this.log("task_status", { task_id: task.id, status: "queued", by: "approval" });
@@ -319,7 +319,7 @@ export class BridgeService {
   denyTask(taskId: string, note?: string): Task {
     const task = this.requireTask(taskId);
     if (task.status !== "waiting_approval") {
-      throw new BridgeError("wrong_status", `Task ${task.id} is already ${task.status}.`);
+      throw new PorticoError("wrong_status", `Task ${task.id} is already ${task.status}.`);
     }
     const reason = note?.trim() ? note.trim() : "denied by the user";
     this.requireSize("note", reason);
@@ -368,7 +368,7 @@ export class BridgeService {
     return this.store.listMessages(filter);
   }
 
-  listEvents(filter: { agent?: string; limit: number }): BridgeEvent[] {
+  listEvents(filter: { agent?: string; limit: number }): PorticoEvent[] {
     return this.store.listEvents(filter);
   }
 
@@ -393,7 +393,7 @@ export class BridgeService {
 
   private requireText(field: string, value: unknown): asserts value is string {
     if (typeof value !== "string" || value.trim() === "") {
-      throw new BridgeError("bad_request", `${field} must be a non-empty string.`);
+      throw new PorticoError("bad_request", `${field} must be a non-empty string.`);
     }
     this.requireSize(field, value);
   }
@@ -401,21 +401,21 @@ export class BridgeService {
   private optionalIdempotencyKey(value: unknown): string | null {
     if (value === undefined || value === null || value === "") return null;
     if (typeof value !== "string" || value.length > 100 || /[\u0000-\u001f\u007f]/.test(value)) {
-      throw new BridgeError("bad_request", "idempotency_key must be a string of up to 100 printable characters.");
+      throw new PorticoError("bad_request", "idempotency_key must be a string of up to 100 printable characters.");
     }
     return value;
   }
 
   private requireSize(field: string, value: string, maxKb = this.config.limits.maxTextKb): void {
     if (new TextEncoder().encode(value).length > maxKb * 1024) {
-      throw new BridgeError("too_large", `${field} is larger than ${maxKb} KB.`);
+      throw new PorticoError("too_large", `${field} is larger than ${maxKb} KB.`);
     }
   }
 
   /** A message's text: non-empty, and within max_message_kb rather than max_text_kb. */
   private requireMessageText(value: unknown): asserts value is string {
     if (typeof value !== "string" || value.trim() === "") {
-      throw new BridgeError("bad_request", "text must be a non-empty string.");
+      throw new PorticoError("bad_request", "text must be a non-empty string.");
     }
     this.requireSize("text", value, this.config.limits.maxMessageKb);
   }
@@ -423,7 +423,7 @@ export class BridgeService {
   /** The receiver's full address. A short session name resolves when it's unique. */
   private requireReceiver(caller: string, to: unknown): string {
     const receiver = this.directory.resolve(to, caller);
-    if (receiver.address === caller) throw new BridgeError("bad_request", "An agent can't send a task to itself.");
+    if (receiver.address === caller) throw new PorticoError("bad_request", "An agent can't send a task to itself.");
     return receiver.address;
   }
 
@@ -437,7 +437,7 @@ export class BridgeService {
     try {
       return this.directory.resolve(to, caller).address === stored;
     } catch (err) {
-      if (err instanceof BridgeError) return false;
+      if (err instanceof PorticoError) return false;
       throw err;
     }
   }
@@ -446,14 +446,14 @@ export class BridgeService {
     const limit = this.config.limits.tasksPerHourPerAgent;
     const used = this.store.countTasksFromSince(caller, this.iso(-HOUR_MS));
     if (used + needed > limit) {
-      throw new BridgeError("rate_limited", `${caller} has reached the limit of ${limit} tasks per hour.`);
+      throw new PorticoError("rate_limited", `${caller} has reached the limit of ${limit} tasks per hour.`);
     }
   }
 
   private requireTask(id: unknown): Task {
-    if (typeof id !== "string" || id === "") throw new BridgeError("bad_request", "task_id is required.");
+    if (typeof id !== "string" || id === "") throw new PorticoError("bad_request", "task_id is required.");
     const task = this.store.getTask(id);
-    if (!task) throw new BridgeError("not_found", `No task ${id}.`);
+    if (!task) throw new PorticoError("not_found", `No task ${id}.`);
     return task;
   }
 

@@ -161,7 +161,7 @@ describe("hub page: Messages", () => {
     for (const page of [await get(), await (await setup()).get()]) {
       const text = visibleCopy(page);
       expect(text).not.toMatch(PRONOUNS);
-      expect(text.toLowerCase()).not.toContain("agent-bridge");
+      expect(text.toLowerCase()).not.toContain("portico");
     }
   });
 });

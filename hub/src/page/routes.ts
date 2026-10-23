@@ -4,8 +4,8 @@ import { html } from "hono/html";
 import type { Directory } from "../core/directory";
 import type { NetworkService } from "../core/network";
 import type { Presence } from "../core/presence";
-import type { BridgeService } from "../core/service";
-import { type BridgeConfig, TASK_STATUSES, type TaskStatus } from "../core/types";
+import type { PorticoService } from "../core/service";
+import { type PorticoConfig, TASK_STATUSES, type TaskStatus } from "../core/types";
 import { log } from "../log";
 import type { StreamHub } from "../ways-in/stream";
 import { decideTask } from "./decide";
@@ -25,12 +25,12 @@ import {
 import { historyView, homeView, loginView, messagesView, taskDetailView } from "./views";
 
 export interface PageDeps {
-  service: BridgeService;
+  service: PorticoService;
   directory: Directory;
   network: NetworkService;
   streams: StreamHub;
   presence: Presence;
-  config: BridgeConfig;
+  config: PorticoConfig;
   now: () => Date;
 }
 

@@ -14,7 +14,7 @@ describe("OpenAPI document", () => {
     expect(res.status).toBe(200);
     const doc = await res.json();
     expect(doc.openapi).toBe("3.1.0");
-    expect(doc.servers).toEqual([{ url: "https://bridge.test" }]);
+    expect(doc.servers).toEqual([{ url: "https://portico.test" }]);
   });
 
   test("every documented operation requires a token", async () => {

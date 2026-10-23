@@ -172,7 +172,7 @@ describe("the answer path refuses", () => {
     const logged = await logsOf(async () => {
       res = await route.request(`/${task.id}`, {
         method: "POST",
-        headers: { authorization: `Bearer ${mac.token}`, "x-bridge-session": "key-mac-first", "content-type": "application/json" },
+        headers: { authorization: `Bearer ${mac.token}`, "x-portico-session": "key-mac-first", "content-type": "application/json" },
         body: JSON.stringify({ nonce: "C".repeat(32), decision: "deny" }),
       });
     });
@@ -242,7 +242,7 @@ describe("when sessions come and go", () => {
     expect(await session.events.next()).toMatchObject({ event: "approval_request", data: { taskId: task.id } });
   });
 
-  test("a session without X-Bridge-Popup is never sent a request", async () => {
+  test("a session without X-Portico-Popup is never sent a request", async () => {
     const ctx = makeApp();
     const mac = joinMachine(ctx);
     const plain = await openSessionStream(ctx, mac.token, { key: "key-mac-plain", repo: "api" });
@@ -288,7 +288,7 @@ describe("send_task's approval info", () => {
   test("REST names the machines showing a pop-up and links the task page; other statuses get null", async () => {
     const ctx = makeApp();
     const none = await (await ctx.call("grok-bot", "POST", "/api/tasks", { to: "muse", instructions: "a" })).json();
-    const url = (id: string) => `https://bridge.test/hub/tasks/${id}`;
+    const url = (id: string) => `https://portico.test/hub/tasks/${id}`;
     expect(none.approval).toEqual({
       url: url(none.task.id),
       popups: [],

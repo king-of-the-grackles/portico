@@ -20,14 +20,14 @@ afterEach(() => {
 });
 
 function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "bridge-"));
+  const dir = mkdtempSync(join(tmpdir(), "portico-"));
   dirs.push(dir);
   return dir;
 }
 
 describe("startServer", () => {
   test("serves the API and keeps data in the database file across restarts", async () => {
-    const config = { ...testConfig(), dbPath: join(tempDir(), "bridge.db") };
+    const config = { ...testConfig(), dbPath: join(tempDir(), "portico.db") };
     running = startServer(config, { port: 0 });
     const base = `http://127.0.0.1:${running.port}`;
     expect((await fetch(`${base}/healthz`)).status).toBe(200);
@@ -47,8 +47,8 @@ describe("startServer", () => {
 });
 
 describe("startup warnings", () => {
-  test("logs rule names nothing knows and assistants shadowed by bridge.yaml agents, by name only", () => {
-    const dbPath = join(tempDir(), "bridge.db");
+  test("logs rule names nothing knows and assistants shadowed by portico.yaml agents, by name only", () => {
+    const dbPath = join(tempDir(), "portico.db");
     const db = openDb(dbPath);
     const network = new NetworkStore(db);
     network.insertAssistant(
@@ -87,49 +87,20 @@ describe("startup warnings", () => {
     const lines: string[] = [];
     captureLogs((line) => lines.push(line));
     try {
-      running = startServer({ ...testConfig(), dbPath: join(tempDir(), "bridge.db") }, { port: 0 });
+      running = startServer({ ...testConfig(), dbPath: join(tempDir(), "portico.db") }, { port: 0 });
     } finally {
       captureLogs(null);
     }
     const names = lines.map((line) => (JSON.parse(line) as { msg: string }).msg);
-    expect(names).toContain("bridge_started");
+    expect(names).toContain("portico_started");
     expect(names).not.toContain("rule_names_unknown");
     expect(names).not.toContain("assistant_name_conflict");
   });
 });
 
-describe("leftover ntfy settings", () => {
-  test("a set BRIDGE_NTFY_TOPIC logs one ntfy_ignored line, by name only, and the hub still starts", async () => {
-    const lines: string[] = [];
-    captureLogs((line) => lines.push(line));
-    try {
-      const config = { ...testConfig(undefined, { BRIDGE_NTFY_TOPIC: "old-topic-value" }), dbPath: join(tempDir(), "bridge.db") };
-      running = startServer(config, { port: 0 });
-      expect((await fetch(`http://127.0.0.1:${running.port}/healthz`)).status).toBe(200);
-    } finally {
-      captureLogs(null);
-    }
-    const ignored = lines.map((line) => JSON.parse(line)).filter((line) => line.msg === "ntfy_ignored");
-    expect(ignored).toHaveLength(1);
-    expect(ignored[0]).toMatchObject({ level: "warn", vars: ["BRIDGE_NTFY_TOPIC"] });
-    expect(lines.join("\n")).not.toContain("old-topic-value");
-  });
-
-  test("without ntfy settings, nothing about ntfy is logged", () => {
-    const lines: string[] = [];
-    captureLogs((line) => lines.push(line));
-    try {
-      running = startServer({ ...testConfig(), dbPath: join(tempDir(), "bridge.db") }, { port: 0 });
-    } finally {
-      captureLogs(null);
-    }
-    expect(lines.some((line) => line.includes("ntfy"))).toBe(false);
-  });
-});
-
 describe("network sweep", () => {
   test("deletes sessions unseen for 7 days and join codes past a day, at startup, logging the counts", () => {
-    const dbPath = join(tempDir(), "bridge.db");
+    const dbPath = join(tempDir(), "portico.db");
     const db = openDb(dbPath);
     const network = new NetworkStore(db);
     const now = Date.now();
@@ -162,45 +133,45 @@ describe("network sweep", () => {
 });
 
 describe("example config", () => {
-  test("bridge.example.yaml is valid", () => {
-    const yaml = readFileSync(join(import.meta.dir, "../../bridge.example.yaml"), "utf8");
+  test("portico.example.yaml is valid", () => {
+    const yaml = readFileSync(join(import.meta.dir, "../../portico.example.yaml"), "utf8");
     const env = {
-      BRIDGE_PUBLIC_URL: "https://bridge.test",
-      BRIDGE_TOKEN_CLAUDE_CODE: "c".repeat(48),
-      BRIDGE_TOKEN_GROK_BOT: "g".repeat(48),
-      BRIDGE_TOKEN_MUSE: "m".repeat(48),
-      BRIDGE_TOKEN_CODEX: "x".repeat(48),
-      BRIDGE_SIGNING_SECRET: "s".repeat(48),
-      BRIDGE_ADMIN_PASSWORD: "a".repeat(16),
+      PORTICO_PUBLIC_URL: "https://portico.test",
+      PORTICO_TOKEN_CLAUDE_CODE: "c".repeat(48),
+      PORTICO_TOKEN_GROK_BOT: "g".repeat(48),
+      PORTICO_TOKEN_MUSE: "m".repeat(48),
+      PORTICO_TOKEN_CODEX: "x".repeat(48),
+      PORTICO_SIGNING_SECRET: "s".repeat(48),
+      PORTICO_ADMIN_PASSWORD: "a".repeat(16),
     };
     expect(parseConfig(yaml, env).agents).toHaveLength(4);
   });
 });
 
-describe("bridge CLI", () => {
+describe("portico CLI", () => {
   const cli = join(import.meta.dir, "../src/cli.ts");
 
   test("prints usage", async () => {
     const proc = Bun.spawn(["bun", cli, "--help"], { stdout: "pipe" });
     expect(await proc.exited).toBe(0);
-    expect(await new Response(proc.stdout).text()).toContain("bridge <command>");
+    expect(await new Response(proc.stdout).text()).toContain("portico <command>");
   });
 
   test("serve exits with the config problems when the config is bad", async () => {
     const dir = tempDir();
-    writeFileSync(join(dir, "bridge.yaml"), BASE_YAML);
+    writeFileSync(join(dir, "portico.yaml"), BASE_YAML);
     const proc = Bun.spawn(["bun", cli, "serve"], {
       cwd: dir,
-      env: { ...process.env, ...testEnv(), BRIDGE_TOKEN_MUSE: "", BRIDGE_CONFIG: join(dir, "bridge.yaml") },
+      env: { ...process.env, ...testEnv(), PORTICO_TOKEN_MUSE: "", PORTICO_CONFIG: join(dir, "portico.yaml") },
       stderr: "pipe",
     });
     expect(await proc.exited).toBe(1);
-    expect(await new Response(proc.stderr).text()).toContain('missing BRIDGE_TOKEN_MUSE for agent "muse"');
+    expect(await new Response(proc.stderr).text()).toContain('missing PORTICO_TOKEN_MUSE for agent "muse"');
   });
 
   test("serve starts and answers /healthz", async () => {
     const dir = tempDir();
-    writeFileSync(join(dir, "bridge.yaml"), BASE_YAML);
+    writeFileSync(join(dir, "portico.yaml"), BASE_YAML);
     const port = 18787 + Math.floor(Math.random() * 1000);
     const proc = Bun.spawn(["bun", cli, "serve"], {
       cwd: dir,
@@ -208,8 +179,8 @@ describe("bridge CLI", () => {
         ...process.env,
         ...testEnv(),
         PORT: String(port),
-        BRIDGE_CONFIG: join(dir, "bridge.yaml"),
-        BRIDGE_DB_PATH: join(dir, "bridge.db"),
+        PORTICO_CONFIG: join(dir, "portico.yaml"),
+        PORTICO_DB_PATH: join(dir, "portico.db"),
       },
       stdout: "pipe",
     });

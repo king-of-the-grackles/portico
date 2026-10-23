@@ -1,6 +1,6 @@
 import { unknownRuleNames } from "./core/rules";
-import type { BridgeService } from "./core/service";
-import type { BridgeConfig } from "./core/types";
+import type { PorticoService } from "./core/service";
+import type { PorticoConfig } from "./core/types";
 import { openDb } from "./db";
 import { createHub } from "./hub";
 import { errorName, log } from "./log";
@@ -8,7 +8,7 @@ import { maxTextOrMessageKb } from "./ways-in/limits";
 
 export interface RunningServer {
   port: number;
-  service: BridgeService;
+  service: PorticoService;
   stop(): void;
 }
 
@@ -17,10 +17,10 @@ const DAY_MS = 86_400_000;
 /** Sessions not seen for this long, and not connected, are deleted by the daily sweep. */
 const SESSION_RETENTION_DAYS = 7;
 
-export function startServer(config: BridgeConfig, opts: { port?: number } = {}): RunningServer {
+export function startServer(config: PorticoConfig, opts: { port?: number } = {}): RunningServer {
   const db = openDb(config.dbPath);
   const hub = createHub(config, { db });
-  const service: BridgeService = hub.service;
+  const service: PorticoService = hub.service;
   let server: ReturnType<typeof Bun.serve>;
   try {
     server = Bun.serve({
@@ -77,13 +77,7 @@ export function startServer(config: BridgeConfig, opts: { port?: number } = {}):
   const historyTimer = setInterval(dailySweep, DAY_MS);
 
   const port = server.port as number;
-  log("info", "bridge_started", { port, agents: config.agents.length, public_url: config.publicUrl });
-  if (config.ntfyIgnored.length > 0) {
-    log("warn", "ntfy_ignored", {
-      vars: config.ntfyIgnored,
-      note: "Phone pushes were removed; approvals pop up on joined machines and wait on the hub page.",
-    });
-  }
+  log("info", "portico_started", { port, agents: config.agents.length, public_url: config.publicUrl });
   // Rules may name agents that join later; at startup, say which exact names nothing knows yet.
   const unknownNames = unknownRuleNames(config.rules, (name) => hub.directory.find(name) !== null);
   if (unknownNames.length > 0) log("warn", "rule_names_unknown", { names: unknownNames });

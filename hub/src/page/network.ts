@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { BridgeError } from "../core/errors";
+import { PorticoError } from "../core/errors";
 import { joinLine, type NetworkService } from "../core/network";
 import type { Presence } from "../core/presence";
-import type { BridgeConfig } from "../core/types";
+import type { PorticoConfig } from "../core/types";
 import type { StreamHub } from "../ways-in/stream";
 import { connectGuide } from "./connect";
 import { sendPage } from "./layout";
@@ -12,7 +12,7 @@ export interface NetworkRouteDeps {
   network: NetworkService;
   presence: Presence;
   streams: StreamHub;
-  config: BridgeConfig;
+  config: PorticoConfig;
 }
 
 const NETWORK_PATH = "/hub/network";
@@ -53,7 +53,7 @@ export function networkRoutes(deps: NetworkRouteDeps): Hono {
       const guide = connectGuide(assistant.kind, { publicUrl: config.publicUrl, name: assistant.name, token });
       return sendPage(c, 200, "Assistant connected", assistantCreatedView(assistant, guide), { nav: true });
     } catch (err) {
-      if (err instanceof BridgeError) {
+      if (err instanceof PorticoError) {
         const typed = { kind: formText(form.kind), name: formText(name), description: formText(form.description) };
         return sendPage(c, 400, "Network", view(err.message, typed), { nav: true });
       }

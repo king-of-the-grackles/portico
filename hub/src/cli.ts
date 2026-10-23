@@ -6,13 +6,13 @@ import type { CliIo } from "./commands/io";
 import { joinCommand } from "./commands/join";
 import { serveCommand } from "./commands/serve";
 
-const USAGE = `Usage: bridge <command>
+const USAGE = `Usage: portico <command>
 
 Commands:
-  serve             Run the hub. Reads bridge.yaml from BRIDGE_CONFIG (default ./bridge.yaml)
+  serve             Run the hub. Reads portico.yaml from PORTICO_CONFIG (default ./portico.yaml)
                     and secrets from the environment (./.env is loaded too).
-  init [--shell]    Write a starter bridge.yaml if there is none, and generate every secret
-                    into ./.env, or with --shell into ./bridge-secrets.sh as export lines.
+  init [--shell]    Write a starter portico.yaml if there is none, and generate every secret
+                    into ./.env, or with --shell into ./portico-secrets.sh as export lines.
   doctor            Check the config, the public URL, and each agent's token on the running hub.
   invite            Make a one-time join line for a new machine (runs where the hub's
                     config and database are).

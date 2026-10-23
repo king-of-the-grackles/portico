@@ -9,5 +9,5 @@ logs
 *.db-wal
 .env
 .env.*
-bridge.yaml
-bridge-secrets.sh
+portico.yaml
+portico-secrets.sh

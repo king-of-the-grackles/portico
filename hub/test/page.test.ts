@@ -35,7 +35,7 @@ describe("hub page sign-in", () => {
     expect(right.status).toBe(303);
     expect(right.headers.get("location")).toBe("/hub");
     const cookie = right.headers.get("set-cookie")!;
-    expect(cookie).toStartWith("bridge_session=");
+    expect(cookie).toStartWith("portico_session=");
     for (const part of ["HttpOnly", "Secure", "SameSite=Strict", "Path=/hub", "Max-Age=604800"]) {
       expect(cookie).toContain(part);
     }
@@ -74,7 +74,7 @@ describe("hub page sign-in", () => {
     const res = await app.request("/hub/logout", { method: "POST", headers: { cookie } });
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/hub/login");
-    expect(res.headers.get("set-cookie")).toContain("bridge_session=;");
+    expect(res.headers.get("set-cookie")).toContain("portico_session=;");
   });
 });
 
@@ -157,7 +157,7 @@ describe("hub page", () => {
     expect((await approve({})).status).toBe(403);
     expect((await approve({ cookie, origin: "https://evil.example" })).status).toBe(403);
     expect(ctx.service.findTask(task.id)?.status).toBe("waiting_approval");
-    expect((await approve({ cookie, origin: "https://bridge.test" })).status).toBe(200);
+    expect((await approve({ cookie, origin: "https://portico.test" })).status).toBe(200);
   });
 
   test("a second approve post shows the no-longer-waiting page and changes nothing; an unknown task gets a 404 page", async () => {
@@ -311,18 +311,19 @@ describe("hub page", () => {
       expect(page).toStartWith("<!doctype html>");
       const text = visibleCopy(page);
       expect(text).not.toMatch(PRONOUNS);
-      expect(text.toLowerCase()).not.toContain("agent-bridge");
+      // portico.yaml is a file name; apart from it, the copy never names the app.
+      expect(text.toLowerCase().replaceAll("portico.yaml", "")).not.toContain("portico");
     }
   });
 
   test("the copy sweep skips paste text and reads attribute text", () => {
-    const page = `<style>p{}</style><p>Shown &amp; read</p><pre>Join my agent bridge</pre><code>your-token</code>
+    const page = `<style>p{}</style><p>Shown &amp; read</p><pre>Join my Portico hub</pre><code>your-token</code>
 <textarea readonly class="paste" aria-label="Connect prompt">Use your token</textarea>
 <input placeholder="Name it" title='Their title'><img alt="Our logo" src="x.png">`;
     const text = visibleCopy(page);
     expect(text).toContain("Shown");
     expect(text).toContain("read");
-    for (const hidden of ["p{}", "agent bridge", "your-token", "Use your token", "&amp;"]) expect(text).not.toContain(hidden);
+    for (const hidden of ["p{}", "Portico hub", "your-token", "Use your token", "&amp;"]) expect(text).not.toContain(hidden);
     for (const shown of ["Connect prompt", "Name it", "Their title", "Our logo"]) expect(text).toContain(shown);
   });
 });

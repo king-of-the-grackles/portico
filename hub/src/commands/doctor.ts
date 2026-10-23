@@ -1,7 +1,6 @@
 import { resolve } from "node:path";
 import { ConfigError, loadConfig } from "../config";
-import type { BridgeConfig } from "../core/types";
-import { listOf } from "../core/words";
+import type { PorticoConfig } from "../core/types";
 import { errorName } from "../log";
 import type { CliIo } from "./io";
 
@@ -18,7 +17,7 @@ export async function doctorCommand(args: string[], io: CliIo, deps: DoctorDeps 
   // --no-push skipped the test push, which is gone; it's still accepted so older scripts keep working.
   const unknown = args.find((arg) => arg !== "--no-push");
   if (unknown !== undefined) {
-    io.err(`Unknown option: ${unknown}. Usage: bridge doctor`);
+    io.err(`Unknown option: ${unknown}. Usage: portico doctor`);
     return 1;
   }
   const doFetch = deps.fetch ?? ((url: string, init?: RequestInit) => fetch(url, init));
@@ -38,9 +37,9 @@ export async function doctorCommand(args: string[], io: CliIo, deps: DoctorDeps 
   };
 
   // 1. Config
-  let config: BridgeConfig;
+  let config: PorticoConfig;
   try {
-    config = await loadConfig({ ...io.env, BRIDGE_CONFIG: resolve(io.cwd, io.env.BRIDGE_CONFIG?.trim() || "bridge.yaml") });
+    config = await loadConfig({ ...io.env, PORTICO_CONFIG: resolve(io.cwd, io.env.PORTICO_CONFIG?.trim() || "portico.yaml") });
   } catch (err) {
     if (!(err instanceof ConfigError)) throw err;
     for (const problem of err.problems) report("fail", problem);
@@ -50,21 +49,12 @@ export async function doctorCommand(args: string[], io: CliIo, deps: DoctorDeps 
   const count = config.agents.length;
   report("ok", `Config: ${count} agents, ${config.rules.length} rules, ${config.triggers.length} triggers.`);
   report("ok", `Tokens are set for all ${count} agents.`);
-  const leftovers = config.ntfyIgnored;
-  if (leftovers.length > 0) {
-    const one = leftovers.length === 1;
-    report(
-      "warn",
-      `${listOf(leftovers)} ${one ? "is" : "are"} set but no longer used: approvals pop up on joined machines and wait on the hub page. ` +
-        `Remove ${one ? "the variable" : "the variables"} from the hub's environment.`,
-    );
-  }
 
   // 2. A local address
   const base = config.publicUrl;
   const host = new URL(base).hostname;
   if (host === "localhost" || host === "127.0.0.1") {
-    report("warn", `BRIDGE_PUBLIC_URL is ${base}: only this machine can reach the hub there. Agents in the cloud need a public https address.`);
+    report("warn", `PORTICO_PUBLIC_URL is ${base}: only this machine can reach the hub there. Agents in the cloud need a public https address.`);
   }
 
   // 3. Health, and 4. tokens on the running hub
@@ -77,7 +67,7 @@ export async function doctorCommand(args: string[], io: CliIo, deps: DoctorDeps 
   }
   if (!healthy) {
     const detail = health.error ?? `HTTP ${health.status}`;
-    report("fail", `${base}/healthz didn't answer (${detail}). Start the hub with bridge serve, and check the host or tunnel.`);
+    report("fail", `${base}/healthz didn't answer (${detail}). Start the hub with portico serve, and check the host or tunnel.`);
   } else {
     report("ok", `${base}/healthz answered.`);
     let accepted = 0;

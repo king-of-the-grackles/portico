@@ -1,5 +1,5 @@
 import { frameMessage, frameResult, frameTask } from "../core/framing";
-import type { BridgeEvent, Delivery, DirectoryEntry, LiveStatus, Message, Task, TaskStatus } from "../core/types";
+import type { Delivery, DirectoryEntry, LiveStatus, Message, PorticoEvent, Task, TaskStatus } from "../core/types";
 
 export interface TaskView {
   id: string;
@@ -45,7 +45,7 @@ export function resultDeliveryView(task: Task): TaskView & { framed_message: str
   return { ...taskView(task), framed_message: frameResult(task) };
 }
 
-export function eventView(event: BridgeEvent) {
+export function eventView(event: PorticoEvent) {
   return { id: event.id, agent: event.agent, name: event.name, details: event.details, created_at: event.createdAt };
 }
 

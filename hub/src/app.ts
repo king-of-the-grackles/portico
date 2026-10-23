@@ -5,9 +5,9 @@ import { pageRoutes } from "./page/routes";
 import type { Directory } from "./core/directory";
 import type { NetworkService } from "./core/network";
 import type { Presence } from "./core/presence";
-import type { BridgeService } from "./core/service";
+import type { PorticoService } from "./core/service";
 import type { SessionRegistry } from "./core/sessions";
-import type { BridgeConfig } from "./core/types";
+import type { PorticoConfig } from "./core/types";
 import { a2aRoutes } from "./ways-in/a2a";
 import type { AgentResolver, PrincipalResolver } from "./ways-in/auth";
 import { joinRoutes } from "./ways-in/join";
@@ -17,8 +17,8 @@ import { handleError, restRoutes } from "./ways-in/rest";
 import { type StreamHub, streamRoutes } from "./ways-in/stream";
 
 export interface AppDeps {
-  service: BridgeService;
-  config: BridgeConfig;
+  service: PorticoService;
+  config: PorticoConfig;
   directory: Directory;
   networkService: NetworkService;
   resolvers: { principal: PrincipalResolver; agent: AgentResolver };

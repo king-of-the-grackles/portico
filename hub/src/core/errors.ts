@@ -19,12 +19,12 @@ export const HTTP_STATUS: Record<ErrorCode, number> = {
   rate_limited: 429,
 };
 
-export class BridgeError extends Error {
+export class PorticoError extends Error {
   constructor(
     public readonly code: ErrorCode,
     message: string,
   ) {
     super(message);
-    this.name = "BridgeError";
+    this.name = "PorticoError";
   }
 }

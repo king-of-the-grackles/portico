@@ -36,7 +36,7 @@ describe("A2A agent cards", () => {
       protocolVersion: "0.3.0",
       name: "claude-code",
       description: "Claude Code",
-      url: "https://bridge.test/a2a/claude-code",
+      url: "https://portico.test/a2a/claude-code",
       preferredTransport: "JSONRPC",
       capabilities: { streaming: false, pushNotifications: false },
       securitySchemes: { bearer: { type: "http", scheme: "bearer" } },
@@ -62,7 +62,7 @@ describe("A2A for network members", () => {
   const card = (ctx: ReturnType<typeof makeApp>, path: string, token?: string) =>
     ctx.app.request(path, token ? { headers: { authorization: `Bearer ${token}` } } : {});
 
-  test("a session has a card at its full address, for a caller with a bridge token", async () => {
+  test("a session has a card at its full address, for a caller with a hub token", async () => {
     const ctx = makeApp();
     addSession(ctx, { name: "dialog-claude", machine: "macbook" });
     const res = await card(ctx, "/a2a/dialog-claude@macbook/.well-known/agent-card.json", TOKENS["grok-bot"]);
@@ -109,12 +109,12 @@ describe("A2A for network members", () => {
     expect((await rpc(ctx, "grok-bot", "nobody@macbook", "message/send", message("x"))).status).toBe(404);
   });
 
-  test("an assistant's card stays public, as bridge.yaml agents' cards are", async () => {
+  test("an assistant's card stays public, as portico.yaml agents' cards are", async () => {
     const ctx = makeApp();
     mintAssistant(ctx, "chatgpt", "chatgpt");
     const res = await ctx.app.request("/a2a/chatgpt/.well-known/agent-card.json");
     expect(res.status).toBe(200);
-    expect((await res.json()).url).toBe("https://bridge.test/a2a/chatgpt");
+    expect((await res.json()).url).toBe("https://portico.test/a2a/chatgpt");
   });
 
   test("message/send to a session creates a task under a kind rule", async () => {
@@ -124,7 +124,7 @@ describe("A2A for network members", () => {
     expect(body.result).toMatchObject({
       kind: "task",
       status: { state: "submitted" },
-      metadata: { from_agent: "grok-bot", to_agent: "dialog-claude@macbook", bridge_status: "queued" },
+      metadata: { from_agent: "grok-bot", to_agent: "dialog-claude@macbook", portico_status: "queued" },
     });
     expect(ctx.store.getTask(body.result.id)).toMatchObject({ toAgent: "dialog-claude@macbook", instructions: "Fix the login bug" });
   });
@@ -145,7 +145,7 @@ describe("A2A JSON-RPC", () => {
     expect(body.result).toMatchObject({
       kind: "task",
       status: { state: "submitted" },
-      metadata: { from_agent: "grok-bot", to_agent: "claude-code", bridge_status: "queued" },
+      metadata: { from_agent: "grok-bot", to_agent: "claude-code", portico_status: "queued" },
     });
     expect(ctx.store.getTask(body.result.id)?.instructions).toBe("Fix the build");
   });

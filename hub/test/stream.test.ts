@@ -358,19 +358,19 @@ describe("session streams", () => {
     const ctx = makeApp();
     const { token } = joinMachine(ctx, "macbook");
     const noKey = await ctx.app.request("/api/stream?repo=dialog", {
-      headers: { authorization: `Bearer ${token}`, "x-bridge-folder": "a".repeat(64) },
+      headers: { authorization: `Bearer ${token}`, "x-portico-folder": "a".repeat(64) },
     });
     expect(noKey.status).toBe(400);
     expect(await noKey.json()).toMatchObject({ error: "bad_request" });
     const noFolder = await ctx.app.request("/api/stream?repo=dialog", {
-      headers: { authorization: `Bearer ${token}`, "x-bridge-session": "key-aaaaaaaa" },
+      headers: { authorization: `Bearer ${token}`, "x-portico-session": "key-aaaaaaaa" },
     });
     expect(noFolder.status).toBe(400);
     expect(await noFolder.json()).toMatchObject({ error: "bad_request" });
     expect(ctx.network.listSessions()).toEqual([]);
   });
 
-  test("a bridge.yaml push agent still gets hello, and is still replaced by its own second stream", async () => {
+  test("a portico.yaml push agent still gets hello, and is still replaced by its own second stream", async () => {
     const { call } = makeApp();
     const first = sseReader(await call("claude-code", "GET", "/api/stream"));
     expect(await first.next()).toEqual(AGENT_HELLO);
@@ -412,7 +412,7 @@ describe("session streams", () => {
     }
   });
 
-  test("a machine's stream opened with X-Bridge-Popup: 1 counts as a pop-up session", async () => {
+  test("a machine's stream opened with X-Portico-Popup: 1 counts as a pop-up session", async () => {
     const ctx = makeApp();
     const { token } = joinMachine(ctx);
     const plain = await openSessionStream(ctx, token, { key: "key-plain-0001", repo: "api" });
@@ -425,10 +425,10 @@ describe("session streams", () => {
     }
   });
 
-  test("a bridge.yaml agent's X-Bridge-Popup is ignored", async () => {
+  test("a portico.yaml agent's X-Portico-Popup is ignored", async () => {
     const ctx = makeApp();
     const res = await ctx.app.request("/api/stream", {
-      headers: { authorization: `Bearer ${TOKENS["claude-code"]}`, "x-bridge-popup": "1" },
+      headers: { authorization: `Bearer ${TOKENS["claude-code"]}`, "x-portico-popup": "1" },
     });
     const events = sseReader(res);
     try {

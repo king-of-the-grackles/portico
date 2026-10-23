@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
 import { addressOf, type Directory } from "../core/directory";
 import { hashSecret } from "../core/tokens";
-import type { BridgeConfig, Machine } from "../core/types";
+import type { Machine, PorticoConfig } from "../core/types";
 import type { NetworkStore } from "../network-store";
 
 /** Who a bearer token (plus, for a machine token, a session key) speaks for. */
@@ -19,11 +19,11 @@ function sha256(value: string): Buffer {
 }
 
 /**
- * bridge.yaml env tokens first, compared in constant time as in v1. Then minted tokens, looked up by hash on every
+ * portico.yaml env tokens first, compared in constant time as in v1. Then minted tokens, looked up by hash on every
  * request, so a removed assistant's or machine's token fails at once.
  */
 export function makeResolvers(
-  config: BridgeConfig,
+  config: PorticoConfig,
   network: NetworkStore,
   opts: { now?: () => Date } = {},
 ): { principal: PrincipalResolver; agent: AgentResolver } {
@@ -55,7 +55,7 @@ export function makeResolvers(
 
     const hash = hashSecret(token);
     const assistant = network.assistantByTokenHash(hash);
-    // An assistant sharing a bridge.yaml agent's name is shadowed: its token doesn't resolve.
+    // An assistant sharing a portico.yaml agent's name is shadowed: its token doesn't resolve.
     if (assistant) return configNames.has(assistant.name) ? null : { type: "member", address: assistant.name };
 
     const machine = network.machineByTokenHash(hash);
@@ -75,8 +75,8 @@ export function makeResolvers(
 }
 
 /**
- * Whether a check_inbox call takes the caller's messages. A 0.1.x plugin (a bridge.yaml push agent in env mode) reads
- * the inbox but shows only tasks and results, and never sends X-Bridge-Session; the 0.2 plugin always does. So a push
+ * Whether a check_inbox call takes the caller's messages. A 0.1.x plugin (a portico.yaml push agent in env mode) reads
+ * the inbox but shows only tasks and results, and never sends X-Portico-Session; the 0.2 plugin always does. So a push
  * caller without the header gets no messages, and they stay pending for its deliveries. Pull callers always get them.
  */
 export function inboxTakesMessages(directory: Directory, agent: string, sessionKey: string | undefined): boolean {
@@ -96,7 +96,7 @@ export const NOT_REGISTERED =
 export function requireAgent(resolveAgent: AgentResolver, resolvePrincipal?: PrincipalResolver): MiddlewareHandler<AgentEnv> {
   return async (c, next) => {
     const authorization = c.req.header("authorization");
-    const agent = resolveAgent(authorization, c.req.header("x-bridge-session"));
+    const agent = resolveAgent(authorization, c.req.header("x-portico-session"));
     if (!agent) {
       const machineToken = resolvePrincipal?.(authorization)?.type === "machine";
       return c.json(

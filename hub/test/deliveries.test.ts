@@ -12,7 +12,7 @@ describe("deliveries for push agents", () => {
     addSession(ctx, { name: "dialog-claude", machine: "macbook", key: "key-12345678" });
     const task = ctx.service.sendTask("grok-bot", { to: "dialog-claude", instructions: "Fix the login bug" });
     const res = await ctx.app.request("/api/deliveries", {
-      headers: { authorization: `Bearer ${token}`, "x-bridge-session": "key-12345678" },
+      headers: { authorization: `Bearer ${token}`, "x-portico-session": "key-12345678" },
     });
     expect(res.status).toBe(200);
     expect((await json(res)).tasks.map((t: any) => t.id)).toEqual([task.id]);
@@ -23,7 +23,7 @@ describe("deliveries for push agents", () => {
     const task = ctx.service.sendTask("grok-bot", { to: "claude-code", instructions: "Write the changelog" });
     const first = await json(await ctx.call("claude-code", "GET", "/api/deliveries"));
     expect(first.tasks.map((t: any) => t.id)).toEqual([task.id]);
-    expect(first.tasks[0].framed_message).toStartWith(`<bridge-task id="${task.id}" from="grok-bot">`);
+    expect(first.tasks[0].framed_message).toStartWith(`<portico-task id="${task.id}" from="grok-bot">`);
     expect(first.results).toEqual([]);
     expect(first.messages).toEqual([]);
     expect(ctx.service.findTask(task.id)?.status).toBe("queued");
@@ -37,7 +37,7 @@ describe("deliveries for push agents", () => {
     ctx.service.checkInbox("grok-bot");
     ctx.service.finishTask("grok-bot", { taskId: sent.id, result: "Found: Friday" });
     const d = await json(await ctx.call("claude-code", "GET", "/api/deliveries"));
-    expect(d.results[0].framed_message).toStartWith(`<bridge-result task_id="${sent.id}" from="grok-bot" status="done">`);
+    expect(d.results[0].framed_message).toStartWith(`<portico-result task_id="${sent.id}" from="grok-bot" status="done">`);
     const res = await ctx.call("claude-code", "POST", "/api/deliveries/ack", { tasks: [incoming.id], results: [sent.id] });
     expect(await json(res)).toEqual({ acked: { tasks: 1, results: 1, messages: 0 } });
     expect(ctx.service.findTask(incoming.id)?.status).toBe("working");
@@ -99,8 +99,8 @@ describe("deliveries for push agents", () => {
   });
 });
 
-// A 0.1.x plugin (a bridge.yaml push agent in env mode) reads GET /api/inbox but shows only tasks and results, and
-// never sends X-Bridge-Session. The 0.2 plugin always does. Messages wait for the 0.2 plugin's deliveries instead.
+// A 0.1.x plugin (a portico.yaml push agent in env mode) reads GET /api/inbox but shows only tasks and results, and
+// never sends X-Portico-Session. The 0.2 plugin always does. Messages wait for the 0.2 plugin's deliveries instead.
 describe("an old plugin's inbox call leaves messages for the deliveries path", () => {
   const TOKEN = TOKENS["claude-code"];
   const mcpCheckInbox = (ctx: ReturnType<typeof makeApp>, auth: { token: string; key?: string }) =>

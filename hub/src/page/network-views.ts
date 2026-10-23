@@ -83,14 +83,14 @@ ${
 }
 
 function configSection(agents: AgentConfig[]): Html {
-  return html`<h2>From bridge.yaml</h2>
-<p class="meta">Set in bridge.yaml. Changes need a hub restart.</p>
+  return html`<h2>From portico.yaml</h2>
+<p class="meta">Set in portico.yaml. Changes need a hub restart.</p>
 <table><thead><tr><th>Agent</th><th>Kind</th><th>Delivery</th><th>Description</th></tr></thead><tbody>${agents.map(
     (agent) => html`<tr><td>${agent.name}</td><td>${agent.kind}</td><td>${agent.delivery}</td><td>${agent.description}</td></tr>`,
   )}</tbody></table>`;
 }
 
-/** The Network page: joined machines, connected assistants and the bridge.yaml agents. */
+/** The Network page: joined machines, connected assistants and the portico.yaml agents. */
 export function networkView(input: {
   machines: (Machine & { sessions: number })[];
   assistants: (Assistant & { lastCheckIn: string | null })[];

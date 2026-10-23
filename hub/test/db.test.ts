@@ -160,7 +160,7 @@ describe("Store: events", () => {
 });
 
 describe("openDb on a file", () => {
-  const path = join(tmpdir(), `bridge-test-${crypto.randomUUID()}.db`);
+  const path = join(tmpdir(), `portico-test-${crypto.randomUUID()}.db`);
   afterEach(() => {
     for (const suffix of ["", "-wal", "-shm"]) rmSync(path + suffix, { force: true });
   });
@@ -203,7 +203,7 @@ describe("Store: idempotency keys and updates", () => {
 
 describe("openDb migration", () => {
   test("adds idempotency_key to a database created before it existed", () => {
-    const path = join(tmpdir(), `bridge-migrate-${crypto.randomUUID()}.db`);
+    const path = join(tmpdir(), `portico-migrate-${crypto.randomUUID()}.db`);
     const old = new Database(path, { create: true, strict: true });
     old.run(`CREATE TABLE tasks (
       id TEXT PRIMARY KEY, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL, instructions TEXT NOT NULL,
@@ -347,7 +347,7 @@ afterEach(() => {
 function v1Database(statements: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), "ab-db-"));
   v1Dirs.push(dir);
-  const path = join(dir, "bridge.db");
+  const path = join(dir, "portico.db");
   const db = new Database(path, { create: true });
   for (const s of statements) db.run(s);
   db.run(`INSERT INTO tasks (id, from_agent, to_agent, instructions, status, chain_length, created_at, updated_at, expires_at)

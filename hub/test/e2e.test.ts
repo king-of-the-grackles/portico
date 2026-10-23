@@ -16,8 +16,8 @@ afterEach(() => {
 });
 
 function startHub() {
-  dir = mkdtempSync(join(tmpdir(), "bridge-e2e-"));
-  running = startServer({ ...testConfig(), dbPath: join(dir, "bridge.db") }, { port: 0 });
+  dir = mkdtempSync(join(tmpdir(), "portico-e2e-"));
+  running = startServer({ ...testConfig(), dbPath: join(dir, "portico.db") }, { port: 0 });
   const base = `http://127.0.0.1:${running.port}`;
   const api = (agent: TestAgent, method: string, path: string, body?: unknown) =>
     fetch(`${base}${path}`, {
@@ -87,9 +87,9 @@ describe("end to end over HTTP", () => {
     const joined = await (
       await fetch(`${base}/api/join`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, machine: "macbook" }) })
     ).json();
-    const session = { authorization: `Bearer ${joined.token}`, "x-bridge-session": "e2e-session-key-1" };
+    const session = { authorization: `Bearer ${joined.token}`, "x-portico-session": "e2e-session-key-1" };
     const stream = await fetch(`${base}/api/stream?repo=api`, {
-      headers: { ...session, "x-bridge-folder": "a".repeat(64), "x-bridge-popup": "1" },
+      headers: { ...session, "x-portico-folder": "a".repeat(64), "x-portico-popup": "1" },
     });
     const events = sseReader(stream);
     try {

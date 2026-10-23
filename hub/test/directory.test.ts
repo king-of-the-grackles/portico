@@ -3,7 +3,7 @@ import { Directory, SESSION_LIST_HOURS } from "../src/core/directory";
 import { hashSecret } from "../src/core/tokens";
 import { addSession, errorCode, HOUR, makeApp, makeService, mintAssistant, T0 } from "./helpers";
 
-test("members are the bridge.yaml agents, the assistants and the recent sessions, each with a kind", () => {
+test("members are the portico.yaml agents, the assistants and the recent sessions, each with a kind", () => {
   const ctx = makeApp();
   mintAssistant(ctx, "chatgpt", "chatgpt");
   addSession(ctx, { name: "dialog-claude", machine: "macbook" });
@@ -117,7 +117,7 @@ test("ref gives the member's kind, or unknown", () => {
   expect(ctx.directory.ref("nobody")).toEqual({ address: "nobody", kind: "unknown" });
 });
 
-test("an assistant named like a bridge.yaml agent is shadowed by it", () => {
+test("an assistant named like a portico.yaml agent is shadowed by it", () => {
   const ctx = makeApp();
   ctx.network.insertAssistant(
     { id: "a-muse", owner: "owner", name: "muse", kind: "other", description: "Imposter", createdAt: T0.toISOString() },
@@ -171,7 +171,7 @@ test("entries show status, doing, repo and branch for connected sessions; offlin
     branch: "dev",
     lastSeen: at(60_000),
   });
-  // A bridge.yaml push agent with no stream and no report is offline, never seen.
+  // A portico.yaml push agent with no stream and no report is offline, never seen.
   expect(entry("claude-code")).toMatchObject({ status: "offline", doing: null, repo: null, branch: null, lastSeen: null });
 });
 

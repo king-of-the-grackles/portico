@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Directory } from "../core/directory";
-import { BridgeError } from "../core/errors";
-import type { BridgeService } from "../core/service";
-import type { BridgeConfig, Member, Task, TaskStatus } from "../core/types";
+import { PorticoError } from "../core/errors";
+import type { PorticoService } from "../core/service";
+import type { Member, PorticoConfig, Task, TaskStatus } from "../core/types";
 import { clip, errorName, log } from "../log";
 import type { AgentResolver, PrincipalResolver } from "./auth";
 import { jsonBodyLimit } from "./limits";
@@ -34,8 +34,8 @@ const UNSUPPORTED_METHODS = new Set([
   "agent/getAuthenticatedExtendedCard",
 ]);
 
-/** Every member has a card at its full address: bridge.yaml agents, assistants and sessions. */
-export function agentCard(config: BridgeConfig, member: Member): Record<string, unknown> {
+/** Every member has a card at its full address: portico.yaml agents, assistants and sessions. */
+export function agentCard(config: PorticoConfig, member: Member): Record<string, unknown> {
   return {
     protocolVersion: A2A_PROTOCOL_VERSION,
     name: member.address,
@@ -43,10 +43,10 @@ export function agentCard(config: BridgeConfig, member: Member): Record<string, 
     url: `${config.publicUrl}/a2a/${member.address}`,
     preferredTransport: "JSONRPC",
     version: "0.1.0",
-    provider: { organization: "agent-bridge", url: config.publicUrl },
+    provider: { organization: "Portico", url: config.publicUrl },
     capabilities: { streaming: false, pushNotifications: false, stateTransitionHistory: false },
     securitySchemes: {
-      bearer: { type: "http", scheme: "bearer", description: "The sending agent's bridge token." },
+      bearer: { type: "http", scheme: "bearer", description: "The sending agent's hub token." },
     },
     security: [{ bearer: [] }],
     defaultInputModes: ["text/plain"],
@@ -56,7 +56,7 @@ export function agentCard(config: BridgeConfig, member: Member): Record<string, 
         id: "handoff",
         name: `Hand a task to ${member.address}`,
         description: member.description,
-        tags: ["handoff", "agent-bridge"],
+        tags: ["handoff", "portico"],
         examples: [],
       },
     ],
@@ -88,7 +88,7 @@ export function toA2ATask(task: Task): Record<string, unknown> {
     contextId: task.id,
     status,
     artifacts,
-    metadata: { from_agent: task.fromAgent, to_agent: task.toAgent, bridge_status: task.status },
+    metadata: { from_agent: task.fromAgent, to_agent: task.toAgent, portico_status: task.status },
   };
 }
 
@@ -105,7 +105,7 @@ function textFromParts(parts: unknown[]): string {
     .join("\n\n");
 }
 
-function handle(service: BridgeService, caller: string, target: string, req: JsonRpcRequest) {
+function handle(service: PorticoService, caller: string, target: string, req: JsonRpcRequest) {
   const id: JsonRpcId = req.id ?? null;
   const params = (req.params ?? {}) as Record<string, unknown>;
   try {
@@ -125,7 +125,7 @@ function handle(service: BridgeService, caller: string, target: string, req: Jso
       try {
         task = service.getTask(caller, params.id, { expectedReceiver: target });
       } catch (err) {
-        if (err instanceof BridgeError && (err.code === "not_found" || err.code === "not_allowed")) {
+        if (err instanceof PorticoError && (err.code === "not_found" || err.code === "not_allowed")) {
           return rpcError(id, TASK_NOT_FOUND, "Task not found.");
         }
         throw err;
@@ -133,11 +133,11 @@ function handle(service: BridgeService, caller: string, target: string, req: Jso
       return rpcResult(id, toA2ATask(task));
     }
     if (UNSUPPORTED_METHODS.has(req.method)) {
-      return rpcError(id, UNSUPPORTED_OPERATION, `${req.method} isn't supported by this bridge.`);
+      return rpcError(id, UNSUPPORTED_OPERATION, `${req.method} isn't supported by this hub.`);
     }
     return rpcError(id, -32601, "Method not found.");
   } catch (err) {
-    if (err instanceof BridgeError) {
+    if (err instanceof PorticoError) {
       return rpcError(id, err.code === "rate_limited" ? -32000 : -32602, `${err.code}: ${err.message}`);
     }
     throw err;
@@ -145,8 +145,8 @@ function handle(service: BridgeService, caller: string, target: string, req: Jso
 }
 
 export function a2aRoutes(
-  service: BridgeService,
-  config: BridgeConfig,
+  service: PorticoService,
+  config: PorticoConfig,
   resolveAgent: AgentResolver,
   directory: Directory,
   resolvePrincipal: PrincipalResolver,
@@ -167,7 +167,7 @@ export function a2aRoutes(
   a2a.post("/:agent", jsonBodyLimit(config), async (c) => {
     // Authenticate before looking the address up, so a caller without a token gets the same 401 for every address and
     // can't learn which sessions exist.
-    const caller = resolveAgent(c.req.header("authorization"), c.req.header("x-bridge-session"));
+    const caller = resolveAgent(c.req.header("authorization"), c.req.header("x-portico-session"));
     if (!caller) {
       return c.json({ error: "unauthorized", message: "Missing or invalid bearer token." }, 401, {
         "WWW-Authenticate": "Bearer",

@@ -5,7 +5,7 @@ node_modules/
 .env
 .env.*
 !.env.example
-bridge.yaml
-bridge-secrets.sh
+portico.yaml
+portico-secrets.sh
 dist/
 fly.toml

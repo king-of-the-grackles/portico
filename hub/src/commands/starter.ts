@@ -1,7 +1,7 @@
-/** The starter bridge.yaml that `bridge init` writes. Kept identical to bridge.example.yaml by a test. */
-export const STARTER_YAML = `# Copy to bridge.yaml and edit. Pairs of agents not listed under rules are blocked.
-# Each agent needs a token in the environment: BRIDGE_TOKEN_<NAME>,
-# e.g. BRIDGE_TOKEN_CLAUDE_CODE for "claude-code". Generate one with: openssl rand -hex 24
+/** The starter portico.yaml that `portico init` writes. Kept identical to portico.example.yaml by a test. */
+export const STARTER_YAML = `# Copy to portico.yaml and edit. Pairs of agents not listed under rules are blocked.
+# Each agent needs a token in the environment: PORTICO_TOKEN_<NAME>,
+# e.g. PORTICO_TOKEN_CLAUDE_CODE for "claude-code". Generate one with: openssl rand -hex 24
 agents:
   - name: claude-code
     description: Claude Code working in a repo. Good for code changes, bug fixes and tests.

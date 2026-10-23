@@ -106,7 +106,7 @@ export interface JoinCode {
   usedAt: string | null;
 }
 
-/** Anyone a task can be addressed to: a bridge.yaml agent, a hub-page assistant, or a session on a machine. */
+/** Anyone a task can be addressed to: a portico.yaml agent, a hub-page assistant, or a session on a machine. */
 export interface Member {
   /** The full address: the name, or `name@machine` for a session. */
   address: string;
@@ -163,7 +163,7 @@ export interface Limits {
   messagesPerHourPerAgent: number;
 }
 
-export interface BridgeConfig {
+export interface PorticoConfig {
   agents: AgentConfig[];
   rules: RuleConfig[];
   triggers: TriggerConfig[];
@@ -177,9 +177,7 @@ export interface BridgeConfig {
   /** HMAC key for hub page sessions. */
   signingSecret: string;
   adminPassword: string;
-  /** Names of set BRIDGE_NTFY_* variables, sorted. Ignored since v1.2; startServer logs them once. */
-  ntfyIgnored: string[];
-  /** BRIDGE_PLUGIN_SOURCE: the marketplace source the /join page tells machines to install from. Null when unset. */
+  /** PORTICO_PLUGIN_SOURCE: the marketplace source the /join page tells machines to install from. Null when unset. */
   pluginSource: string | null;
 }
 
@@ -217,7 +215,7 @@ export interface Message {
   deliveredAt: string | null;
 }
 
-export interface BridgeEvent {
+export interface PorticoEvent {
   id: string;
   agent: string;
   name: string;

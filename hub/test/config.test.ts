@@ -22,11 +22,11 @@ triggers:
 `;
 
 const ENV: Record<string, string | undefined> = {
-  BRIDGE_PUBLIC_URL: "https://bridge.example.com/",
-  BRIDGE_TOKEN_GROK_BOT: "g".repeat(32),
-  BRIDGE_SIGNING_SECRET: "s".repeat(32),
-  BRIDGE_ADMIN_PASSWORD: "correct horse battery",
-  BRIDGE_TOKEN_CLAUDE_CODE_WINGMAN: "c".repeat(32),
+  PORTICO_PUBLIC_URL: "https://portico.example.com/",
+  PORTICO_TOKEN_GROK_BOT: "g".repeat(32),
+  PORTICO_SIGNING_SECRET: "s".repeat(32),
+  PORTICO_ADMIN_PASSWORD: "correct horse battery",
+  PORTICO_TOKEN_CLAUDE_CODE_WINGMAN: "c".repeat(32),
 };
 
 function problems(yaml: string, env: Record<string, string | undefined> = ENV): string[] {
@@ -41,7 +41,7 @@ function problems(yaml: string, env: Record<string, string | undefined> = ENV): 
 
 describe("tokenEnvName", () => {
   test("upper-cases and turns hyphens into underscores", () => {
-    expect(tokenEnvName("claude-code-wingman")).toBe("BRIDGE_TOKEN_CLAUDE_CODE_WINGMAN");
+    expect(tokenEnvName("claude-code-wingman")).toBe("PORTICO_TOKEN_CLAUDE_CODE_WINGMAN");
   });
 });
 
@@ -51,7 +51,7 @@ describe("parseConfig", () => {
     expect(config.agents.map((a) => a.name)).toEqual(["grok-bot", "claude-code-wingman"]);
     expect(config.rules).toHaveLength(2);
     expect(config.triggers[0]?.send.to).toBe("claude-code-wingman");
-    expect(config.publicUrl).toBe("https://bridge.example.com");
+    expect(config.publicUrl).toBe("https://portico.example.com");
     expect(config.tokens).toEqual({ "grok-bot": "g".repeat(32), "claude-code-wingman": "c".repeat(32) });
     expect(config.limits).toEqual({
       taskExpiryHours: 24,
@@ -67,20 +67,19 @@ describe("parseConfig", () => {
     expect(config.port).toBe(8790);
     expect(config.signingSecret).toBe("s".repeat(32));
     expect(config.adminPassword).toBe("correct horse battery");
-    expect(config.ntfyIgnored).toEqual([]);
-    expect(config.dbPath).toBe("./bridge.db");
+    expect(config.dbPath).toBe("./portico.db");
   });
 
-  test("reads limits, PORT and BRIDGE_DB_PATH", () => {
+  test("reads limits, PORT and PORTICO_DB_PATH", () => {
     const config = parseConfig(`${YAML}\nlimits:\n  max_chain_length: 3\n  task_expiry_hours: 2\n`, {
       ...ENV,
       PORT: "9000",
-      BRIDGE_DB_PATH: "/data/bridge.db",
+      PORTICO_DB_PATH: "/data/portico.db",
     });
     expect(config.limits.maxChainLength).toBe(3);
     expect(config.limits.taskExpiryHours).toBe(2);
     expect(config.port).toBe(9000);
-    expect(config.dbPath).toBe("/data/bridge.db");
+    expect(config.dbPath).toBe("/data/portico.db");
   });
 
   test("reads the message limits, which must be positive integers", () => {
@@ -107,9 +106,9 @@ agents:
   - { name: muse, description: y, delivery: pull }
 `;
     const p = problems(yaml, {
-      BRIDGE_PUBLIC_URL: "https://b.test",
-      BRIDGE_TOKEN_GROK_BOT: "g".repeat(32),
-      BRIDGE_TOKEN_MUSE: "m".repeat(32),
+      PORTICO_PUBLIC_URL: "https://b.test",
+      PORTICO_TOKEN_GROK_BOT: "g".repeat(32),
+      PORTICO_TOKEN_MUSE: "m".repeat(32),
     });
     expect(p).toContain('agent name "Grok_Bot" must be lowercase letters, digits and hyphens');
     expect(p).toContain('agent name "muse" is used more than once');
@@ -126,7 +125,7 @@ triggers:
     when: { agent: codex, event: e }
     send: { to: muse, instructions: hi }
 `;
-    const p = problems(yaml, { BRIDGE_PUBLIC_URL: "https://b.test", BRIDGE_TOKEN_GROK_BOT: "g".repeat(32) });
+    const p = problems(yaml, { PORTICO_PUBLIC_URL: "https://b.test", PORTICO_TOKEN_GROK_BOT: "g".repeat(32) });
     expect(p.filter((problem) => problem.startsWith("rule "))).toEqual([]);
     expect(p).toContain('trigger "t": when.agent "codex" is not a configured agent');
     expect(p).toContain('trigger "t": send.to "muse" is not a configured agent');
@@ -144,10 +143,10 @@ agents:
 `;
     const env = {
       ...ENV,
-      BRIDGE_TOKEN_MUSE: "m".repeat(32),
-      BRIDGE_TOKEN_CHATGPT: "h".repeat(32),
-      BRIDGE_TOKEN_CODEX: "x".repeat(32),
-      BRIDGE_TOKEN_HELPER: "e".repeat(32),
+      PORTICO_TOKEN_MUSE: "m".repeat(32),
+      PORTICO_TOKEN_CHATGPT: "h".repeat(32),
+      PORTICO_TOKEN_CODEX: "x".repeat(32),
+      PORTICO_TOKEN_HELPER: "e".repeat(32),
     };
     const kinds = Object.fromEntries(parseConfig(yaml, env).agents.map((agent) => [agent.name, agent.kind]));
     expect(kinds).toEqual({
@@ -210,23 +209,23 @@ rules:
   });
 
   test("rejects missing, short and shared tokens", () => {
-    expect(problems(YAML, { ...ENV, BRIDGE_TOKEN_GROK_BOT: undefined })).toContain(
-      'missing BRIDGE_TOKEN_GROK_BOT for agent "grok-bot"',
+    expect(problems(YAML, { ...ENV, PORTICO_TOKEN_GROK_BOT: undefined })).toContain(
+      'missing PORTICO_TOKEN_GROK_BOT for agent "grok-bot"',
     );
-    expect(problems(YAML, { ...ENV, BRIDGE_TOKEN_GROK_BOT: "short" })).toContain(
-      "BRIDGE_TOKEN_GROK_BOT must be at least 24 characters",
+    expect(problems(YAML, { ...ENV, PORTICO_TOKEN_GROK_BOT: "short" })).toContain(
+      "PORTICO_TOKEN_GROK_BOT must be at least 24 characters",
     );
-    expect(problems(YAML, { ...ENV, BRIDGE_TOKEN_GROK_BOT: "c".repeat(32) })).toContain(
+    expect(problems(YAML, { ...ENV, PORTICO_TOKEN_GROK_BOT: "c".repeat(32) })).toContain(
       'agents "grok-bot" and "claude-code-wingman" share the same token',
     );
   });
 
   test("requires https except for localhost", () => {
-    expect(problems(YAML, { ...ENV, BRIDGE_PUBLIC_URL: "http://bridge.example.com" })).toContain(
-      "BRIDGE_PUBLIC_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)",
+    expect(problems(YAML, { ...ENV, PORTICO_PUBLIC_URL: "http://portico.example.com" })).toContain(
+      "PORTICO_PUBLIC_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)",
     );
-    expect(problems(YAML, { ...ENV, BRIDGE_PUBLIC_URL: "http://localhost:8787" })).toEqual([]);
-    expect(problems(YAML, { ...ENV, BRIDGE_PUBLIC_URL: undefined })).toContain("missing BRIDGE_PUBLIC_URL");
+    expect(problems(YAML, { ...ENV, PORTICO_PUBLIC_URL: "http://localhost:8787" })).toEqual([]);
+    expect(problems(YAML, { ...ENV, PORTICO_PUBLIC_URL: undefined })).toContain("missing PORTICO_PUBLIC_URL");
   });
 
   test("rejects a bad rule action and a bad delivery mode", () => {
@@ -236,41 +235,29 @@ rules:
   });
 
   test("rejects a file that isn't YAML", () => {
-    expect(problems("agents: [unclosed")[0]).toStartWith("bridge.yaml is not valid YAML");
+    expect(problems("agents: [unclosed")[0]).toStartWith("portico.yaml is not valid YAML");
   });
 });
 
 describe("parseConfig: secrets and strictness", () => {
   test("requires a signing secret and an admin password of a minimum length", () => {
-    expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: undefined })).toContain("missing BRIDGE_SIGNING_SECRET");
-    expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: "short" })).toContain(
-      "BRIDGE_SIGNING_SECRET must be at least 32 characters",
+    expect(problems(YAML, { ...ENV, PORTICO_SIGNING_SECRET: undefined })).toContain("missing PORTICO_SIGNING_SECRET");
+    expect(problems(YAML, { ...ENV, PORTICO_SIGNING_SECRET: "short" })).toContain(
+      "PORTICO_SIGNING_SECRET must be at least 32 characters",
     );
-    expect(problems(YAML, { ...ENV, BRIDGE_ADMIN_PASSWORD: undefined })).toContain("missing BRIDGE_ADMIN_PASSWORD");
-    expect(problems(YAML, { ...ENV, BRIDGE_ADMIN_PASSWORD: "short" })).toContain(
-      "BRIDGE_ADMIN_PASSWORD must be at least 12 characters",
+    expect(problems(YAML, { ...ENV, PORTICO_ADMIN_PASSWORD: undefined })).toContain("missing PORTICO_ADMIN_PASSWORD");
+    expect(problems(YAML, { ...ENV, PORTICO_ADMIN_PASSWORD: "short" })).toContain(
+      "PORTICO_ADMIN_PASSWORD must be at least 12 characters",
     );
   });
 
   test("the signing secret must differ from every agent token and the admin password", () => {
-    const message = "BRIDGE_SIGNING_SECRET must differ from every agent token and from BRIDGE_ADMIN_PASSWORD";
-    expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: ENV.BRIDGE_TOKEN_GROK_BOT })).toContain(message);
-    expect(problems(YAML, { ...ENV, BRIDGE_SIGNING_SECRET: "p".repeat(32), BRIDGE_ADMIN_PASSWORD: "p".repeat(32) })).toContain(
+    const message = "PORTICO_SIGNING_SECRET must differ from every agent token and from PORTICO_ADMIN_PASSWORD";
+    expect(problems(YAML, { ...ENV, PORTICO_SIGNING_SECRET: ENV.PORTICO_TOKEN_GROK_BOT })).toContain(message);
+    expect(problems(YAML, { ...ENV, PORTICO_SIGNING_SECRET: "p".repeat(32), PORTICO_ADMIN_PASSWORD: "p".repeat(32) })).toContain(
       message,
     );
     expect(problems(YAML)).not.toContain(message);
-  });
-
-  test("BRIDGE_NTFY_* variables are ignored, never refused, and listed by name", () => {
-    const config = parseConfig(YAML, {
-      ...ENV,
-      BRIDGE_NTFY_TOPIC: "mytopic", // refused before v1.2: too short
-      BRIDGE_NTFY_URL: "http://ntfy.example.com", // refused before v1.2: not https
-      BRIDGE_NTFY_TOKEN: "  ",
-    });
-    expect(config.ntfyIgnored).toEqual(["BRIDGE_NTFY_TOPIC", "BRIDGE_NTFY_URL"]);
-    expect(config).not.toHaveProperty("ntfy");
-    expect(parseConfig(YAML, ENV).ntfyIgnored).toEqual([]);
   });
 
   test("rejects unknown keys, so typos aren't silently ignored", () => {
@@ -292,7 +279,7 @@ triggers:
   - { name: t, when: { agent: muse, event: e }, send: { to: muse, instructions: hi } }
   - { name: t, when: { agent: muse, event: f }, send: { to: grok-bot, instructions: hi } }
 `;
-    const p = problems(yaml, { ...ENV, BRIDGE_TOKEN_MUSE: "m".repeat(32) });
+    const p = problems(yaml, { ...ENV, PORTICO_TOKEN_MUSE: "m".repeat(32) });
     expect(p).toContain(`trigger "t": an agent can't send a task to itself`);
     expect(p).toContain(`trigger "t" is defined more than once`);
   });
@@ -309,19 +296,19 @@ triggers:
 
 describe("loadConfig", () => {
   test("names a missing config file", async () => {
-    await expect(loadConfig({ ...ENV, BRIDGE_CONFIG: "/nonexistent/bridge.yaml" })).rejects.toThrow(
-      "config file not found: /nonexistent/bridge.yaml",
+    await expect(loadConfig({ ...ENV, PORTICO_CONFIG: "/nonexistent/portico.yaml" })).rejects.toThrow(
+      "config file not found: /nonexistent/portico.yaml",
     );
   });
 
   // Root can read any file, so the check only means something for an unprivileged test process.
   test.skipIf(process.getuid?.() === 0)("explains a config file that cannot be read", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "bridge-cfg-"));
-    const path = join(dir, "bridge.yaml");
+    const dir = mkdtempSync(join(tmpdir(), "portico-cfg-"));
+    const path = join(dir, "portico.yaml");
     try {
       writeFileSync(path, YAML);
       chmodSync(path, 0o000);
-      const err = await loadConfig({ ...ENV, BRIDGE_CONFIG: path }).catch((e) => e);
+      const err = await loadConfig({ ...ENV, PORTICO_CONFIG: path }).catch((e) => e);
       expect(err).toBeInstanceOf(ConfigError);
       const text = err.problems.join("\n");
       expect(text).toContain(path);

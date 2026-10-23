@@ -3,11 +3,11 @@ import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import type { Directory } from "../core/directory";
-import { BridgeError, HTTP_STATUS } from "../core/errors";
+import { HTTP_STATUS, PorticoError } from "../core/errors";
 import { parseStatusReport, type Presence } from "../core/presence";
-import { type BridgeService, DELIVERY_BATCH_MAX } from "../core/service";
+import { DELIVERY_BATCH_MAX, type PorticoService } from "../core/service";
 import type { SessionRegistry } from "../core/sessions";
-import type { BridgeConfig } from "../core/types";
+import type { PorticoConfig } from "../core/types";
 import { errorName, log } from "../log";
 import { type AgentEnv, type AgentResolver, inboxTakesMessages, type PrincipalResolver, requireAgent } from "./auth";
 import { jsonBodyLimit } from "./limits";
@@ -32,12 +32,12 @@ export async function readJson(c: Context): Promise<unknown> {
   try {
     return await c.req.json();
   } catch {
-    throw new BridgeError("bad_request", "Request body must be JSON.");
+    throw new PorticoError("bad_request", "Request body must be JSON.");
   }
 }
 
 export function handleError(err: unknown, c: Context): Response {
-  if (err instanceof BridgeError) {
+  if (err instanceof PorticoError) {
     return c.json({ error: err.code, message: err.message }, HTTP_STATUS[err.code] as ContentfulStatusCode);
   }
   if (err instanceof z.ZodError) {
@@ -49,8 +49,8 @@ export function handleError(err: unknown, c: Context): Response {
 }
 
 export function restRoutes(
-  service: BridgeService,
-  config: BridgeConfig,
+  service: PorticoService,
+  config: PorticoConfig,
   resolvers: { agent: AgentResolver; principal: PrincipalResolver },
   directory: Directory,
   status: { presence: Presence; sessions: SessionRegistry; now: () => Date },
@@ -82,7 +82,7 @@ export function restRoutes(
   api.get("/inbox", (c) => {
     const agent = c.get("agent");
     const { tasks, results, messages } = service.checkInbox(agent, {
-      messages: inboxTakesMessages(directory, agent, c.req.header("x-bridge-session")),
+      messages: inboxTakesMessages(directory, agent, c.req.header("x-portico-session")),
     });
     return c.json({
       tasks: tasks.map(inboxTaskView),
@@ -94,7 +94,7 @@ export function restRoutes(
   // Peek and ack, for push agents' plugins: a GET changes nothing, and only the ack claims what was delivered.
   const requirePush = (agent: string) => {
     if (!directory.isPush(agent)) {
-      throw new BridgeError("not_allowed", "Only push agents use deliveries; pull agents call check_inbox.");
+      throw new PorticoError("not_allowed", "Only push agents use deliveries; pull agents call check_inbox.");
     }
   };
 
@@ -117,7 +117,7 @@ export function restRoutes(
   // Push members' live status, kept in memory (spec §5.3). The text is cleaned here; nothing about it is logged.
   api.post("/status", async (c) => {
     const agent = c.get("agent");
-    if (!directory.isPush(agent)) throw new BridgeError("not_allowed", "Only push agents report status.");
+    if (!directory.isPush(agent)) throw new PorticoError("not_allowed", "Only push agents report status.");
     const report = parseStatusReport(await readJson(c));
     status.presence.report(agent, report, status.now().toISOString());
     status.sessions.touch(agent);

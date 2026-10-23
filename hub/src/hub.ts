@@ -5,9 +5,9 @@ import { ApprovalDesk } from "./approvals/desk";
 import { Directory } from "./core/directory";
 import { NetworkService } from "./core/network";
 import { Presence } from "./core/presence";
-import { BridgeService } from "./core/service";
+import { PorticoService } from "./core/service";
 import { SessionRegistry } from "./core/sessions";
-import type { BridgeConfig, Notice } from "./core/types";
+import type { Notice, PorticoConfig } from "./core/types";
 import { Store } from "./db";
 import { log } from "./log";
 import { NetworkStore } from "./network-store";
@@ -35,7 +35,7 @@ export interface Hub {
   /** Live status reports and check-ins, in memory. */
   presence: Presence;
   sessions: SessionRegistry;
-  service: BridgeService;
+  service: PorticoService;
   streams: StreamHub;
   /** Open approval requests, and who holds them on each machine. */
   desk: ApprovalDesk;
@@ -46,7 +46,7 @@ export interface Hub {
 const RESTORE_LIMIT = 500;
 
 /** Wires every piece of the hub together. Used by startServer and by the tests. */
-export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
+export function createHub(config: PorticoConfig, opts: HubOptions): Hub {
   const store = new Store(opts.db);
   const network = new NetworkStore(opts.db);
   const streams = new StreamHub();
@@ -84,7 +84,7 @@ export function createHub(config: BridgeConfig, opts: HubOptions): Hub {
     approvalNeeded: (task) => desk.open(task),
     approvalDecided: (task, outcome) => desk.close(task.id, outcome),
   });
-  const service = new BridgeService({
+  const service = new PorticoService({
     store,
     config,
     directory,

@@ -65,7 +65,7 @@ describe("the live directory on the hub page", () => {
 
   test("a kind with no friendly name shows as itself", async () => {
     const yaml = BASE_YAML.replace("agents:\n", "agents:\n  - { name: notes, description: Notes, delivery: pull, kind: notes-bot }\n");
-    const ctx = makeApp(testConfig(yaml, { BRIDGE_TOKEN_NOTES: "notes-token-0123456789abcdef" }));
+    const ctx = makeApp(testConfig(yaml, { PORTICO_TOKEN_NOTES: "notes-token-0123456789abcdef" }));
     const cookie = await signIn(ctx.app);
     const page = await getPage(ctx, "/hub", cookie);
     expect(page).toContain('<td>notes</td><td class="narrow-hide">notes-bot</td>');
@@ -100,10 +100,10 @@ describe("the network page", () => {
     expect(res.headers.get("location")).toBe(`/hub/login?next=${encodeURIComponent("/hub/network")}`);
     const signedOut = await ctx.app.request("/hub/network/join-codes", { method: "POST" });
     expect(signedOut.status).toBe(403);
-    expect(await signedOut.text()).not.toContain("Join my agent bridge");
+    expect(await signedOut.text()).not.toContain("Join my Portico hub");
   });
 
-  test("the network page lists machines with their sessions, assistants with when they were added, and the bridge.yaml agents", async () => {
+  test("the network page lists machines with their sessions, assistants with when they were added, and the portico.yaml agents", async () => {
     const ctx = makeApp();
     const cookie = await signIn(ctx.app);
     const { token } = joinMachine(ctx, "macbook");
@@ -129,8 +129,8 @@ describe("the network page", () => {
       expect(nameInput).toContain('maxlength="40"');
       expect(nameInput).toContain("required");
       for (const label of ["Muse", "Grok Bot", "ChatGPT", "Codex", "Other MCP client"]) expect(page).toContain(`>${label}</option>`);
-      expect(page).toContain("From bridge.yaml");
-      expect(page).toContain("Set in bridge.yaml. Changes need a hub restart.");
+      expect(page).toContain("From portico.yaml");
+      expect(page).toContain("Set in portico.yaml. Changes need a hub restart.");
       expect(page).toMatch(/<td>claude-code<\/td><td>claude-code<\/td><td>push<\/td><td>Claude Code<\/td>/);
     } finally {
       await events.cancel();
@@ -158,7 +158,7 @@ describe("the network page", () => {
     expect(page).toContain("The line is shown once.");
     expect(page).toContain('href="/hub/network"');
     const [line] = pasteBlocks(page);
-    const match = line?.match(/^Join my agent bridge: https:\/\/bridge\.test\/join#([A-Za-z0-9_-]{22})$/);
+    const match = line?.match(/^Join my Portico hub: https:\/\/portico\.test\/join#([A-Za-z0-9_-]{22})$/);
     expect(match).not.toBeNull();
     const code = match![1]!;
     expect(await getPage(ctx, "/hub/network", cookie)).not.toContain(code);
@@ -191,26 +191,26 @@ describe("the network page", () => {
       const header = `Authorization: Bearer ${token}`;
       switch (kind) {
         case "muse": {
-          expect(blocks.some((block) => block.includes("https://bridge.test/api/openapi.json"))).toBe(true);
+          expect(blocks.some((block) => block.includes("https://portico.test/api/openapi.json"))).toBe(true);
           expect(blocks.filter((block) => block.includes(token!))).toEqual([token!]);
           expect(page.split(token!)).toHaveLength(2);
           break;
         }
         case "grok-bot": {
           expect(blocks).toHaveLength(1);
-          expect(blocks[0]).toContain("https://bridge.test/mcp");
+          expect(blocks[0]).toContain("https://portico.test/mcp");
           expect(blocks[0]).toContain(header);
           break;
         }
         case "codex": {
-          expect(blocks.some((block) => block.includes('bearer_token_env_var = "BRIDGE_TOKEN_TEST_CODEX"'))).toBe(true);
-          expect(blocks.some((block) => block.includes('url = "https://bridge.test/mcp"'))).toBe(true);
-          expect(blocks).toContain(`export BRIDGE_TOKEN_TEST_CODEX='${token}'`);
+          expect(blocks.some((block) => block.includes('bearer_token_env_var = "PORTICO_TOKEN_TEST_CODEX"'))).toBe(true);
+          expect(blocks.some((block) => block.includes('url = "https://portico.test/mcp"'))).toBe(true);
+          expect(blocks).toContain(`export PORTICO_TOKEN_TEST_CODEX='${token}'`);
           break;
         }
         case "chatgpt":
         case "other": {
-          expect(blocks).toEqual(["https://bridge.test/mcp", header]);
+          expect(blocks).toEqual(["https://portico.test/mcp", header]);
           break;
         }
       }
@@ -228,7 +228,7 @@ describe("the network page", () => {
     expect((await post(ctx, "/hub/network/assistants", cookie, { kind: "muse", name: "helper" })).status).toBe(200);
     const cases: [Record<string, string>, string][] = [
       [{ kind: "muse", name: "helper" }, "An assistant named &quot;helper&quot; already exists. Choose another name."],
-      [{ kind: "codex", name: "muse" }, "&quot;muse&quot; is already an agent in bridge.yaml. Choose another name."],
+      [{ kind: "codex", name: "muse" }, "&quot;muse&quot; is already an agent in portico.yaml. Choose another name."],
       [{ kind: "codex", name: "Bad Name" }, "name must be lowercase letters, digits and hyphens."],
       [{ kind: "robot", name: "fresh" }, "kind must be one of: muse, grok-bot, chatgpt, codex, other."],
     ];
@@ -332,7 +332,7 @@ describe("the network page", () => {
       expect(after).not.toContain("scenes-claude");
       expect(await getPage(ctx, "/hub/network", cookie)).not.toContain("macbook");
       const reopen = await ctx.app.request("/api/stream?repo=dialog", {
-        headers: { authorization: `Bearer ${token}`, "x-bridge-session": "key-aaaaaaaa", "x-bridge-folder": "1".repeat(64) },
+        headers: { authorization: `Bearer ${token}`, "x-portico-session": "key-aaaaaaaa", "x-portico-folder": "1".repeat(64) },
       });
       expect(reopen.status).toBe(401);
     } finally {
@@ -403,7 +403,7 @@ describe("the network page", () => {
       const res = await post(ctx, path, cookie, form, evil);
       expect(res.status).toBe(403);
       const page = await res.text();
-      expect(page).not.toContain("Join my agent bridge");
+      expect(page).not.toContain("Join my Portico hub");
       expect(page).not.toMatch(TOKEN);
     }
     expect(ctx.networkService.listAssistants().map((assistant) => assistant.name)).toEqual(["helper"]);

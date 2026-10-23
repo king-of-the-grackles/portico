@@ -100,7 +100,7 @@ describe("assistants", () => {
     expect(errorCode(() => networkService.createAssistant({ name: "odd", kind: "other", description: 7 }))).toBe("bad_request");
   });
 
-  test("names follow the agent-name rule and can't reuse a bridge.yaml agent or another assistant", () => {
+  test("names follow the agent-name rule and can't reuse a portico.yaml agent or another assistant", () => {
     const { networkService } = makeNetwork();
     expect(errorCode(() => networkService.createAssistant({ name: "Muse!", kind: "muse" }))).toBe("bad_request");
     expect(errorCode(() => networkService.createAssistant({ name: 42, kind: "muse" }))).toBe("bad_request");

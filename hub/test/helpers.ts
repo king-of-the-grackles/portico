@@ -2,12 +2,12 @@ import type { Hono } from "hono";
 import { createHub } from "../src/hub";
 import { parseConfig } from "../src/config";
 import { addressOf, Directory } from "../src/core/directory";
-import { BridgeError } from "../src/core/errors";
+import { PorticoError } from "../src/core/errors";
 import type { NetworkService } from "../src/core/network";
 import { Presence } from "../src/core/presence";
-import { BridgeService } from "../src/core/service";
+import { PorticoService } from "../src/core/service";
 import { hashSecret } from "../src/core/tokens";
-import type { Assistant, AssistantKind, BridgeConfig, Machine, Notice, SessionRecord } from "../src/core/types";
+import type { Assistant, AssistantKind, Machine, Notice, PorticoConfig, SessionRecord } from "../src/core/types";
 import { OWNER } from "../src/core/types";
 import { openDb, Store } from "../src/db";
 import { NetworkStore } from "../src/network-store";
@@ -60,23 +60,23 @@ export type TestAgent = keyof typeof TOKENS;
 
 export function testEnv(extra: Record<string, string> = {}): Record<string, string> {
   return {
-    BRIDGE_PUBLIC_URL: "https://bridge.test",
-    BRIDGE_TOKEN_GROK_BOT: TOKENS["grok-bot"],
-    BRIDGE_TOKEN_CLAUDE_CODE: TOKENS["claude-code"],
-    BRIDGE_TOKEN_MUSE: TOKENS.muse,
-    BRIDGE_TOKEN_CODEX: TOKENS.codex,
-    BRIDGE_SIGNING_SECRET: "test-signing-secret-0123456789abcdef",
-    BRIDGE_ADMIN_PASSWORD: "test-admin-password",
+    PORTICO_PUBLIC_URL: "https://portico.test",
+    PORTICO_TOKEN_GROK_BOT: TOKENS["grok-bot"],
+    PORTICO_TOKEN_CLAUDE_CODE: TOKENS["claude-code"],
+    PORTICO_TOKEN_MUSE: TOKENS.muse,
+    PORTICO_TOKEN_CODEX: TOKENS.codex,
+    PORTICO_SIGNING_SECRET: "test-signing-secret-0123456789abcdef",
+    PORTICO_ADMIN_PASSWORD: "test-admin-password",
     ...extra,
   };
 }
 
-export function testConfig(yaml: string = BASE_YAML, extraEnv: Record<string, string> = {}): BridgeConfig {
+export function testConfig(yaml: string = BASE_YAML, extraEnv: Record<string, string> = {}): PorticoConfig {
   return parseConfig(yaml, testEnv(extraEnv));
 }
 
 /** A service over an in-memory database. Add an address to `connected` to give it an open stream. */
-export function makeService(config: BridgeConfig = testConfig()) {
+export function makeService(config: PorticoConfig = testConfig()) {
   const db = openDb(":memory:");
   const store = new Store(db);
   const network = new NetworkStore(db);
@@ -92,7 +92,7 @@ export function makeService(config: BridgeConfig = testConfig()) {
   });
   const notices: Notice[] = [];
   let counter = 0;
-  const service = new BridgeService({
+  const service = new PorticoService({
     store,
     config,
     directory,
@@ -143,7 +143,7 @@ export function mintAssistant(
   return ctx.networkService.createAssistant({ name, kind });
 }
 
-/** Joins a machine as `bridge join` would, returning its one-time token. */
+/** Joins a machine as `portico join` would, returning its one-time token. */
 export function joinMachine(ctx: { networkService: NetworkService }, name = "macbook"): { machine: Machine; token: string } {
   const { code } = ctx.networkService.createJoinCode();
   return ctx.networkService.redeemJoinCode(code, name);
@@ -158,7 +158,7 @@ export async function callAs(
   body?: unknown,
 ): Promise<Response> {
   const headers: Record<string, string> = { authorization: `Bearer ${auth.token}` };
-  if (auth.key !== undefined) headers["x-bridge-session"] = auth.key;
+  if (auth.key !== undefined) headers["x-portico-session"] = auth.key;
   let payload: string | undefined;
   if (body !== undefined) {
     headers["content-type"] = "application/json";
@@ -175,10 +175,10 @@ export async function openSessionStream(
 ): Promise<{ res: Response; events: ReturnType<typeof sseReader>; hello: HelloEvent }> {
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
-    "x-bridge-session": opts.key,
-    "x-bridge-folder": opts.folderId ?? "a".repeat(64),
+    "x-portico-session": opts.key,
+    "x-portico-folder": opts.folderId ?? "a".repeat(64),
   };
-  if (opts.popup) headers["x-bridge-popup"] = "1";
+  if (opts.popup) headers["x-portico-popup"] = "1";
   const res = await ctx.app.request(`/api/stream?repo=${encodeURIComponent(opts.repo)}`, { headers });
   if (res.status !== 200) throw new Error(`stream open failed with ${res.status}: ${await res.text()}`);
   const events = sseReader(res);
@@ -203,19 +203,19 @@ export function fakeConnection() {
   return { conn, sent, isClosed: () => closed };
 }
 
-/** Runs fn and returns the BridgeError code it threw, or null if it didn't throw. */
+/** Runs fn and returns the PorticoError code it threw, or null if it didn't throw. */
 export function errorCode(fn: () => unknown): string | null {
   try {
     fn();
   } catch (err) {
-    if (err instanceof BridgeError) return err.code;
+    if (err instanceof PorticoError) return err.code;
     throw err;
   }
   return null;
 }
 
 /** A hub over an in-memory database with a fake clock. `newNonce` replaces the approval nonces' random source. */
-export function makeApp(config: BridgeConfig = testConfig(), opts: { newNonce?: () => string } = {}) {
+export function makeApp(config: PorticoConfig = testConfig(), opts: { newNonce?: () => string } = {}) {
   const clock = testClock();
   const notices: Notice[] = [];
   let counter = 0;

@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import type { BridgeEvent, Message, Task, TaskStatus } from "./core/types";
+import type { Message, PorticoEvent, Task, TaskStatus } from "./core/types";
 
 // v1's schema, as deployed. Every statement is idempotent, because deployed v1 databases are at user_version 0
 // with these tables already there.
@@ -213,7 +213,7 @@ function toTask(row: TaskRow): Task {
   };
 }
 
-function toEvent(row: EventRow): BridgeEvent {
+function toEvent(row: EventRow): PorticoEvent {
   return { id: row.id, agent: row.agent, name: row.name, details: row.details, createdAt: row.created_at };
 }
 
@@ -438,19 +438,19 @@ export class Store {
     return rows.map(toTask);
   }
 
-  insertEvent(event: BridgeEvent): void {
+  insertEvent(event: PorticoEvent): void {
     this.db
       .query("INSERT INTO events (id, agent, name, details, created_at) VALUES ($id, $agent, $name, $details, $createdAt)")
       .run({ id: event.id, agent: event.agent, name: event.name, details: event.details, createdAt: event.createdAt });
   }
 
-  getEvent(id: string): BridgeEvent | null {
+  getEvent(id: string): PorticoEvent | null {
     const row = this.db.query("SELECT * FROM events WHERE id = $id").get({ id }) as EventRow | null;
     return row ? toEvent(row) : null;
   }
 
   /** Newest first. */
-  listEvents(filter: { agent?: string; limit: number }): BridgeEvent[] {
+  listEvents(filter: { agent?: string; limit: number }): PorticoEvent[] {
     const where = filter.agent ? "WHERE agent = $agent" : "";
     const bindings: Bindings = filter.agent ? { agent: filter.agent, limit: filter.limit } : { limit: filter.limit };
     const rows = this.db

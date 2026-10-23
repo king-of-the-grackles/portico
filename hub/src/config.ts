@@ -2,7 +2,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { rulePatternProblem } from "./core/rules";
 import { unknownPlaceholders } from "./core/templates";
-import type { AgentConfig, BridgeConfig, Limits } from "./core/types";
+import type { AgentConfig, Limits, PorticoConfig } from "./core/types";
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {
@@ -87,14 +87,7 @@ function defaultKind(agent: Pick<AgentConfig, "name" | "delivery">): string {
 }
 
 export function tokenEnvName(agent: string): string {
-  return `BRIDGE_TOKEN_${agent.toUpperCase().replace(/-/g, "_")}`;
-}
-
-/** Set BRIDGE_NTFY_* variables, by name. Phone pushes are gone: the hub ignores these and says so once at startup. */
-function ntfyLeftovers(env: Env): string[] {
-  return Object.keys(env)
-    .filter((name) => name.startsWith("BRIDGE_NTFY_") && (env[name]?.trim() ?? "") !== "")
-    .sort();
+  return `PORTICO_TOKEN_${agent.toUpperCase().replace(/-/g, "_")}`;
 }
 
 function requireSecret(env: Env, name: string, minLength: number, problems: string[]): string {
@@ -104,12 +97,12 @@ function requireSecret(env: Env, name: string, minLength: number, problems: stri
   return value;
 }
 
-export function parseConfig(yamlText: string, env: Env): BridgeConfig {
+export function parseConfig(yamlText: string, env: Env): PorticoConfig {
   let raw: unknown;
   try {
     raw = parseYaml(yamlText);
   } catch (err) {
-    throw new ConfigError([`bridge.yaml is not valid YAML: ${(err as Error).message}`]);
+    throw new ConfigError([`portico.yaml is not valid YAML: ${(err as Error).message}`]);
   }
 
   const parsed = FileSchema.safeParse(raw ?? {});
@@ -173,28 +166,28 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
     tokens[name] = token;
   }
 
-  const publicUrl = (env.BRIDGE_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
+  const publicUrl = (env.PORTICO_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
   if (!publicUrl) {
-    problems.push("missing BRIDGE_PUBLIC_URL");
+    problems.push("missing PORTICO_PUBLIC_URL");
   } else {
     try {
       const url = new URL(publicUrl);
       const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
       if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
-        problems.push("BRIDGE_PUBLIC_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)");
+        problems.push("PORTICO_PUBLIC_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)");
       }
     } catch {
-      problems.push(`BRIDGE_PUBLIC_URL "${publicUrl}" is not a valid URL`);
+      problems.push(`PORTICO_PUBLIC_URL "${publicUrl}" is not a valid URL`);
     }
   }
 
   const port = env.PORT ? Number(env.PORT) : DEFAULT_PORT;
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push(`PORT "${env.PORT}" is not a valid port`);
 
-  const signingSecret = requireSecret(env, "BRIDGE_SIGNING_SECRET", MIN_SECRET_LENGTH, problems);
-  const adminPassword = requireSecret(env, "BRIDGE_ADMIN_PASSWORD", MIN_PASSWORD_LENGTH, problems);
+  const signingSecret = requireSecret(env, "PORTICO_SIGNING_SECRET", MIN_SECRET_LENGTH, problems);
+  const adminPassword = requireSecret(env, "PORTICO_ADMIN_PASSWORD", MIN_PASSWORD_LENGTH, problems);
   if (signingSecret && (Object.values(tokens).includes(signingSecret) || signingSecret === adminPassword)) {
-    problems.push("BRIDGE_SIGNING_SECRET must differ from every agent token and from BRIDGE_ADMIN_PASSWORD");
+    problems.push("PORTICO_SIGNING_SECRET must differ from every agent token and from PORTICO_ADMIN_PASSWORD");
   }
 
   if (problems.length > 0) throw new ConfigError(problems);
@@ -222,17 +215,16 @@ export function parseConfig(yamlText: string, env: Env): BridgeConfig {
     },
     publicUrl,
     tokens,
-    dbPath: env.BRIDGE_DB_PATH?.trim() || "./bridge.db",
+    dbPath: env.PORTICO_DB_PATH?.trim() || "./portico.db",
     port,
     signingSecret,
     adminPassword,
-    ntfyIgnored: ntfyLeftovers(env),
-    pluginSource: env.BRIDGE_PLUGIN_SOURCE?.trim() || null,
+    pluginSource: env.PORTICO_PLUGIN_SOURCE?.trim() || null,
   };
 }
 
-export async function loadConfig(env: Env = process.env): Promise<BridgeConfig> {
-  const path = env.BRIDGE_CONFIG?.trim() || "./bridge.yaml";
+export async function loadConfig(env: Env = process.env): Promise<PorticoConfig> {
+  const path = env.PORTICO_CONFIG?.trim() || "./portico.yaml";
   const file = Bun.file(path);
   if (!(await file.exists())) throw new ConfigError([`config file not found: ${path}`]);
   let text: string;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Builds the single-file `bridge` executables (spec §13).
+// Builds the single-file `portico` executables (spec §13).
 // Usage: bun scripts/build.ts [target ...]   (default: all three; "host" means this machine's platform)
 const TARGETS = ["bun-darwin-arm64", "bun-linux-x64", "bun-linux-arm64"] as const;
 const host = `bun-${process.platform}-${process.arch}`;
@@ -14,7 +14,7 @@ for (const target of targets) {
 }
 
 for (const target of targets) {
-  const outfile = `dist/bridge-${target.replace(/^bun-/, "")}`;
+  const outfile = `dist/portico-${target.replace(/^bun-/, "")}`;
   const build = Bun.spawnSync(
     ["bun", "build", "hub/src/cli.ts", "--compile", `--target=${target}`, "--no-compile-autoload-bunfig", `--outfile=${outfile}`],
     { stdout: "inherit", stderr: "inherit" },

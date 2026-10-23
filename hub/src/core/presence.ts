@@ -1,4 +1,4 @@
-import { BridgeError } from "./errors";
+import { PorticoError } from "./errors";
 import { defang } from "./framing";
 import type { SessionStatus, StatusReport } from "./types";
 
@@ -15,7 +15,7 @@ function oneLine(value: unknown, max: number): string | null {
 export function parseStatusReport(body: unknown): StatusReport {
   const b = (body ?? {}) as Record<string, unknown>;
   if (typeof b.status !== "string" || !STATUSES.has(b.status)) {
-    throw new BridgeError("bad_request", "status must be busy, idle or waiting.");
+    throw new PorticoError("bad_request", "status must be busy, idle or waiting.");
   }
   const repo = oneLine(b.repo, 100);
   return {

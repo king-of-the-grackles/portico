@@ -1,9 +1,9 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
-import type { BridgeConfig } from "../core/types";
+import type { PorticoConfig } from "../core/types";
 
-export const SESSION_COOKIE = "bridge_session";
+export const SESSION_COOKIE = "portico_session";
 export const SESSION_DAYS = 7;
 const DAY_MS = 86_400_000;
 
@@ -67,17 +67,17 @@ export function loginPath(requestUrl: string): string {
 }
 
 /** Constant-time comparison of fixed-length digests. */
-export function passwordMatches(config: BridgeConfig, given: string): boolean {
+export function passwordMatches(config: PorticoConfig, given: string): boolean {
   return timingSafeEqual(sha256(given), sha256(config.adminPassword));
 }
 
-/** A signed, stateless session token. Changing BRIDGE_SIGNING_SECRET signs everyone out. */
-export function newSessionToken(config: BridgeConfig, now: Date): string {
+/** A signed, stateless session token. Changing PORTICO_SIGNING_SECRET signs everyone out. */
+export function newSessionToken(config: PorticoConfig, now: Date): string {
   const expiresAt = new Date(now.getTime() + SESSION_DAYS * DAY_MS).toISOString();
   return signSession(config.signingSecret, expiresAt);
 }
 
-export function hasSession(c: Context, config: BridgeConfig, now: Date): boolean {
+export function hasSession(c: Context, config: PorticoConfig, now: Date): boolean {
   const token = getCookie(c, SESSION_COOKIE);
   return token !== undefined && validSession(config.signingSecret, token, now);
 }
@@ -104,7 +104,7 @@ export class LoginLimiter {
 }
 
 /** True when a post carries no Origin header, or the hub's own origin. SameSite=Strict is the first defense. */
-export function sameOrigin(c: Context, config: BridgeConfig): boolean {
+export function sameOrigin(c: Context, config: PorticoConfig): boolean {
   const origin = c.req.header("origin");
   return origin === undefined || origin === new URL(config.publicUrl).origin;
 }

@@ -1,5 +1,5 @@
 {
-  "name": "agent-bridge",
+  "name": "portico",
   "license": "MIT OR Apache-2.0",
   "private": true,
   "workspaces": ["hub", "plugin-claude-code"],

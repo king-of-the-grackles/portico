@@ -1,22 +1,22 @@
 # Render Blueprint for the hub (docs/deploy/cloud.md). A persistent disk needs a paid instance type.
 services:
   - type: web
-    name: agent-bridge
+    name: portico
     runtime: docker
     plan: starter
     healthCheckPath: /healthz
     disk:
-      name: bridge-data
+      name: portico-data
       mountPath: /data
       sizeGB: 1
     envVars:
-      # bridge.yaml is added as a Secret File named bridge.yaml, which Render mounts here.
-      - key: BRIDGE_CONFIG
-        value: /etc/secrets/bridge.yaml
-      - key: BRIDGE_PUBLIC_URL
+      # portico.yaml is added as a Secret File named portico.yaml, which Render mounts here.
+      - key: PORTICO_CONFIG
+        value: /etc/secrets/portico.yaml
+      - key: PORTICO_PUBLIC_URL
         sync: false
-      - key: BRIDGE_SIGNING_SECRET
+      - key: PORTICO_SIGNING_SECRET
         sync: false
-      - key: BRIDGE_ADMIN_PASSWORD
+      - key: PORTICO_ADMIN_PASSWORD
         sync: false
-      # Add one BRIDGE_TOKEN_<NAME> per agent in bridge.yaml in the dashboard.
+      # Add one PORTICO_TOKEN_<NAME> per agent in portico.yaml in the dashboard.
