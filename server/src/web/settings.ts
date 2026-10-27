@@ -3,7 +3,7 @@ import { html, raw } from "hono/html";
 import { computerView } from "../api/computers";
 import type { PersonEnv } from "../api/context";
 import { passkeyView } from "../api/passkeys";
-import { claimView, inviteView } from "../api/people";
+import { peopleListing } from "../api/people";
 import { agentsInOrder, personViews } from "../api/views";
 import type { Core } from "../core/core";
 import type { Person } from "../core/types";
@@ -17,21 +17,12 @@ import { sendPage, signInPath } from "./layout";
  */
 export function settingsData(core: Core, me: Person): SettingsData {
   const views = personViews(core, me);
-  const owner = me.role === "owner";
-  const link = (secret: string | null) => (secret ? `${core.settings.publicUrl()}/invite#${secret}` : null);
   return {
     page: "settings",
     me: views.person(me),
     publicUrl: core.settings.publicUrl(),
     agents: agentsInOrder(core.agents, me).map(views.agent),
-    people: {
-      people: core.people
-        .list()
-        .filter((p) => p.status === "active")
-        .map((p) => ({ ...views.person(p), joinedAt: p.approvedAt ?? p.createdAt })),
-      invites: owner ? core.people.openInvites().map((i) => inviteView(i, link(core.people.inviteSecret(i.id)))) : [],
-      claims: owner ? core.people.claims().map(claimView) : [],
-    },
+    people: peopleListing(core, me),
     computers: core.computers.list(me.id).map((computer) => computerView(core, me, computer)),
     passkeys: core.accounts.passkeys.list(me.id).map(passkeyView),
   };

@@ -171,7 +171,7 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
 
   route.get("/", (c) => {
     const principal = deps.resolver.principal(c.req.header("authorization"));
-    if (!principal) return unauthorized(c);
+    if (!principal) return unauthorized(c, deps.resolver);
     if (principal.type !== "computer") {
       return c.json({ error: "not_allowed", message: "Only sessions on a computer open the live stream." }, 403);
     }

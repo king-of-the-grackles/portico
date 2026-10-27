@@ -180,7 +180,7 @@ export function mcpRoutes(deps: McpDeps): Hono {
 
   mcp.post("/", jsonBodyLimit(), async (c) => {
     const agent = deps.resolver.agent(c.req.header("authorization"), c.req.header("x-portico-session"));
-    if (!agent) return unauthorized(c);
+    if (!agent) return unauthorized(c, deps.resolver);
     let body: unknown;
     try {
       body = await c.req.json();

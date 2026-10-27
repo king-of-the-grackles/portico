@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Core } from "../core/core";
+import type { Person } from "../core/types";
 import { PorticoError } from "../core/errors";
 import { checkNewPassword, hashPassword } from "../core/accounts";
 import { cleanPersonName, type Claim, type Invite } from "../core/people";
@@ -22,6 +23,25 @@ export function inviteView(invite: Invite, link: string | null = null): InviteVi
   };
 }
 
+/**
+ * What GET /api/people answers, and Settings' first data: everyone active, and for the owner, open invites (with their
+ * links) and claims waiting for approval.
+ */
+export function peopleListing(core: Core, me: Person): { people: PeopleEntry[]; invites: InviteView[]; claims: ClaimView[] } {
+  const { people, settings } = core;
+  const views = personViews(core, me);
+  const isOwner = me.role === "owner";
+  const link = (secret: string | null) => (secret ? `${settings.publicUrl()}/invite#${secret}` : null);
+  return {
+    people: people
+      .list()
+      .filter((p) => p.status === "active")
+      .map((p) => ({ ...views.person(p), joinedAt: p.approvedAt ?? p.createdAt })),
+    invites: isOwner ? people.openInvites().map((invite) => inviteView(invite, link(people.inviteSecret(invite.id)))) : [],
+    claims: isOwner ? people.claims().map(claimView) : [],
+  };
+}
+
 export function claimView(claim: Claim): ClaimView {
   return { personId: claim.personId, name: claim.name, inviteName: claim.inviteName, claimedAt: claim.claimedAt };
 }
@@ -39,20 +59,7 @@ export function peopleRoutes(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
   const inviteLink = (secret: string | null) => (secret ? `${settings.publicUrl()}/invite#${secret}` : null);
 
-  route.get("/people", (c) => {
-    const me = currentPerson(c);
-    const views = personViews(core, me);
-    const isOwner = me.role === "owner";
-    const entries: PeopleEntry[] = people
-      .list()
-      .filter((p) => p.status === "active")
-      .map((p) => ({ ...views.person(p), joinedAt: p.approvedAt ?? p.createdAt }));
-    return c.json({
-      people: entries,
-      invites: isOwner ? people.openInvites().map((invite) => inviteView(invite, inviteLink(people.inviteSecret(invite.id)))) : [],
-      claims: isOwner ? people.claims().map(claimView) : [],
-    });
-  });
+  route.get("/people", (c) => c.json(peopleListing(core, currentPerson(c))));
 
   route.post("/invites", async (c) => {
     const me = currentOwner(c);

@@ -104,9 +104,17 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
     const agent = c.get("agent");
     requireSession(agent, "report status");
     const report = parseStatusReport(await readJson(c));
+    const before = presence.get(agent.id);
     presence.report(agent.id, report, deps.now().toISOString());
     agents.touch(agent);
-    deps.changes.emit("agents");
+    // The plugin repeats an unchanged report as a heartbeat; only a change is worth every open page's refetch.
+    const changed =
+      !before ||
+      before.status !== report.status ||
+      before.doing !== report.doing ||
+      before.repo !== report.repo ||
+      before.branch !== report.branch;
+    if (changed) deps.changes.emit("agents");
     return c.json({ ok: true });
   });
 

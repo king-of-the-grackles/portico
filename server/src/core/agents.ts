@@ -54,9 +54,13 @@ export function addressOf(agent: Pick<Agent, "name" | "computer">): string {
   return agent.computer ? `${agent.name}@${agent.computer}` : agent.name;
 }
 
-/** A session's name before deduplication: the slugged repo basename plus `-claude`. */
+/**
+ * A session's name before deduplication: the slugged repo basename plus `-claude`. The repo part is clipped so the name,
+ * even with a `-99` suffix, stays within the 40 characters every agent name allows.
+ */
 export function sessionBaseName(repo: string): string {
-  return `${slugify(repo, "session")}-claude`;
+  const room = LIMITS.maxNameChars - "-claude".length - "-99".length;
+  return `${slugify(repo, "session").slice(0, room).replace(/-+$/, "")}-claude`;
 }
 
 /** What a session's plugin sends when it opens its stream. */
@@ -75,6 +79,11 @@ const MAX_REPO = 200;
 const MAX_DEDUPE = 99;
 /** A session's last_seen_at is written by its status reports at most this often. */
 const TOUCH_INTERVAL_MS = 60_000;
+/**
+ * A disconnected session's row can be taken over by a new session in its folder only after this long, so a session
+ * between reconnect attempts (the plugin waits at most a minute) keeps its name, threads and messages.
+ */
+const INHERIT_AFTER_MS = 3 * 60_000;
 
 /** The registration headers and query, checked. The repo defaults to "session". */
 export function parseRegistration(key: unknown, folderId: unknown, repo: unknown): Registration {
@@ -334,8 +343,8 @@ export class Agents {
   // ---- sessions ----
 
   /**
-   * The same key reconnecting keeps its row. Otherwise a stale session in the same folder is inherited, shortest name
-   * first, then most recently seen. Otherwise a new row gets the first free name on the computer: `<repo>-claude`,
+   * The same key reconnecting keeps its row. Otherwise a session in the same folder that has been disconnected for 3
+   * minutes is inherited, shortest name first, then most recently seen. Otherwise a new row gets the first free name on the computer: `<repo>-claude`,
    * `-2`, `-3`, and so on. A new key in a folder whose switch is off is refused with `folder_off`.
    */
   registerSession(computer: Computer, reg: Registration): { agent: Agent; inherited: boolean } {
@@ -357,8 +366,11 @@ export class Agents {
       }
 
       const sessions = this.sessionsOn(computer.id);
+      const quietSince = this.iso(-INHERIT_AFTER_MS);
       const stale = sessions
-        .filter((s) => s.folderId === reg.folderId && !this.isConnected(s.id))
+        .filter(
+          (s) => s.folderId === reg.folderId && !this.isConnected(s.id) && (s.lastSeenAt ?? s.createdAt) <= quietSince,
+        )
         .sort(
           (a, b) => a.name.length - b.name.length || (b.lastSeenAt ?? "").localeCompare(a.lastSeenAt ?? ""),
         )[0];

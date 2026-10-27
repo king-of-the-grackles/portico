@@ -39,12 +39,14 @@ export function frameMessage(m: { id: string; from: string; subject: string; tex
 }
 
 /** What happened to a held message the agent sent. Portico's own words, so no untrusted-input warning. */
-export function frameUpdate(u: { messageId: string; to: string; subject: string; status: string }): string {
+export function frameUpdate(u: { messageId: string; to: string; subject: string; status: string; decision: string | null }): string {
   const outcome =
     u.status === "delivered"
       ? "was approved and delivered"
       : u.status === "declined"
         ? "was declined by the recipient's owner"
-        : "expired before anyone approved it";
+        : u.decision
+          ? "was approved, but expired before the recipient picked it up"
+          : "expired before anyone approved it";
   return `<portico-update message_id="${u.messageId}" to="${u.to}" status="${u.status}">\nThe message to \`${u.to}\` (${defang(u.subject)}) ${outcome}.\n</portico-update>`;
 }

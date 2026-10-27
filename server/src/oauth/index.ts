@@ -266,7 +266,12 @@ function basicClientId(authorization: string | undefined): string | undefined {
   if (!match) return undefined;
   const decoded = Buffer.from(match[1]!, "base64").toString("utf8");
   const colon = decoded.indexOf(":");
-  const id = decodeURIComponent(colon < 0 ? decoded : decoded.slice(0, colon));
+  let id: string;
+  try {
+    id = decodeURIComponent(colon < 0 ? decoded : decoded.slice(0, colon));
+  } catch {
+    throw new OAuthProblem("invalid_client", "The client credentials can't be read.", 401);
+  }
   return id || undefined;
 }
 

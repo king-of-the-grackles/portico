@@ -48,11 +48,8 @@ export interface UpdateView {
 
 /** View builders for the agent API, which name agents by address and people by name. */
 export function agentViews(agents: Agents, people: People) {
-  const names = new Map<string, string>();
-  const ownerName = (id: string) => {
-    if (!names.has(id)) names.set(id, people.get(id)?.name ?? "");
-    return names.get(id)!;
-  };
+  // Read on every call: these builders live as long as the server, and people rename themselves.
+  const ownerName = (id: string) => people.get(id)?.name ?? "";
   /** An agent ID as its display name; a removed agent's ID stays as it is. */
   const nameOf = (id: string) => {
     const agent = agents.get(id);
@@ -102,7 +99,7 @@ export function agentViews(agents: Agents, people: People) {
       subject: m.subject,
       status: m.status,
       at,
-      framed_message: frameUpdate({ messageId: m.id, to, subject: m.subject, status: m.status }),
+      framed_message: frameUpdate({ messageId: m.id, to, subject: m.subject, status: m.status, decision: m.decision }),
     };
   };
 

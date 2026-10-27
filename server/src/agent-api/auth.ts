@@ -8,6 +8,8 @@ import type { Agent, Computer } from "../core/types";
 export type Principal = { type: "agent"; agent: Agent } | { type: "computer"; computer: Computer };
 
 export interface Resolver {
+  /** Portico's public URL, for the 401's pointer to the OAuth metadata. */
+  publicUrl(): string;
   /** A computer token without a session key stays a computer, so it can register a new session. */
   principal(authorization: string | undefined, sessionKey?: string): Principal | null;
   agent(authorization: string | undefined, sessionKey?: string): Agent | null;
@@ -22,7 +24,7 @@ export function bearer(authorization: string | undefined): string | null {
  * Tokens are looked up by hash on every request, so a removed agent's or computer's token fails at once. An app's
  * token and a connector's access token name an agent; a computer token plus a registered session key names a session.
  */
-export function makeResolver(agents: Agents, computers: Computers): Resolver {
+export function makeResolver(agents: Agents, computers: Computers, publicUrl: () => string): Resolver {
   const principal: Resolver["principal"] = (authorization, sessionKey) => {
     const token = bearer(authorization);
     if (!token) return null;
@@ -37,6 +39,7 @@ export function makeResolver(agents: Agents, computers: Computers): Resolver {
     return agent ? { type: "agent", agent } : null;
   };
   return {
+    publicUrl,
     principal,
     agent: (authorization, sessionKey) => {
       const found = principal(authorization, sessionKey);
@@ -51,10 +54,13 @@ export type AgentEnv = { Variables: { agent: Agent } };
 export const NOT_REGISTERED =
   "This session isn't registered with Portico yet. The session registers when its live stream connects; check the plugin log.";
 
-/** The 401 every agent route answers, with where a connector finds how to sign in. */
-export function unauthorized(c: Context, message = "Missing or invalid bearer token."): Response {
+/**
+ * The 401 every agent route answers, with where a connector finds how to sign in. Built from the public URL: behind a
+ * proxy that ends TLS, the request's own URL would say http.
+ */
+export function unauthorized(c: Context, resolver: Pick<Resolver, "publicUrl">, message = "Missing or invalid bearer token."): Response {
   return c.json({ error: "unauthorized", message }, 401, {
-    "WWW-Authenticate": `Bearer resource_metadata="${new URL("/.well-known/oauth-protected-resource", c.req.url).href}"`,
+    "WWW-Authenticate": `Bearer resource_metadata="${resolver.publicUrl()}/.well-known/oauth-protected-resource"`,
   });
 }
 
@@ -65,7 +71,7 @@ export function requireAgent(resolver: Resolver): MiddlewareHandler<AgentEnv> {
     const agent = resolver.agent(authorization, c.req.header("x-portico-session"));
     if (!agent) {
       const computerToken = resolver.principal(authorization)?.type === "computer";
-      return unauthorized(c, computerToken ? NOT_REGISTERED : undefined);
+      return unauthorized(c, resolver, computerToken ? NOT_REGISTERED : undefined);
     }
     c.set("agent", agent);
     await next();

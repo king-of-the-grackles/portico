@@ -102,10 +102,18 @@ describe("session registration", () => {
     const second = p.agents.registerSession(computer, { key: "key-00002", repo: "api", folderId });
     expect(second.agent.name).toBe("api-claude-2");
     p.agentStreams.closeAll([first.agent.id]);
+    // Just disconnected: the session may be between reconnect attempts, so its row isn't up for grabs yet.
+    const fourth = p.agents.registerSession(computer, { key: "key-00004", repo: "api", folderId });
+    expect(fourth).toMatchObject({ inherited: false });
+    expect(fourth.agent.name).toBe("api-claude-3");
+    p.clock.advance(3 * 60_000);
     const third = p.agents.registerSession(computer, { key: "key-00003", repo: "api", folderId });
     expect(third).toMatchObject({ inherited: true });
     expect(third.agent.id).toBe(first.agent.id);
     expect(sessionBaseName("My Repo!")).toBe("my-repo-claude");
+    const long = sessionBaseName("a-very-long-repository-name-that-goes-on-and-on");
+    expect(`${long}-99`.length).toBeLessThanOrEqual(40);
+    expect(long).toBe("a-very-long-repository-name-th-claude");
   });
 
   test("a new session in a folder switched off is refused with folder_off; the running one keeps its row", async () => {

@@ -291,14 +291,26 @@ export class Messages {
    * that agent's threads.
    */
   threads(filter: { involving?: string[]; agentId?: string; limit?: number } = {}): Thread[] {
+    // Filtered before the limit, so a member's or an agent's threads never fall behind everyone else's.
+    const clauses: string[] = [];
+    const bindings: Record<string, string | number> = { limit: filter.limit ?? 500 };
+    if (filter.involving) {
+      if (filter.involving.length === 0) return [];
+      const names = filter.involving.map((id, i) => {
+        bindings[`i${i}`] = id;
+        return `$i${i}`;
+      });
+      clauses.push(`(a_id IN (${names.join(", ")}) OR b_id IN (${names.join(", ")}))`);
+    }
+    if (filter.agentId) {
+      clauses.push("(a_id = $agentId OR b_id = $agentId)");
+      bindings.agentId = filter.agentId;
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.db
-      .query("SELECT * FROM threads ORDER BY last_message_at DESC, id LIMIT $limit")
-      .all({ limit: filter.limit ?? 500 }) as ThreadRow[];
-    const involving = filter.involving ? new Set(filter.involving) : null;
-    return rows
-      .map(toThread)
-      .filter((t) => !involving || involving.has(t.aId) || involving.has(t.bId))
-      .filter((t) => !filter.agentId || t.aId === filter.agentId || t.bId === filter.agentId);
+      .query(`SELECT * FROM threads ${where} ORDER BY last_message_at DESC, id LIMIT $limit`)
+      .all(bindings) as ThreadRow[];
+    return rows.map(toThread);
   }
 
   /** The thread's messages, oldest first. */

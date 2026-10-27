@@ -21,7 +21,7 @@ import { html } from "hono/html";
  */
 export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono {
   const app = new Hono();
-  const resolver = makeResolver(core.agents, core.computers);
+  const resolver = makeResolver(core.agents, core.computers, () => core.settings.publicUrl());
   const views = agentViews(core.agents, core.people);
   const { agents, messages } = core;
 
