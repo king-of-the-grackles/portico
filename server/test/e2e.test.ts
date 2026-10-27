@@ -15,7 +15,7 @@ afterEach(() => {
   dir = null;
 });
 
-function startHub() {
+function startPortico() {
   dir = mkdtempSync(join(tmpdir(), "portico-e2e-"));
   running = startServer({ ...testConfig(), dbPath: join(dir, "portico.db") }, { port: 0 });
   const base = `http://127.0.0.1:${running.port}`;
@@ -43,7 +43,7 @@ function startHub() {
 
 describe("end to end over HTTP", () => {
   test("an ask task: Approve on the hub page, the receiver works it, and the sender gets the result", async () => {
-    const { base, api, signIn } = startHub();
+    const { base, api, signIn } = startPortico();
     const sent = await (await api("grok-bot", "POST", "/api/tasks", { to: "muse", instructions: "Summarize the inbox" })).json();
     expect(sent.task.status).toBe("waiting_approval");
 
@@ -58,7 +58,7 @@ describe("end to end over HTTP", () => {
   });
 
   test("a push agent hears about new work at once", async () => {
-    const { base, api } = startHub();
+    const { base, api } = startPortico();
     const stream = await fetch(`${base}/api/stream`, { headers: { authorization: `Bearer ${TOKENS["claude-code"]}` } });
     const events = sseReader(stream);
     try {
@@ -71,7 +71,7 @@ describe("end to end over HTTP", () => {
   });
 
   test("the hub page signs in over HTTP and lists the waiting task", async () => {
-    const { base, api, signIn } = startHub();
+    const { base, api, signIn } = startPortico();
     await api("codex", "POST", "/api/tasks", { to: "muse", instructions: "Draft a reply" });
     const cookie = await signIn();
     const page = await fetch(`${base}/hub`, { headers: { cookie } });
@@ -80,7 +80,7 @@ describe("end to end over HTTP", () => {
   });
 
   test("an ask task pops up on a joined machine's session, and the pop-up's Approve queues the task", async () => {
-    const { base, api, signIn } = startHub();
+    const { base, api, signIn } = startPortico();
     const cookie = await signIn();
     const page = await (await fetch(`${base}/hub/network/join-codes`, { method: "POST", headers: { cookie } })).text();
     const code = /\/join#([A-Za-z0-9_-]+)/.exec(page)![1]!;

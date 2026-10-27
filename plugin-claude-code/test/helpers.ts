@@ -6,8 +6,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
-import type { PorticoConfig } from "../../hub/src/core/types";
-import { joinMachine, makeApp, TOKENS, type TestAgent, testConfig } from "../../hub/test/helpers";
+import type { PorticoConfig } from "../../server/src/core/types";
+import { joinMachine, makeApp, TOKENS, type TestAgent, testConfig } from "../../server/test/helpers";
 import { HubClient } from "../src/hub-client";
 import type { Logger } from "../src/log";
 import type { ApprovalPrompt, DialogRunner, PanelOutcome } from "../src/popup";
@@ -16,20 +16,20 @@ import { InboxSocket } from "../src/socket";
 export { TOKENS };
 
 /** A real hub (in-memory database, fake clock, 50 ms heartbeats) on a random local port. */
-export function startHub(config: PorticoConfig = testConfig(), opts: { newNonce?: () => string } = {}) {
+export function startPortico(config: PorticoConfig = testConfig(), opts: { newNonce?: () => string } = {}) {
   const hub = makeApp(config, opts);
   const server = Bun.serve({ port: 0, fetch: hub.app.fetch, idleTimeout: 60 });
   return { ...hub, url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
 }
 
-export type TestHub = ReturnType<typeof startHub>;
+export type TestPortico = ReturnType<typeof startPortico>;
 
-export function hubClient(hub: TestHub, agent: TestAgent): HubClient {
+export function hubClient(hub: TestPortico, agent: TestAgent): HubClient {
   return new HubClient({ url: hub.url, token: TOKENS[agent] });
 }
 
 /** Joins a machine to the test hub, as the plugin's join would: its machine token and name. */
-export function joinTestMachine(hub: TestHub, name = "macbook"): { token: string; machine: string } {
+export function joinTestMachine(hub: TestPortico, name = "macbook"): { token: string; machine: string } {
   const { machine, token } = joinMachine(hub, name);
   return { token, machine: machine.name };
 }

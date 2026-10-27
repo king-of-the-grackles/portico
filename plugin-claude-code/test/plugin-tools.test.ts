@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createIdleServer, createPorticoPlugin, type PorticoPlugin } from "../src/plugin";
-import { captureLog, fakeHost, fakeInboxSocket, type FakeInboxSocket, hubClient, startHub, type TestHub, TOKENS, waitFor } from "./helpers";
+import { captureLog, fakeHost, fakeInboxSocket, type FakeInboxSocket, hubClient, startPortico, type TestPortico, TOKENS, waitFor } from "./helpers";
 
-let hub: TestHub;
+let hub: TestPortico;
 let sock: FakeInboxSocket;
 const cleanup: (() => Promise<void>)[] = [];
 
 beforeEach(async () => {
-  hub = startHub();
+  hub = startPortico();
   sock = await fakeInboxSocket();
 });
 afterEach(async () => {

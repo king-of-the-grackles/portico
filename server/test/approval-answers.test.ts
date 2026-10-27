@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { approvalRoutes } from "../src/approvals/routes";
-import { createHub } from "../src/hub";
+import { createPortico } from "../src/portico";
 import { captureLogs } from "../src/log";
 import { openDb } from "../src/db";
 import {
@@ -270,11 +270,11 @@ describe("when sessions come and go", () => {
   test("a task waiting when the hub starts pops up once a session connects", async () => {
     const db = openDb(":memory:");
     const config = testConfig();
-    const before = createHub(config, { db });
+    const before = createPortico(config, { db });
     const task = before.service.sendTask("grok-bot", { to: "muse", instructions: "Still waiting" });
-    let after!: ReturnType<typeof createHub>;
+    let after!: ReturnType<typeof createPortico>;
     const logged = await logsOf(async () => {
-      after = createHub(config, { db, heartbeatMs: 50 });
+      after = createPortico(config, { db, heartbeatMs: 50 });
     });
     expect(logged).toContainEqual(expect.objectContaining({ level: "info", msg: "approval_requests_restored", count: 1 }));
     const mac = joinMachine(after);

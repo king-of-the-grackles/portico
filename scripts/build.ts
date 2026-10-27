@@ -16,7 +16,7 @@ for (const target of targets) {
 for (const target of targets) {
   const outfile = `dist/portico-${target.replace(/^bun-/, "")}`;
   const build = Bun.spawnSync(
-    ["bun", "build", "hub/src/cli.ts", "--compile", `--target=${target}`, "--no-compile-autoload-bunfig", `--outfile=${outfile}`],
+    ["bun", "build", "server/src/cli.ts", "--compile", `--target=${target}`, "--no-compile-autoload-bunfig", `--outfile=${outfile}`],
     { stdout: "inherit", stderr: "inherit" },
   );
   if (build.exitCode !== 0) process.exit(build.exitCode ?? 1);

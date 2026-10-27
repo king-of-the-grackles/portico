@@ -2,14 +2,14 @@ import { describe, expect, test } from "bun:test";
 import type { Task } from "../src/core/types";
 import { captureLogs } from "../src/log";
 import { makeNotifier } from "../src/notifier";
-import { type StreamChange, StreamHub } from "../src/ways-in/stream";
+import { type StreamChange, AgentStreams } from "../src/ways-in/stream";
 import { T0, TOKENS, callAs, fakeConnection, flush, joinMachine, makeApp, mintAssistant, openSessionStream, sseReader } from "./helpers";
 
 const AGENT_HELLO = { event: "hello", data: { address: "claude-code", name: "claude-code", machine: null } };
 
-describe("StreamHub", () => {
+describe("AgentStreams", () => {
   test("delivers nudges to the agent's open stream", () => {
-    const hub = new StreamHub();
+    const hub = new AgentStreams();
     expect(hub.nudge("claude-code")).toBe(false);
     const { conn, sent } = fakeConnection();
     hub.connect("claude-code", conn);
@@ -19,7 +19,7 @@ describe("StreamHub", () => {
   });
 
   test("a new stream replaces the old one, which is told and closed", () => {
-    const hub = new StreamHub();
+    const hub = new AgentStreams();
     const first = fakeConnection();
     const second = fakeConnection();
     const disconnectFirst = hub.connect("claude-code", first.conn);
@@ -32,7 +32,7 @@ describe("StreamHub", () => {
   });
 
   test("a quiet replacement closes the old stream without telling it", () => {
-    const hub = new StreamHub();
+    const hub = new AgentStreams();
     const first = fakeConnection();
     const second = fakeConnection();
     hub.connect("dialog-claude@macbook", first.conn, "quiet");
@@ -44,7 +44,7 @@ describe("StreamHub", () => {
   });
 
   test("close() closes and forgets an address's stream", () => {
-    const hub = new StreamHub();
+    const hub = new AgentStreams();
     const { conn, sent, isClosed } = fakeConnection();
     hub.connect("dialog-claude@macbook", conn, "quiet");
     hub.close("dialog-claude@macbook");
@@ -55,7 +55,7 @@ describe("StreamHub", () => {
   });
 
   test("a stream that fails to send is dropped", () => {
-    const hub = new StreamHub();
+    const hub = new AgentStreams();
     const { conn } = fakeConnection();
     hub.connect("claude-code", conn);
     conn.close();
@@ -64,7 +64,7 @@ describe("StreamHub", () => {
   });
 
   test("popupSessions lists a machine's pop-up sessions, oldest connection first; popupMachines lists machines with one", () => {
-    const hub = new StreamHub();
+    const hub = new AgentStreams();
     const popup = { machine: "macbook", popup: true };
     hub.connect("web-claude@macbook", fakeConnection().conn, "quiet", popup);
     hub.connect("api-claude@macbook", fakeConnection().conn, "quiet", popup);
@@ -78,13 +78,13 @@ describe("StreamHub", () => {
   });
 
   test("a stream with no machine never counts as a pop-up session, whatever it declares", () => {
-    const hub = new StreamHub();
+    const hub = new AgentStreams();
     hub.connect("claude-code", fakeConnection().conn, "notify", { machine: null, popup: true });
     expect(hub.popupMachines()).toEqual([]);
   });
 
   test("onChange reports opened for every connection, and closed only when the address loses its stream", () => {
-    const hub = new StreamHub();
+    const hub = new AgentStreams();
     const changes: StreamChange[] = [];
     hub.onChange((change) => changes.push(change));
     const info = { machine: "macbook", popup: true };
@@ -111,7 +111,7 @@ describe("StreamHub", () => {
   });
 
   test("closeAll forgets every stream it names before reporting any of them closed", () => {
-    const hub = new StreamHub();
+    const hub = new AgentStreams();
     const info = { machine: "macbook", popup: true };
     const one = fakeConnection();
     const two = fakeConnection();
@@ -131,7 +131,7 @@ describe("StreamHub", () => {
     const lines: string[] = [];
     captureLogs((line) => lines.push(line));
     try {
-      const hub = new StreamHub();
+      const hub = new AgentStreams();
       const later: string[] = [];
       hub.onChange(() => {
         throw new TypeError("listener bug");

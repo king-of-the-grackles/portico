@@ -13,9 +13,9 @@ import { log } from "./log";
 import { NetworkStore } from "./network-store";
 import { makeNotifier } from "./notifier";
 import { type AgentResolver, makeResolvers, type PrincipalResolver } from "./ways-in/auth";
-import { StreamHub } from "./ways-in/stream";
+import { AgentStreams } from "./ways-in/stream";
 
-export interface HubOptions {
+export interface PorticoOptions {
   db: Database;
   now?: () => Date;
   newId?: () => string;
@@ -26,7 +26,7 @@ export interface HubOptions {
   onNotice?: (notice: Notice) => void;
 }
 
-export interface Hub {
+export interface Portico {
   store: Store;
   network: NetworkStore;
   networkService: NetworkService;
@@ -36,7 +36,7 @@ export interface Hub {
   presence: Presence;
   sessions: SessionRegistry;
   service: PorticoService;
-  streams: StreamHub;
+  streams: AgentStreams;
   /** Open approval requests, and who holds them on each machine. */
   desk: ApprovalDesk;
   app: Hono;
@@ -46,10 +46,10 @@ export interface Hub {
 const RESTORE_LIMIT = 500;
 
 /** Wires every piece of the hub together. Used by startServer and by the tests. */
-export function createHub(config: PorticoConfig, opts: HubOptions): Hub {
+export function createPortico(config: PorticoConfig, opts: PorticoOptions): Portico {
   const store = new Store(opts.db);
   const network = new NetworkStore(opts.db);
-  const streams = new StreamHub();
+  const streams = new AgentStreams();
   const desk = new ApprovalDesk({
     streams,
     publicUrl: config.publicUrl,

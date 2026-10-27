@@ -1,5 +1,5 @@
 import type { Hono } from "hono";
-import { createHub } from "../src/hub";
+import { createPortico } from "../src/portico";
 import { parseConfig } from "../src/config";
 import { addressOf, Directory } from "../src/core/directory";
 import { PorticoError } from "../src/core/errors";
@@ -219,7 +219,7 @@ export function makeApp(config: PorticoConfig = testConfig(), opts: { newNonce?:
   const clock = testClock();
   const notices: Notice[] = [];
   let counter = 0;
-  const hub = createHub(config, {
+  const hub = createPortico(config, {
     db: openDb(":memory:"),
     now: clock.now,
     newId: () => `id-${++counter}`,

@@ -14,7 +14,7 @@ import { joinRoutes } from "./ways-in/join";
 import { mcpRoutes } from "./ways-in/mcp";
 import { openApiDocument } from "./ways-in/openapi";
 import { handleError, restRoutes } from "./ways-in/rest";
-import { type StreamHub, streamRoutes } from "./ways-in/stream";
+import { type AgentStreams, streamRoutes } from "./ways-in/stream";
 
 export interface AppDeps {
   service: PorticoService;
@@ -24,7 +24,7 @@ export interface AppDeps {
   resolvers: { principal: PrincipalResolver; agent: AgentResolver };
   presence: Presence;
   sessions: SessionRegistry;
-  streams: StreamHub;
+  streams: AgentStreams;
   desk: ApprovalDesk;
   now: () => Date;
   heartbeatMs?: number;

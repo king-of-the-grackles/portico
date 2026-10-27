@@ -3,7 +3,7 @@ import { PorticoError } from "../core/errors";
 import { joinLine, type NetworkService } from "../core/network";
 import type { Presence } from "../core/presence";
 import type { PorticoConfig } from "../core/types";
-import type { StreamHub } from "../ways-in/stream";
+import type { AgentStreams } from "../ways-in/stream";
 import { connectGuide } from "./connect";
 import { sendPage } from "./layout";
 import { type AssistantForm, assistantCreatedView, joinLineView, networkView } from "./network-views";
@@ -11,7 +11,7 @@ import { type AssistantForm, assistantCreatedView, joinLineView, networkView } f
 export interface NetworkRouteDeps {
   network: NetworkService;
   presence: Presence;
-  streams: StreamHub;
+  streams: AgentStreams;
   config: PorticoConfig;
 }
 

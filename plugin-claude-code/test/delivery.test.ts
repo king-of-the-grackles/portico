@@ -11,16 +11,16 @@ import {
 } from "../src/hub-client";
 import { createPorticoPlugin } from "../src/plugin";
 import { InboxSocket, SocketError } from "../src/socket";
-import { captureLog, fakeHost, fakeInboxSocket, hubClient, startHub, type TestHub, TOKENS, waitFor } from "./helpers";
+import { captureLog, fakeHost, fakeInboxSocket, hubClient, startPortico, type TestPortico, TOKENS, waitFor } from "./helpers";
 
 type TestAgent = keyof typeof TOKENS;
 
-let hub: TestHub;
+let hub: TestPortico;
 let logs: ReturnType<typeof captureLog>;
 const cleanup: (() => Promise<void>)[] = [];
 
 beforeEach(() => {
-  hub = startHub();
+  hub = startPortico();
   logs = captureLog();
 });
 afterEach(async () => {

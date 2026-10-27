@@ -2,15 +2,15 @@ import { afterEach, beforeEach, describe, expect, type Mock, spyOn, test } from 
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import { dirname, join } from "node:path";
-import { PRONOUNS } from "../../hub/test/helpers";
+import { PRONOUNS } from "../../server/test/helpers";
 import { type CliIo, runCli } from "../src/cli-run";
 import { readMachineFile, writeMachineFile } from "../src/machine";
-import { startHub, tempDir, type TestHub } from "./helpers";
+import { startPortico, tempDir, type TestPortico } from "./helpers";
 
 const CLI = join(import.meta.dir, "../src/cli.ts");
 const FILE = { hub: "https://portico.example.com", machine: "macbook", token: "bm_secret-token", off: [] as string[] };
 
-const hubs: TestHub[] = [];
+const hubs: TestPortico[] = [];
 // Every run sets PORTICO_MACHINE_CONFIG and PORTICO_CLAUDE_HOME. The home folder is stubbed too, so an override name the
 // CLI doesn't read falls back into a temp folder, never into the real ~/.portico or ~/.claude.
 let home: Mock<typeof os.homedir>;
@@ -22,8 +22,8 @@ afterEach(() => {
   for (const hub of hubs.splice(0)) hub.stop();
 });
 
-function hub(): TestHub {
-  const started = startHub();
+function hub(): TestPortico {
+  const started = startPortico();
   hubs.push(started);
   return started;
 }

@@ -1,23 +1,23 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { signIn, testConfig } from "../../hub/test/helpers";
+import { signIn, testConfig } from "../../server/test/helpers";
 import { HubClient } from "../src/hub-client";
 import { createPorticoPlugin } from "../src/plugin";
 import type { DialogRunner } from "../src/popup";
-import { captureLog, fakeHost, fakeInboxSocket, fakeRunner, hubClient, joinTestMachine, startHub, type TestHub, waitFor } from "./helpers";
+import { captureLog, fakeHost, fakeInboxSocket, fakeRunner, hubClient, joinTestMachine, startPortico, type TestPortico, waitFor } from "./helpers";
 
 // BASE_YAML sends every task for muse through an ask rule.
-let hub: TestHub;
+let hub: TestPortico;
 const cleanup: (() => Promise<void>)[] = [];
 beforeEach(() => {
-  hub = realTimeHub();
+  hub = realTimePortico();
 });
 
 /**
  * A test hub whose clock reads the real time, so its tasks expire a day from now: the plugin's panels compare the
  * expiry with the real clock, and a task already expired shows no panel.
  */
-function realTimeHub(opts: Parameters<typeof startHub>[1] = {}): TestHub {
-  const started = startHub(testConfig(), opts);
+function realTimePortico(opts: Parameters<typeof startPortico>[1] = {}): TestPortico {
+  const started = startPortico(testConfig(), opts);
   started.clock.advance(Date.now() - started.clock.now().getTime());
   return started;
 }
@@ -108,7 +108,7 @@ test("when the session holding the panel stops, the other session on the machine
 test("a dropped stream kills the panel, and the reconnect brings it back with the same nonce", async () => {
   hub.stop();
   let made = 0;
-  hub = realTimeHub({ newNonce: () => `nonce-${++made}-aaaaaaaaaaaaaaaa` });
+  hub = realTimePortico({ newNonce: () => `nonce-${++made}-aaaaaaaaaaaaaaaa` });
   const { token } = joinTestMachine(hub, "macbook");
   const runner = fakeRunner();
   const { client } = await session(token, "key-first-0001", "api", "a".repeat(64), runner.runner);

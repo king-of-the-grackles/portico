@@ -4,15 +4,15 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { sessionBaseName } from "../../hub/src/core/sessions";
+import { sessionBaseName } from "../../server/src/core/sessions";
 import { writeMachineFile } from "../src/machine";
 import {
   ChannelNotification,
   fakeInboxSocket,
   type FakeInboxSocket,
   joinTestMachine,
-  startHub,
-  type TestHub,
+  startPortico,
+  type TestPortico,
   TOKENS,
   waitFor,
   writeSessionFile,
@@ -20,7 +20,7 @@ import {
 
 const MAIN = join(import.meta.dir, "../src/main.ts");
 
-let hub: TestHub | null = null;
+let hub: TestPortico | null = null;
 let sock: FakeInboxSocket | null = null;
 const dirs: string[] = [];
 afterEach(async () => {
@@ -88,7 +88,7 @@ function registerSession(env: Record<string, string>, fields: Parameters<typeof 
 
 describe("the plugin over stdio", () => {
   test("serves the tools and posts tasks into the inbox socket, with nothing but MCP on stdout", async () => {
-    hub = startHub();
+    hub = startPortico();
     sock = await fakeInboxSocket();
     const env = childEnv({
       PORTICO_URL: hub.url,
@@ -115,7 +115,7 @@ describe("the plugin over stdio", () => {
   });
 
   test("finds the inbox socket through the session registry when the environment doesn't name it", async () => {
-    hub = startHub();
+    hub = startPortico();
     sock = await fakeInboxSocket();
     const env = childEnv({ PORTICO_URL: hub.url, PORTICO_TOKEN: TOKENS["claude-code"] });
     // The plugin's parent is this test process, so it plays the Claude Code session.
@@ -183,7 +183,7 @@ describe("the plugin over stdio", () => {
   });
 
   test("in machine mode, registers and serves the tools", async () => {
-    hub = startHub();
+    hub = startPortico();
     sock = await fakeInboxSocket();
     const { token, machine } = joinTestMachine(hub, "macbook");
     const project = tempFolder("portico-proj-");

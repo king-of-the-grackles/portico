@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { mcpTools } from "../../hub/src/ways-in/mcp";
-import { callAs, makeApp, TOKENS } from "../../hub/test/helpers";
+import { mcpTools } from "../../server/src/ways-in/mcp";
+import { callAs, makeApp, TOKENS } from "../../server/test/helpers";
 import type { Inbox } from "../src/hub-client";
 import { inboxText, TOOLS } from "../src/tools";
 

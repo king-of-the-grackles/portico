@@ -19,7 +19,7 @@ function setUp(extraEnv: Record<string, string> = {}) {
   stops.push(() => server.stop(true), () => rmSync(dir, { recursive: true, force: true }));
   const url = `http://127.0.0.1:${server.port}`;
   const env = testEnv({ PORTICO_PUBLIC_URL: url, PORTICO_CONFIG: "portico.yaml", ...extraEnv });
-  return { url, dir, env, stopHub: () => server.stop(true) };
+  return { url, dir, env, stopPortico: () => server.stop(true) };
 }
 
 async function doctor(setup: ReturnType<typeof setUp>, args: string[] = []) {
@@ -56,7 +56,7 @@ describe("portico doctor", () => {
 
   test("reports a hub that doesn't answer, and skips the token check", async () => {
     const setup = setUp();
-    setup.stopHub();
+    setup.stopPortico();
     const { code, lines } = await doctor(setup);
     expect(code).toBe(1);
     expect(lines.some((line) => line.startsWith(`✗ ${setup.url}/healthz didn't answer`))).toBe(true);

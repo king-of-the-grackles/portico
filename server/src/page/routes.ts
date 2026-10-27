@@ -7,7 +7,7 @@ import type { Presence } from "../core/presence";
 import type { PorticoService } from "../core/service";
 import { type PorticoConfig, TASK_STATUSES, type TaskStatus } from "../core/types";
 import { log } from "../log";
-import type { StreamHub } from "../ways-in/stream";
+import type { AgentStreams } from "../ways-in/stream";
 import { decideTask } from "./decide";
 import { formBodyLimit, sendPage } from "./layout";
 import { networkRoutes } from "./network";
@@ -28,7 +28,7 @@ export interface PageDeps {
   service: PorticoService;
   directory: Directory;
   network: NetworkService;
-  streams: StreamHub;
+  streams: AgentStreams;
   presence: Presence;
   config: PorticoConfig;
   now: () => Date;

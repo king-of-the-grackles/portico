@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { HubClient } from "../src/hub-client";
 import { StreamClient, type StreamClientOptions, type StreamStop } from "../src/stream";
-import { captureLog, hubClient, startHub, type TestHub, TOKENS, waitFor } from "./helpers";
+import { captureLog, hubClient, startPortico, type TestPortico, TOKENS, waitFor } from "./helpers";
 
 const running: StreamClient[] = [];
 afterEach(async () => {
@@ -30,9 +30,9 @@ function watch(open: StreamClientOptions["open"], extra: Partial<StreamClientOpt
 }
 
 describe("StreamClient against the hub", () => {
-  let hub: TestHub;
+  let hub: TestPortico;
   beforeEach(() => {
-    hub = startHub();
+    hub = startPortico();
   });
   afterEach(async () => {
     for (const client of running.splice(0)) await client.stop();
@@ -230,7 +230,7 @@ describe("StreamClient reconnects", () => {
   });
 
   test("starts the backoff over after a healthy connection", async () => {
-    const hub = startHub();
+    const hub = startPortico();
     try {
       const times: number[] = [];
       const watched = watch(

@@ -48,7 +48,7 @@ interface OpenStream extends StreamInfo {
 }
 
 /** Each push member's live stream. One per address: a new stream replaces the old one (spec §9.4, §5.2). */
-export class StreamHub {
+export class AgentStreams {
   private readonly open = new Map<string, OpenStream>();
   private readonly listeners: ((change: StreamChange) => void)[] = [];
   private connections = 0;
@@ -166,7 +166,7 @@ export const HEARTBEAT_MS = 25_000;
 export interface StreamRouteDeps {
   service: PorticoService;
   directory: Directory;
-  streams: StreamHub;
+  streams: AgentStreams;
   /** Resolved without the session key, so a machine token stays a machine and can register a new session. */
   resolvePrincipal: PrincipalResolver;
   sessions: SessionRegistry;

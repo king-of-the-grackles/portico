@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { HubClient, HubError } from "../src/hub-client";
-import { hubClient, startHub, type TestHub, TOKENS } from "./helpers";
+import { hubClient, startPortico, type TestPortico, TOKENS } from "./helpers";
 
-let hub: TestHub;
+let hub: TestPortico;
 beforeEach(() => {
-  hub = startHub();
+  hub = startPortico();
 });
 afterEach(() => hub.stop());
 

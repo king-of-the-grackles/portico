@@ -2,7 +2,7 @@ import { unknownRuleNames } from "./core/rules";
 import type { PorticoService } from "./core/service";
 import type { PorticoConfig } from "./core/types";
 import { openDb } from "./db";
-import { createHub } from "./hub";
+import { createPortico } from "./portico";
 import { errorName, log } from "./log";
 import { maxTextOrMessageKb } from "./ways-in/limits";
 
@@ -19,7 +19,7 @@ const SESSION_RETENTION_DAYS = 7;
 
 export function startServer(config: PorticoConfig, opts: { port?: number } = {}): RunningServer {
   const db = openDb(config.dbPath);
-  const hub = createHub(config, { db });
+  const hub = createPortico(config, { db });
   const service: PorticoService = hub.service;
   let server: ReturnType<typeof Bun.serve>;
   try {

@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { defang } from "../core/framing";
 import type { ApprovalInfo, ApprovalOutcome, Task } from "../core/types";
 import { listOf } from "../core/words";
-import type { StreamChange, StreamHub } from "../ways-in/stream";
+import type { StreamChange, AgentStreams } from "../ways-in/stream";
 
 /** The most of a task's instructions a pop-up shows, in code points. */
 export const PANEL_TEXT_MAX = 500;
@@ -48,7 +48,7 @@ export function approvalNote(url: string, popups: string[]): string {
 }
 
 export interface ApprovalDeskDeps {
-  streams: Pick<StreamHub, "send" | "isConnected" | "popupSessions" | "popupMachines">;
+  streams: Pick<AgentStreams, "send" | "isConnected" | "popupSessions" | "popupMachines">;
   publicUrl: string;
   now?: () => Date;
   /** Default: 24 random bytes as base64url, 32 characters. */
@@ -111,7 +111,7 @@ export class ApprovalDesk {
     }
   }
 
-  /** For StreamHub.onChange. */
+  /** For AgentStreams.onChange. */
   streamChanged(change: StreamChange): void {
     if (change.kind === "opened") this.streamOpened(change.address, change.machine, change.popup);
     else this.streamClosed(change.address, change.machine);
@@ -184,7 +184,7 @@ export class ApprovalDesk {
 
   /**
    * Elects the address on the machine and sends it the request. The holder is set before sending: a failed send drops
-   * the stream, StreamHub reports the close synchronously, and streamClosed elects the next session.
+   * the stream, AgentStreams reports the close synchronously, and streamClosed elects the next session.
    */
   private send(request: OpenRequest, machine: string, address: string): void {
     const nonce = request.nonces.get(address) ?? this.newNonce();

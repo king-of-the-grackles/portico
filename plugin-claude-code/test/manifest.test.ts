@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { joinLine } from "../../hub/src/core/network";
+import { joinLine } from "../../server/src/core/network";
 import { SERVER_NAME, SERVER_VERSION } from "../src/plugin";
 
 const ROOT = join(import.meta.dir, "../..");

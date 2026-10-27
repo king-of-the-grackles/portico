@@ -2,11 +2,11 @@
   "name": "portico",
   "license": "MIT OR Apache-2.0",
   "private": true,
-  "workspaces": ["hub", "plugin-claude-code"],
+  "workspaces": ["server", "plugin-claude-code"],
   "scripts": {
     "test": "bun test",
     "build": "bun scripts/build.ts",
-    "typecheck": "bun run --cwd hub typecheck && tsc --noEmit -p plugin-claude-code"
+    "typecheck": "bun run --cwd server typecheck && tsc --noEmit -p plugin-claude-code"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

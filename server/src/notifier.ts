@@ -2,12 +2,12 @@ import type { Directory } from "./core/directory";
 import type { ApprovalOutcome, Notice, Task } from "./core/types";
 import type { Store } from "./db";
 import { errorName, log } from "./log";
-import type { StreamHub } from "./ways-in/stream";
+import type { AgentStreams } from "./ways-in/stream";
 
 export interface NotifierDeps {
   store: Store;
   directory: Directory;
-  streams: StreamHub;
+  streams: AgentStreams;
   /** Runs once a task waiting for approval is committed. */
   approvalNeeded?: (task: Task) => void;
   /** Runs once a waiting task was approved, denied or expired. */

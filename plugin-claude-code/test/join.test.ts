@@ -3,15 +3,15 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync
 import { join } from "node:path";
 import { defaultMachineName, JoinError, joinMachine, parseJoinLine } from "../src/join";
 import { readMachineFile, writeMachineFile } from "../src/machine";
-import { startHub, tempDir, type TestHub } from "./helpers";
+import { startPortico, tempDir, type TestPortico } from "./helpers";
 
-const hubs: TestHub[] = [];
+const hubs: TestPortico[] = [];
 afterEach(() => {
   for (const hub of hubs.splice(0)) hub.stop();
 });
 
-function hub(): TestHub {
-  const started = startHub();
+function hub(): TestPortico {
+  const started = startPortico();
   hubs.push(started);
   return started;
 }

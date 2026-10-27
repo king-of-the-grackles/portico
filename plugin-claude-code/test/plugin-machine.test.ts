@@ -1,21 +1,21 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { BASE_YAML, testConfig } from "../../hub/test/helpers";
+import { BASE_YAML, testConfig } from "../../server/test/helpers";
 import { HubClient } from "../src/hub-client";
 import { createPorticoPlugin } from "../src/plugin";
 import type { OwnSession } from "../src/registry";
 import { SessionWatcher } from "../src/status";
 import { runTool } from "../src/tools";
-import { captureLog, fakeHost, fakeInboxSocket, type FakeInboxSocket, joinTestMachine, startHub, type TestHub, waitFor } from "./helpers";
+import { captureLog, fakeHost, fakeInboxSocket, type FakeInboxSocket, joinTestMachine, startPortico, type TestPortico, waitFor } from "./helpers";
 
 // Sessions are reached through a kind rule, as on a real network.
 const YAML = BASE_YAML.replace("rules:\n", 'rules:\n  - { from: grok-bot, to: "kind:claude-code", action: allow }\n');
 
-let hub: TestHub;
+let hub: TestPortico;
 let logs: ReturnType<typeof captureLog>;
 const cleanup: (() => Promise<void>)[] = [];
 
 beforeEach(() => {
-  hub = startHub(testConfig(YAML));
+  hub = startPortico(testConfig(YAML));
   logs = captureLog();
 });
 afterEach(async () => {

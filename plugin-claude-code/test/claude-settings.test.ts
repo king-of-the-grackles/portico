@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PRONOUNS } from "../../hub/test/helpers";
+import { PRONOUNS } from "../../server/test/helpers";
 import { type AllowOutcome, allowLine, allowPorticoTools, claudeSettingsPath, PORTICO_ALLOW_RULE } from "../src/claude-settings";
 import { tempDir } from "./helpers";
 

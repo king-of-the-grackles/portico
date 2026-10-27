@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ApprovalDesk, approvalNote, PANEL_TEXT_MAX } from "../src/approvals/desk";
 import type { Task } from "../src/core/types";
-import { StreamHub } from "../src/ways-in/stream";
+import { AgentStreams } from "../src/ways-in/stream";
 import { fakeConnection, HOUR, PRONOUNS, T0 } from "./helpers";
 
 const A = "api-claude@macbook";
@@ -18,7 +18,7 @@ function waitingTask(id = "t1", instructions = "Summarize the inbox"): Task {
 }
 
 function setup() {
-  const streams = new StreamHub();
+  const streams = new AgentStreams();
   let clock = T0.getTime();
   let n = 0;
   const desk = new ApprovalDesk({ streams, publicUrl: "https://portico.test", now: () => new Date(clock), newNonce: () => `nonce-${++n}` });
