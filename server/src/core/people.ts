@@ -2,12 +2,15 @@ import type { Database } from "bun:sqlite";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS } from "./limits";
-import { hashSecret, LINK_SECRET, newLinkSecret } from "./tokens";
+import { hashSecret, LINK_SECRET, newLinkSecret, seal, unseal } from "./tokens";
 import type { Person, PersonStatus, Role } from "./types";
 
 export type InviteStatus = "open" | "claimed" | "revoked" | "expired";
 
-/** A link the owner made for one person. Its secret lives only in the link; Portico keeps its hash. */
+/**
+ * A link the owner made for one person. Portico finds an invite by its secret's hash, and keeps the secret sealed with
+ * the signing key so the owner can copy an open invite's link again.
+ */
 export interface Invite {
   id: string;
   /** Who the invite is for, as the owner typed it. */
@@ -94,9 +97,13 @@ export function cleanPersonName(value: unknown): string {
 export interface PeopleDeps {
   db: Database;
   changes: Changes;
+  /** Seals open invites' secrets, so their links can be copied again. */
+  signingKey: string;
   now?: () => Date;
   newId?: () => string;
 }
+
+const INVITE_SEAL = "invite";
 
 /**
  * The people who use Portico: one owner, and members who joined by invite. Only the owner invites, by name. An invite
@@ -108,9 +115,12 @@ export class People {
   private readonly now: () => Date;
   private readonly newId: () => string;
 
+  private readonly signingKey: string;
+
   constructor(deps: PeopleDeps) {
     this.db = deps.db;
     this.changes = deps.changes;
+    this.signingKey = deps.signingKey;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
   }
@@ -220,10 +230,18 @@ export class People {
     };
     this.db
       .query(
-        `INSERT INTO invites (id, name, secret_hash, created_by, created_at, expires_at)
-         VALUES ($id, $name, $hash, $createdBy, $createdAt, $expiresAt)`,
+        `INSERT INTO invites (id, name, secret_hash, secret_box, created_by, created_at, expires_at)
+         VALUES ($id, $name, $hash, $box, $createdBy, $createdAt, $expiresAt)`,
       )
-      .run({ id: row.id, name, hash: hashSecret(secret), createdBy: byId, createdAt: row.created_at, expiresAt: row.expires_at });
+      .run({
+        id: row.id,
+        name,
+        hash: hashSecret(secret),
+        box: seal(this.signingKey, INVITE_SEAL, secret),
+        createdBy: byId,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+      });
     this.changes.emit("people");
     return { invite: this.toInvite(row), secret };
   }
@@ -231,6 +249,16 @@ export class People {
   invite(id: string): Invite | null {
     const row = this.db.query("SELECT * FROM invites WHERE id = $id").get({ id }) as InviteRow | null;
     return row ? this.toInvite(row) : null;
+  }
+
+  /** An open invite's secret, for copying its link again. Null once it's claimed, revoked or expired. */
+  inviteSecret(id: string): string | null {
+    const row = this.db
+      .query(
+        "SELECT secret_box FROM invites WHERE id = $id AND claimed_at IS NULL AND revoked_at IS NULL AND expires_at > $now",
+      )
+      .get({ id, now: this.iso() }) as { secret_box: string | null } | null;
+    return row?.secret_box ? unseal(this.signingKey, INVITE_SEAL, row.secret_box) : null;
   }
 
   /** Invites still waiting to be claimed, newest first. */

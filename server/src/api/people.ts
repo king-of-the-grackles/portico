@@ -12,8 +12,15 @@ import { type ClaimView, type InviteView, type PersonView, personViews } from ".
 /** A row in the People list: the person view plus when the person joined, for "Joined Oct 23. 2 agents." */
 export type PeopleEntry = PersonView & { joinedAt: string };
 
-export function inviteView(invite: Invite): InviteView {
-  return { id: invite.id, name: invite.name, createdAt: invite.createdAt, expiresAt: invite.expiresAt, status: invite.status };
+export function inviteView(invite: Invite, link: string | null = null): InviteView {
+  return {
+    id: invite.id,
+    name: invite.name,
+    createdAt: invite.createdAt,
+    expiresAt: invite.expiresAt,
+    status: invite.status,
+    link,
+  };
 }
 
 export function claimView(claim: Claim): ClaimView {
@@ -39,6 +46,7 @@ async function readObject(c: Parameters<typeof readJson>[0]): Promise<Record<str
 export function peopleRoutes(core: Core): Hono<PersonEnv> {
   const { people, accounts, agents, settings } = core;
   const route = new Hono<PersonEnv>();
+  const inviteLink = (secret: string | null) => (secret ? `${settings.publicUrl()}/invite#${secret}` : null);
 
   route.get("/people", (c) => {
     const me = currentPerson(c);
@@ -50,7 +58,7 @@ export function peopleRoutes(core: Core): Hono<PersonEnv> {
       .map((p) => ({ ...views.person(p), joinedAt: p.approvedAt ?? p.createdAt }));
     return c.json({
       people: entries,
-      invites: isOwner ? people.openInvites().map(inviteView) : [],
+      invites: isOwner ? people.openInvites().map((invite) => inviteView(invite, inviteLink(people.inviteSecret(invite.id)))) : [],
       claims: isOwner ? people.claims().map(claimView) : [],
     });
   });
@@ -60,7 +68,8 @@ export function peopleRoutes(core: Core): Hono<PersonEnv> {
     const body = await readObject(c);
     const { invite, secret } = people.createInvite(me.id, body.name);
     log("info", "invite_created", { invite_id: invite.id });
-    return c.json({ invite: inviteView(invite), link: `${settings.publicUrl()}/invite#${secret}` }, 201);
+    const link = inviteLink(secret)!;
+    return c.json({ invite: inviteView(invite, link), link }, 201);
   });
 
   // Before /invites/:id, so these paths never read as an invite ID.

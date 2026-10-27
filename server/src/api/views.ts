@@ -127,6 +127,8 @@ export interface InviteView {
   createdAt: string;
   expiresAt: string;
   status: "open" | "claimed" | "revoked" | "expired";
+  /** The link to copy, while the invite is open. Only the owner sees invites. */
+  link: string | null;
 }
 
 export interface ClaimView {

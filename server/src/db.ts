@@ -53,6 +53,7 @@ const SCHEMA = [
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     secret_hash TEXT NOT NULL UNIQUE,
+    secret_box TEXT,
     created_by TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,

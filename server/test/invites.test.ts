@@ -31,7 +31,7 @@ async function setup() {
 async function invite(p: ReturnType<typeof makePortico>, owner: string, name = "Priya") {
   const res = await callPerson(p, owner, "POST", "/api/invites", { name });
   expect(res.status).toBe(201);
-  const body = await json<{ invite: { id: string; name: string; status: string; createdAt: string; expiresAt: string }; link: string }>(
+  const body = await json<{ invite: { id: string; name: string; status: string; createdAt: string; expiresAt: string; link: string | null }; link: string }>(
     res,
   );
   return { ...body, secret: body.link.split("#")[1]! };
@@ -45,8 +45,8 @@ async function claim(p: ReturnType<typeof makePortico>, body: Record<string, unk
 }
 
 describe("creating and listing invites", () => {
-  test("the owner creates an invite by name and gets its link once", async () => {
-    const { p, owner } = await setup();
+  test("the owner creates an invite by name, and can copy an open invite's link again", async () => {
+    const { p, owner, member } = await setup();
     const { invite: created, link, secret } = await invite(p, owner);
     expect(created).toEqual({
       id: created.id,
@@ -54,11 +54,14 @@ describe("creating and listing invites", () => {
       createdAt: T0.toISOString(),
       expiresAt: new Date(T0.getTime() + 7 * DAY).toISOString(),
       status: "open",
+      link,
     });
     expect(link).toBe(`${PUBLIC_URL}/invite#${secret}`);
     const listed = await json<{ invites: Record<string, unknown>[] }>(callPerson(p, owner, "GET", "/api/people"));
     expect(listed.invites).toEqual([created]);
-    expect(JSON.stringify(listed)).not.toContain(secret);
+    expect(JSON.stringify(await json(callPerson(p, member, "GET", "/api/people")))).not.toContain(secret);
+    const stored = p.db.query("SELECT * FROM invites").get() as Record<string, string>;
+    expect(JSON.stringify(stored)).not.toContain(secret);
   });
 
   test("members can't invite and see no invites or claims; signed out is 401", async () => {

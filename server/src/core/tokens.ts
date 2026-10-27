@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 /**
  * Secret prefixes, so a leaked value says what it is: `pc_` a computer, `pa_` an app agent, `pt_` and `pr_` a
@@ -46,6 +46,34 @@ export function verifySigned<T>(key: string, purpose: string, value: string): T 
   if (!sameSecret(mac, expected)) return null;
   try {
     return JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+function sealKey(key: string, purpose: string): Buffer {
+  return createHmac("sha256", key).update(`seal:${purpose}`).digest();
+}
+
+/**
+ * Encrypts a value Portico must show again later, such as an open invite's link, with AES-256-GCM under a key derived
+ * from the signing key. `<iv>.<tag>.<ciphertext>`, each base64url.
+ */
+export function seal(key: string, purpose: string, plaintext: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", sealKey(key, purpose), iv);
+  const body = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  return [iv, cipher.getAuthTag(), body].map((part) => part.toString("base64url")).join(".");
+}
+
+/** The plaintext of a value `seal` made with the same key and purpose, or null. */
+export function unseal(key: string, purpose: string, sealed: string): string | null {
+  const [iv, tag, body] = sealed.split(".").map((part) => Buffer.from(part, "base64url"));
+  if (!iv || !tag || !body) return null;
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", sealKey(key, purpose), iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
   } catch {
     return null;
   }

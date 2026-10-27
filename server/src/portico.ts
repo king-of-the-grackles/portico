@@ -51,7 +51,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const personStreams = new PersonStreams();
   changes.on((topics) => personStreams.broadcast(topics));
 
-  const people = new People({ db, changes, now, newId });
+  const people = new People({ db, changes, signingKey: config.signingKey, now, newId });
   const accounts = new Accounts({ db, people, now, newId });
   const computers = new Computers({ db, changes, now, newId, log: logInfo });
   const agents: Agents = new Agents({
