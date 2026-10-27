@@ -140,6 +140,8 @@ class Page<S extends Shared> {
   }
 
   paint(): void {
+    // Relative times ("Expires in 10 min.") read the clock at each render.
+    this.state.now = Date.now();
     const before = new Set(Array.from(this.root.querySelectorAll("[data-autofocus]")));
     morph(this.root, this.view(this.state));
     const fresh = Array.from(this.root.querySelectorAll<HTMLElement>("[data-autofocus]")).find((el) => !before.has(el));
@@ -1140,9 +1142,9 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
   });
   setInterval(() => page.set({ now: Date.now() }), 30_000);
   page.paint();
-  void loadPeople();
-  void loadComputers();
-  void loadPasskeys();
+  if (data.people === null) void loadPeople();
+  if (data.computers === null) void loadComputers();
+  if (data.passkeys === null) void loadPasskeys();
 }
 
 // ---- passkeys ----

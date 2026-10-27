@@ -261,6 +261,7 @@ textarea.field { resize: vertical; }
 .sec-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .sec-action { margin-left: auto; }
 .h-settings { margin: 0; font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; }
+.h-settings.mb12 { margin-bottom: 12px; }
 .sec-help { margin: 0 0 12px; font-size: 14px; line-height: 20px; color: var(--muted); }
 .settings-notice { margin-bottom: 12px; display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 12px; background: var(--card); }
 .settings-notice svg { flex: none; color: var(--teal); }
@@ -274,7 +275,7 @@ textarea.field { resize: vertical; }
 .srow { padding: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
 .srow .row-text { flex: 1 1 240px; min-width: 0; }
 .srow strong, .strong { display: block; font-weight: 600; }
-.srow-stack { flex-direction: column; align-items: stretch; }
+.srow-stack { flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
 .srow-line { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
 .srow-claim { background: var(--ochre-wash); }
 .claim-help { color: var(--ochre-ink); }
@@ -312,7 +313,8 @@ textarea.field { resize: vertical; }
   .middle { flex: none; }
   .rail { display: none; }
   .agents-open .rail { display: flex; position: fixed; inset: 0; z-index: 30; padding: 12px 16px 24px; overflow-y: auto; background: var(--canvas); }
-  .panel { position: fixed; inset: 0; z-index: 35; max-width: none; border-radius: 0; overflow-y: auto; box-shadow: none; }
+  .panel { position: fixed; inset: 0; z-index: 35; flex: none; align-self: stretch; max-width: none; border-radius: 0; overflow-y: auto; box-shadow: none; }
+  .rail-head .icon-btn { margin-left: auto; }
   .first { padding: 24px; }
   .card-when { margin-left: 0; flex-basis: 100%; }
   .settings-main { padding: 16px 16px 48px; }
