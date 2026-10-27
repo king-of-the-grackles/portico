@@ -75,7 +75,7 @@ export interface MessageView {
   subject: string;
   text: string;
   /** The message this one answers, for the one-line quote. */
-  replyTo: { id: string; from: AgentRef; subject: string; text: string } | null;
+  replyTo: { id: string; from: AgentRef; subject: string; text: string; createdAt: string } | null;
   status: MessageStatus;
   createdAt: string;
   expiresAt: string;
@@ -85,7 +85,7 @@ export interface MessageView {
   decidedBy: PersonRef | null;
 }
 
-/** A held message as its approval card shows it, with the facts Portico checks itself. */
+/** A held message as its approval card shows it, with the facts Portico checks itself (managedBy: the sender's manager). */
 export interface HeldCard extends MessageView {
   facts: { managedBy: PersonRef; replyToRecipient: boolean; earlier: { decision: Decision; at: string }[] };
 }
@@ -210,7 +210,13 @@ export function personViews(deps: ViewDeps, me: Person) {
       subject: m.subject,
       text: m.text,
       replyTo: original
-        ? { id: original.id, from: agentRef(original.fromId), subject: original.subject, text: clipText(original.text) }
+        ? {
+            id: original.id,
+            from: agentRef(original.fromId),
+            subject: original.subject,
+            text: clipText(original.text),
+            createdAt: original.createdAt,
+          }
         : null,
       status: m.status,
       createdAt: m.createdAt,
@@ -230,7 +236,13 @@ export function personViews(deps: ViewDeps, me: Person) {
     return {
       ...view,
       replyTo: previous
-        ? { id: previous.id, from: agentRef(previous.fromId), subject: previous.subject, text: clipText(previous.text) }
+        ? {
+            id: previous.id,
+            from: agentRef(previous.fromId),
+            subject: previous.subject,
+            text: clipText(previous.text),
+            createdAt: previous.createdAt,
+          }
         : view.replyTo,
       facts: { managedBy: personRef(facts.managedBy.id), replyToRecipient: facts.replyToRecipient, earlier: facts.earlier },
     };

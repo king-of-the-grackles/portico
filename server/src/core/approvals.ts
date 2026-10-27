@@ -45,6 +45,7 @@ export class AllowList {
 
 /** What Portico checks itself for a held-message card. Never anything the sender wrote. */
 export interface HeldFacts {
+  /** The person who manages the sender. */
   managedBy: Person;
   /** The previous message in the thread came from the recipient. */
   replyToRecipient: boolean;
@@ -140,10 +141,10 @@ export class Approvals {
   }
 
   facts(message: Message): HeldFacts {
-    const receiver = this.agents.require(message.toId);
+    const sender = this.agents.require(message.fromId);
     const previous = this.messages.previous(message);
     return {
-      managedBy: this.people.require(receiver.ownerId),
+      managedBy: this.people.require(sender.ownerId),
       replyToRecipient: previous !== null && previous.fromId === message.toId,
       earlier: this.messages.decisionsBetween(message.fromId, message.toId, message.id),
     };

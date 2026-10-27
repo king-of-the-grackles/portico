@@ -111,7 +111,7 @@ const heldMessage = message({
 });
 const HELD: HeldCard = {
   ...heldMessage,
-  replyTo: { id: "m2", from: ref(muse), subject: "Thursday 2pm confirmed", text: reply.text },
+  replyTo: { id: "m2", from: ref(muse), subject: "Thursday 2pm confirmed", text: reply.text, createdAt: at(10, 23) },
   facts: { managedBy: CHRIS, replyToRecipient: true, earlier: [{ decision: "allow_once", at: at(10, 19) }] },
 };
 
@@ -356,7 +356,7 @@ describe("Home renders every board state", () => {
       "Managed by Chris",
       "Reply to muse",
       "Allowed once at 10:19",
-      "muse:",
+      "muse, 10:23:",
       "Sam confirmed Thursday 2pm",
       "Thanks. Please add the migration doc link",
       ">View thread<",
@@ -371,8 +371,8 @@ describe("Home renders every board state", () => {
     expect(t).toContain("1 awaiting approval");
   });
 
-  test("F1: the quote shows the replied message's time once a thread has loaded", () => {
-    expect(text(render(home({ quoteTimes: { m2: at(10, 23) } })))).toContain("muse, 10:23: Sam confirmed");
+  test("F1: the quote shows the replied message's time", () => {
+    expect(text(render(home()))).toContain("muse, 10:23: Sam confirmed");
   });
 
   test("F2: View thread opens the thread with the held message marked", () => {

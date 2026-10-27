@@ -16,7 +16,6 @@ import type {
   HomeData,
   HomeState,
   InviteView,
-  MessageView,
   NewJoinLine,
   PasskeyView,
   PersonRow,
@@ -475,28 +474,10 @@ function startHome(root: HTMLElement, data: HomeData): void {
   const loadApprovals = async () => {
     const r = await api<{ held: HeldCard[]; signIns: SignInView[] }>("GET", "/api/approvals");
     page.set({ held: r.held, signIns: r.signIns });
-    void loadQuoteTimes();
   };
   const loadThreads = async () => page.set({ threads: (await api<{ threads: ThreadView[] }>("GET", "/api/threads")).threads });
   const loadMe = async () => page.set({ me: (await api<{ person: PersonView }>("GET", "/api/me")).person });
 
-  const rememberTimes = (messages: MessageView[]) => {
-    const times = { ...s().quoteTimes };
-    for (const m of messages) times[m.id] = m.createdAt;
-    page.set({ quoteTimes: times });
-  };
-
-  /** A held card quotes the message it answers with that message's time, read from the thread. */
-  const loadQuoteTimes = async () => {
-    const threads = new Set(s().held.filter((m) => m.replyTo && !s().quoteTimes[m.replyTo.id]).map((m) => m.threadId));
-    for (const id of threads) {
-      try {
-        rememberTimes((await api<ThreadData>("GET", `/api/threads/${encodeURIComponent(id)}`)).messages);
-      } catch {
-        // The quote shows without a time.
-      }
-    }
-  };
 
   const loadOpen = async () => {
     const open = s().open;
@@ -506,7 +487,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
         const data = await api<ThreadData>("GET", `/api/threads/${encodeURIComponent(open.id)}`);
         const now = s().open;
         if (now?.kind === "thread" && now.id === open.id) page.set({ open: { ...now, data } });
-        rememberTimes(data.messages);
       } else {
         const data = await api<AgentData>("GET", `/api/agents/${encodeURIComponent(open.id)}`);
         const now = s().open;
@@ -824,7 +804,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
   }
 
   page.paint();
-  void loadQuoteTimes();
   if (s().open && s().open!.kind !== "signin" && !(s().open as { data: unknown }).data) void loadOpen();
 }
 

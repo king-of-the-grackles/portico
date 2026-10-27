@@ -158,14 +158,13 @@ function stamp(iso: string, now: number): string {
  * under a one-line quote of the message it answers; then View thread at the left and Deny, Always allow, Allow once.
  */
 export function renderHeldCard(s: HomeState, m: HeldCard): string {
-  const sender = s.agents.find((a) => a.id === m.from.id);
-  const manager = sender ? sender.owner : m.facts.managedBy;
+  const manager = m.facts.managedBy;
   const facts = [
     `<li class="fact">${pav(manager)}Managed by ${esc(manager.name)}</li>`,
     when(m.facts.replyToRecipient, `<li class="fact">${ICON.reply()}Reply to ${esc(m.to.display)}</li>`),
     ...m.facts.earlier.map((e) => `<li class="fact">${ICON.check(14)}${DECISION_LABEL[e.decision]} ${atWhen(e.at, s.now)}</li>`),
   ].join("");
-  const quoteTime = m.replyTo ? s.quoteTimes[m.replyTo.id] : undefined;
+  const quoteTime = m.replyTo?.createdAt;
   const quote = m.replyTo
     ? `<p class="quote"><span class="tnum">${esc(m.replyTo.from.display)}${quoteTime ? `, ${stamp(quoteTime, s.now)}` : ""}:</span> ${esc(m.replyTo.text)}</p>`
     : "";
@@ -541,6 +540,5 @@ export function homeState(data: {
     expanded: false,
     confirmRemove: false,
     busy: null,
-    quoteTimes: {},
   };
 }

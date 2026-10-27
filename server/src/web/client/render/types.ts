@@ -134,8 +134,6 @@ export interface HomeState {
   confirmRemove: boolean;
   /** The action in flight, so its button can't be pressed twice. */
   busy: string | null;
-  /** Times of messages a held card quotes, by message ID, when known from a loaded thread. */
-  quoteTimes: Record<string, string>;
 }
 
 /** What Settings renders. */

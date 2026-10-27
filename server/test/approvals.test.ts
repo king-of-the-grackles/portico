@@ -46,6 +46,13 @@ describe("decisions", () => {
 });
 
 describe("card facts", () => {
+  test("Managed by names the person who manages the sender", async () => {
+    const { p, maya } = await setup();
+    const mayaDot = addAppAgent(p, maya, "maya-dot", { kind: "dots" }).agent;
+    const held = p.messages.send(mayaDot, { to: "muse", subject: "Churn numbers", text: "Last quarter?" }).message;
+    expect(p.approvals.facts(held).managedBy.name).toBe("Maya");
+  });
+
   test("managed by, a reply to the recipient, and earlier decisions: all checked by Portico", async () => {
     const { p, chris, grok, muse } = await setup();
     const first = p.messages.send(grok, { to: "muse", subject: "Find a time", text: "With Sam" }).message;
