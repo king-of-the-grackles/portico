@@ -1,27 +1,37 @@
 import { spawn as realSpawn } from "node:child_process";
+import type { Decision } from "./portico-client";
 
 /** Always by absolute path, never a PATH lookup, so an agent can't put a stand-in earlier on the PATH. */
 export const OSASCRIPT = "/usr/bin/osascript";
 export const NOTIFY_SEND = "/usr/bin/notify-send";
-/** The most of a task's instructions a panel shows, in code points. */
+/** The most of a message's text a panel shows, in code points. */
 export const PANEL_TEXT_MAX = 500;
+/** A subject is one line of at most 120 characters. */
+export const SUBJECT_MAX = 120;
 /** The Linux notification shows less: its body is also visible in the process list. */
 const NOTIFY_TEXT_MAX = 200;
 const TITLE = "Approval needed";
-const NOTE_PLACEHOLDER = "Note for the sender (sent with Deny)";
+/** The buttons, left to right: the primary one, Allow once, sits far right. */
+export const BUTTONS: { decision: Decision; label: string }[] = [
+  { decision: "deny", label: "Deny" },
+  { decision: "always_allow", label: "Always allow" },
+  { decision: "allow_once", label: "Allow once" },
+];
+const DECISIONS = new Set<string>(BUTTONS.map((button) => button.decision));
 
 /** What one panel shows. `slot` offsets each further open panel, so none hides another. */
 export interface ApprovalPrompt {
-  taskId: string;
+  messageId: string;
   from: string;
   to: string;
-  instructions: string;
+  subject: string;
+  text: string;
   expiresAt: string;
   slot: number;
 }
 
 export type PanelOutcome =
-  | { kind: "answered"; decision: "approve" | "deny"; note: string }
+  | { kind: "answered"; decision: Decision }
   | { kind: "dismissed" }
   | { kind: "failed"; code: number | null };
 
@@ -64,7 +74,7 @@ export function popupPlatform(
   return null;
 }
 
-/** What a desktop needs, and nothing else: the machine token and the inbox socket variables never reach the child. */
+/** What a desktop needs, and nothing else: the computer token and the inbox socket variables never reach the child. */
 const CHILD_VARS = ["HOME", "LANG", "LC_ALL", "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"];
 
 export function childEnv(env: Record<string, string | undefined>): Record<string, string> {
@@ -77,7 +87,7 @@ export function childEnv(env: Record<string, string | undefined>): Record<string
 }
 
 /**
- * The hub already defanged the text; this cleans it again for a panel: line separators become newlines, hidden
+ * Portico already defanged the text; this cleans it again for a panel: line separators become newlines, hidden
  * format characters (bidi controls, zero-width), other characters that draw nothing (fillers, variation selectors)
  * and control characters other than newline and tab go, tabs and braille blanks become spaces, lines of nothing but
  * spaces (Unicode spaces too) count as blank, runs of blank lines shrink to one, and the result is clipped with "…".
@@ -98,6 +108,11 @@ export function panelText(text: string, max = PANEL_TEXT_MAX): string {
   return chars.length > max ? `${chars.slice(0, max).join("")}…` : cleaned;
 }
 
+/** The subject as a panel's headline: cleaned like the text, on one line, at most 120 characters. */
+export function panelSubject(subject: string): string {
+  return panelText(subject.replace(/[\r\n\u2028\u2029]+/g, " "), SUBJECT_MAX).replace(/\s+/g, " ");
+}
+
 /** Many notification servers read the body as markup. */
 export function escapeMarkup(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -108,15 +123,15 @@ function lastLine(stdout: string): string {
 }
 
 /**
- * The macOS panel writes one JSON line: `{ decision, note }`, or `{ expired: true }` when it closed itself at the
- * deadline, which answers nothing. Anything else is a failure.
+ * The macOS panel writes one JSON line: `{ decision }`, or `{ expired: true }` when it closed itself at the deadline,
+ * which answers nothing. Anything else is a failure.
  */
 export function parsePanelOutput(stdout: string): PanelOutcome {
   try {
-    const answer = JSON.parse(lastLine(stdout)) as { decision?: unknown; note?: unknown; expired?: unknown } | null;
+    const answer = JSON.parse(lastLine(stdout)) as { decision?: unknown; expired?: unknown } | null;
     if (answer?.expired === true) return { kind: "dismissed" };
-    if (answer && (answer.decision === "approve" || answer.decision === "deny")) {
-      return { kind: "answered", decision: answer.decision, note: typeof answer.note === "string" ? answer.note : "" };
+    if (answer && typeof answer.decision === "string" && DECISIONS.has(answer.decision)) {
+      return { kind: "answered", decision: answer.decision as Decision };
     }
   } catch {
     // not JSON
@@ -127,7 +142,7 @@ export function parsePanelOutput(stdout: string): PanelOutcome {
 /** notify-send prints the chosen action's name. Nothing (closed without a choice) is a dismissal. */
 export function parseNotifyOutput(stdout: string): PanelOutcome {
   const action = lastLine(stdout);
-  return action === "approve" || action === "deny" ? { kind: "answered", decision: action, note: "" } : { kind: "dismissed" };
+  return DECISIONS.has(action) ? { kind: "answered", decision: action as Decision } : { kind: "dismissed" };
 }
 
 /** Runs the child, writes `stdin`, and settles once: on exit, on a spawn error, or on kill. */
@@ -176,9 +191,10 @@ function runChild(
 /**
  * The macOS panel, run by `osascript -l JavaScript`. A titled, utility, non-activating NSPanel at floating level on
  * every Space, with no close button and no key equivalents: it never takes the keyboard by itself, and only a click
- * answers. The body scrolls in a read-only text view, so none of the text is out of sight. The request is read from
- * stdin as JSON, never from argv; the answer is one JSON line on stdout. At the deadline the panel closes itself,
- * answering nothing, so a plugin killed outright never leaves it up.
+ * answers. The subject is the headline, then who sent the message to whom, then the text, which scrolls in a
+ * read-only text view so none of it is out of sight. The buttons end on the right, Allow once (the primary) far
+ * right. The request is read from stdin as JSON, never from argv; the answer is one JSON line on stdout. At the
+ * deadline the panel closes itself, answering nothing, so a plugin killed outright never leaves it up.
  * A String.raw template, so its escapes stay escapes; it has no backticks and no template placeholders.
  */
 export const MAC_PANEL_SCRIPT = String.raw`
@@ -191,31 +207,34 @@ var input = JSON.parse($.NSString.alloc.initWithDataEncoding(data, $.NSUTF8Strin
 var app = $.NSApplication.sharedApplication;
 app.setActivationPolicy(1); // accessory: no Dock icon and no menu bar
 
-var WIDTH = 440;
-var HEIGHT = 300;
+var WIDTH = 460;
+var HEIGHT = 320;
+var MARGIN = 20;
 // Titled, utility window and non-activating panel (1 | 16 | 128): floats without taking the keyboard, with no close button.
 var panel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, WIDTH, HEIGHT), 1 | 16 | 128, 2, false);
 panel.title = input.title;
 panel.level = 3; // floating
 panel.floatingPanel = true;
-panel.becomesKeyOnlyIfNeeded = true; // a button click never takes the keyboard; a click in the note field does
+panel.becomesKeyOnlyIfNeeded = true; // a button click never takes the keyboard; a click in the text does
 panel.hidesOnDeactivate = false;
 panel.collectionBehavior = 1 | 256; // every Space, and over full-screen windows
 var view = panel.contentView;
 
 function addLabel(text, y, height, bold) {
   var label = $.NSTextField.wrappingLabelWithString(text);
-  label.frame = $.NSMakeRect(20, y, WIDTH - 40, height);
+  label.frame = $.NSMakeRect(MARGIN, y, WIDTH - 2 * MARGIN, height);
   label.font = bold ? $.NSFont.boldSystemFontOfSize(14) : $.NSFont.systemFontOfSize(12);
   label.selectable = false;
   view.addSubview(label);
 }
-addLabel(input.heading, HEIGHT - 44, 22, true);
+// The subject is the headline (one line, wrapping to two), then who sent the message to whom.
+addLabel(input.heading, HEIGHT - 58, 40, true);
+addLabel(input.route, HEIGHT - 80, 18, false);
 
 // The body scrolls, so none of the (already clipped) text is ever out of sight. A legacy scroller is always drawn,
 // and a knob shorter than its track says there is more. Read-only: the text can be selected and copied, never edited.
-// Like the note field, the text view takes the keyboard only when clicked; the panel is never made key on its own.
-var scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(20, 100, WIDTH - 40, HEIGHT - 152));
+// The text view takes the keyboard only when clicked; the panel is never made key on its own.
+var scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(MARGIN, 64, WIDTH - 2 * MARGIN, HEIGHT - 152));
 scroll.borderType = 2; // bezel
 scroll.scrollerStyle = 0; // legacy: drawn all the time, unlike an overlay scroller
 scroll.hasVerticalScroller = true;
@@ -238,25 +257,18 @@ body.string = input.body;
 scroll.documentView = body;
 view.addSubview(scroll);
 
-var note = $.NSTextField.alloc.initWithFrame($.NSMakeRect(20, 60, WIDTH - 40, 24));
-note.placeholderString = input.notePlaceholder;
-view.addSubview(note);
-
 function reply(answer) {
   var line = JSON.stringify(answer) + "\n";
   $.NSFileHandle.fileHandleWithStandardOutput.writeData($(line).dataUsingEncoding($.NSUTF8StringEncoding));
   $.exit(0);
 }
 
-function finish(decision) {
-  reply({ decision: decision, note: note.stringValue.js });
-}
-
 ObjC.registerSubclass({
   name: "PorticoApprovalTarget",
   methods: {
-    "approve:": { types: ["void", ["id"]], implementation: function () { finish("approve"); } },
-    "deny:": { types: ["void", ["id"]], implementation: function () { finish("deny"); } },
+    "deny:": { types: ["void", ["id"]], implementation: function () { reply({ decision: "deny" }); } },
+    "alwaysAllow:": { types: ["void", ["id"]], implementation: function () { reply({ decision: "always_allow" }); } },
+    "allowOnce:": { types: ["void", ["id"]], implementation: function () { reply({ decision: "allow_once" }); } },
     "expire:": { types: ["void", ["id"]], implementation: function () { reply({ expired: true }); } },
   },
 });
@@ -269,15 +281,25 @@ if (typeof input.deadline === "number") {
 }
 
 // Buttons get no key equivalents and refuse the keyboard focus: only a click answers, so Return typed in a terminal
-// can never approve, and neither can Tab then Space with Full Keyboard Access on.
-function addButton(title, x, action) {
+// can never allow a message, and neither can Tab then Space with Full Keyboard Access on. The primary button is
+// marked by its color alone.
+function addButton(title, right, width, action, primary) {
   var button = $.NSButton.buttonWithTitleTargetAction(title, target, action);
   button.refusesFirstResponder = true;
-  button.frame = $.NSMakeRect(x, 16, 100, 32);
+  button.frame = $.NSMakeRect(WIDTH - MARGIN - right - width, 16, width, 32);
+  if (primary) {
+    try {
+      button.bezelColor = $.NSColor.controlAccentColor;
+    } catch (e) {
+      // an older macOS draws it plain
+    }
+  }
   view.addSubview(button);
 }
-addButton(input.deny, WIDTH - 230, "deny:");
-addButton(input.approve, WIDTH - 120, "approve:");
+// Right-aligned, Allow once far right.
+addButton(input.allowOnce, 0, 110, "allowOnce:", true);
+addButton(input.alwaysAllow, 118, 120, "alwaysAllow:", false);
+addButton(input.deny, 246, 90, "deny:", false);
 
 panel.center;
 var offset = 24 * (input.slot || 0);
@@ -285,6 +307,8 @@ panel.setFrameOrigin($.NSMakePoint(panel.frame.origin.x + offset, panel.frame.or
 panel.orderFrontRegardless;
 app.run;
 `;
+
+const label = (decision: Decision) => BUTTONS.find((button) => button.decision === decision)!.label;
 
 export function macPanelRunner(env: Record<string, string | undefined>, spawnFn: SpawnLike = systemSpawn): DialogRunner {
   return (prompt) =>
@@ -295,11 +319,12 @@ export function macPanelRunner(env: Record<string, string | undefined>, spawnFn:
       childEnv(env),
       JSON.stringify({
         title: TITLE,
-        heading: `${prompt.from} → ${prompt.to}`,
-        body: panelText(prompt.instructions),
-        notePlaceholder: NOTE_PLACEHOLDER,
-        approve: "Approve",
-        deny: "Deny",
+        heading: panelSubject(prompt.subject),
+        route: `${prompt.from} → ${prompt.to}`,
+        body: panelText(prompt.text),
+        deny: label("deny"),
+        alwaysAllow: label("always_allow"),
+        allowOnce: label("allow_once"),
         slot: prompt.slot,
         deadline: Date.parse(prompt.expiresAt),
       }),
@@ -318,15 +343,14 @@ export function linuxNotifyRunner(
   return (prompt) => {
     const expireMs = Math.min(MAX_EXPIRE_MS, Math.max(1_000, Date.parse(prompt.expiresAt) - now()));
     // Clipped first, then escaped, so the limit counts characters a reader sees and no entity is cut in half.
-    const body = escapeMarkup(`${prompt.from} → ${prompt.to}\n\n${panelText(prompt.instructions, NOTIFY_TEXT_MAX)}`);
+    const body = escapeMarkup(`${TITLE}: ${prompt.from} → ${prompt.to}\n\n${panelText(prompt.text, NOTIFY_TEXT_MAX)}`);
     const args = [
       "--urgency=critical",
       "--wait",
-      "--action=approve=Approve",
-      "--action=deny=Deny",
+      ...BUTTONS.map((button) => `--action=${button.decision}=${button.label}`),
       `--expire-time=${expireMs}`,
       "--",
-      TITLE,
+      panelSubject(prompt.subject),
       body,
     ];
     return runChild(spawnFn, NOTIFY_SEND, args, childEnv(env), "", parseNotifyOutput);

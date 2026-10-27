@@ -1,21 +1,22 @@
 import { errorName, type Logger } from "./log";
 import { SseParser } from "./sse";
 
-export type StreamStop = { reason: "replaced" } | { reason: "rejected"; status: number; message: string };
+/** Why the stream stopped for good. `code` is the error code Portico sent with a refusal, such as `folder_off`. */
+export type StreamStop = { reason: "replaced" } | { reason: "rejected"; status: number; code: string | null; message: string };
 
 export interface StreamClientOptions {
-  /** Opens GET /api/stream (HubClient.openStream). */
+  /** Opens GET /api/agent/stream (PorticoClient.openStream). */
   open: (signal: AbortSignal) => Promise<Response>;
   /** Every event except `replaced`, with its data parsed as JSON. */
   onEvent: (event: string, data: unknown) => void;
-  /** Called once, when the client stops for good: another session took over, or the hub refused the stream. */
+  /** Called once, when the client stops for good: another connection took over, or Portico refused the stream. */
   onStop: (stop: StreamStop) => void;
-  /** Called whenever a connection that reached the hub ends, however it ends. Not for a refused or failed open. */
+  /** Called whenever a connection that reached Portico ends, however it ends. Not for a refused or failed open. */
   onDisconnect?: () => void;
   log: Logger;
-  /** A connection open this long counts as healthy, and the backoff starts over. Default 30 s, longer than the hub's 25 s heartbeat. */
+  /** A connection open this long counts as healthy, and the backoff starts over. Default 30 s, longer than Portico's 25 s heartbeat. */
   healthyMs?: number;
-  /** Reconnect after this long with no bytes at all. The hub sends a comment every 25 s. Default 60 s. */
+  /** Reconnect after this long with no bytes at all. Portico sends a comment every 25 s. Default 60 s. */
   silenceMs?: number;
   /** First pause between attempts; it doubles after each failure. Default 1 s. */
   initialBackoffMs?: number;
@@ -29,10 +30,11 @@ export const SILENCE_MS = 60_000;
 export const HEALTHY_MS = 30_000;
 
 /**
- * Holds the hub's live stream open (spec §9.4–§9.5). It reconnects with backoff when the stream fails or ends,
+ * Holds Portico's live stream open. It reconnects with backoff when the stream fails or ends,
  * and when it goes silent: a half-open connection can look alive for a long time. It stops for good on
- * `replaced`, so two sessions sharing a token don't fight, and when the hub refuses the stream (401, 403) or answers that it has no stream at that address (a 404 carrying the hub's own `not_found` error).
- * Any other 404 may come from a proxy in front of the hub, say during a redeploy, so it is retried like a 5xx.
+ * `replaced`, so two connections for one session don't fight, and when Portico refuses the stream (401, 403) or answers that
+ * it has no stream at that address (a 404 carrying Portico's own `not_found` error).
+ * Any other 404 may come from a proxy in front of Portico, say during a redeploy, so it is retried like a 5xx.
  */
 export class StreamClient {
   private running = false;
@@ -57,7 +59,7 @@ export class StreamClient {
     await this.loop;
   }
 
-  /** Drops the current connection. The loop reconnects, and the hub nudges on connect if work is waiting. */
+  /** Drops the current connection. The loop reconnects, and Portico nudges on connect if messages are waiting. */
   reconnect(): void {
     this.current?.abort();
   }
@@ -85,15 +87,17 @@ export class StreamClient {
       }, silenceMs);
     };
     try {
-      arm(); // the hub must answer within the window too
+      arm(); // Portico must answer within the window too
       const res = await this.opts.open(controller.signal);
-      // 401 and 403 are final. A 404 is final only when the hub itself sent it ({"error":"not_found"}): PORTICO_URL then
-      // points at the wrong path (e.g. ends in /mcp). A proxy may answer 404 briefly during a redeploy, and that is retried.
+      // 401 and 403 are final. A 404 is final only when Portico itself sent it ({"error":"not_found"}): the address in
+      // computer.json then points at the wrong path. A proxy may answer 404 briefly during a redeploy, and that is retried.
       if (res.status === 401 || res.status === 403 || res.status === 404) {
         const { code, message } = await readError(res);
         if (res.status !== 404 || code === "not_found") {
-          this.opts.log("error", "stream_refused", { status: res.status });
-          this.opts.onStop({ reason: "rejected", status: res.status, message });
+          // A folder that's off is expected, not an error: this one line is all the log says about it.
+          const level = code === "folder_off" ? "info" : "error";
+          this.opts.log(level, "stream_refused", { status: res.status, ...(code ? { code: code.slice(0, 40) } : {}) });
+          this.opts.onStop({ reason: "rejected", status: res.status, code: code ?? null, message });
           return "stopped";
         }
       }
@@ -169,7 +173,7 @@ export class StreamClient {
   }
 }
 
-/** Reads the error body once: the hub's error code and message, with the message falling back to `HTTP <status>`. */
+/** Reads the error body once: Portico's error code and message, with the message falling back to `HTTP <status>`. */
 async function readError(res: Response): Promise<{ code: string | undefined; message: string }> {
   try {
     const body = (await res.json()) as { error?: unknown; message?: unknown };

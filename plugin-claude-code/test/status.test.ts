@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { HubError, type StatusReport } from "../src/hub-client";
+import { folderId } from "../src/computer";
+import { ApiError, type StatusReport } from "../src/portico-client";
 import type { OwnSession } from "../src/registry";
-import { composeDoing, folderId, gitInfo, mapStatus, SessionWatcher, type SessionWatcherDeps } from "../src/status";
+import { composeDoing, gitInfo, mapStatus, SessionWatcher, type SessionWatcherDeps } from "../src/status";
 import { captureLog, tempDir, waitFor } from "./helpers";
 
 describe("status values", () => {
@@ -31,12 +32,12 @@ describe("status values", () => {
     const dir = tempDir();
     mkdirSync(join(dir, "app"));
     symlinkSync(join(dir, "app"), join(dir, "link"));
-    const id = folderId("bm_one", join(dir, "app"));
+    const id = folderId("pc_one", join(dir, "app"));
     expect(id).toMatch(/^[a-f0-9]{64}$/);
-    expect(folderId("bm_one", join(dir, "app"))).toBe(id);
-    expect(folderId("bm_one", join(dir, "link"))).toBe(id); // the real path is what's hashed
-    expect(folderId("bm_two", join(dir, "app"))).not.toBe(id);
-    expect(folderId("bm_one", dir)).not.toBe(id);
+    expect(folderId("pc_one", join(dir, "app"))).toBe(id);
+    expect(folderId("pc_one", join(dir, "link"))).toBe(id); // the real path is what's hashed
+    expect(folderId("pc_two", join(dir, "app"))).not.toBe(id);
+    expect(folderId("pc_one", dir)).not.toBe(id);
     expect(id).not.toContain(Buffer.from(join(dir, "app")).toString("hex"));
   });
 
@@ -215,7 +216,7 @@ describe("SessionWatcher", () => {
       transcriptOf: () => null,
       git: async () => ({ repo: "dialog", branch: "secret-branch" }),
       report: async (r) => {
-        if (fail) throw new HubError(500, "internal", `boom ${doingText}`);
+        if (fail) throw new ApiError(500, "internal", `boom ${doingText}`);
         sent.push(r);
       },
       pollMs: 10,
@@ -227,7 +228,7 @@ describe("SessionWatcher", () => {
       await Bun.sleep(50);
       // Logged once per failure streak, not on every poll.
       expect(logs.lines.filter((l) => l.msg === "status_report_failed")).toEqual([
-        { level: "warn", msg: "status_report_failed", fields: { error: "HubError" } },
+        { level: "warn", msg: "status_report_failed", fields: { error: "ApiError" } },
       ]);
       fail = false;
       await waitFor(() => sent.length === 1);

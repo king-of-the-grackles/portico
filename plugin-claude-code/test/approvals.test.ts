@@ -1,28 +1,31 @@
 import { describe, expect, test } from "bun:test";
-import { ApprovalPanels } from "../src/approvals";
-import { HubError } from "../src/hub-client";
+import { ApprovalPanels, parseApprovalRequest } from "../src/approvals";
+import { ApiError, type Decision } from "../src/portico-client";
 import { captureLog, fakeRunner, waitFor } from "./helpers";
 
 const REQUEST = {
-  taskId: "t1",
+  messageId: "m1",
   nonce: "nonce-aaaaaaaaaaaaaaaa",
-  from: "grok-bot",
+  from: "grok",
   to: "muse",
-  instructions: "Summarize the inbox",
+  subject: "Read the inbox",
+  text: "Summarize the inbox",
   expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
 };
 
+type Body = { nonce: string; decision: Decision };
+
 function setup(opts: { fail?: (attempt: number) => Error | null; runner?: boolean; retryMs?: number[] } = {}) {
-  const answers: { taskId: string; body: unknown }[] = [];
+  const answers: { messageId: string; body: Body }[] = [];
   let attempts = 0;
   let unavailable = 0;
   const client = {
-    answerApproval: async (taskId: string, body: { nonce: string; decision: "approve" | "deny"; note?: string }) => {
+    answerApproval: async (messageId: string, body: Body) => {
       attempts++;
       const err = opts.fail?.(attempts);
       if (err) throw err;
-      answers.push({ taskId, body });
-      return { task: {} as never };
+      answers.push({ messageId, body });
+      return { message: {} as never };
     },
   };
   const fake = fakeRunner();
@@ -38,87 +41,94 @@ function setup(opts: { fail?: (attempt: number) => Error | null; runner?: boolea
 }
 
 describe("approval panels", () => {
-  test("shows a panel for a request and answers Approve with the request's nonce, never a note", async () => {
+  test("shows a panel for a request and sends Allow once with the request's nonce", async () => {
     const { panels, fake, answers } = setup();
     panels.request(REQUEST);
     expect(fake.panels.map((panel) => panel.prompt)).toEqual([
-      { taskId: "t1", from: "grok-bot", to: "muse", instructions: "Summarize the inbox", expiresAt: REQUEST.expiresAt, slot: 0 },
+      {
+        messageId: "m1",
+        from: "grok",
+        to: "muse",
+        subject: "Read the inbox",
+        text: "Summarize the inbox",
+        expiresAt: REQUEST.expiresAt,
+        slot: 0,
+      },
     ]);
-    fake.panels[0]!.answer({ kind: "answered", decision: "approve", note: "typed anyway" });
+    fake.panels[0]!.answer({ kind: "answered", decision: "allow_once" });
     await waitFor(() => answers.length === 1);
-    expect(answers[0]).toEqual({ taskId: "t1", body: { nonce: REQUEST.nonce, decision: "approve" } });
+    expect(answers[0]).toEqual({ messageId: "m1", body: { nonce: REQUEST.nonce, decision: "allow_once" } });
     expect(panels.openCount).toBe(0);
   });
 
-  test("Deny sends the note, trimmed and clipped to 2,000 characters", async () => {
+  test("each of the three buttons sends its own decision", async () => {
     const { panels, fake, answers } = setup();
-    panels.request(REQUEST);
-    fake.panels[0]!.answer({ kind: "answered", decision: "deny", note: `  ${"n".repeat(2500)}  ` });
-    await waitFor(() => answers.length === 1);
-    expect(answers[0]).toEqual({ taskId: "t1", body: { nonce: REQUEST.nonce, decision: "deny", note: "n".repeat(2000) } });
+    const decisions: Decision[] = ["deny", "always_allow", "allow_once"];
+    decisions.forEach((decision, i) => {
+      panels.request({ ...REQUEST, messageId: `m${i}` });
+      fake.panels[i]!.answer({ kind: "answered", decision });
+    });
+    await waitFor(() => answers.length === 3);
+    expect(answers.map((answer) => [answer.messageId, answer.body.decision])).toEqual([
+      ["m0", "deny"],
+      ["m1", "always_allow"],
+      ["m2", "allow_once"],
+    ]);
   });
 
-  test("Deny with a blank note sends no note", async () => {
-    const { panels, fake, answers } = setup();
-    panels.request(REQUEST);
-    fake.panels[0]!.answer({ kind: "answered", decision: "deny", note: "   " });
-    await waitFor(() => answers.length === 1);
-    expect(answers[0]).toEqual({ taskId: "t1", body: { nonce: REQUEST.nonce, decision: "deny" } });
-  });
-
-  test("a repeat request for the same task updates the nonce instead of opening a second panel; a second task cascades", async () => {
+  test("a repeat request for the same message updates the nonce instead of opening a second panel; a second message cascades", async () => {
     const { panels, fake, answers } = setup();
     panels.request(REQUEST);
     panels.request({ ...REQUEST, nonce: "nonce-bbbbbbbbbbbbbbbb" });
     expect(fake.panels).toHaveLength(1);
-    panels.request({ ...REQUEST, taskId: "t2" });
+    panels.request({ ...REQUEST, messageId: "m2" });
     expect(fake.panels[1]!.prompt.slot).toBe(1);
-    fake.panels[0]!.answer({ kind: "answered", decision: "approve", note: "" });
+    fake.panels[0]!.answer({ kind: "answered", decision: "allow_once" });
     await waitFor(() => answers.length === 1);
-    expect((answers[0]!.body as { nonce: string }).nonce).toBe("nonce-bbbbbbbbbbbbbbbb");
-    // t1's slot is free again, while t2 still holds slot 1: the next panel takes the lowest free one.
-    panels.request({ ...REQUEST, taskId: "t3" });
-    panels.request({ ...REQUEST, taskId: "t4" });
-    expect(fake.panels.slice(2).map((panel) => [panel.prompt.taskId, panel.prompt.slot])).toEqual([
-      ["t3", 0],
-      ["t4", 2],
+    expect(answers[0]!.body.nonce).toBe("nonce-bbbbbbbbbbbbbbbb");
+    // m1's slot is free again, while m2 still holds slot 1: the next panel takes the lowest free one.
+    panels.request({ ...REQUEST, messageId: "m3" });
+    panels.request({ ...REQUEST, messageId: "m4" });
+    expect(fake.panels.slice(2).map((panel) => [panel.prompt.messageId, panel.prompt.slot])).toEqual([
+      ["m3", 0],
+      ["m4", 2],
     ]);
   });
 
   test("approval_closed kills the panel, and an answer that comes after is never sent", async () => {
     const { panels, fake, answers } = setup();
     panels.request(REQUEST);
-    panels.closed({ taskId: "t1", outcome: "approved" });
+    panels.closed({ messageId: "m1", outcome: "allowed" });
     expect(fake.panels[0]!.killed).toBe(true);
-    fake.panels[0]!.answer({ kind: "answered", decision: "approve", note: "" });
+    fake.panels[0]!.answer({ kind: "answered", decision: "allow_once" });
     await Bun.sleep(20);
     expect(answers).toEqual([]);
   });
 
   test("at most five panels are open at once; later requests wait in order, and a closed one leaves the queue", async () => {
     const { panels, fake } = setup();
-    for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) panels.request({ ...REQUEST, taskId: `t${n}` });
-    expect(fake.panels.map((panel) => [panel.prompt.taskId, panel.prompt.slot])).toEqual([
-      ["t1", 0],
-      ["t2", 1],
-      ["t3", 2],
-      ["t4", 3],
-      ["t5", 4],
+    for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) panels.request({ ...REQUEST, messageId: `m${n}` });
+    expect(fake.panels.map((panel) => [panel.prompt.messageId, panel.prompt.slot])).toEqual([
+      ["m1", 0],
+      ["m2", 1],
+      ["m3", 2],
+      ["m4", 3],
+      ["m5", 4],
     ]);
     expect(panels.openCount).toBe(5);
-    panels.request({ ...REQUEST, taskId: "t6", nonce: "nonce-bbbbbbbbbbbbbbbb" }); // a repeat while queued: still one entry
-    panels.closed({ taskId: "t7", outcome: "approved" }); // decided while waiting: it never shows
-    panels.closed({ taskId: "t2", outcome: "denied" });
-    expect(fake.panels.slice(5).map((panel) => [panel.prompt.taskId, panel.prompt.slot])).toEqual([["t6", 1]]);
+    panels.request({ ...REQUEST, messageId: "m6", nonce: "nonce-bbbbbbbbbbbbbbbb" }); // a repeat while queued: still one entry
+    panels.closed({ messageId: "m7", outcome: "allowed" }); // decided while waiting: it never shows
+    panels.closed({ messageId: "m2", outcome: "declined" });
+    expect(fake.panels.slice(5).map((panel) => [panel.prompt.messageId, panel.prompt.slot])).toEqual([["m6", 1]]);
     fake.panels[0]!.answer({ kind: "dismissed" });
     await waitFor(() => fake.panels.length === 7);
-    expect(fake.panels.at(-1)!.prompt).toMatchObject({ taskId: "t8", slot: 0 });
+    expect(fake.panels.at(-1)!.prompt).toMatchObject({ messageId: "m8", slot: 0 });
     expect(panels.openCount).toBe(5);
   });
 
   test("closeAll empties the queue too, so nothing opens after it", async () => {
     const { panels, fake } = setup();
-    for (const n of [1, 2, 3, 4, 5, 6]) panels.request({ ...REQUEST, taskId: `t${n}` });
+    for (const n of [1, 2, 3, 4, 5, 6]) panels.request({ ...REQUEST, messageId: `m${n}` });
     panels.closeAll();
     await Bun.sleep(20);
     expect(fake.panels).toHaveLength(5);
@@ -128,34 +138,34 @@ describe("approval panels", () => {
 
   test("a queued request is answered with its newest nonce once it shows", async () => {
     const { panels, fake, answers } = setup();
-    for (const n of [1, 2, 3, 4, 5, 6]) panels.request({ ...REQUEST, taskId: `t${n}` });
-    panels.request({ ...REQUEST, taskId: "t6", nonce: "nonce-cccccccccccccccc" });
-    panels.closed({ taskId: "t1", outcome: "approved" });
-    fake.panels[5]!.answer({ kind: "answered", decision: "approve", note: "" });
+    for (const n of [1, 2, 3, 4, 5, 6]) panels.request({ ...REQUEST, messageId: `m${n}` });
+    panels.request({ ...REQUEST, messageId: "m6", nonce: "nonce-cccccccccccccccc" });
+    panels.closed({ messageId: "m1", outcome: "allowed" });
+    fake.panels[5]!.answer({ kind: "answered", decision: "allow_once" });
     await waitFor(() => answers.length === 1);
-    expect(answers[0]).toEqual({ taskId: "t6", body: { nonce: "nonce-cccccccccccccccc", decision: "approve" } });
+    expect(answers[0]).toEqual({ messageId: "m6", body: { nonce: "nonce-cccccccccccccccc", decision: "allow_once" } });
   });
 
-  test("no second panel opens for a task whose answer is on its way or being retried", async () => {
-    const pending = setup({ fail: (n) => (n === 1 ? new HubError(0, "unreachable", "x") : null), retryMs: [200] });
+  test("no second panel opens for a message whose answer is on its way or being retried", async () => {
+    const pending = setup({ fail: (n) => (n === 1 ? new ApiError(0, "unreachable", "x") : null), retryMs: [200] });
     pending.panels.request(REQUEST);
-    pending.fake.panels[0]!.answer({ kind: "answered", decision: "approve", note: "" });
+    pending.fake.panels[0]!.answer({ kind: "answered", decision: "allow_once" });
     await waitFor(() => pending.attempts() === 1);
     pending.panels.request({ ...REQUEST, nonce: "nonce-bbbbbbbbbbbbbbbb" }); // re-sent after a reconnect, mid-retry
     expect(pending.fake.panels).toHaveLength(1);
     await waitFor(() => pending.answers.length === 1);
     expect(pending.fake.panels).toHaveLength(1);
-    expect((pending.answers[0]!.body as { nonce: string }).nonce).toBe(REQUEST.nonce);
+    expect(pending.answers[0]!.body.nonce).toBe(REQUEST.nonce);
 
     let land!: () => void;
     const fake = fakeRunner();
     const slow = new ApprovalPanels({
-      client: { answerApproval: () => new Promise<{ task: never }>((resolve) => (land = () => resolve({ task: {} as never }))) },
+      client: { answerApproval: () => new Promise<{ message: never }>((resolve) => (land = () => resolve({ message: {} as never }))) },
       runner: fake.runner,
       log: captureLog().log,
     });
     slow.request(REQUEST);
-    fake.panels[0]!.answer({ kind: "answered", decision: "deny", note: "" });
+    fake.panels[0]!.answer({ kind: "answered", decision: "deny" });
     await waitFor(() => land !== undefined);
     slow.request(REQUEST); // the answer is in flight
     expect(fake.panels).toHaveLength(1);
@@ -170,9 +180,9 @@ describe("approval panels", () => {
     const fake = fakeRunner();
     const panels = new ApprovalPanels({
       client: {
-        answerApproval: (_taskId, body) =>
-          new Promise<{ task: never }>((resolve, reject) =>
-            calls.push({ nonce: body.nonce, settle: (err) => (err ? reject(err) : resolve({ task: {} as never })) }),
+        answerApproval: (_messageId, body) =>
+          new Promise<{ message: never }>((resolve, reject) =>
+            calls.push({ nonce: body.nonce, settle: (err) => (err ? reject(err) : resolve({ message: {} as never })) }),
           ),
       },
       runner: fake.runner,
@@ -180,31 +190,31 @@ describe("approval panels", () => {
       retryMs: [],
     });
     panels.request(REQUEST);
-    fake.panels[0]!.answer({ kind: "answered", decision: "approve", note: "" });
+    fake.panels[0]!.answer({ kind: "answered", decision: "allow_once" });
     await waitFor(() => calls.length === 1);
-    panels.request({ ...REQUEST, nonce: "nonce-bbbbbbbbbbbbbbbb" }); // a restarted hub re-sends with a new nonce
+    panels.request({ ...REQUEST, nonce: "nonce-bbbbbbbbbbbbbbbb" }); // a restarted Portico re-sends with a new nonce
     panels.request({ ...REQUEST, nonce: "nonce-cccccccccccccccc" }); // the latest one is kept
     expect(fake.panels).toHaveLength(1);
-    calls[0]!.settle(new HubError(403, "not_allowed", "No approval request for this session matches."));
+    calls[0]!.settle(new ApiError(403, "not_allowed", "No pop-up request for this session matches."));
     await waitFor(() => fake.panels.length === 2);
-    expect(fake.panels[1]!.prompt.taskId).toBe("t1");
-    fake.panels[1]!.answer({ kind: "answered", decision: "approve", note: "" });
+    expect(fake.panels[1]!.prompt.messageId).toBe("m1");
+    fake.panels[1]!.answer({ kind: "answered", decision: "allow_once" });
     await waitFor(() => calls.length === 2);
     expect(calls[1]!.nonce).toBe("nonce-cccccccccccccccc");
     calls[1]!.settle(null);
 
-    // A kept request is dropped when the answer lands, or when the task is closed meanwhile.
-    panels.request({ ...REQUEST, taskId: "t2" });
-    fake.panels[2]!.answer({ kind: "answered", decision: "approve", note: "" });
+    // A kept request is dropped when the answer lands, or when the message is closed meanwhile.
+    panels.request({ ...REQUEST, messageId: "m2" });
+    fake.panels[2]!.answer({ kind: "answered", decision: "allow_once" });
     await waitFor(() => calls.length === 3);
-    panels.request({ ...REQUEST, taskId: "t2", nonce: "nonce-dddddddddddddddd" });
+    panels.request({ ...REQUEST, messageId: "m2", nonce: "nonce-dddddddddddddddd" });
     calls[2]!.settle(null);
-    panels.request({ ...REQUEST, taskId: "t3" });
-    fake.panels[3]!.answer({ kind: "answered", decision: "deny", note: "" });
+    panels.request({ ...REQUEST, messageId: "m3" });
+    fake.panels[3]!.answer({ kind: "answered", decision: "deny" });
     await waitFor(() => calls.length === 4);
-    panels.request({ ...REQUEST, taskId: "t3", nonce: "nonce-eeeeeeeeeeeeeeee" });
-    panels.closed({ taskId: "t3", outcome: "approved" });
-    calls[3]!.settle(new HubError(409, "wrong_status", "decided"));
+    panels.request({ ...REQUEST, messageId: "m3", nonce: "nonce-eeeeeeeeeeeeeeee" });
+    panels.closed({ messageId: "m3", outcome: "allowed" });
+    calls[3]!.settle(new ApiError(409, "wrong_status", "decided"));
     await Bun.sleep(20);
     expect(fake.panels).toHaveLength(4);
   });
@@ -212,18 +222,18 @@ describe("approval panels", () => {
   test("closeAll kills every panel, as when the stream drops", () => {
     const { panels, fake } = setup();
     panels.request(REQUEST);
-    panels.request({ ...REQUEST, taskId: "t2" });
+    panels.request({ ...REQUEST, messageId: "m2" });
     expect(panels.openCount).toBe(2);
     panels.closeAll();
     expect(fake.panels.map((panel) => panel.killed)).toEqual([true, true]);
     expect(panels.openCount).toBe(0);
   });
 
-  test("the panel is killed when the task expires, and an already expired request shows nothing", async () => {
+  test("the panel is killed when the message expires, and an already expired request shows nothing", async () => {
     const { panels, fake } = setup();
     panels.request({ ...REQUEST, expiresAt: new Date(Date.now() + 30).toISOString() });
     await waitFor(() => fake.panels[0]!.killed);
-    panels.request({ ...REQUEST, taskId: "t2", expiresAt: new Date(Date.now() - 1).toISOString() });
+    panels.request({ ...REQUEST, messageId: "m2", expiresAt: new Date(Date.now() - 1).toISOString() });
     expect(fake.panels).toHaveLength(1);
   });
 
@@ -231,18 +241,18 @@ describe("approval panels", () => {
     const { panels, fake, answers, logs } = setup();
     panels.request(REQUEST);
     fake.panels[0]!.answer({ kind: "dismissed" });
-    panels.request({ ...REQUEST, taskId: "t2" });
+    panels.request({ ...REQUEST, messageId: "m2" });
     fake.panels[1]!.answer({ kind: "failed", code: 1 });
     await Bun.sleep(20);
     expect(answers).toEqual([]);
-    expect(logs.lines.find((line) => line.msg === "approval_popup_failed")?.fields).toEqual({ task_id: "t2", code: 1 });
+    expect(logs.lines.find((line) => line.msg === "approval_popup_failed")?.fields).toEqual({ message_id: "m2", code: 1 });
   });
 
   test("a panel that fails to show turns pop-ups off for good, once, so the session stops declaring them", async () => {
     const { panels, fake, logs, unavailable } = setup();
     expect(panels.available).toBe(true);
     panels.request(REQUEST);
-    panels.request({ ...REQUEST, taskId: "t2" });
+    panels.request({ ...REQUEST, messageId: "m2" });
     fake.panels[0]!.answer({ kind: "failed", code: 1 });
     await waitFor(() => unavailable() === 1);
     expect(panels.available).toBe(false);
@@ -254,56 +264,61 @@ describe("approval panels", () => {
     fake.panels[1]!.answer({ kind: "failed", code: 1 });
     await Bun.sleep(20);
     expect(unavailable()).toBe(1);
-    panels.request({ ...REQUEST, taskId: "t3" });
+    panels.request({ ...REQUEST, messageId: "m3" });
     expect(fake.panels).toHaveLength(2);
   });
 
-  test("retries an answer the hub couldn't take, never a refusal; logs carry no nonce, note or task text", async () => {
-    const flaky = setup({ fail: (n) => (n < 3 ? new HubError(0, "unreachable", "x") : null) });
+  test("retries an answer Portico couldn't take, never a refusal; logs carry no nonce, subject or text", async () => {
+    const flaky = setup({ fail: (n) => (n < 3 ? new ApiError(0, "unreachable", "x") : null) });
     flaky.panels.request(REQUEST);
-    flaky.fake.panels[0]!.answer({ kind: "answered", decision: "deny", note: "SECRET-NOTE" });
+    flaky.fake.panels[0]!.answer({ kind: "answered", decision: "deny" });
     await waitFor(() => flaky.answers.length === 1);
     expect(flaky.attempts()).toBe(3);
-    const refused = setup({ fail: () => new HubError(409, "wrong_status", "decided") });
+    const refused = setup({ fail: () => new ApiError(409, "wrong_status", "decided") });
     refused.panels.request(REQUEST);
-    refused.fake.panels[0]!.answer({ kind: "answered", decision: "approve", note: "" });
+    refused.fake.panels[0]!.answer({ kind: "answered", decision: "allow_once" });
     await waitFor(() => refused.logs.lines.some((line) => line.msg === "approval_answer_failed"));
-    expect(refused.logs.lines.find((line) => line.msg === "approval_answer_failed")?.fields).toEqual({ task_id: "t1", status: 409 });
+    expect(refused.logs.lines.find((line) => line.msg === "approval_answer_failed")?.fields).toEqual({ message_id: "m1", status: 409 });
     expect(refused.attempts()).toBe(1);
     for (const logs of [flaky.logs, refused.logs]) {
       const text = JSON.stringify(logs.lines);
-      for (const secret of [REQUEST.nonce, "SECRET-NOTE", "Summarize"]) expect(text).not.toContain(secret);
+      for (const secret of [REQUEST.nonce, "Read the inbox", "Summarize"]) expect(text).not.toContain(secret);
     }
   });
 
-  test("a hub that answers 5xx is retried, and given up on after two retries", async () => {
-    const down = setup({ fail: () => new HubError(503, "http_error", "down") });
+  test("Portico answering 5xx is retried, and given up on after two retries", async () => {
+    const down = setup({ fail: () => new ApiError(503, "http_error", "down") });
     down.panels.request(REQUEST);
-    down.fake.panels[0]!.answer({ kind: "answered", decision: "approve", note: "" });
+    down.fake.panels[0]!.answer({ kind: "answered", decision: "allow_once" });
     await waitFor(() => down.logs.lines.some((line) => line.msg === "approval_answer_failed"));
     expect(down.attempts()).toBe(3);
-    expect(down.logs.lines.find((line) => line.msg === "approval_answer_failed")?.fields).toEqual({ task_id: "t1", status: 503 });
+    expect(down.logs.lines.find((line) => line.msg === "approval_answer_failed")?.fields).toEqual({ message_id: "m1", status: 503 });
   });
 
-  test("instructions are cleaned before they reach the panel", () => {
+  test("the subject and the text are cleaned before they reach the panel", () => {
     const { panels, fake } = setup();
-    panels.request({ ...REQUEST, instructions: "Run\u202E this\u200B now\r\nok" });
-    expect(fake.panels[0]!.prompt.instructions).toBe("Run this now\nok");
+    const rlo = String.fromCharCode(0x202e);
+    const zwsp = String.fromCharCode(0x200b);
+    panels.request({ ...REQUEST, subject: `Read${rlo} the\ninbox${zwsp}`, text: `Run${rlo} this${zwsp} now\r\nok` });
+    expect(fake.panels[0]!.prompt.subject).toBe("Read the inbox");
+    expect(fake.panels[0]!.prompt.text).toBe("Run this now\nok");
   });
 
   test("an invalid request is ignored and logged; without a runner nothing shows", () => {
     const { panels, fake, logs } = setup();
-    panels.request({ taskId: "t1", nonce: "short" });
+    panels.request({ messageId: "m1", nonce: "short" });
+    panels.request({ ...REQUEST, subject: "" });
     expect(fake.panels).toEqual([]);
-    expect(logs.lines.map((line) => line.msg)).toEqual(["approval_request_invalid"]);
+    expect(logs.lines.map((line) => line.msg)).toEqual(["approval_request_invalid", "approval_request_invalid"]);
+    expect(parseApprovalRequest({ ...REQUEST, taskId: "t1", messageId: undefined })).toBeNull();
     const none = setup({ runner: false });
     expect(none.panels.available).toBe(false);
     none.panels.request(REQUEST);
-    none.panels.request({ ...REQUEST, taskId: "t2" });
+    none.panels.request({ ...REQUEST, messageId: "m2" });
     expect(none.fake.panels).toEqual([]);
     expect(none.panels.openCount).toBe(0);
     expect(none.logs.lines.filter((line) => line.msg === "approval_request_ignored")).toEqual([
-      { level: "warn", msg: "approval_request_ignored", fields: { task_id: "t1", reason: "no_popup" } },
+      { level: "warn", msg: "approval_request_ignored", fields: { message_id: "m1", reason: "no_popup" } },
     ]);
   });
 });
