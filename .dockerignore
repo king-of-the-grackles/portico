@@ -9,5 +9,5 @@ logs
 *.db-wal
 .env
 .env.*
-portico.yaml
-portico-secrets.sh
+signing.key
+.claude
