@@ -1,13 +1,12 @@
-import type { MachineFile } from "./machine";
+import type { ComputerFile } from "./computer";
 
 export interface PluginConfig {
-  /** The hub's base URL, without a trailing slash. */
+  /** Portico's base URL, without a trailing slash. */
   url: string;
+  /** The computer token. */
   token: string;
-  /** "env": PORTICO_URL and PORTICO_TOKEN, for one session. "machine": machine.json, written when this machine joined. */
-  source: "env" | "machine";
-  /** This machine's name in machine mode, otherwise null. */
-  machine: string | null;
+  /** This computer's name on Portico. */
+  computer: string;
 }
 
 export class PluginConfigError extends Error {
@@ -17,19 +16,11 @@ export class PluginConfigError extends Error {
   }
 }
 
-type Env = Record<string, string | undefined>;
-
-/** `.mcp.json` passes `${VAR}` through as literal text when VAR isn't set in Claude Code's environment. */
-function read(env: Env, name: string): string {
-  const value = env[name]?.trim() ?? "";
-  return /^\$\{[^}]*\}$/.test(value) ? "" : value;
-}
-
 /**
- * The hub address without a trailing slash, or a problem. `label` names where it came from. https is required except
+ * Portico's address without a trailing slash, or a problem. `label` names where it came from. https is required except
  * for localhost, because the token travels with every request.
  */
-function parseHubUrl(raw: string, label: string): { url: string } | { problem: string } {
+export function parsePorticoUrl(raw: string, label: string): { url: string } | { problem: string } {
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -47,38 +38,13 @@ function parseHubUrl(raw: string, label: string): { url: string } | { problem: s
 }
 
 /**
- * Reads the plugin's settings (spec §5.1). PORTICO_URL and PORTICO_TOKEN win, for one session; otherwise the machine
- * file gives machine mode. Returns null when there are neither: the plugin is enabled in every session, and sessions
- * not on a hub should see nothing. Throws when the settings are half there or wrong.
+ * The plugin's settings, from computer.json, written when this computer joined. Null when there is none: the plugin
+ * is enabled in every session, and sessions on a computer that hasn't joined should see nothing. Throws when the
+ * address in the file is wrong.
  */
-export function parsePluginConfig(env: Env, machineFile: MachineFile | null = null): PluginConfig | null {
-  const rawUrl = read(env, "PORTICO_URL");
-  const token = read(env, "PORTICO_TOKEN");
-  if (!rawUrl && !token && !machineFile) return null;
-
-  const problems: string[] = [];
-  let url = "";
-  if (rawUrl || token) {
-    if (!rawUrl) {
-      problems.push(
-        "PORTICO_URL is not set. Set it to the hub's public address, e.g. https://portico.example.com, in the environment Claude Code starts from.",
-      );
-    } else {
-      const hub = parseHubUrl(rawUrl, "PORTICO_URL");
-      if ("problem" in hub) problems.push(hub.problem);
-      else url = hub.url;
-    }
-    if (!token) {
-      problems.push("PORTICO_TOKEN is not set. Use the token of this session's agent (PORTICO_TOKEN_<NAME> in the hub's environment).");
-    }
-  } else if (machineFile) {
-    const hub = parseHubUrl(machineFile.hub, "the hub address in machine.json");
-    if ("problem" in hub) problems.push(hub.problem);
-    else url = hub.url;
-  }
-  if (problems.length > 0) throw new PluginConfigError(problems);
-
-  if (rawUrl || token) return { url, token, source: "env", machine: null };
-  const file = machineFile!;
-  return { url, token: file.token, source: "machine", machine: file.machine };
+export function parsePluginConfig(file: ComputerFile | null): PluginConfig | null {
+  if (!file) return null;
+  const parsed = parsePorticoUrl(file.url, "the Portico address in computer.json");
+  if ("problem" in parsed) throw new PluginConfigError([parsed.problem]);
+  return { url: parsed.url, token: file.token, computer: file.computer };
 }
