@@ -53,7 +53,7 @@ export async function setupCommand(args: string[], io: CliIo): Promise<number> {
   }
   try {
     const settings = new Settings(db, config);
-    const accounts = new Accounts({ db, people: new People({ db, changes: new Changes() }) });
+    const accounts = new Accounts({ db, people: new People({ db, changes: new Changes(), signingKey: config.signingKey }) });
     const done = settings.setupDone();
     if (done && !reset) {
       io.err("Portico is already set up. To set a new owner password, run portico setup --reset.");

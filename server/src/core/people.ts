@@ -43,20 +43,6 @@ interface InviteRow {
 
 /** Invites are kept this long past expiry, so an old link still says it expired; then the daily sweep deletes them. */
 const INVITE_RETENTION_DAYS = 30;
-const MAX_PASSWORD_CHARS = 1024;
-
-/** A new password as typed: 12 characters or more. Throws `bad_request` otherwise. */
-export function checkNewPassword(value: unknown): string {
-  if (typeof value !== "string" || value === "") throw new PorticoError("bad_request", "Enter a password.");
-  const length = Array.from(value).length;
-  if (length < LIMITS.minPasswordChars) {
-    throw new PorticoError("bad_request", `A password needs ${LIMITS.minPasswordChars} characters or more.`);
-  }
-  if (length > MAX_PASSWORD_CHARS) {
-    throw new PorticoError("bad_request", `A password can be at most ${MAX_PASSWORD_CHARS} characters.`);
-  }
-  return value;
-}
 
 interface PersonRow {
   id: string;
