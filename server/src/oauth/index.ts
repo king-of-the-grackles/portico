@@ -5,6 +5,7 @@ import { jsonBodyLimit } from "../agent-api/limits";
 import { handleError, readJson } from "../agent-api/rest";
 import { sameOrigin } from "../api";
 import { type PersonEnv, currentPerson, loadPerson } from "../api/context";
+import { clientIp } from "../client-ip";
 import { WindowLimiter } from "../computer-api/limiter";
 import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
@@ -111,7 +112,8 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
   // RFC 7591. Clients are public: whatever authentication a client asks for, Portico answers "none" and relies on PKCE.
   route.post("/oauth/register", jsonBodyLimit(), async (c) => {
     if (!core.settings.setupDone()) throw setupRequired();
-    if (registrations.blocked()) throw new OAuthProblem("temporarily_unavailable", "Too many client registrations. Try again later.", 429);
+    const address = clientIp(c);
+    if (registrations.blocked(address)) throw new OAuthProblem("temporarily_unavailable", "Too many client registrations. Try again later.", 429);
     let body: unknown;
     try {
       body = await c.req.json();
@@ -120,7 +122,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     }
     if (typeof body !== "object" || body === null) throw new OAuthProblem("invalid_client_metadata", "The registration must be a JSON object.");
     const client = store.register(body as Fields);
-    registrations.record();
+    registrations.record(address);
     return c.json(
       {
         client_id: client.clientId,

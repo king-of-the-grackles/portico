@@ -6,19 +6,10 @@ import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
 import { sign, verifySigned } from "../core/tokens";
 import type { Person } from "../core/types";
+import { clientIp } from "../client-ip";
 import { safeNext } from "../web/layout";
 import { type PersonEnv, sessionCookieOptions } from "./context";
 import { personViews } from "./views";
-
-/**
- * The address a sign-in attempt came from, for the limiter: Fly's Fly-Client-IP, else the last X-Forwarded-For entry
- * (the one the nearest proxy added; earlier entries are whatever the client sent), else "local".
- */
-export function clientIp(c: Context): string {
-  const fly = c.req.header("fly-client-ip")?.trim();
-  if (fly) return fly;
-  return c.req.header("x-forwarded-for")?.split(",").at(-1)?.trim() || "local";
-}
 
 /** A JSON object body, or 400. */
 export async function jsonObject(c: Context): Promise<Record<string, unknown>> {

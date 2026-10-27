@@ -47,10 +47,10 @@ async function makeLine(p: ReturnType<typeof makePortico>, cookie: string, kind 
   return { ...joinLine, secret: joinLine.line.split("#")[1]! };
 }
 
-function join(p: ReturnType<typeof makePortico>, token: unknown, computer: unknown = "Chris-MacBook.local") {
+function join(p: ReturnType<typeof makePortico>, token: unknown, computer: unknown = "Chris-MacBook.local", from?: string) {
   return p.app.request("/api/computer/join", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...(from ? { "x-forwarded-for": from } : {}) },
     body: JSON.stringify({ token, computer }),
   });
 }
@@ -122,13 +122,20 @@ describe("computer join", () => {
     expect(p.computers.joinLine(muse.id)?.usedAt).toBeNull();
   });
 
-  test("ten unknown lines in 15 minutes close the route for a while", async () => {
+  test("ten unknown lines in 15 minutes from one address close the route to that address for a while", async () => {
     const { p, owner } = await setup();
     const line = await makeLine(p, owner);
-    for (let i = 0; i < 10; i++) expect((await join(p, `unknown-secret-${i}`.padEnd(22, "x"))).status).toBe(404);
-    expect((await join(p, line.secret)).status).toBe(429);
+    for (let i = 0; i < 10; i++) expect((await join(p, `unknown-secret-${i}`.padEnd(22, "x"), "mac", "6.6.6.6")).status).toBe(404);
+    expect((await join(p, line.secret, "mac", "6.6.6.6")).status).toBe(429);
     p.clock.advance(15 * 60_000 + 1);
-    expect((await join(p, line.secret)).status).toBe(201);
+    expect((await join(p, line.secret, "mac", "6.6.6.6")).status).toBe(201);
+  });
+
+  test("one address's failures don't close joining for others", async () => {
+    const { p, owner } = await setup();
+    const line = await makeLine(p, owner);
+    for (let i = 0; i < 10; i++) await join(p, `unknown-secret-${i}`.padEnd(22, "x"), "mac", "6.6.6.6");
+    expect((await join(p, line.secret, "mac", "1.2.3.4")).status).toBe(201);
   });
 
   test("joining stays closed until setup is done", async () => {

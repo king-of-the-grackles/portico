@@ -3,6 +3,7 @@ import { bearer } from "../agent-api/auth";
 import { jsonBodyLimit } from "../agent-api/limits";
 import { handleError, readJson } from "../agent-api/rest";
 import { requireSetupDone } from "../api";
+import { clientIp } from "../client-ip";
 import { limitedRedeem, WindowLimiter } from "../computer-api/limiter";
 import type { Core } from "../core/core";
 
@@ -20,7 +21,7 @@ export function signInRequestApi(core: Core): Hono {
   // The join line's secret is the credential, so unknown secrets count toward the same limit as computer joins.
   route.post("/", async (c) => {
     const body = (await readJson(c)) as { token?: unknown; name?: unknown; kind?: unknown } | null;
-    const { request, pollSecret } = limitedRedeem(limiter, () =>
+    const { request, pollSecret } = limitedRedeem(limiter, clientIp(c), () =>
       core.computers.requestSignIn(body?.token, { name: body?.name, kind: body?.kind }),
     );
     return c.json({ id: request.id, code: request.code, poll_secret: pollSecret, expires_at: request.expiresAt }, 201);

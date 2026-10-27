@@ -87,7 +87,28 @@ describe("POST /api/session", () => {
     expect(copyProblems(String(body.message))).toEqual([]);
     expect((await postSession(p, { name: "Chris", password: PASSWORD }, from("5.6.7.8"))).status).toBe(200);
     expect((await postSession(p, { name: "Chris", password: PASSWORD })).status).toBe(200);
-    expect((await postSession(p, { name: "Chris", password: PASSWORD }, { "fly-client-ip": "1.2.3.4" })).status).toBe(429);
+    // Off Fly, a Fly-Client-IP header is just something the client sent.
+    expect((await postSession(p, { name: "Chris", password: PASSWORD }, { "fly-client-ip": "1.2.3.4" })).status).toBe(200);
+  });
+
+  test("a name gets at most 30 failures in 15 minutes from all addresses together", async () => {
+    const p = makePortico();
+    await addOwner(p);
+    for (let i = 0; i < 30; i++) {
+      expect((await postSession(p, { name: "Chris", password: "wrong-password" }, { "x-forwarded-for": `10.0.${i}.1` })).status).toBe(401);
+    }
+    expect((await postSession(p, { name: "Chris", password: PASSWORD }, { "x-forwarded-for": "10.9.9.9" })).status).toBe(429);
+  });
+
+  test("parallel guesses can't slip past the limit while the password check runs", async () => {
+    const p = makePortico();
+    await addOwner(p);
+    const answers = await Promise.all(
+      Array.from({ length: 25 }, () => postSession(p, { name: "Chris", password: "wrong-password" }, { "x-forwarded-for": "6.6.6.6" })),
+    );
+    const statuses = answers.map((res) => res.status);
+    expect(statuses.filter((status) => status === 401)).toHaveLength(10);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(15);
   });
 
   test("signing in again ends the browser's earlier session", async () => {

@@ -8,6 +8,7 @@ import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
 import { defang } from "../core/framing";
 import type { Computer } from "../core/types";
+import { clientIp } from "../client-ip";
 import { limitedRedeem, WindowLimiter } from "./limiter";
 
 const FOLDER_ID = /^[a-f0-9]{64}$/;
@@ -40,10 +41,10 @@ export function computerApi(core: Core): Hono {
   route.use("*", requireSetupDone(core));
   route.use("*", jsonBodyLimit());
 
-  // The join line is the credential: no token yet. Ten unknown lines in 15 minutes close the route for a while.
+  // The join line is the credential: no token yet. Ten unknown lines in 15 minutes from one address close the route to that address for a while.
   route.post("/join", async (c) => {
     const body = (await readJson(c)) as { token?: unknown; computer?: unknown } | null;
-    const { computer, token } = limitedRedeem(limiter, () => core.computers.redeem(body?.token, body?.computer));
+    const { computer, token } = limitedRedeem(limiter, clientIp(c), () => core.computers.redeem(body?.token, body?.computer));
     return c.json({ computer: { id: computer.id, name: computer.name }, token }, 201);
   });
 

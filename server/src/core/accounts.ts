@@ -44,8 +44,10 @@ export const SESSION_COOKIE = "portico_session";
 /** A web session's last_used_at is written at most this often. */
 const TOUCH_INTERVAL_MS = 60_000;
 
-/** Sign in allows this many failures per address and name within the window. */
+/** Sign in allows this many failures per address and name within the window, */
 const SIGN_IN_FAILURES = 10;
+/** and this many per name from all addresses together, since a client can choose the address it reports. */
+const SIGN_IN_FAILURES_PER_NAME = 30;
 const SIGN_IN_WINDOW_MS = 15 * MINUTE_MS;
 
 interface WebSessionRow {
@@ -130,6 +132,7 @@ export class Accounts {
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly signInFailures: FailureLimiter;
+  private readonly nameFailures: FailureLimiter;
   /** A hash to verify against when the name is unknown, so a wrong name takes as long as a wrong password. */
   private decoyHash: Promise<string> | null = null;
   readonly passkeys: Passkeys;
@@ -140,6 +143,7 @@ export class Accounts {
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.signInFailures = new FailureLimiter(SIGN_IN_FAILURES, SIGN_IN_WINDOW_MS, this.now);
+    this.nameFailures = new FailureLimiter(SIGN_IN_FAILURES_PER_NAME, SIGN_IN_WINDOW_MS, this.now);
     this.passkeys = new Passkeys({ db: this.db, people: this.people, now: this.now, newId: this.newId });
   }
 
@@ -189,22 +193,26 @@ export class Accounts {
 
   /**
    * The person with this name and password. A wrong name and a wrong password get the same answer. 10 failures in 15
-   * minutes from one address for one name stop further attempts until the oldest leaves the window.
+   * minutes from one address for one name, or 30 for one name from anywhere, stop further attempts until the oldest
+   * leaves the window. Each attempt counts as a failure before the slow check, so parallel attempts can't all slip
+   * past the limit; a success clears the count.
    */
   async signIn(input: { name: unknown; password: unknown; ip: string }): Promise<Person> {
     const name = typeof input.name === "string" ? input.name.replace(/\s+/g, " ").trim() : "";
     const password = typeof input.password === "string" ? input.password : "";
     if (name === "" || password === "") throw new PorticoError("bad_request", "Enter a name and password.");
     const key = `sign-in\n${input.ip}\n${name.toLowerCase()}`;
+    const nameKey = `sign-in\n${name.toLowerCase()}`;
     this.signInFailures.check(key, "sign in");
+    this.nameFailures.check(nameKey, "sign in");
+    this.signInFailures.fail(key);
+    this.nameFailures.fail(nameKey);
     const person = this.people.byName(name);
     const hash = person ? this.people.passwordHash(person.id) : null;
     const ok = await verifyPassword(password, hash ?? (await this.decoy()));
-    if (!person || !hash || !ok) {
-      this.signInFailures.fail(key);
-      throw new PorticoError("unauthorized", "Wrong name or password.");
-    }
+    if (!person || !hash || !ok) throw new PorticoError("unauthorized", "Wrong name or password.");
     this.signInFailures.clear(key);
+    this.nameFailures.clear(nameKey);
     return person;
   }
 
@@ -215,8 +223,9 @@ export class Accounts {
     const next = checkNewPassword(input.next);
     const hash = this.people.passwordHash(personId);
     if (!hash) throw new PorticoError("not_found", "No such person.");
+    // Counted before the slow check, as in signIn, so parallel attempts can't all slip past the limit.
+    this.signInFailures.fail(key);
     if (typeof input.current !== "string" || !(await verifyPassword(input.current, hash))) {
-      this.signInFailures.fail(key);
       throw new PorticoError("bad_request", "The current password is wrong.");
     }
     this.signInFailures.clear(key);
@@ -316,6 +325,7 @@ export class Accounts {
   sweep(): number {
     const now = this.now().toISOString();
     this.signInFailures.sweep();
+    this.nameFailures.sweep();
     this.passkeys.sweep();
     const sessions = this.db.query("DELETE FROM web_sessions WHERE expires_at <= $now").run({ now }).changes;
     const links = this.db.query("DELETE FROM setup_links WHERE expires_at <= $now").run({ now }).changes;
