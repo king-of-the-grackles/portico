@@ -73,10 +73,12 @@ describe("POST /api/session", () => {
     expect(copyProblems(String(a.message))).toEqual([]);
   });
 
-  test("the limiter counts per address (the first X-Forwarded-For entry) and name", async () => {
+  test("the limiter counts per address (the proxy's X-Forwarded-For entry, not one the client sent) and name", async () => {
     const p = makePortico();
     await addOwner(p);
-    const from = (ip: string) => ({ "x-forwarded-for": `${ip}, 10.0.0.1` });
+    let n = 0;
+    // The client makes up the first entry on every try; the proxy's own entry, last, is what counts.
+    const from = (ip: string) => ({ "x-forwarded-for": `9.9.9.${++n}, ${ip}` });
     for (let i = 0; i < 10; i++) expect((await postSession(p, { name: "Chris", password: "wrong-password" }, from("1.2.3.4"))).status).toBe(401);
     const limited = await postSession(p, { name: "Chris", password: PASSWORD }, from("1.2.3.4"));
     expect(limited.status).toBe(429);
@@ -85,6 +87,7 @@ describe("POST /api/session", () => {
     expect(copyProblems(String(body.message))).toEqual([]);
     expect((await postSession(p, { name: "Chris", password: PASSWORD }, from("5.6.7.8"))).status).toBe(200);
     expect((await postSession(p, { name: "Chris", password: PASSWORD })).status).toBe(200);
+    expect((await postSession(p, { name: "Chris", password: PASSWORD }, { "fly-client-ip": "1.2.3.4" })).status).toBe(429);
   });
 
   test("signing in again ends the browser's earlier session", async () => {

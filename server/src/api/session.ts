@@ -10,9 +10,14 @@ import { safeNext } from "../web/layout";
 import { type PersonEnv, sessionCookieOptions } from "./context";
 import { personViews } from "./views";
 
-/** The address a sign-in attempt came from: the first X-Forwarded-For entry, else "local". */
+/**
+ * The address a sign-in attempt came from, for the limiter: Fly's Fly-Client-IP, else the last X-Forwarded-For entry
+ * (the one the nearest proxy added; earlier entries are whatever the client sent), else "local".
+ */
 export function clientIp(c: Context): string {
-  return c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+  const fly = c.req.header("fly-client-ip")?.trim();
+  if (fly) return fly;
+  return c.req.header("x-forwarded-for")?.split(",").at(-1)?.trim() || "local";
 }
 
 /** A JSON object body, or 400. */
