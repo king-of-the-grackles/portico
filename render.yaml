@@ -1,22 +1,14 @@
-# Render Blueprint for the hub (docs/deploy/cloud.md). A persistent disk needs a paid instance type.
+# Render Blueprint for Portico (docs/deploy/cloud.md). Nothing to fill in: Portico keeps its database and signing key
+# on the disk at /data. After the first deploy, open the service's Shell and run `portico setup`.
+# A persistent disk needs a paid instance type (Starter or above).
 services:
   - type: web
     name: portico
     runtime: docker
     plan: starter
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /healthz
     disk:
       name: portico-data
       mountPath: /data
       sizeGB: 1
-    envVars:
-      # portico.yaml is added as a Secret File named portico.yaml, which Render mounts here.
-      - key: PORTICO_CONFIG
-        value: /etc/secrets/portico.yaml
-      - key: PORTICO_PUBLIC_URL
-        sync: false
-      - key: PORTICO_SIGNING_SECRET
-        sync: false
-      - key: PORTICO_ADMIN_PASSWORD
-        sync: false
-      # Add one PORTICO_TOKEN_<NAME> per agent in portico.yaml in the dashboard.

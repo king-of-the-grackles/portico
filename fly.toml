@@ -1,0 +1,32 @@
+# Fly.io config for Portico (docs/deploy/cloud.md). Nothing to fill in: pass the app's name with -a on each fly command.
+# Portico keeps its database and signing key on the volume at /data. After the first deploy, run
+# `fly ssh console -a <app name> -C "portico setup"`.
+app = "portico"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORTICO_DB_PATH = "/data/portico.db"
+
+# SQLite lives on one volume, so Portico runs on one machine: deploy with --ha=false.
+[mounts]
+  source = "portico_data"
+  destination = "/data"
+  initial_size = "1gb"
+
+[http_service]
+  internal_port = 8790
+  force_https = true
+  # A stopped machine drops the agents' live streams and misses the expiry sweep.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"

@@ -5,7 +5,5 @@ node_modules/
 .env
 .env.*
 !.env.example
-portico.yaml
-portico-secrets.sh
+signing.key
 dist/
-fly.toml
