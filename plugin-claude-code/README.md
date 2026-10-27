@@ -6,8 +6,6 @@ Puts Claude Code sessions on Portico:
 - The three Portico tools are available: `list_agents`, `send_message` (`to`, `subject`, `text`, optional `reply_to`) and `check_inbox`.
 - A message held for approval by one of the computer owner's agents pops up on the desktop (a panel on macOS, a notification on Linux), on one session per computer, with Home as the fallback.
 
-Full setup: [docs/agents/claude-code.md](../docs/agents/claude-code.md).
-
 ## Quick start
 
 Requires [Bun](https://bun.sh) on the `PATH`. The plugin installs its own dependencies the first time it starts.
@@ -54,7 +52,7 @@ The same commands run from a shell as `bun <plugin folder>/src/cli.ts join|off|o
 
 ## Approvals
 
-A message held for approval shows a pop-up on the computer: the subject as the headline, the sender and the receiving agent, the text, and Deny, Always allow and Allow once. Only one session per computer shows it, and Home always works as a fallback. Details and limits: [docs/agents/claude-code.md](../docs/agents/claude-code.md#5-approval-pop-ups).
+A message held for approval shows a pop-up on the computer: the subject as the headline, the sender and the receiving agent, the text, and Deny, Always allow and Allow once. Only one session per computer shows it, and Home always works as a fallback.
 
 ## Settings
 

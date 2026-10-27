@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Builds the single-file `portico` executables into dist/ (docs/deploy/mac.md uses the darwin-arm64 one).
+// Builds the single-file `portico` executables into dist/.
 // Usage: bun scripts/build.ts [target ...]   (default: all three; "host" means this machine's platform)
 const TARGETS = ["bun-darwin-arm64", "bun-linux-x64", "bun-linux-arm64"] as const;
 const host = `bun-${process.platform}-${process.arch}`;
