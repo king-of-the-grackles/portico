@@ -1,23 +1,21 @@
 #!/usr/bin/env bun
 import { doctorCommand } from "./commands/doctor";
-import { initCommand } from "./commands/init";
-import { inviteCommand } from "./commands/invite";
 import type { CliIo } from "./commands/io";
 import { joinCommand } from "./commands/join";
+import { leaveCommand } from "./commands/leave";
 import { serveCommand } from "./commands/serve";
+import { setupCommand } from "./commands/setup";
 
 const USAGE = `Usage: portico <command>
 
 Commands:
-  serve             Run the hub. Reads portico.yaml from PORTICO_CONFIG (default ./portico.yaml)
-                    and secrets from the environment (./.env is loaded too).
-  init [--shell]    Write a starter portico.yaml if there is none, and generate every secret
-                    into ./.env, or with --shell into ./portico-secrets.sh as export lines.
-  doctor            Check the config, the public URL, and each agent's token on the running hub.
-  invite            Make a one-time join line for a new machine (runs where the hub's
-                    config and database are).
-  join <line> [--code <code>] [--name <machine>] [--replace] [--no-allow]
-                    Join this machine to a hub with a join line, and allow the network tools in Claude Code.
+  serve             Run Portico. Every setting is optional: PORT, PORTICO_DB_PATH,
+                    PORTICO_PUBLIC_URL and PORTICO_PLUGIN_SOURCE.
+  setup [--reset]   Print a one-time link that creates the owner account. With --reset,
+                    print a new link.
+  doctor            Check that Portico answers at the public URL and that setup is done.
+  join '<line>'     Join this computer to Portico with a join line from Add agent.
+  leave             Take this computer off Portico and undo the join.
   help              Show this message.
 `;
 
@@ -33,14 +31,14 @@ async function main(argv: string[]): Promise<number | "running"> {
   switch (command) {
     case "serve":
       return serveCommand(io);
-    case "init":
-      return initCommand(args, io);
+    case "setup":
+      return setupCommand(args, io);
     case "doctor":
       return doctorCommand(args, io);
-    case "invite":
-      return inviteCommand(args, io);
     case "join":
       return joinCommand(args, io);
+    case "leave":
+      return leaveCommand(args, io);
     case undefined:
     case "help":
     case "--help":

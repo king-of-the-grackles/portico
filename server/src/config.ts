@@ -1,8 +1,8 @@
-import { parse as parseYaml } from "yaml";
-import { z } from "zod";
-import { rulePatternProblem } from "./core/rules";
-import { unknownPlaceholders } from "./core/templates";
-import type { AgentConfig, Limits, PorticoConfig } from "./core/types";
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { cleanPublicUrl } from "./core/settings";
+import type { PorticoConfig } from "./core/types";
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {
@@ -11,230 +11,60 @@ export class ConfigError extends Error {
   }
 }
 
-export const DEFAULT_LIMITS: Limits = {
-  taskExpiryHours: 24,
-  tasksPerHourPerAgent: 30,
-  eventsPerHourPerAgent: 60,
-  maxTextKb: 20,
-  maxChainLength: 1,
-  historyDays: 30,
-  maxMessageKb: 64,
-  messageExpiryHours: 24,
-  messagesPerHourPerAgent: 120,
-};
-
 /** Not 8787 (Claude Code's fakechat channel demo) or 8788 (the Channels webhook example). */
 export const DEFAULT_PORT = 8790;
-
-export const AGENT_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const MIN_TOKEN_LENGTH = 24;
-const MIN_SECRET_LENGTH = 32;
-const MIN_PASSWORD_LENGTH = 12;
-
-const positiveInt = z.number().int().positive();
-
-// Strict objects everywhere: an unknown key (usually a typo) is an error, not silently ignored.
-const FileSchema = z.strictObject({
-  agents: z
-    .array(
-      z.strictObject({
-        name: z.string(),
-        description: z.string(),
-        delivery: z.enum(["push", "pull"]),
-        kind: z.string().optional(),
-      }),
-    )
-    .min(1, "at least one agent is required"),
-  rules: z
-    .array(z.strictObject({ from: z.string(), to: z.string(), action: z.enum(["allow", "ask", "block"]) }))
-    .default([]),
-  triggers: z
-    .array(
-      z.strictObject({
-        name: z.string().min(1),
-        when: z.strictObject({ agent: z.string(), event: z.string().min(1) }),
-        send: z.strictObject({ to: z.string(), instructions: z.string().min(1) }),
-      }),
-    )
-    .default([]),
-  limits: z
-    .strictObject({
-      task_expiry_hours: positiveInt.optional(),
-      tasks_per_hour_per_agent: positiveInt.optional(),
-      events_per_hour_per_agent: positiveInt.optional(),
-      max_text_kb: positiveInt.optional(),
-      max_chain_length: positiveInt.optional(),
-      history_days: positiveInt.optional(),
-      max_message_kb: positiveInt.optional(),
-      message_expiry_hours: positiveInt.optional(),
-      messages_per_hour_per_agent: positiveInt.optional(),
-    })
-    .default({}),
-});
+export const DEFAULT_DB_PATH = "./portico.db";
+const SIGNING_KEY_FILE = "signing.key";
 
 type Env = Record<string, string | undefined>;
 
-/** Pull agents with these names get the name as their kind. */
-const NAMED_KINDS = ["muse", "grok-bot", "chatgpt", "codex"];
-
 /**
- * Without an explicit kind, a push agent is claude-code, a pull agent named after a known kind gets that kind, and any
- * other pull agent is assistant.
+ * Everything is optional: PORT, PORTICO_DB_PATH, PORTICO_PLUGIN_SOURCE and PORTICO_PUBLIC_URL. The signing key is
+ * passed in, so this stays free of file access (see loadConfig).
  */
-function defaultKind(agent: Pick<AgentConfig, "name" | "delivery">): string {
-  if (agent.delivery === "push") return "claude-code";
-  return NAMED_KINDS.includes(agent.name) ? agent.name : "assistant";
-}
-
-export function tokenEnvName(agent: string): string {
-  return `PORTICO_TOKEN_${agent.toUpperCase().replace(/-/g, "_")}`;
-}
-
-function requireSecret(env: Env, name: string, minLength: number, problems: string[]): string {
-  const value = env[name]?.trim() ?? "";
-  if (!value) problems.push(`missing ${name}`);
-  else if (value.length < minLength) problems.push(`${name} must be at least ${minLength} characters`);
-  return value;
-}
-
-export function parseConfig(yamlText: string, env: Env): PorticoConfig {
-  let raw: unknown;
-  try {
-    raw = parseYaml(yamlText);
-  } catch (err) {
-    throw new ConfigError([`portico.yaml is not valid YAML: ${(err as Error).message}`]);
-  }
-
-  const parsed = FileSchema.safeParse(raw ?? {});
-  if (!parsed.success) {
-    throw new ConfigError(
-      parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`),
-    );
-  }
-  const file = parsed.data;
+export function parseEnv(env: Env, signingKey: string): PorticoConfig {
   const problems: string[] = [];
-
-  const names = new Set<string>();
-  for (const agent of file.agents) {
-    if (!AGENT_NAME.test(agent.name)) {
-      problems.push(`agent name "${agent.name}" must be lowercase letters, digits and hyphens`);
-    }
-    if (names.has(agent.name)) problems.push(`agent name "${agent.name}" is used more than once`);
-    names.add(agent.name);
-    if (agent.description.trim() === "") problems.push(`agent "${agent.name}" needs a description`);
-    if (agent.kind !== undefined && !AGENT_NAME.test(agent.kind)) {
-      problems.push(`agent "${agent.name}": kind "${agent.kind}" must be lowercase letters, digits and hyphens`);
-    }
-  }
-
-  // Rules may name agents that aren't in this file: hub-page assistants and sessions appear after startup.
-  for (const rule of file.rules) {
-    for (const [side, value] of [["from", rule.from], ["to", rule.to]] as const) {
-      const problem = rulePatternProblem(value);
-      if (problem) problems.push(`rule ${side} "${value}" is ${problem}`);
-    }
-  }
-
-  const triggerNames = new Set<string>();
-  for (const trigger of file.triggers) {
-    const label = `trigger "${trigger.name}"`;
-    if (triggerNames.has(trigger.name)) problems.push(`${label} is defined more than once`);
-    triggerNames.add(trigger.name);
-    if (!names.has(trigger.when.agent)) {
-      problems.push(`${label}: when.agent "${trigger.when.agent}" is not a configured agent`);
-    }
-    if (!names.has(trigger.send.to)) problems.push(`${label}: send.to "${trigger.send.to}" is not a configured agent`);
-    if (trigger.when.agent === trigger.send.to) problems.push(`${label}: an agent can't send a task to itself`);
-    for (const placeholder of unknownPlaceholders(trigger.send.instructions)) {
-      problems.push(`${label}: unknown placeholder {{${placeholder}}}`);
-    }
-  }
-
-  const tokens: Record<string, string> = {};
-  const tokenOwner = new Map<string, string>();
-  for (const name of names) {
-    const varName = tokenEnvName(name);
-    const token = env[varName]?.trim();
-    if (!token) {
-      problems.push(`missing ${varName} for agent "${name}"`);
-      continue;
-    }
-    if (token.length < MIN_TOKEN_LENGTH) problems.push(`${varName} must be at least ${MIN_TOKEN_LENGTH} characters`);
-    const owner = tokenOwner.get(token);
-    if (owner) problems.push(`agents "${owner}" and "${name}" share the same token`);
-    tokenOwner.set(token, name);
-    tokens[name] = token;
-  }
-
-  const publicUrl = (env.PORTICO_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
-  if (!publicUrl) {
-    problems.push("missing PORTICO_PUBLIC_URL");
-  } else {
-    try {
-      const url = new URL(publicUrl);
-      const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-      if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
-        problems.push("PORTICO_PUBLIC_URL must start with https:// (http:// is allowed only for localhost and 127.0.0.1)");
-      }
-    } catch {
-      problems.push(`PORTICO_PUBLIC_URL "${publicUrl}" is not a valid URL`);
-    }
-  }
-
-  const port = env.PORT ? Number(env.PORT) : DEFAULT_PORT;
+  const port = env.PORT?.trim() ? Number(env.PORT) : DEFAULT_PORT;
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push(`PORT "${env.PORT}" is not a valid port`);
-
-  const signingSecret = requireSecret(env, "PORTICO_SIGNING_SECRET", MIN_SECRET_LENGTH, problems);
-  const adminPassword = requireSecret(env, "PORTICO_ADMIN_PASSWORD", MIN_PASSWORD_LENGTH, problems);
-  if (signingSecret && (Object.values(tokens).includes(signingSecret) || signingSecret === adminPassword)) {
-    problems.push("PORTICO_SIGNING_SECRET must differ from every agent token and from PORTICO_ADMIN_PASSWORD");
+  let publicUrl: string | null = null;
+  const rawUrl = env.PORTICO_PUBLIC_URL?.trim();
+  if (rawUrl) {
+    publicUrl = cleanPublicUrl(rawUrl);
+    if (!publicUrl) {
+      problems.push(
+        `PORTICO_PUBLIC_URL "${rawUrl}" must be an https:// address (http:// is allowed only for localhost and 127.0.0.1)`,
+      );
+    }
   }
-
   if (problems.length > 0) throw new ConfigError(problems);
-
-  const limits = file.limits;
+  const dbPath = env.PORTICO_DB_PATH?.trim() || DEFAULT_DB_PATH;
   return {
-    agents: file.agents.map((agent) => ({
-      name: agent.name,
-      description: agent.description,
-      delivery: agent.delivery,
-      kind: agent.kind ?? defaultKind(agent),
-    })),
-    rules: file.rules,
-    triggers: file.triggers,
-    limits: {
-      taskExpiryHours: limits.task_expiry_hours ?? DEFAULT_LIMITS.taskExpiryHours,
-      tasksPerHourPerAgent: limits.tasks_per_hour_per_agent ?? DEFAULT_LIMITS.tasksPerHourPerAgent,
-      eventsPerHourPerAgent: limits.events_per_hour_per_agent ?? DEFAULT_LIMITS.eventsPerHourPerAgent,
-      maxTextKb: limits.max_text_kb ?? DEFAULT_LIMITS.maxTextKb,
-      maxChainLength: limits.max_chain_length ?? DEFAULT_LIMITS.maxChainLength,
-      historyDays: limits.history_days ?? DEFAULT_LIMITS.historyDays,
-      maxMessageKb: limits.max_message_kb ?? DEFAULT_LIMITS.maxMessageKb,
-      messageExpiryHours: limits.message_expiry_hours ?? DEFAULT_LIMITS.messageExpiryHours,
-      messagesPerHourPerAgent: limits.messages_per_hour_per_agent ?? DEFAULT_LIMITS.messagesPerHourPerAgent,
-    },
-    publicUrl,
-    tokens,
-    dbPath: env.PORTICO_DB_PATH?.trim() || "./portico.db",
     port,
-    signingSecret,
-    adminPassword,
+    dbPath,
+    dataDir: dbPath === ":memory:" ? "." : dirname(resolve(dbPath)),
     pluginSource: env.PORTICO_PLUGIN_SOURCE?.trim() || null,
+    publicUrl,
+    signingKey,
   };
 }
 
-export async function loadConfig(env: Env = process.env): Promise<PorticoConfig> {
-  const path = env.PORTICO_CONFIG?.trim() || "./portico.yaml";
-  const file = Bun.file(path);
-  if (!(await file.exists())) throw new ConfigError([`config file not found: ${path}`]);
-  let text: string;
-  try {
-    text = await file.text();
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code ?? "unknown error";
-    throw new ConfigError([
-      `config file ${path} can't be read (${code}). The hub runs as an unprivileged user in the Docker image; make the file readable to that user.`,
-    ]);
+/** The data folder's signing key, made on first start: 32 random bytes as hex, readable only by this account. */
+export function ensureSigningKey(dataDir: string): string {
+  const path = join(dataDir, SIGNING_KEY_FILE);
+  if (existsSync(path)) {
+    const key = readFileSync(path, "utf8").trim();
+    if (/^[a-f0-9]{64}$/.test(key)) return key;
+    throw new ConfigError([`${path} isn't a Portico signing key. Move it aside and start again to make a new one.`]);
   }
-  return parseConfig(text, env);
+  mkdirSync(dataDir, { recursive: true });
+  const key = randomBytes(32).toString("hex");
+  writeFileSync(path, `${key}\n`, { mode: 0o600, flag: "wx" });
+  chmodSync(path, 0o600);
+  return key;
+}
+
+/** The config from the environment, with the data folder's signing key, made if missing. */
+export function loadConfig(env: Env = process.env): PorticoConfig {
+  const config = parseEnv(env, "");
+  return { ...config, signingKey: ensureSigningKey(config.dataDir) };
 }

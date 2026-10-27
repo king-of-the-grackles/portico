@@ -1,20 +1,17 @@
-import type { Hono } from "hono";
-import { createPortico } from "../src/portico";
-import { parseConfig } from "../src/config";
-import { addressOf, Directory } from "../src/core/directory";
+import { hashPassword } from "../src/core/accounts";
+import type { Registration } from "../src/core/agents";
 import { PorticoError } from "../src/core/errors";
-import type { NetworkService } from "../src/core/network";
-import { Presence } from "../src/core/presence";
-import { PorticoService } from "../src/core/service";
-import { hashSecret } from "../src/core/tokens";
-import type { Assistant, AssistantKind, Machine, Notice, PorticoConfig, SessionRecord } from "../src/core/types";
-import { OWNER } from "../src/core/types";
-import { openDb, Store } from "../src/db";
-import { NetworkStore } from "../src/network-store";
-import type { HelloEvent, StreamConnection } from "../src/ways-in/stream";
+import type { Agent, AgentKind, Computer, Notice, Person, PorticoConfig } from "../src/core/types";
+import { openDb } from "../src/db";
+import { createPortico, type Portico } from "../src/portico";
+import type { HelloEvent, StreamConnection } from "../src/agent-api/stream";
 
-export const T0 = new Date("2026-10-20T12:00:00.000Z");
+export const T0 = new Date("2026-10-27T12:00:00.000Z");
+export const MINUTE = 60_000;
 export const HOUR = 3_600_000;
+export const DAY = 86_400_000;
+export const PUBLIC_URL = "https://portico.example.com";
+export const PASSWORD = "correct-horse-battery";
 
 export function testClock(start: Date = T0) {
   let current = start.getTime();
@@ -26,132 +23,101 @@ export function testClock(start: Date = T0) {
   };
 }
 
-// Rules cover every case: allow, ask, an explicit block, and pairs with no rule (blocked).
-export const BASE_YAML = `
-agents:
-  - { name: grok-bot, description: Grok Bot, delivery: pull }
-  - { name: claude-code, description: Claude Code, delivery: push }
-  - { name: muse, description: Meta Muse, delivery: pull }
-  - { name: codex, description: Codex, delivery: pull }
-rules:
-  - { from: grok-bot, to: claude-code, action: allow }
-  - { from: claude-code, to: grok-bot, action: allow }
-  - { from: muse, to: claude-code, action: allow }
-  - { from: codex, to: grok-bot, action: allow }
-  - { from: "*", to: muse, action: ask }
-  - { from: codex, to: claude-code, action: block }
-triggers:
-  - name: bug-to-claude
-    when: { agent: muse, event: bug_report_received }
-    send: { to: claude-code, instructions: "Investigate: {{event.details}}" }
-  - name: bug-to-grok
-    when: { agent: muse, event: bug_report_received }
-    send: { to: grok-bot, instructions: "Research: {{event.details}}" }
-`;
-
-export const TOKENS = {
-  "grok-bot": "grok-token-0123456789abcdef",
-  "claude-code": "claude-token-0123456789abcdef",
-  muse: "muse-token-0123456789abcdef01",
-  codex: "codex-token-0123456789abcdef",
-} as const;
-
-export type TestAgent = keyof typeof TOKENS;
-
-export function testEnv(extra: Record<string, string> = {}): Record<string, string> {
+export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfig {
   return {
-    PORTICO_PUBLIC_URL: "https://portico.test",
-    PORTICO_TOKEN_GROK_BOT: TOKENS["grok-bot"],
-    PORTICO_TOKEN_CLAUDE_CODE: TOKENS["claude-code"],
-    PORTICO_TOKEN_MUSE: TOKENS.muse,
-    PORTICO_TOKEN_CODEX: TOKENS.codex,
-    PORTICO_SIGNING_SECRET: "test-signing-secret-0123456789abcdef",
-    PORTICO_ADMIN_PASSWORD: "test-admin-password",
-    ...extra,
+    port: 8790,
+    dbPath: ":memory:",
+    dataDir: ".",
+    pluginSource: null,
+    publicUrl: PUBLIC_URL,
+    signingKey: "a".repeat(64),
+    ...overrides,
   };
 }
 
-export function testConfig(yaml: string = BASE_YAML, extraEnv: Record<string, string> = {}): PorticoConfig {
-  return parseConfig(yaml, testEnv(extraEnv));
+/** A hashed test password, made once: argon2id is slow on purpose. */
+let passwordHash: Promise<string> | null = null;
+function testPasswordHash(): Promise<string> {
+  passwordHash ??= hashPassword(PASSWORD);
+  return passwordHash;
 }
 
-/** A service over an in-memory database. Add an address to `connected` to give it an open stream. */
-export function makeService(config: PorticoConfig = testConfig()) {
-  const db = openDb(":memory:");
-  const store = new Store(db);
-  const network = new NetworkStore(db);
-  const clock = testClock();
-  const presence = new Presence();
-  const connected = new Set<string>();
-  const directory = new Directory({
-    config,
-    network,
-    presence,
-    isConnected: (address) => connected.has(address),
-    now: clock.now,
-  });
-  const notices: Notice[] = [];
-  let counter = 0;
-  const service = new PorticoService({
-    store,
-    config,
-    directory,
-    presence,
-    now: clock.now,
-    newId: () => `id-${++counter}`,
-    notify: (notice) => notices.push(notice),
-  });
-  return { service, store, network, directory, presence, connected, config, clock, notices };
+export interface TestPortico extends Portico {
+  clock: ReturnType<typeof testClock>;
+  notices: Notice[];
 }
 
 /**
- * Stores a session as if its plugin had registered, adding its machine first when it's missing. The session is
- * last seen now by the context's clock (T0 without one).
+ * Portico over an in-memory database, with a fake clock and counting IDs. With `setup` (the default), setup is marked
+ * done, so Portico is open; the owner still has to be added with addOwner.
  */
-export function addSession(
-  ctx: { network: NetworkStore; clock?: { now: () => Date } },
-  input: { name: string; machine: string; key?: string; folder?: string; folderId?: string; lastSeenAt?: string },
-): { address: string; machine: Machine; session: SessionRecord } {
-  const at = input.lastSeenAt ?? (ctx.clock?.now() ?? T0).toISOString();
-  let machine = ctx.network.machineByName(input.machine);
-  if (!machine) {
-    machine = { id: `m-${input.machine}`, owner: OWNER, name: input.machine, createdAt: at, lastSeenAt: null };
-    ctx.network.insertMachine(machine, hashSecret(`t-${input.machine}`));
-  }
-  const session: SessionRecord = {
-    id: `s-${input.name}-${input.machine}`,
-    owner: OWNER,
-    machineId: machine.id,
-    machine: machine.name,
-    name: input.name,
-    key: input.key ?? `key-${input.name}`,
-    folder: input.folder ?? input.name.replace(/-claude.*$/, ""),
-    folderId: input.folderId ?? "f".repeat(64),
-    createdAt: at,
-    lastSeenAt: at,
-  };
-  ctx.network.insertSession(session);
-  return { address: addressOf(session.name, machine.name), machine, session };
+export function makePortico(opts: { config?: Partial<PorticoConfig>; setup?: boolean; newNonce?: () => string } = {}): TestPortico {
+  const clock = testClock();
+  const notices: Notice[] = [];
+  let counter = 0;
+  const portico = createPortico(testConfig(opts.config), {
+    db: openDb(":memory:"),
+    now: clock.now,
+    newId: () => `id-${String(++counter).padStart(4, "0")}`,
+    newNonce: opts.newNonce,
+    heartbeatMs: 50,
+    onNotice: (notice) => notices.push(notice),
+  });
+  if (opts.setup !== false) portico.settings.set("setup_done_at", T0.toISOString());
+  return Object.assign(portico, { clock, notices });
 }
 
-/** Connects an assistant as the hub page would, returning its one-time token. */
-export function mintAssistant(
-  ctx: { networkService: NetworkService },
+export async function addOwner(p: Portico, name = "Chris"): Promise<Person> {
+  return p.people.create({ name, role: "owner", status: "active", passwordHash: await testPasswordHash() });
+}
+
+export async function addMember(p: Portico, name = "Maya", status: "active" | "pending" = "active"): Promise<Person> {
+  return p.people.create({ name, role: "member", status, passwordHash: await testPasswordHash() });
+}
+
+/** A browser sign-in for the person: the Cookie header value to send. */
+export function signIn(p: Portico, person: Person): string {
+  const { token } = p.accounts.startSession(person.id);
+  return `portico_session=${token}`;
+}
+
+/** An app agent with its API token. */
+export function addAppAgent(
+  p: Portico,
+  owner: Person,
   name: string,
-  kind: AssistantKind = "other",
-): { token: string; assistant: Assistant } {
-  return ctx.networkService.createAssistant({ name, kind });
+  opts: { kind?: AgentKind; approvalRequired?: boolean } = {},
+): { agent: Agent; token: string } {
+  let agent = p.agents.create({ ownerId: owner.id, name, kind: opts.kind ?? "muse", type: "app" });
+  if (opts.approvalRequired) agent = p.agents.update(owner.id, agent.id, { approvalRequired: true });
+  return { agent, token: p.agents.issueToken(agent.id, "api") };
 }
 
-/** Joins a machine as `portico join` would, returning its one-time token. */
-export function joinMachine(ctx: { networkService: NetworkService }, name = "macbook"): { machine: Machine; token: string } {
-  const { code } = ctx.networkService.createJoinCode();
-  return ctx.networkService.redeemJoinCode(code, name);
+export function addComputer(p: Portico, owner: Person, name = "macbook"): { computer: Computer; token: string } {
+  return p.computers.create(owner.id, name);
 }
 
-/** Calls the app with any bearer token, plus a session key when given. */
+let keys = 0;
+
+/** Registers a session on the computer as its plugin's stream would, without opening a stream. */
+export function addSession(
+  p: Portico,
+  computer: Computer,
+  opts: Partial<Registration> & { approvalRequired?: boolean } = {},
+): { agent: Agent; key: string } {
+  const key = opts.key ?? `session-key-${++keys}`;
+  let { agent } = p.agents.registerSession(computer, {
+    key,
+    repo: opts.repo ?? "api",
+    folderId: opts.folderId ?? `${keys}`.padStart(64, "0"),
+  });
+  if (opts.approvalRequired) agent = p.agents.update(computer.ownerId, agent.id, { approvalRequired: true });
+  return { agent, key };
+}
+
+/** Calls the app with a bearer token, plus a session key when given. */
 export async function callAs(
-  ctx: { app: Hono },
+  p: { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } },
   auth: { token: string; key?: string },
   method: string,
   path: string,
@@ -164,14 +130,33 @@ export async function callAs(
     headers["content-type"] = "application/json";
     payload = typeof body === "string" ? body : JSON.stringify(body);
   }
-  return await ctx.app.request(path, { method, headers, body: payload });
+  return await p.app.request(path, { method, headers, body: payload });
 }
 
-/** Opens a session's live stream as the plugin does in machine mode, and reads its hello. `popup` declares pop-ups. */
+/** Calls the person API as a signed-in browser would: the cookie, JSON, and the page's own Origin on changes. */
+export async function callPerson(
+  p: { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } },
+  cookie: string | null,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<Response> {
+  const headers: Record<string, string> = { host: "portico.example.com" };
+  if (cookie) headers.cookie = cookie;
+  if (method !== "GET") headers.origin = PUBLIC_URL;
+  let payload: string | undefined;
+  if (body !== undefined) {
+    headers["content-type"] = "application/json";
+    payload = JSON.stringify(body);
+  }
+  return await p.app.request(`${PUBLIC_URL}${path}`, { method, headers, body: payload });
+}
+
+/** Opens a session's live stream as the plugin does, and reads its hello. `popup` declares pop-ups. */
 export async function openSessionStream(
-  ctx: { app: Hono },
+  p: { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } },
   token: string,
-  opts: { key: string; repo: string; folderId?: string; popup?: boolean },
+  opts: { key: string; repo?: string; folderId?: string; popup?: boolean },
 ): Promise<{ res: Response; events: ReturnType<typeof sseReader>; hello: HelloEvent }> {
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
@@ -179,7 +164,7 @@ export async function openSessionStream(
     "x-portico-folder": opts.folderId ?? "a".repeat(64),
   };
   if (opts.popup) headers["x-portico-popup"] = "1";
-  const res = await ctx.app.request(`/api/stream?repo=${encodeURIComponent(opts.repo)}`, { headers });
+  const res = await p.app.request(`/api/agent/stream?repo=${encodeURIComponent(opts.repo ?? "api")}`, { headers });
   if (res.status !== 200) throw new Error(`stream open failed with ${res.status}: ${await res.text()}`);
   const events = sseReader(res);
   const first = await events.next();
@@ -214,34 +199,7 @@ export function errorCode(fn: () => unknown): string | null {
   return null;
 }
 
-/** A hub over an in-memory database with a fake clock. `newNonce` replaces the approval nonces' random source. */
-export function makeApp(config: PorticoConfig = testConfig(), opts: { newNonce?: () => string } = {}) {
-  const clock = testClock();
-  const notices: Notice[] = [];
-  let counter = 0;
-  const hub = createPortico(config, {
-    db: openDb(":memory:"),
-    now: clock.now,
-    newId: () => `id-${++counter}`,
-    newNonce: opts.newNonce,
-    heartbeatMs: 50,
-    onNotice: (notice) => notices.push(notice),
-  });
-  const { app } = hub;
-  async function call(agent: TestAgent | null, method: string, path: string, body?: unknown): Promise<Response> {
-    const headers: Record<string, string> = {};
-    if (agent) headers.authorization = `Bearer ${TOKENS[agent]}`;
-    let payload: string | undefined;
-    if (body !== undefined) {
-      headers["content-type"] = "application/json";
-      payload = typeof body === "string" ? body : JSON.stringify(body);
-    }
-    return await app.request(path, { method, headers, body: payload });
-  }
-  return { ...hub, config, clock, notices, call };
-}
-
-/** Lets queued microtasks and zero-delay timers run, e.g. the notifier's work after a transaction. */
+/** Lets queued microtasks and zero-delay timers run, e.g. notices and change batches. */
 export function flush(): Promise<void> {
   return Bun.sleep(1);
 }
@@ -291,30 +249,41 @@ export function sseReader(res: Response) {
   };
 }
 
-/** Pronouns that hub pages and CLI output never use. Errs strict: it also flags "i.e.". */
+// ---- copy sweeps ----
+
+/** Pronouns Portico's copy never uses. Errs strict: it also flags "i.e.". */
 export const PRONOUNS = /\b(i|me|my|we|us|our|you|your|it|its|they|them|their)\b/i;
 
+/** The one phrase the owner chose to keep: the empty-state heading. */
+const ALLOWED_PHRASES = [/\badd your first agent\b/gi];
+
+/** The retired word. */
+export const HUB = /\bhubs?\b/i;
+
 /**
- * The copy a reader sees on a page, for the pronoun and app-name sweep. Paste-ready text is exempt, so <pre>, <code>
- * and <textarea> are dropped with their content, as are <style>, tags and entities. Attribute text a reader also
- * sees or hears (placeholder, aria-label, title, alt) is added back.
+ * The copy a reader sees on a page. Paste-ready text is exempt, so <pre>, <code> and <textarea> are dropped with their
+ * content, as are <style>, <script> (including first data), tags and entities. Attribute text a reader also sees or
+ * hears (placeholder, aria-label, title, alt) is added back. The allowed phrase is removed.
  */
 export function visibleCopy(page: string): string {
   const attributes = [...page.matchAll(/\s(?:placeholder|aria-label|title|alt)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)].map(
     (match) => match[1] ?? match[2] ?? "",
   );
-  const text = page
-    .replace(/<(style|pre|code|textarea)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<[^>]+>/g, " ");
-  return [text, ...attributes].join(" ").replace(/&[a-z0-9#]+;/gi, " ");
+  let text = [page.replace(/<(style|script|pre|code|textarea)\b[^>]*>[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " "), ...attributes]
+    .join(" ")
+    .replace(/&[a-z0-9#]+;/gi, " ");
+  for (const phrase of ALLOWED_PHRASES) text = text.replace(phrase, " ");
+  return text;
 }
 
-export const ADMIN_PASSWORD = "test-admin-password";
-
-/** Signs in to the hub page and returns the Cookie header value to send. */
-export async function signIn(app: Hono, password = ADMIN_PASSWORD): Promise<string> {
-  const res = await app.request("/hub/login", { method: "POST", body: new URLSearchParams({ password }) });
-  const setCookie = res.headers.get("set-cookie");
-  if (res.status !== 303 || !setCookie) throw new Error(`sign-in failed with ${res.status}`);
-  return setCookie.split(";")[0]!;
+/** The words that break the copy rules in a piece of copy: pronouns and "hub". Empty when the copy is clean. */
+export function copyProblems(copy: string): string[] {
+  const problems: string[] = [];
+  for (const re of [new RegExp(PRONOUNS.source, "gi"), new RegExp(HUB.source, "gi")]) {
+    for (const match of copy.matchAll(re)) {
+      const start = Math.max(0, match.index! - 30);
+      problems.push(`"${match[0]}" in …${copy.slice(start, match.index! + match[0].length + 30).replace(/\s+/g, " ")}…`);
+    }
+  }
+  return problems;
 }

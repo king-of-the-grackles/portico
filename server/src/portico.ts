@@ -1,119 +1,184 @@
 import type { Database } from "bun:sqlite";
 import type { Hono } from "hono";
+import { helloFor, AgentStreams } from "./agent-api/stream";
+import { PersonStreams } from "./api/events";
 import { buildApp } from "./app";
-import { ApprovalDesk } from "./approvals/desk";
-import { Directory } from "./core/directory";
-import { NetworkService } from "./core/network";
+import { Accounts } from "./core/accounts";
+import { Agents } from "./core/agents";
+import { AllowList, Approvals } from "./core/approvals";
+import { Changes } from "./core/changes";
+import { Computers } from "./core/computers";
+import type { Core } from "./core/core";
+import { Messages } from "./core/messages";
+import { People } from "./core/people";
 import { Presence } from "./core/presence";
-import { PorticoService } from "./core/service";
-import { SessionRegistry } from "./core/sessions";
+import { Settings } from "./core/settings";
 import type { Notice, PorticoConfig } from "./core/types";
-import { Store } from "./db";
-import { log } from "./log";
-import { NetworkStore } from "./network-store";
-import { makeNotifier } from "./notifier";
-import { type AgentResolver, makeResolvers, type PrincipalResolver } from "./ways-in/auth";
-import { AgentStreams } from "./ways-in/stream";
+import { Desk } from "./desk";
+import { errorName, log } from "./log";
 
 export interface PorticoOptions {
   db: Database;
   now?: () => Date;
   newId?: () => string;
+  /** Both streams' heartbeat, for tests. */
   heartbeatMs?: number;
-  /** The approval nonces' random source, for tests. */
+  /** The pop-up nonces' random source, for tests. */
   newNonce?: () => string;
   /** Tests observe notices here. */
   onNotice?: (notice: Notice) => void;
 }
 
-export interface Portico {
-  store: Store;
-  network: NetworkStore;
-  networkService: NetworkService;
-  directory: Directory;
-  resolvers: { principal: PrincipalResolver; agent: AgentResolver };
-  /** Live status reports and check-ins, in memory. */
-  presence: Presence;
-  sessions: SessionRegistry;
-  service: PorticoService;
-  streams: AgentStreams;
-  /** Open approval requests, and who holds them on each machine. */
-  desk: ApprovalDesk;
+export interface Portico extends Core {
   app: Hono;
+  /** Run every minute: expiries. */
+  sweepMinute(): void;
+  /** Run every day: history, stale sessions, expired sign-ins and links. */
+  sweepDaily(): void;
 }
 
-/** The most waiting tasks whose requests a restart re-opens. */
-const RESTORE_LIMIT = 500;
+const logInfo = (msg: string, fields: Record<string, unknown>) => log("info", msg, fields);
 
-/** Wires every piece of the hub together. Used by startServer and by the tests. */
+/** Wires every piece of Portico together. Used by startServer and by the tests. */
 export function createPortico(config: PorticoConfig, opts: PorticoOptions): Portico {
-  const store = new Store(opts.db);
-  const network = new NetworkStore(opts.db);
-  const streams = new AgentStreams();
-  const desk = new ApprovalDesk({
-    streams,
-    publicUrl: config.publicUrl,
-    now: opts.now,
-    newNonce: opts.newNonce,
-    log: (msg, fields) => log("info", msg, fields),
-  });
-  streams.onChange((change) => desk.streamChanged(change));
+  const { db } = opts;
+  const now = opts.now ?? (() => new Date());
+  const newId = opts.newId ?? (() => crypto.randomUUID());
+  const changes = new Changes();
+  const settings = new Settings(db, config);
   const presence = new Presence();
-  const isConnected = (address: string) => streams.isConnected(address);
-  const directory = new Directory({ config, network, isConnected, presence, now: opts.now });
-  const sessions = new SessionRegistry({
-    network,
-    store,
-    isConnected,
-    now: opts.now,
-    newId: opts.newId,
-    log: (msg, fields) => log("info", msg, fields),
-  });
-  const networkService = new NetworkService({
-    store: network,
-    config,
-    now: opts.now,
-    newId: opts.newId,
-    log: (msg, fields) => log("info", msg, fields),
-  });
-  const resolvers = makeResolvers(config, network, { now: opts.now });
-  const notify = makeNotifier({
-    store,
-    directory,
-    streams,
-    approvalNeeded: (task) => desk.open(task),
-    approvalDecided: (task, outcome) => desk.close(task.id, outcome),
-  });
-  const service = new PorticoService({
-    store,
-    config,
-    directory,
+  const agentStreams = new AgentStreams();
+  const personStreams = new PersonStreams();
+  changes.on((topics) => personStreams.broadcast(topics));
+
+  const people = new People({ db, changes, now, newId });
+  const accounts = new Accounts({ db, people, now, newId });
+  const computers = new Computers({ db, changes, now, newId, log: logInfo });
+  const agents: Agents = new Agents({
+    db,
+    computers,
     presence,
-    now: opts.now,
-    newId: opts.newId,
-    notify: (notice) => {
-      opts.onNotice?.(notice);
-      notify(notice);
-    },
-    log: (msg, fields) => log("info", msg, fields),
-    approvalInfo: (task) => desk.info(task),
+    changes,
+    now,
+    newId,
+    log: logInfo,
+    isConnected: (id) => agentStreams.isConnected(id),
+    disconnect: (ids) => agentStreams.closeAll(ids),
+    renamed: (agent) => agentStreams.send(agent.id, "renamed", { ...helloFor(agents, agent) }),
   });
-  // Requests live in memory: after a restart, tasks still waiting pop up again as sessions reconnect.
-  const waiting = store.listTasks({ status: "waiting_approval", limit: RESTORE_LIMIT, oldestFirst: true });
-  for (const task of waiting) desk.open(task);
-  if (waiting.length > 0) log("info", "approval_requests_restored", { count: waiting.length });
-  const app = buildApp({
-    service,
+  const desk = new Desk({ streams: agentStreams, now, newNonce: opts.newNonce, log: logInfo });
+  agentStreams.onChange((change) => desk.streamChanged(change));
+
+  // Notices are raised as writes commit; their effects (nudges, pop-ups) run in a microtask and never throw.
+  const notify = (notice: Notice) => {
+    opts.onNotice?.(notice);
+    queueMicrotask(() => {
+      try {
+        handleNotice(notice);
+      } catch (err) {
+        log("error", "notice_failed", { kind: notice.kind, error: errorName(err) });
+      }
+    });
+  };
+  const nudgeIfPush = (agentId: string) => {
+    const agent = agents.get(agentId);
+    if (agent && agents.isPush(agent)) agentStreams.nudge(agent.id);
+  };
+  const handleNotice = (notice: Notice) => {
+    const m = notice.message;
+    switch (notice.kind) {
+      case "message_sent": {
+        if (m.status === "pending") nudgeIfPush(m.toId);
+        if (m.status !== "held") return;
+        const sender = agents.get(m.fromId);
+        const receiver = agents.get(m.toId);
+        if (!sender || !receiver) return;
+        desk.open({
+          messageId: m.id,
+          ownerId: receiver.ownerId,
+          from: agents.display(sender),
+          to: agents.display(receiver),
+          subject: m.subject,
+          text: m.text,
+          expiresAt: m.expiresAt,
+        });
+        return;
+      }
+      case "message_decided":
+        desk.close(m.id, m.status === "declined" ? "declined" : "allowed");
+        if (m.status === "pending") nudgeIfPush(m.toId);
+        if (m.status === "declined") nudgeIfPush(m.fromId);
+        return;
+      case "message_expired":
+        if (m.heldAt === null) return;
+        desk.close(m.id, "expired");
+        nudgeIfPush(m.fromId);
+        return;
+      case "message_delivered":
+        if (m.heldAt !== null) nudgeIfPush(m.fromId);
+        return;
+    }
+  };
+
+  const allowList = new AllowList(db);
+  const messages = new Messages({
+    db,
+    agents,
+    alwaysAllows: (agentId, senderId) => allowList.has(agentId, senderId),
+    changes,
+    now,
+    newId,
+    notify,
+    log: logInfo,
+  });
+  const approvals = new Approvals({ db, agents, messages, people, allowList, changes, now, notify, log: logInfo });
+
+  const core: Core = {
     config,
-    directory,
-    networkService,
-    resolvers,
+    db,
+    settings,
+    changes,
+    people,
+    accounts,
+    computers,
+    agents,
+    messages,
+    approvals,
+    allowList,
     presence,
-    sessions,
-    streams,
+    agentStreams,
+    personStreams,
     desk,
-    now: opts.now ?? (() => new Date()),
-    heartbeatMs: opts.heartbeatMs,
-  });
-  return { store, network, networkService, directory, resolvers, presence, sessions, service, streams, desk, app };
+    now,
+    newId,
+  };
+  const app = buildApp(core, { heartbeatMs: opts.heartbeatMs });
+
+  const sweep = (name: string, fn: () => unknown) => {
+    try {
+      const result = fn();
+      if (typeof result === "number" ? result > 0 : result && Object.values(result).some((n) => n > 0)) {
+        log("info", `${name}_swept`, typeof result === "number" ? { count: result } : (result as Record<string, unknown>));
+      }
+    } catch (err) {
+      log("error", `${name}_sweep_failed`, { error: errorName(err) });
+    }
+  };
+
+  return {
+    ...core,
+    app,
+    sweepMinute() {
+      sweep("messages_expired", () => messages.expireDue().length);
+      sweep("desk", () => desk.sweep());
+      sweep("computers_minute", () => computers.sweepMinute());
+    },
+    sweepDaily() {
+      sweep("history", () => messages.prune());
+      sweep("sessions", () => agents.sweep());
+      sweep("web_sessions", () => accounts.sweep());
+      sweep("people", () => people.sweep());
+      sweep("computers", () => computers.sweep());
+    },
+  };
 }

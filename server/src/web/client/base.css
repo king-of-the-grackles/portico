@@ -1,0 +1,71 @@
+/* Portico's tokens and the primitives every page uses. Home and Settings add app.css. */
+:root {
+  --teal: #1f6f5c;
+  --teal-dark: #185a4a;
+  --teal-wash: #eef4f1;
+  --ink: #102b25;
+  --ink-soft: #2f4640;
+  --muted: #4e625c;
+  --line: #c9d1c7;
+  --hairline: rgba(16, 43, 37, 0.1);
+  --canvas: #e9ece6;
+  --card: #f7f8f5;
+  --surface: #ffffff;
+  --ochre: #8a4f0e;
+  --ochre-wash: #fbf1df;
+  --ochre-ink: #6b5a3e;
+  --danger: #9a2e22;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --font: "Manrope", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100dvh; background: var(--canvas); color: var(--ink); font-family: var(--font); font-size: 16px; line-height: 24px; }
+a { color: var(--teal); }
+a:hover { color: var(--teal-dark); }
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
+:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tnum { font-variant-numeric: tabular-nums; }
+
+.homemark { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; }
+a.homemark:hover { background: #e3e8e1; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 16px; border-radius: 8px; font: inherit; font-size: 16px; line-height: 24px; font-weight: 600; cursor: pointer; text-decoration: none; transition: background-color 300ms var(--ease), transform 300ms var(--ease); }
+.btn:active { transform: scale(0.98); }
+.btn:disabled { opacity: 0.6; cursor: default; }
+.btn-primary { border: 1px solid var(--teal); background: var(--teal); color: #ffffff; }
+.btn-primary:hover { background: var(--teal-dark); color: #ffffff; }
+.btn-secondary { border: 1px solid var(--teal); background: var(--surface); color: var(--teal); }
+.btn-secondary:hover { background: var(--teal-wash); }
+.btn-link { border: none; background: transparent; color: var(--teal); }
+.btn-link:hover { background: var(--teal-wash); color: var(--teal); }
+.btn-danger { border: 1px solid var(--danger); background: var(--surface); color: var(--danger); }
+.btn-danger:hover { background: #f8ecea; }
+
+.field { width: 100%; min-height: 44px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 16px; line-height: 24px; }
+.lbl { font-size: 14px; line-height: 20px; font-weight: 600; }
+.help { margin: 0; font-size: 12px; line-height: 16px; color: var(--muted); }
+.logo { display: block; flex: none; width: 32px; height: 32px; border-radius: 8px; background: var(--surface); box-shadow: 0 0 0 1px var(--hairline); object-fit: cover; }
+.logo-lg { width: 48px; height: 48px; border-radius: 12px; }
+
+/* Action rows end on the right: the primary action far right, Cancel or Deny to its left. */
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+.actions .start { margin-right: auto; }
+
+/* Standalone pages: setup, sign in, invites, join, consent. */
+.top { max-width: 1440px; margin: 0 auto; padding: 16px 32px 0; display: flex; align-items: center; gap: 8px; }
+.narrow { max-width: 472px; margin: 0 auto; padding: 48px 16px 64px; display: flex; flex-direction: column; gap: 24px; }
+.narrow h1 { margin: 0 0 8px; font-size: 36px; line-height: 40px; font-weight: 700; letter-spacing: -0.02em; }
+.narrow .lead { margin: 0; color: var(--ink-soft); }
+.form-card { padding: 24px; border-radius: 16px; background: var(--card); display: flex; flex-direction: column; gap: 8px; }
+.form-card .lbl:not(:first-child) { margin-top: 8px; }
+.form-card .actions { margin-top: 16px; }
+.notice { margin: 0; padding: 12px 16px; border-radius: 8px; background: var(--ochre-wash); color: var(--ochre-ink); font-size: 14px; line-height: 20px; }
+.notice[hidden] { display: none; }
+.notice-error { background: #f8ecea; color: var(--danger); }
+
+.dot-wait { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--teal); animation: breathe 2400ms var(--ease) infinite; }
+@keyframes breathe { 0%, 100% { box-shadow: 0 0 0 0 rgba(31, 111, 92, 0.35); } 50% { box-shadow: 0 0 0 4px rgba(31, 111, 92, 0); } }
+@media (prefers-reduced-motion: reduce) { .dot-wait { animation: none; } .btn:active { transform: none; } }
+@media (max-width: 600px) { .top { padding: 16px 16px 0; } .narrow { padding-top: 24px; } }

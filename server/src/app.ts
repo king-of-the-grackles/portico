@@ -1,67 +1,51 @@
 import { Hono } from "hono";
-import type { ApprovalDesk } from "./approvals/desk";
-import { approvalRoutes } from "./approvals/routes";
-import { pageRoutes } from "./page/routes";
-import type { Directory } from "./core/directory";
-import type { NetworkService } from "./core/network";
-import type { Presence } from "./core/presence";
-import type { PorticoService } from "./core/service";
-import type { SessionRegistry } from "./core/sessions";
-import type { PorticoConfig } from "./core/types";
-import { a2aRoutes } from "./ways-in/a2a";
-import type { AgentResolver, PrincipalResolver } from "./ways-in/auth";
-import { joinRoutes } from "./ways-in/join";
-import { mcpRoutes } from "./ways-in/mcp";
-import { openApiDocument } from "./ways-in/openapi";
-import { handleError, restRoutes } from "./ways-in/rest";
-import { type AgentStreams, streamRoutes } from "./ways-in/stream";
+import { makeResolver } from "./agent-api/auth";
+import { mcpRoutes } from "./agent-api/mcp";
+import { openApiDocument } from "./agent-api/openapi";
+import { popupAnswerRoutes } from "./agent-api/popup-answers";
+import { agentRestRoutes, handleError } from "./agent-api/rest";
+import { streamRoutes } from "./agent-api/stream";
+import { agentViews } from "./agent-api/views";
+import { personApi } from "./api";
+import { computerApi } from "./computer-api";
+import type { Core } from "./core/core";
+import { oauthRoutes } from "./oauth";
+import { signInRequestApi } from "./sign-in-api";
+import { webRoutes } from "./web";
+import { narrowPage } from "./web/layout";
+import { html } from "hono/html";
 
-export interface AppDeps {
-  service: PorticoService;
-  config: PorticoConfig;
-  directory: Directory;
-  networkService: NetworkService;
-  resolvers: { principal: PrincipalResolver; agent: AgentResolver };
-  presence: Presence;
-  sessions: SessionRegistry;
-  streams: AgentStreams;
-  desk: ApprovalDesk;
-  now: () => Date;
-  heartbeatMs?: number;
-}
-
-export function buildApp(deps: AppDeps): Hono {
-  const { service, config, directory, presence, sessions, streams } = deps;
+/**
+ * Every surface over the core. Order matters: the agent, computer and sign-in-request routes answer before the person
+ * API's catch-all middleware under /api, and pages come last.
+ */
+export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono {
   const app = new Hono();
-  const resolveAgent = deps.resolvers.agent;
+  const resolver = makeResolver(core.agents, core.computers);
+  const views = agentViews(core.agents, core.people);
+  const { agents, messages } = core;
 
-  // Clients and proxies that probe the root get a 200, not a 404. Reveals no version, agents or tasks.
-  app.get("/", (c) => c.json({ openapi: "/api/openapi.json", health: "/healthz" }));
   app.get("/healthz", (c) => c.json({ ok: true }));
-  const openApi = openApiDocument(config);
-  app.get("/api/openapi.json", (c) => c.json(openApi));
-  // Routes under /api that aren't part of the web API group are mounted before it, so they answer first.
-  app.route("/", joinRoutes({ network: deps.networkService, config, now: deps.now }));
+  app.get("/api/agent/openapi.json", (c) => c.json(openApiDocument(core.settings.publicUrl())));
+  app.route("/api/agent/stream", streamRoutes({ agents, messages, streams: core.agentStreams, resolver, heartbeatMs: opts.heartbeatMs }));
+  app.route("/api/agent/approvals", popupAnswerRoutes({ approvals: core.approvals, desk: core.desk, views, resolver }));
   app.route(
-    "/api/stream",
-    streamRoutes({
-      service,
-      directory,
-      streams,
-      resolvePrincipal: deps.resolvers.principal,
-      sessions,
-      heartbeatMs: deps.heartbeatMs,
-    }),
+    "/api/agent",
+    agentRestRoutes({ agents, messages, presence: core.presence, views, resolver, changes: core.changes, now: core.now }),
   );
-  app.route("/api/approvals", approvalRoutes({ config, service, directory, desk: deps.desk, resolvers: deps.resolvers }));
-  app.route("/api", restRoutes(service, config, deps.resolvers, directory, { presence, sessions, now: deps.now }));
-  app.route("/mcp", mcpRoutes(service, config, resolveAgent, directory));
-  app.route("/a2a", a2aRoutes(service, config, resolveAgent, directory, deps.resolvers.principal));
+  app.route("/api/computer", computerApi(core));
+  app.route("/api/sign-in-requests", signInRequestApi(core));
+  app.route("/mcp", mcpRoutes({ agents, messages, views, resolver }));
+  app.route("/", oauthRoutes(core));
+  app.route("/api", personApi(core, opts));
+  app.route("/", webRoutes(core));
 
-  app.get("/hub/", (c) => c.redirect("/hub", 303));
-  app.route("/hub", pageRoutes({ service, directory, network: deps.networkService, streams, presence, config, now: deps.now }));
-
-  app.notFound((c) => c.json({ error: "not_found", message: "No such endpoint." }, 404));
+  app.notFound((c) => {
+    if (/^\/(api|mcp|oauth|\.well-known)(\/|$)/.test(c.req.path)) {
+      return c.json({ error: "not_found", message: "No such endpoint." }, 404);
+    }
+    return narrowPage(c, { title: "Not found", status: 404, main: html`<h1>Nothing here</h1><p class="lead"><a href="/">Go to Home</a></p>` });
+  });
   app.onError(handleError);
   return app;
 }

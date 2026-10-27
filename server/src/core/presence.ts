@@ -11,7 +11,7 @@ function oneLine(value: unknown, max: number): string | null {
   return text ? Array.from(text).slice(0, max).join("") : null;
 }
 
-/** A status report from a push member's body. Only `status` is required. */
+/** A status report from a session's body. Only `status` is required. */
 export function parseStatusReport(body: unknown): StatusReport {
   const b = (body ?? {}) as Record<string, unknown>;
   if (typeof b.status !== "string" || !STATUSES.has(b.status)) {
@@ -27,33 +27,54 @@ export function parseStatusReport(body: unknown): StatusReport {
   };
 }
 
+/** Check-ins kept per agent, for the usual interval between them. */
+const CHECK_INS_KEPT = 5;
+
 /**
- * Live state, in memory only: each push member's last status report, and each member's last check-in. After a
- * restart, sessions report again within seconds of their plugins reconnecting.
+ * Live state, in memory only, by agent ID: each session's last status report, and each agent's recent check-ins.
+ * After a restart, sessions report again within seconds of their plugins reconnecting.
  */
 export class Presence {
   private readonly reports = new Map<string, StatusReport & { at: string }>();
-  private readonly checkIns = new Map<string, string>();
+  private readonly checkIns = new Map<string, string[]>();
 
-  report(address: string, report: StatusReport, at: string): void {
-    this.reports.set(address, { ...report, at });
+  report(agentId: string, report: StatusReport, at: string): void {
+    this.reports.set(agentId, { ...report, at });
   }
 
-  get(address: string): (StatusReport & { at: string }) | null {
-    return this.reports.get(address) ?? null;
+  get(agentId: string): (StatusReport & { at: string }) | null {
+    return this.reports.get(agentId) ?? null;
   }
 
-  checkedIn(address: string, at: string): void {
-    this.checkIns.set(address, at);
+  checkedIn(agentId: string, at: string): void {
+    const times = this.checkIns.get(agentId) ?? [];
+    times.push(at);
+    if (times.length > CHECK_INS_KEPT) times.shift();
+    this.checkIns.set(agentId, times);
   }
 
-  lastCheckIn(address: string): string | null {
-    return this.checkIns.get(address) ?? null;
+  lastCheckIn(agentId: string): string | null {
+    return this.checkIns.get(agentId)?.at(-1) ?? null;
   }
 
-  /** Drops everything known about the address, e.g. once its assistant is removed. */
-  forget(address: string): void {
-    this.reports.delete(address);
-    this.checkIns.delete(address);
+  /**
+   * The usual minutes between check-ins: the median gap, rounded, once there are two. Gaps under a minute (a burst of
+   * calls in one turn) don't count.
+   */
+  checkInMinutes(agentId: string): number | null {
+    const times = (this.checkIns.get(agentId) ?? []).map((at) => Date.parse(at));
+    const gaps = times
+      .slice(1)
+      .map((at, i) => (at - times[i]!) / 60_000)
+      .filter((gap) => gap >= 1)
+      .sort((a, b) => a - b);
+    if (gaps.length === 0) return null;
+    return Math.round(gaps[Math.floor((gaps.length - 1) / 2)]!);
+  }
+
+  /** Drops everything known about the agent, e.g. once it's removed. */
+  forget(agentId: string): void {
+    this.reports.delete(agentId);
+    this.checkIns.delete(agentId);
   }
 }

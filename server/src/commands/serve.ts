@@ -1,18 +1,18 @@
 import { ConfigError, loadConfig } from "../config";
 import type { PorticoConfig } from "../core/types";
-import { SchemaTooNewError } from "../db";
+import { SchemaMismatchError } from "../db";
 import { startServer } from "../server";
 import type { CliIo } from "./io";
 
 /** A plain explanation for startup failures that aren't bugs, or null for anything else. */
 export function startupProblem(err: unknown, config: Pick<PorticoConfig, "port" | "dbPath">): string | null {
-  if (err instanceof SchemaTooNewError) {
-    return `The database at ${config.dbPath} was written by a newer hub version. Run that version, or restore a backup.`;
+  if (err instanceof SchemaMismatchError) {
+    return `The database at ${config.dbPath} was written by a different Portico version. Move it aside to start fresh, or run that version.`;
   }
   const code = (err as { code?: unknown } | null)?.code;
   if (code === "EADDRINUSE") return `Port ${config.port} is already in use. Stop the other process, or set PORT to a free port.`;
   if (code === "SQLITE_CANTOPEN") {
-    return `The database at ${config.dbPath} can't be opened. Check that its folder exists and is writable, or set PORTICO_DB_PATH.`;
+    return `The database at ${config.dbPath} can't be opened. Check that the folder exists and is writable, or set PORTICO_DB_PATH.`;
   }
   return null;
 }
@@ -20,7 +20,7 @@ export function startupProblem(err: unknown, config: Pick<PorticoConfig, "port" 
 export async function serveCommand(io: CliIo): Promise<number | "running"> {
   let config: PorticoConfig;
   try {
-    config = await loadConfig(io.env);
+    config = loadConfig(io.env);
   } catch (err) {
     if (err instanceof ConfigError) {
       io.err(err.message);
