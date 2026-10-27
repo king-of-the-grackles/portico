@@ -9,6 +9,8 @@ primary_region = "iad"
 
 [env]
   PORTICO_DB_PATH = "/data/portico.db"
+  # Where /join tells computers to install the Claude Code plugin from.
+  PORTICO_PLUGIN_SOURCE = "king-of-the-grackles/portico"
 
 # SQLite lives on one volume, so Portico runs on one machine: deploy with --ha=false.
 [mounts]

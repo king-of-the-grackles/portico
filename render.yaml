@@ -8,6 +8,12 @@ services:
     plan: starter
     dockerfilePath: ./Dockerfile
     healthCheckPath: /healthz
+    # Deploys only when someone chooses to, not on every push to this repo.
+    autoDeployTrigger: "off"
+    envVars:
+      # Where /join tells computers to install the Claude Code plugin from.
+      - key: PORTICO_PLUGIN_SOURCE
+        value: king-of-the-grackles/portico
     disk:
       name: portico-data
       mountPath: /data
