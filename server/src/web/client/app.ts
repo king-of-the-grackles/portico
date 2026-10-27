@@ -458,8 +458,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
   const s = () => page.state;
   const add = new AddFlow(page, (agent) => {
     if (!agent) return;
-    page.set({ notice: { text: agent.computer ? `${agent.display} joined from ${agent.computer.name}.` : `${agent.display} joined.` } });
     go(`/a/${agent.id}`);
+    page.set({ notice: { text: agent.computer ? `${agent.display} joined from ${agent.computer.name}.` : `${agent.display} joined.` } });
   });
 
   const note = (text: string, check = false) => page.set({ notice: { text, check } });
@@ -541,7 +541,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
 
   const applyRoute = () => {
     const route = routeOf(location.pathname);
-    const reset = { edit: null, saved: false, expanded: false, confirmRemove: false, acctOpen: false, agentsOpen: false };
+    // Opening something new clears what the last action said, as the boards do.
+    const reset = { edit: null, saved: false, expanded: false, confirmRemove: false, acctOpen: false, agentsOpen: false, notice: null };
     if (!route) {
       page.set({ open: null, ...reset });
       return;
@@ -635,11 +636,11 @@ function startHome(root: HTMLElement, data: HomeData): void {
         note("Sign in request declined.");
         return;
       }
-      note(`${request.name} joined.`);
       await loadAgents();
       const agent =
         s().agents.find((a) => a.id === answer?.agent?.id) ?? s().agents.find((a) => a.mine && a.name === request.name);
       if (agent) go(`/a/${agent.id}`);
+      note(`${request.name} joined.`);
     } catch (err) {
       fail(err);
     } finally {
@@ -685,8 +686,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
     try {
       await api("DELETE", `/api/agents/${encodeURIComponent(id)}`);
       page.set({ agents: s().agents.filter((a) => a.id !== id), filter: null, confirmRemove: false });
-      note(`${agent.display} removed and signed out.`);
       go("/");
+      note(`${agent.display} removed and signed out.`);
     } catch (err) {
       fail(err);
     } finally {
