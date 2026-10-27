@@ -1,0 +1,32 @@
+/* The onboarding pages: /join and the connector consent page. */
+
+/* The signed-in person, at the right of the top bar. */
+.top .me { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 12px 4px 4px; border-radius: 16px; background: rgba(247, 248, 245, 0.82); box-shadow: 0 8px 24px rgba(16, 43, 37, 0.08); font-size: 14px; line-height: 20px; font-weight: 600; }
+.top .me .mono { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: var(--ink); color: var(--card); font-size: 12px; line-height: 16px; font-weight: 700; }
+
+/* Consent: "<client> wants to add an agent to Portico". */
+.consent { padding: 24px; border-radius: 16px; background: var(--card); display: flex; flex-direction: column; gap: 24px; }
+.consent-head { display: flex; align-items: center; gap: 16px; }
+.consent-head > div { min-width: 0; }
+.narrow .consent h1 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.consent-when { margin: 0; font-size: 14px; line-height: 20px; color: var(--muted); }
+.consent form { display: flex; flex-direction: column; gap: 8px; }
+.consent .note { margin: 16px 0 0; color: var(--ink-soft); }
+.consent .actions { margin-top: 16px; }
+.logo-tile { display: inline-flex; align-items: center; justify-content: center; color: var(--teal); font-size: 20px; font-weight: 700; }
+.kinds { margin: 8px 0 0; padding: 0; border: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.kinds legend { padding: 0; margin-bottom: 8px; }
+.kind { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; cursor: pointer; transition: background-color 300ms var(--ease), border-color 300ms var(--ease); }
+.kind input { margin: 0; accent-color: var(--teal); }
+.kind:has(input:checked) { border-color: var(--teal); background: var(--teal-wash); color: var(--teal); }
+
+/* /join: steps an agent reads. */
+.narrow.doc { max-width: 720px; gap: 16px; }
+.doc h2 { margin: 24px 0 0; font-size: 20px; line-height: 28px; font-weight: 700; }
+.doc p, .doc li { margin: 0; color: var(--ink-soft); }
+.doc ol { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 16px; }
+.doc pre { margin: 8px 0 0; padding: 12px 16px; border-radius: 8px; background: var(--surface); box-shadow: 0 0 0 1px var(--hairline); font-size: 14px; line-height: 20px; overflow-x: auto; }
+.doc code { font-size: 0.92em; overflow-wrap: anywhere; }
+.doc pre code { overflow-wrap: normal; }
+.doc .notice { margin-top: 8px; }
+@media (max-width: 600px) { .consent { padding: 16px; } }

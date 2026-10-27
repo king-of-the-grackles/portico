@@ -32,6 +32,16 @@ export class Settings {
   }
 }
 
+/** Whether a URL points at this computer: localhost or 127.0.0.1. */
+export function isLocalUrl(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "localhost" || hostname === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
 /** A public URL as given, checked: https, or http only for localhost and 127.0.0.1. Null when unusable. */
 export function cleanPublicUrl(raw: string): string | null {
   const trimmed = raw.trim().replace(/\/+$/, "");

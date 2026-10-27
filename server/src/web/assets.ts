@@ -27,6 +27,11 @@ import iconGrokBot from "./client/icons/grok-bot.svg" with { type: "text" };
 import iconDots from "./client/icons/dots.svg" with { type: "text" };
 import iconClaudeDuet from "./client/icons/claude-duet.svg" with { type: "text" };
 import iconOther from "./client/icons/other.svg" with { type: "text" };
+// @ts-ignore: imported as text, not as a module
+import passkeyTs from "./client/passkey.ts" with { type: "text" };
+// @ts-ignore: imported as text, not as a module
+import localTimeTs from "./client/local-time.ts" with { type: "text" };
+import onboardingCss from "./client/onboarding.css" with { type: "text" };
 
 type Source = { css: string } | { svg: string } | { ts: string };
 
@@ -49,6 +54,9 @@ export const ASSETS: Record<string, Source> = {
   "icons/dots.svg": { svg: iconDots },
   "icons/claude-duet.svg": { svg: iconClaudeDuet },
   "icons/other.svg": { svg: iconOther },
+  "passkey.js": { ts: passkeyTs as string },
+  "local-time.js": { ts: localTimeTs as string },
+  "onboarding.css": { css: onboardingCss },
 };
 
 const transpiler = new Bun.Transpiler({ loader: "ts", target: "browser" });
