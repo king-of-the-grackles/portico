@@ -35,11 +35,11 @@ export function setupPage(core: Core): Hono<PersonEnv> {
   <label for="reset-pw" class="lbl">New password</label>
   <input id="reset-pw" name="password" class="field" type="password" autocomplete="new-password" minlength="12" required aria-describedby="reset-pw-help">
   <span id="reset-pw-help" class="help">12 characters or more.</span>
-  <p class="notice notice-error" data-error role="alert" hidden></p>
+  <p class="notice notice-error" data-error role="alert" style="font-variant-ligatures: none" hidden></p>
   <input type="hidden" name="token" data-fragment>
   <div class="actions"><button type="submit" class="btn btn-primary">Set new password</button></div>
 </form>
-<p class="help">This reset link works once. For a new link, run portico setup --reset on the host.</p>`,
+<p class="help">This reset link works once. For a new link, run <code>portico setup --reset</code> on the host.</p>`,
       });
     }
     const publicUrl = core.config.publicUrl ?? core.settings.get("public_url") ?? requestOrigin(c);
@@ -60,7 +60,7 @@ export function setupPage(core: Core): Hono<PersonEnv> {
   <label for="setup-url" class="lbl">Public URL</label>
   <input id="setup-url" name="publicUrl" class="field" type="url" inputmode="url" autocomplete="url" spellcheck="false" required value="${publicUrl}" aria-describedby="setup-url-help">
   <span id="setup-url-help" class="help">The address people and agents use to reach Portico.</span>
-  <p class="notice notice-error" data-error role="alert" hidden></p>
+  <p class="notice notice-error" data-error role="alert" style="font-variant-ligatures: none" hidden></p>
   <input type="hidden" name="token" data-fragment>
   <div class="actions"><button type="submit" class="btn btn-primary">Create owner account</button></div>
 </form>
