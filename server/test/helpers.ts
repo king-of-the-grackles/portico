@@ -252,7 +252,8 @@ export function sseReader(res: Response) {
 // ---- copy sweeps ----
 
 /** Pronouns Portico's copy never uses. Errs strict: it also flags "i.e.". */
-export const PRONOUNS = /\b(i|me|my|we|us|our|you|your|it|its|they|them|their)\b/i;
+export const PRONOUNS =
+  /\b(i|me|my|mine|myself|we|us|our|ours|ourselves|you|your|yours|yourself|yourselves|it|its|itself|they|them|their|theirs|themselves)\b/i;
 
 /** The one phrase the owner chose to keep: the empty-state heading. */
 const ALLOWED_PHRASES = [/\badd your first agent\b/gi];

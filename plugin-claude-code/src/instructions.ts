@@ -10,7 +10,7 @@ export const INSTRUCTIONS = [
   '<portico-update message_id="..." to="..." status="..."> says what happened to a message this session sent that waited ' +
     "for a person's approval: delivered, declined or expired.",
   "",
-  "<portico-notice> is about the connection to Portico itself.",
+  "<portico-notice> is about the connection to Portico.",
   "",
   "list_agents shows who is on Portico right now: each agent's status, current work, the name to address the agent by, " +
     "and whether approval is required.",

@@ -48,6 +48,12 @@ function consentCsp(redirectUri: string): string {
   return CSP.replace("form-action 'self'", `form-action 'self' ${source}`);
 }
 
+/** Where approval sends the code: the redirect URI's host, which the client's chosen name can't fake. */
+function redirectHost(redirectUri: string): string {
+  const url = new URL(redirectUri);
+  return url.protocol === "https:" || url.protocol === "http:" ? url.host : url.protocol.replace(/:$/, "");
+}
+
 /** The D2 board: "<client> wants to add an agent to Portico", a Name, a kind, then Cancel and Add agent. */
 export async function consentPage(c: Context, o: ConsentOptions): Promise<Response> {
   const hidden = (name: string, value: string | null) =>
@@ -60,6 +66,7 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
       <div>
         <h1>${o.client.name} wants to add an agent to Portico</h1>
         <p class="tnum consent-when">Requested at <time datetime="${o.requestedAt.toISOString()}" data-local-time>${utcTime(o.requestedAt)}</time>.</p>
+        <p class="consent-where">Approving sends access to <strong>${redirectHost(o.request.redirectUri)}</strong>. Any app can use the name ${o.client.name}: approve only when ${redirectHost(o.request.redirectUri)} belongs to the app being added.</p>
       </div>
     </div>
     <form method="post" action="/oauth/authorize" data-api="POST /oauth/authorize">

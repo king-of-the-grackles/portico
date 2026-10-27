@@ -429,7 +429,7 @@ export class Agents {
     if (!AGENT_KINDS.some((kind) => kind === input.kind)) {
       throw new PorticoError("bad_request", `kind must be one of: ${AGENT_KINDS.join(", ")}.`);
     }
-    if (this.byAddress(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
+    if (this.nameTaken(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
     const id = this.newId();
     this.insert({
       id,
@@ -516,7 +516,7 @@ export class Agents {
           ? this.db
               .query("SELECT 1 FROM agents WHERE computer_id = $computerId AND name = $name")
               .get({ computerId: agent.computerId, name })
-          : this.byAddress(name);
+          : this.nameTaken(name, agent.id);
         if (taken) throw new PorticoError("conflict", `The name ${name} is already in use.`);
         sets.push("name = $name");
         bindings.name = name;
@@ -595,6 +595,17 @@ export class Agents {
   }
 
   // ---- helpers ----
+
+  /**
+   * Whether an app or connector can't take the name: another app or connector has it, or a session does. A session's
+   * short name is how agents address it, so an app taking it would receive that session's messages.
+   */
+  private nameTaken(name: string, exceptId?: string): boolean {
+    const row = this.db
+      .query("SELECT id FROM agents WHERE name = $name AND id != $exceptId LIMIT 1")
+      .get({ name, exceptId: exceptId ?? "" });
+    return row !== null;
+  }
 
   private sessionsOn(computerId: string): Agent[] {
     return (this.db.query(`${SELECT} WHERE a.computer_id = $computerId ORDER BY a.name`).all({ computerId }) as AgentRow[]).map(

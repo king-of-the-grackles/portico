@@ -18,11 +18,11 @@ describe("addresses and the agent list", () => {
     expect(p.agents.display(second)).toBe("dialog-claude@studio");
   });
 
-  test("an app named like a session takes the short name", async () => {
+  test("an app that had the name first keeps the short name; a later session goes by its full address", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
-    const session = addSession(p, addComputer(p, chris).computer, { repo: "api" }).agent;
     addAppAgent(p, chris, "api-claude");
+    const session = addSession(p, addComputer(p, chris).computer, { repo: "api" }).agent;
     expect(p.agents.display(session)).toBe("api-claude@macbook");
     expect(p.agents.resolve("api-claude", "x").type).toBe("app");
   });
@@ -153,6 +153,18 @@ describe("what an agent's manager can change", () => {
     const a = addSession(p, addComputer(p, chris, "macbook").computer, { repo: "web" }).agent;
     addSession(p, addComputer(p, chris, "studio").computer, { repo: "api" });
     expect(p.agents.update(chris.id, a.id, { name: "api-claude" }).name).toBe("api-claude");
+  });
+
+  test("an app can't take a name a session goes by, so the session's messages can't be redirected", async () => {
+    const p = makePortico();
+    const chris = await addOwner(p);
+    const maya = await addMember(p);
+    addSession(p, addComputer(p, chris).computer, { repo: "portico" });
+    expect(() => p.agents.create({ ownerId: maya.id, name: "portico-claude", kind: "muse", type: "app" })).toThrow(
+      "The name portico-claude is already in use.",
+    );
+    const { agent } = addAppAgent(p, maya, "maya-muse");
+    expect(errorCode(() => p.agents.update(maya.id, agent.id, { name: "portico-claude" }))).toBe("conflict");
   });
 
   test("only the person who manages an agent can change or remove it", async () => {

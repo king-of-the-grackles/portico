@@ -10,6 +10,7 @@
 .consent-head > div { min-width: 0; }
 .narrow .consent h1 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .consent-when { margin: 0; font-size: 14px; line-height: 20px; color: var(--muted); }
+.consent-where { margin: 8px 0 0; font-size: 14px; line-height: 20px; color: var(--ochre-ink); }
 .consent form { display: flex; flex-direction: column; gap: 8px; }
 .consent .note { margin: 16px 0 0; color: var(--ink-soft); }
 .consent .actions { margin-top: 16px; }

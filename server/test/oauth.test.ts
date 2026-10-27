@@ -212,6 +212,8 @@ describe("the consent page", () => {
     const html = await res.text();
     expect(html).toContain("Claude Duet wants to add an agent to Portico");
     expect(html).toContain("Requested at");
+    // The client picks its own name; where approval sends access is what can be trusted.
+    expect(html).toContain("Approving sends access to <strong>localhost:4567</strong>.");
     expect(html).toContain('value="claude-duet" aria-describedby="c-name-help"');
     expect(html).toMatch(/value="claude-duet" checked>Claude Duet/);
     expect(html).toContain("Other agents use this name when sending messages.");
