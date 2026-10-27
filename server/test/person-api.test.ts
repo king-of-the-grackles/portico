@@ -121,6 +121,18 @@ describe("approvals", () => {
   });
 });
 
+describe("held card quote", () => {
+  test("quotes reply_to, or else the recipient's message just before", async () => {
+    const { p, chris, owner, grok, muse } = await setup();
+    const first = p.messages.send(grok, { to: "muse", subject: "Find a time", text: "With Sam" }).message;
+    p.approvals.decide(chris.id, first.id, "allow_once");
+    p.messages.send(muse, { to: "grok", subject: "Thursday", text: "Thursday 2pm works" });
+    p.messages.send(grok, { to: "muse", subject: "Add the link", text: "docs/billing-v2.md" });
+    const { held } = await json<{ held: { replyTo: { text: string } | null }[] }>(callPerson(p, owner, "GET", "/api/approvals"));
+    expect(held[0]!.replyTo?.text).toBe("Thursday 2pm works");
+  });
+});
+
 describe("threads", () => {
   test("the owner sees every thread; a member sees threads with the member's agents; others are 404", async () => {
     const { p, owner, member, grok, mayaDot } = await setup();

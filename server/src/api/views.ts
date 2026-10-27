@@ -220,10 +220,16 @@ export function personViews(deps: ViewDeps, me: Person) {
     };
   };
 
+  /** The card quotes the message this one answers: reply_to, or else the recipient's message just before it. */
   const held = (m: Message): HeldCard => {
     const facts = approvals.facts(m);
+    const view = message(m);
+    const previous = view.replyTo === null && facts.replyToRecipient ? messages.previous(m) : null;
     return {
-      ...message(m),
+      ...view,
+      replyTo: previous
+        ? { id: previous.id, from: agentRef(previous.fromId), subject: previous.subject, text: clipText(previous.text) }
+        : view.replyTo,
       facts: { managedBy: personRef(facts.managedBy.id), replyToRecipient: facts.replyToRecipient, earlier: facts.earlier },
     };
   };
