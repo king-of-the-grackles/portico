@@ -148,6 +148,24 @@ describe("threads", () => {
     expect(mayaDot.id).toBeDefined();
   });
 
+  test("a thread answers its newest page, and before asks for the page ending just before a message", async () => {
+    const { p, owner, grok } = await setup();
+    const first = p.messages.send(grok, { to: "muse", subject: "One", text: "1" }).message;
+    p.messages.send(grok, { to: "muse", subject: "Two", text: "2" });
+    const page = await json<{ messages: { id: string; text: string }[]; more: boolean }>(
+      callPerson(p, owner, "GET", `/api/threads/${first.threadId}`),
+    );
+    expect([page.messages.map((m) => m.text), page.more]).toEqual([["1", "2"], false]);
+    const before = await json<{ messages: { text: string }[] }>(
+      callPerson(p, owner, "GET", `/api/threads/${first.threadId}?before=${page.messages[1]!.id}`),
+    );
+    expect(before.messages.map((m) => m.text)).toEqual(["1"]);
+    const gone = await json<{ messages: unknown[]; more: boolean }>(callPerson(p, owner, "GET", `/api/threads/${first.threadId}?before=nope`));
+    expect(gone).toMatchObject({ messages: [], more: false });
+    const one = await json<{ messages: { text: string }[]; more: boolean }>(callPerson(p, owner, "GET", `/api/threads/${first.threadId}?limit=1`));
+    expect([one.messages.map((m) => m.text), one.more]).toEqual([["2"], true]);
+  });
+
   test("filter by agent", async () => {
     const { p, owner, grok, muse } = await setup();
     p.messages.send(grok, { to: "maya-dot", subject: "s", text: "t" });

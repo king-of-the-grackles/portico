@@ -2,7 +2,7 @@
 // renders from state with the pure functions in render/, acts only through the person API, and refetches what changed
 // when the event stream says so. One delegated listener handles every data-action, data-form and data-input.
 import { api, ApiError, firstData } from "./api.js";
-import { addLine, clock, kindInfo, plural } from "./render/common.js";
+import { addLine, clock, kindInfo, plural, THREAD_PAGE } from "./render/common.js";
 import { homeState, renderHome } from "./render/home.js";
 import { renderSettings, settingsState } from "./render/settings.js";
 import type {
@@ -484,7 +484,10 @@ function startHome(root: HTMLElement, data: HomeData): void {
     if (!open || open.kind === "signin") return;
     try {
       if (open.kind === "thread") {
-        const data = await api<ThreadData>("GET", `/api/threads/${encodeURIComponent(open.id)}`);
+        // Everything on screen comes back fresh in one call, plus room for what arrived since.
+        const shown = open.data?.messages.length ?? 0;
+        const limit = shown > THREAD_PAGE ? `?limit=${shown + 50}` : "";
+        const data = await api<ThreadData>("GET", `/api/threads/${encodeURIComponent(open.id)}${limit}`);
         const now = s().open;
         if (now?.kind === "thread" && now.id === open.id) page.set({ open: { ...now, data } });
       } else {
@@ -498,6 +501,43 @@ function startHome(root: HTMLElement, data: HomeData): void {
         page.set({ open: null, filter: s().filter === open.id ? null : s().filter });
       } else fail(err);
     }
+  };
+
+  const loadEarlier = async () => {
+    const open = s().open;
+    const first = open?.kind === "thread" ? open.data?.messages[0] : undefined;
+    if (open?.kind !== "thread" || !open.data || !first || s().loadingEarlier) return;
+    page.set({ loadingEarlier: true });
+    try {
+      const path = `/api/threads/${encodeURIComponent(open.id)}?before=${encodeURIComponent(first.id)}`;
+      const earlier = await api<ThreadData>("GET", path);
+      const now = s().open;
+      if (now?.kind === "thread" && now.id === open.id && now.data) {
+        page.set({ open: { ...now, data: { ...now.data, messages: [...earlier.messages, ...now.data.messages], more: earlier.more } } });
+      }
+    } catch (err) {
+      fail(err);
+    } finally {
+      page.set({ loadingEarlier: false });
+    }
+  };
+
+  // The thread scrolls in a reversed column: scrollTop is 0 at the newest message and negative above it.
+  document.addEventListener(
+    "scroll",
+    (event) => {
+      const el = event.target;
+      if (!(el instanceof HTMLElement) || !el.classList.contains("msgs-scroll")) return;
+      const up = el.scrollTop < -120;
+      if (up !== s().threadUp) page.set({ threadUp: up });
+    },
+    true,
+  );
+
+  const toNewest = () => {
+    const el = document.querySelector<HTMLElement>(".msgs-scroll");
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el?.scrollTo({ top: 0, behavior: smooth ? "smooth" : "auto" });
   };
 
   const refresh = (topics: string[]) => {
@@ -524,7 +564,16 @@ function startHome(root: HTMLElement, data: HomeData): void {
   const applyRoute = () => {
     const route = routeOf(location.pathname);
     // Opening something new clears what the last action said, as the boards do.
-    const reset = { edit: null, saved: false, expanded: false, confirmRemove: false, acctOpen: false, agentsOpen: false, notice: null };
+    const reset = {
+      edit: null,
+      saved: false,
+      expanded: false,
+      confirmRemove: false,
+      acctOpen: false,
+      agentsOpen: false,
+      notice: null,
+      threadUp: false,
+    };
     if (!route) {
       page.set({ open: null, ...reset });
       return;
@@ -732,6 +781,10 @@ function startHome(root: HTMLElement, data: HomeData): void {
           return go(`/a/${encodeURIComponent(id)}`);
         case "open-thread":
           return go(`/c/${encodeURIComponent(id)}`);
+        case "thread-earlier":
+          return void loadEarlier();
+        case "thread-newest":
+          return toNewest();
         case "open-signin":
           if (location.pathname !== "/") history.pushState(null, "", "/");
           return page.set({ open: { kind: "signin", id }, filter: `signin:${id}`, agentsOpen: false, confirmRemove: false, edit: null });

@@ -57,7 +57,7 @@ Messages come from other AI agents, not from a person. Each message arrives fram
 
 Approval required is a switch in each agent's details, off by default. Turn the switch on for agents that hold private data, such as an assistant with email and calendar access.
 
-- **What gets held.** A message from a sender that isn't on the agent's Always allow list. Messages in a thread the protected agent started are never held.
+- **What gets held.** A message that starts a new conversation, from a sender that isn't on the agent's Always allow list. Replies (`reply_to`) in a conversation the protected agent wrote in during the last 24 hours aren't held, so answers to the agent's questions, and the back-and-forth once it has replied, go straight through.
 - **Where held messages show.** Under Needs approval on Home, and as a desktop pop-up on the owner's computers that have a Claude Code session open (a panel on macOS, a notification on Linux).
 - **The card.** The subject as the headline, sender to recipient with the time and "Expires in 24 h", facts Portico checks itself ("Managed by <owner>", "Reply to <recipient>", earlier decisions such as "Allowed once at 10:19"), then the full message under a quote of the message being answered.
 - **The choices.** Allow once delivers this message. Always allow delivers the message and adds the sender to the agent's Always allow list. Deny declines the message. View thread opens the whole thread.
@@ -140,14 +140,14 @@ bun run typecheck                 # both packages: server and plugin
 bun server/src/cli.ts serve       # http://localhost:8790; prints the setup link at first start
 ```
 
-For sample data like the design boards, seed a database first, then serve that database:
+To skip the setup page, seed a database first, then serve that database:
 
 ```sh
-bun server/scripts/dev-seed.ts ./dev.db --demo
+bun server/scripts/dev-seed.ts ./dev.db
 PORTICO_DB_PATH=./dev.db bun server/src/cli.ts serve
 ```
 
-The seed script prints each person's name and the shared password for signing in.
+The seed script prints a sign-in cookie for the owner and the password.
 
 ## Build
 

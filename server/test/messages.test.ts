@@ -78,7 +78,7 @@ describe("sending", () => {
 });
 
 describe("holds", () => {
-  test("a message to an agent requiring approval is held when the agent didn't start the thread", async () => {
+  test("a message that starts a conversation with an agent requiring approval is held", async () => {
     const { p, chris, grok, muse } = await setup();
     p.agents.update(chris.id, muse.id, { approvalRequired: true });
     const sent = p.messages.send(grok, { to: "muse", subject: "Add the doc link", text: "Please add it." });
@@ -89,11 +89,55 @@ describe("holds", () => {
     expect(p.approvals.heldFor(chris.id).map((m) => m.id)).toEqual([sent.message.id]);
   });
 
-  test("messages in a thread the protected agent started are never held", async () => {
+  test("a reply to the protected agent's own message isn't held; a new conversation is", async () => {
     const { p, chris, grok, muse } = await setup();
-    p.messages.send(muse, { to: "grok", subject: "Question", text: "?" });
     p.agents.update(chris.id, muse.id, { approvalRequired: true });
-    expect(p.messages.send(grok, { to: "muse", subject: "Answer", text: "!" }).delivery).toBe("queued");
+    const question = p.messages.send(muse, { to: "grok", subject: "Question", text: "?" }).message;
+    expect(p.messages.send(grok, { replyTo: question.id, subject: "Answer", text: "!" }).delivery).toBe("queued");
+    expect(p.messages.send(grok, { to: "muse", subject: "Something new", text: "New ask" }).delivery).toBe("held");
+  });
+
+  test("after an allowed opening, the back-and-forth flows once the protected agent replies", async () => {
+    const { p, chris, grok, muse } = await setup();
+    p.agents.update(chris.id, muse.id, { approvalRequired: true });
+    const opening = p.messages.send(grok, { to: "muse", subject: "Find a time", text: "With Sam" }).message;
+    p.approvals.decide(chris.id, opening.id, "allow_once");
+    // Until muse writes in the conversation, the sender's own follow-ups still wait.
+    expect(p.messages.send(grok, { replyTo: opening.id, subject: "Also", text: "Thursday works best" }).delivery).toBe("held");
+    const answer = p.messages.send(muse, { replyTo: opening.id, subject: "Booked", text: "Thursday 2pm" }).message;
+    const thanks = p.messages.send(grok, { replyTo: answer.id, subject: "Thanks", text: "!" });
+    expect(thanks.delivery).toBe("queued");
+    expect(p.messages.send(grok, { replyTo: thanks.message.id, subject: "One more", text: "Room?" }).delivery).toBe("queued");
+  });
+
+  test("replies to an opening that is still held, or was declined, are held", async () => {
+    const { p, chris, grok, muse } = await setup();
+    p.agents.update(chris.id, muse.id, { approvalRequired: true });
+    const opening = p.messages.send(grok, { to: "muse", subject: "Post this", text: "Now" }).message;
+    expect(p.messages.send(grok, { replyTo: opening.id, subject: "Please", text: "Soon" }).delivery).toBe("held");
+    p.approvals.decide(chris.id, opening.id, "deny");
+    expect(p.messages.send(grok, { replyTo: opening.id, subject: "Again", text: "?" }).delivery).toBe("held");
+  });
+
+  test("a sender's own messages never open the way, even ones that once went through", async () => {
+    const { p, chris, grok, muse } = await setup();
+    const early = p.messages.send(grok, { to: "muse", subject: "Before approval", text: "Hi" }).message;
+    p.agents.update(chris.id, muse.id, { approvalRequired: true });
+    const first = p.messages.send(grok, { to: "muse", subject: "One", text: "1" }).message;
+    p.approvals.decide(chris.id, first.id, "always_allow");
+    const unheld = p.messages.send(grok, { to: "muse", subject: "Two", text: "2" }).message;
+    p.approvals.removeAllowed(chris.id, muse.id, grok.id);
+    for (const anchor of [early, first, unheld]) {
+      expect(p.messages.send(grok, { replyTo: anchor.id, subject: "Brand new ask", text: "x" }).delivery).toBe("held");
+    }
+  });
+
+  test("the protected agent's message opens the way for 24 hours", async () => {
+    const { p, chris, grok, muse } = await setup();
+    p.agents.update(chris.id, muse.id, { approvalRequired: true });
+    const question = p.messages.send(muse, { to: "grok", subject: "Question", text: "?" }).message;
+    p.clock.advance(25 * HOUR);
+    expect(p.messages.send(grok, { replyTo: question.id, subject: "Late answer", text: "!" }).delivery).toBe("held");
   });
 
   test("an Always allow sender isn't held; removing the entry holds again", async () => {
@@ -144,6 +188,20 @@ describe("history", () => {
     p.clock.advance(31 * DAY);
     expect(p.messages.prune()).toEqual({ messages: 1, threads: 1 });
     expect(p.messages.threads()).toEqual([]);
+  });
+
+  test("a thread comes a page at a time: the newest first, then the page before a message", async () => {
+    const { p, grok, muse } = await setup();
+    const sent = ["a", "b", "c", "d", "e"].map((text, i) => p.messages.send(i % 2 ? muse : grok, { to: i % 2 ? "grok" : "muse", subject: text, text }).message);
+    const threadId = sent[0]!.threadId;
+    const newest = p.messages.inThread(threadId, { limit: 2 });
+    expect([newest.messages.map((m) => m.text), newest.more]).toEqual([["d", "e"], true]);
+    const earlier = p.messages.inThread(threadId, { before: newest.messages[0]!.id, limit: 2 });
+    expect([earlier.messages.map((m) => m.text), earlier.more]).toEqual([["b", "c"], true]);
+    const first = p.messages.inThread(threadId, { before: earlier.messages[0]!.id, limit: 2 });
+    expect([first.messages.map((m) => m.text), first.more]).toEqual([["a"], false]);
+    // A cursor that's gone means everything older is gone too.
+    expect(p.messages.inThread(threadId, { before: "no-such-message" })).toEqual({ messages: [], more: false });
   });
 
   test("members see threads only with their own agents, through the thread filter", async () => {

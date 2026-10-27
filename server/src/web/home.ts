@@ -20,7 +20,7 @@ export function homeData(core: Core, me: Person, open: { kind: "thread" | "agent
       panel = {
         kind: "thread",
         id: thread.id,
-        data: { thread: views.thread(thread), messages: core.messages.inThread(thread.id).map(views.message) },
+        data: views.threadData(thread),
       };
     }
   } else if (open?.kind === "agent") {

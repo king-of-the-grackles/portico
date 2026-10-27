@@ -153,6 +153,14 @@ function stamp(iso: string, now: number): string {
   return day === "Today" ? clock(iso) : `${day} ${clock(iso)}`;
 }
 
+/** Deny, Always allow and Allow once on a held message: the primary action last, at the right. */
+function decideButtons(s: HomeState, id: string): string {
+  const busy = s.busy === `decide:${id}`;
+  return `<button type="button" class="btn btn-text" data-action="decide" data-id="${esc(id)}" data-decision="deny"${when(busy, " disabled")}>Deny</button>
+      <button type="button" class="btn btn-secondary" data-action="decide" data-id="${esc(id)}" data-decision="always_allow"${when(busy, " disabled")}>Always allow</button>
+      <button type="button" class="btn btn-primary" data-action="decide" data-id="${esc(id)}" data-decision="allow_once"${when(busy, " disabled")}>Allow once</button>`;
+}
+
 /**
  * A held message, top to bottom: the subject; from, to, time and expiry; the facts Portico checks itself; the message
  * under a one-line quote of the message it answers; then View thread at the left and Deny, Always allow, Allow once.
@@ -168,7 +176,6 @@ export function renderHeldCard(s: HomeState, m: HeldCard): string {
   const quote = m.replyTo
     ? `<p class="quote"><span class="tnum">${esc(m.replyTo.from.display)}${quoteTime ? `, ${stamp(quoteTime, s.now)}` : ""}:</span> ${esc(m.replyTo.text)}</p>`
     : "";
-  const busy = s.busy === `decide:${m.id}`;
   return `<article aria-labelledby="held-h-${esc(m.id)}" class="card" data-key="h-${esc(m.id)}">
     <h3 id="held-h-${esc(m.id)}" class="card-title">${esc(m.subject)}</h3>
     <div class="card-route">
@@ -179,9 +186,7 @@ export function renderHeldCard(s: HomeState, m: HeldCard): string {
     <div class="msg-box">${quote}<p class="msg-full">${esc(m.text)}</p></div>
     <div class="actions">
       <button type="button" class="btn btn-link start" data-action="open-thread" data-id="${esc(m.threadId)}">View thread</button>
-      <button type="button" class="btn btn-text" data-action="decide" data-id="${esc(m.id)}" data-decision="deny"${when(busy, " disabled")}>Deny</button>
-      <button type="button" class="btn btn-secondary" data-action="decide" data-id="${esc(m.id)}" data-decision="always_allow"${when(busy, " disabled")}>Always allow</button>
-      <button type="button" class="btn btn-primary" data-action="decide" data-id="${esc(m.id)}" data-decision="allow_once"${when(busy, " disabled")}>Allow once</button>
+      ${decideButtons(s, m.id)}
     </div>
   </article>`;
 }
@@ -281,37 +286,78 @@ export function messageStatus(m: MessageView, now: number): MessageStatusView {
 
 function participantChip(s: HomeState, ref: { id: string; display: string }): string {
   const a = s.agents.find((x) => x.id === ref.id);
-  if (!a) return `<span class="chip chip-static">${esc(ref.display)}</span>`;
+  // Only a session that's been offline over a day leaves the agents list.
+  if (!a) return `<span class="chip chip-static"><span class="dot dot-offline"></span>${esc(ref.display)}: offline</span>`;
   const st = agentState(a, s.now);
   return `<button type="button" class="chip" data-action="open-agent" data-id="${esc(a.id)}"><span class="dot ${st.dot}"></span>${esc(a.display)}: ${esc(st.label.toLowerCase())}</button>`;
 }
 
+/** Who manages one side of the thread. */
+function managerOf(t: ThreadView, agentId: string): ThreadView["a"]["owner"] {
+  return agentId === t.a.id ? t.a.owner : t.b.owner;
+}
+
+/**
+ * A held message in the thread: the person who decides gets Deny, Always allow and Allow once, like the card on Home;
+ * anyone else sees who it waits for.
+ */
+function heldActions(s: HomeState, t: ThreadView | null, m: MessageView): string {
+  if (m.status !== "held") return "";
+  if (s.held.some((h) => h.id === m.id)) return `<div class="actions msg-actions">${decideButtons(s, m.id)}</div>`;
+  const manager = t ? managerOf(t, m.to.id) : null;
+  return `<p class="msg-waiting">${ICON.clock()}${manager?.name ? `Waiting for ${esc(manager.name)} to approve.` : "Waiting for approval."}</p>`;
+}
+
+/**
+ * The thread between two agents: one scroll that opens at the newest message. Each message shows its subject; a hairline
+ * starts each new conversation (a message that answers nothing). When the two agents have different managers, each
+ * message names its sender's manager. Older pages load on request.
+ */
 export function renderThreadPanel(s: HomeState, id: string, data: ThreadData | null): string {
   const t = data?.thread ?? s.threads.find((x) => x.id === id) ?? null;
   const title = t ? `${esc(t.a.display)} and ${esc(t.b.display)}` : "Thread";
-  const items: string[] = [];
-  let day = "";
+  const managerA = t?.a.owner ?? null;
+  const managerB = t?.b.owner ?? null;
+  const twoPeople = managerA !== null && managerB !== null && managerA.id !== managerB.id;
+  // Each day is its own group, so its pinned label scrolls away with it rather than piling under the next day's.
+  const days: { label: string; items: string[] }[] = [];
   for (const m of data?.messages ?? []) {
     const label = dayLabel(m.createdAt, s.now);
-    if (label !== day) {
-      day = label;
-      items.push(`<li class="msg-day" data-key="d-${esc(label)}">${esc(label)}</li>`);
-    }
+    const newDay = days.at(-1)?.label !== label;
+    if (newDay) days.push({ label, items: [] });
+    const items = days.at(-1)!.items;
+    const startsConversation = m.replyTo === null && !newDay;
     const st = messageStatus(m, s.now);
-    items.push(`<li class="msg${when(m.status === "held", " is-held")}" data-key="m-${esc(m.id)}">
+    const manager = twoPeople && t ? managerOf(t, m.from.id) : null;
+    items.push(`<li class="msg${when(m.status === "held", " is-held")}${when(startsConversation, " starts-conv")}" data-key="m-${esc(m.id)}">
       ${logo(m.from.kind, "logo-sm msg-logo")}
       <div class="msg-body">
-        <span class="msg-meta"><strong>${esc(m.from.display)}</strong><span class="tnum msg-time">${clock(m.createdAt)}</span><span class="tnum msg-status tone-${st.tone}${when(st.strong, " is-strong")}">${esc(st.text)}</span></span>
+        <span class="msg-meta"><strong>${esc(m.from.display)}</strong>${manager ? `<span class="msg-manager">${pav(manager)}${esc(manager.name)}</span>` : ""}<span class="tnum msg-time">${clock(m.createdAt)}</span><span class="tnum msg-status tone-${st.tone}${when(st.strong, " is-strong")}">${esc(st.text)}</span></span>
+        <p class="msg-subject">${esc(m.subject)}</p>
         <p class="msg-text">${esc(m.text)}</p>
+        ${heldActions(s, t, m)}
       </div>
     </li>`);
   }
+  const top = !data
+    ? ""
+    : data.more
+      ? `<li class="msgs-top" data-key="top-more"><button type="button" class="btn btn-link" data-action="thread-earlier"${when(s.loadingEarlier, " disabled")}>Show earlier messages</button></li>`
+      : `<li class="msgs-top" data-key="top-end">Messages older than 30 days are deleted.</li>`;
   return `<div class="thread-head">
-      <h2 class="panel-title">${title}</h2>
+      <div class="thread-title">
+        ${t ? `<span class="pair">${logo(t.a.kind, "logo-md")}${logo(t.b.kind, "logo-md pair-b")}</span>` : ""}
+        <h2 class="panel-title">${title}</h2>
+      </div>
+      ${twoPeople ? `<p class="thread-people">${pav(managerA!)}${esc(managerA!.name)} and ${pav(managerB!)}${esc(managerB!.name)}</p>` : ""}
       ${t ? `<div class="chips">${participantChip(s, t.a)}${participantChip(s, t.b)}</div>` : ""}
     </div>
-    <ol class="msgs">${items.join("")}</ol>
-    <div class="panel-foot">Kept for 30 days.</div>`;
+    <div class="msgs-scroll" data-key="msgs-scroll">
+      <ol class="msgs">${top}${days
+        .map((d) => `<li class="msg-group" data-key="d-${esc(d.label)}"><p class="msg-day">${esc(d.label)}</p><ol class="msg-list">${d.items.join("")}</ol></li>`)
+        .join("")}</ol>
+    </div>
+    ${when(s.threadUp, `<button type="button" class="newest-btn" data-action="thread-newest">${ICON.arrowDown()}Newest</button>`)}`;
 }
 
 // ---- the right panel: an agent ----
@@ -393,7 +439,7 @@ export function renderAgentPanel(s: HomeState, data: AgentData | null): string {
     const allow = data.allowList ?? [];
     parts.push(`<div class="box">
       <div class="switch-row">
-        <div class="grow"><span id="appr-label" class="row-title">Approval required</span><span id="appr-help" class="row-help">Messages from new senders wait for approval.</span></div>
+        <div class="grow"><span id="appr-label" class="row-title">Approval required</span><span id="appr-help" class="row-help">New conversations with ${esc(a.display)} wait for approval. Replies to ${esc(a.display)}'s messages don't.</span></div>
         ${switchButton(a.approvalRequired, "toggle-approval", "appr-label", "appr-help", s.busy === `approval:${a.id}`)}
       </div>
       ${when(
@@ -471,7 +517,7 @@ export function renderPanel(s: HomeState): string {
       s.signIns.find((r) => r.id === open.id),
     );
   }
-  return `<aside aria-label="${label}" class="panel sheet" data-key="panel-${open.kind}-${esc(open.id)}">
+  return `<aside aria-label="${label}" class="panel panel-${open.kind} sheet" data-key="panel-${open.kind}-${esc(open.id)}">
     <button type="button" class="icon-btn panel-close" aria-label="Close" data-action="close-panel">${ICON.close()}</button>
     ${body}
   </aside>`;
@@ -539,6 +585,8 @@ export function homeState(data: {
     saved: false,
     expanded: false,
     confirmRemove: false,
+    threadUp: false,
+    loadingEarlier: false,
     busy: null,
   };
 }

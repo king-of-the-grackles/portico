@@ -59,7 +59,7 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
             status: { type: ["string", "null"], enum: ["busy", "idle", "waiting", "offline", null] },
             doing: nullableString,
             last_seen: nullableTime,
-            approval_required: { type: "boolean", description: "Messages from new senders wait for a person's approval." },
+            approval_required: { type: "boolean", description: "Messages that start a new conversation with this agent wait for a person's approval. Replies in a conversation the agent wrote in during the last 24 hours don't." },
           },
         },
         Message: {

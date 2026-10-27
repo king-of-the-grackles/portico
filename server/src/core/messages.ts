@@ -69,6 +69,10 @@ function toThread(row: ThreadRow): Thread {
 /** The most of each kind one deliveries list holds, and one ack may name, so a single ack always covers a list. */
 export const DELIVERY_BATCH_MAX = 500;
 
+/** How many messages one page of a thread holds by default, and at most. */
+export const THREAD_PAGE = 200;
+export const THREAD_PAGE_MAX = 2000;
+
 /** A held message that ended: the sender hears about it once. */
 const UPDATE = "from_id = $agent AND held_at IS NOT NULL AND status IN ('delivered', 'declined', 'expired') AND sender_notified_at IS NULL";
 /** A message the agent can pick up now. */
@@ -130,8 +134,9 @@ export class Messages {
   }
 
   /**
-   * Sends a message. It's held for the receiver's owner when the receiver requires approval, didn't start the thread,
-   * and doesn't always allow the sender. Every message obeys the size limit, the hourly limit and the loop guard.
+   * Sends a message. It's held for the receiver's owner when the receiver requires approval, doesn't always allow the
+   * sender, and hasn't itself written in the message's conversation in the last 24 hours. Every message obeys the size
+   * limit, the hourly limit and the loop guard.
    */
   send(
     caller: Agent,
@@ -162,7 +167,9 @@ export class Messages {
     const message = this.db.transaction(() => {
       const thread = this.threadBetween(caller.id, receiver.id) ?? this.startThread(caller.id, receiver.id, at);
       const held =
-        receiver.approvalRequired && thread.startedBy !== receiver.id && !this.alwaysAllows(receiver.id, caller.id);
+        receiver.approvalRequired &&
+        !this.alwaysAllows(receiver.id, caller.id) &&
+        !(replyTo !== null && this.receiverInConversation(replyTo, receiver.id));
       const m: Message = {
         id: this.newId(),
         threadId: thread.id,
@@ -192,8 +199,9 @@ export class Messages {
     this.changes.emit(...(message.status === "held" ? (["threads", "approvals"] as const) : (["threads"] as const)));
     const note =
       delivery === "held"
-        ? `Held: ${this.agents.display(receiver)} requires approval for new senders. A person decides within 24 hours; ` +
-          "check_inbox reports whether the message was delivered, declined or expired."
+        ? `Held: ${this.agents.display(receiver)} requires approval for new conversations. Replies (reply_to) in a ` +
+          `conversation ${this.agents.display(receiver)} wrote in during the last 24 hours aren't held. A person decides ` +
+          "within 24 hours; check_inbox reports whether the message was delivered, declined or expired."
         : null;
     return { message, delivery, note };
   }
@@ -313,12 +321,27 @@ export class Messages {
     return rows.map(toThread);
   }
 
-  /** The thread's messages, oldest first. */
-  inThread(threadId: string): Message[] {
+  /**
+   * A page of the thread, oldest first: the newest `limit` messages, or with `before`, the newest `limit` sent before
+   * that message. `more` says whether older messages remain.
+   */
+  inThread(threadId: string, page: { before?: string; limit?: number } = {}): { messages: Message[]; more: boolean } {
+    const limit = Math.min(Math.max(1, Math.floor(page.limit ?? THREAD_PAGE)), THREAD_PAGE_MAX);
+    const cursor = page.before
+      ? (this.db
+          .query("SELECT created_at AS at, rowid AS n FROM messages WHERE id = $id AND thread_id = $threadId")
+          .get({ id: page.before, threadId }) as { at: string; n: number } | null)
+      : null;
+    // Pruning deletes the oldest messages first, so when the cursor is gone, so is everything older.
+    if (page.before && !cursor) return { messages: [], more: false };
     const rows = this.db
-      .query("SELECT * FROM messages WHERE thread_id = $threadId ORDER BY created_at, rowid")
-      .all({ threadId }) as MessageRow[];
-    return rows.map(toMessage);
+      .query(
+        `SELECT * FROM messages WHERE thread_id = $threadId
+           ${cursor ? "AND (created_at < $at OR (created_at = $at AND rowid < $n))" : ""}
+         ORDER BY created_at DESC, rowid DESC LIMIT $limit`,
+      )
+      .all({ threadId, limit: limit + 1, ...(cursor ? { at: cursor.at, n: cursor.n } : {}) }) as MessageRow[];
+    return { messages: rows.slice(0, limit).reverse().map(toMessage), more: rows.length > limit };
   }
 
   /** The thread's newest message, its count, and how many are held. */
@@ -345,6 +368,25 @@ export class Messages {
   }
 
   // ---- holds ----
+
+  /**
+   * Whether the receiver itself wrote in the conversation `messageId` belongs to (its reply_to chain) during the last 24
+   * hours. Only the receiver's own messages count: a sender chooses reply_to, so its own earlier messages can't open the
+   * way. Answers to the protected agent, and the back-and-forth once it has replied, are never held.
+   */
+  private receiverInConversation(messageId: string, receiverId: string): boolean {
+    const row = this.db
+      .query(
+        `WITH RECURSIVE chain(id, reply_to, from_id, created_at) AS (
+           SELECT id, reply_to, from_id, created_at FROM messages WHERE id = $id
+           UNION
+           SELECT m.id, m.reply_to, m.from_id, m.created_at FROM messages m JOIN chain c ON m.id = c.reply_to
+         )
+         SELECT 1 AS ok FROM chain WHERE from_id = $receiver AND created_at > $since LIMIT 1`,
+      )
+      .get({ id: messageId, receiver: receiverId, since: this.iso(-LIMITS.messageExpiryHours * HOUR_MS) }) as { ok: number } | null;
+    return row !== null;
+  }
 
   /** Held messages to agents the person manages, oldest first. */
   heldFor(personId: string): Message[] {

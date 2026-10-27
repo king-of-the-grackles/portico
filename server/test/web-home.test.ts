@@ -97,7 +97,7 @@ function message(o: Partial<MessageView> & { id: string; from: AgentView; to: Ag
 }
 
 const first = message({ id: "m1", from: api, to: muse, text: "Please find a time with Sam this week for the billing review.", decision: "allow_once", decidedAt: at(10, 19), decidedBy: CHRIS });
-const reply = message({ id: "m2", from: muse, to: api, text: "Sam confirmed Thursday 2pm for the billing review. Calendar invite sent.", createdAt: at(10, 23), deliveredAt: at(10, 24) });
+const reply = message({ id: "m2", from: muse, to: api, subject: "Thursday 2pm confirmed", text: "Sam confirmed Thursday 2pm for the billing review. Calendar invite sent.", createdAt: at(10, 23), deliveredAt: at(10, 24), replyTo: { id: "m1", from: ref(api), subject: "A subject", text: "Please find a time with Sam this week for the billing review.", createdAt: at(10, 18) } });
 const heldMessage = message({
   id: "m3",
   from: api,
@@ -118,8 +118,8 @@ const HELD: HeldCard = {
 function thread(id: string, a: AgentView, b: AgentView, last: MessageView, extra: Partial<ThreadView> = {}): ThreadView {
   return {
     id,
-    a: ref(a),
-    b: ref(b),
+    a: { ...ref(a), owner: a.owner },
+    b: { ...ref(b), owner: b.owner },
     startedBy: a.id,
     lastMessageAt: last.createdAt,
     last: { from: last.from, subject: last.subject, text: last.text, status: last.status },
@@ -376,27 +376,70 @@ describe("Home renders every board state", () => {
   });
 
   test("F2: View thread opens the thread with the held message marked", () => {
-    const data = { thread: THREADS[1]!, messages: [first, reply, heldMessage] };
+    const data = { thread: THREADS[1]!, messages: [first, reply, heldMessage], more: false };
     const html = render(home({ open: { kind: "thread", id: "t-api-muse", data } }));
     const t = text(html);
     expect(t).toContain("api-claude and muse");
     expect(t).toContain("Allowed once, read 10:19");
     expect(t).toContain("Read 10:24");
-    expect(html).toContain('class="msg is-held"');
+    expect(html).toContain('class="msg is-held starts-conv"');
     expect(t).toContain("Awaiting approval");
-    expect(t).toContain("Kept for 30 days.");
+    expect(t).toContain("Messages older than 30 days are deleted.");
     expect(html).toContain('aria-current="true" data-action="open-thread" data-id="t-api-muse"');
   });
 
   test("F3: Always allow delivers and the thread shows the decision", () => {
     const allowed = { ...heldMessage, status: "pending" as const, decision: "always_allow" as const, decidedAt: at(10, 30) };
-    const data = { thread: THREADS[1]!, messages: [first, reply, allowed] };
+    const data = { thread: THREADS[1]!, messages: [first, reply, allowed], more: false };
     const html = render(home({ held: [], notice: { text: "Delivered. api-claude is now always allowed.", check: true }, open: { kind: "thread", id: "t-api-muse", data } }));
     const t = text(html);
     expect(t).toContain("Delivered. api-claude is now always allowed.");
     expect(html).toContain('class="notice-strip notice-check enter"');
     expect(t).toContain("Always allowed, unread");
     expect(html).not.toContain("Needs approval");
+  });
+
+  test("F5: the thread opens at the newest, with both logos, subjects and a line where a new conversation starts", () => {
+    const data = { thread: THREADS[1]!, messages: [first, reply, heldMessage], more: false };
+    const html = render(home({ open: { kind: "thread", id: "t-api-muse", data } }));
+    const panel = html.slice(html.indexOf('class="panel panel-thread'));
+    expect(panel).toContain('<span class="pair"><img class="logo logo-md"');
+    expect(panel).toContain('class="msgs-scroll"');
+    expect(panel).toContain('<p class="msg-subject">Thursday 2pm confirmed</p>');
+    // The first message follows a day label and the reply continues its conversation: only the held message starts one.
+    expect(panel.match(/starts-conv/g)).toHaveLength(1);
+    expect(panel).not.toContain("newest-btn");
+    expect(render(home({ threadUp: true, open: { kind: "thread", id: "t-api-muse", data } }))).toContain('data-action="thread-newest"');
+  });
+
+  test("F6: the person who decides gets Deny, Always allow and Allow once on the held message in the thread", () => {
+    const data = { thread: THREADS[1]!, messages: [first, reply, heldMessage], more: false };
+    const html = render(home({ open: { kind: "thread", id: "t-api-muse", data } }));
+    const panel = html.slice(html.indexOf('class="panel panel-thread'));
+    expect(panel.match(/data-action="decide" data-id="m3"/g)).toHaveLength(3);
+    inOrder(panel, 'data-decision="deny"', 'data-decision="always_allow"', 'data-decision="allow_once"');
+    expect(panel).not.toContain("Waiting for");
+  });
+
+  test("F7: agents managed by two people: each message names its manager, and a held message says who decides", () => {
+    const toMaya = message({ id: "x1", threadId: "t-api-dot", from: api, to: mayaDot, subject: "Switch checkout to discount_total", text: "Please switch the checkout page too.", status: "held", deliveredAt: null, createdAt: at(11, 40) });
+    const fromMaya = message({ id: "x0", threadId: "t-api-dot", from: mayaDot, to: api, subject: "Gift card orders", text: "Totals are off for gift cards.", createdAt: at(11, 10) });
+    const data = { thread: thread("t-api-dot", api, mayaDot, toMaya, { held: 1 }), messages: [fromMaya, toMaya], more: false };
+    const html = render(home({ open: { kind: "thread", id: "t-api-dot", data } }));
+    const panel = html.slice(html.indexOf('class="panel panel-thread'));
+    const t = text(panel);
+    expect(t).toContain("C Chris and M Maya Okafor");
+    expect(panel.match(/class="msg-manager"/g)).toHaveLength(2);
+    expect(t).toContain("Waiting for Maya Okafor to approve.");
+    expect(panel).not.toContain('data-action="decide"');
+  });
+
+  test("F8: earlier pages load on request", () => {
+    const data = { thread: THREADS[1]!, messages: [reply, heldMessage], more: true };
+    const html = render(home({ open: { kind: "thread", id: "t-api-muse", data } }));
+    expect(html).toContain('data-action="thread-earlier"');
+    expect(text(html)).toContain("Show earlier messages");
+    expect(text(html)).not.toContain("older than 30 days");
   });
 
   test("F4: the Always allow list, with Remove on each sender", () => {
@@ -416,7 +459,7 @@ describe("Home renders every board state", () => {
       message({ id: "g1", threadId: "t-grok-dialog", from: grok, to: dialog, text: "Does the billing webhook retry on 5xx? A customer says a payment notice never arrived.", createdAt: at(10, 31), deliveredAt: at(10, 31) }),
       grokDialogLast,
     ];
-    const html = render(home({ open: { kind: "thread", id: "t-grok-dialog", data: { thread: THREADS[0]!, messages: msgs } } }));
+    const html = render(home({ open: { kind: "thread", id: "t-grok-dialog", data: { thread: THREADS[0]!, messages: msgs, more: false } } }));
     const t = text(html);
     expect(t).toContain("grok: checks in every 10 min");
     expect(t).toContain("dialog-claude: working");
@@ -547,7 +590,7 @@ describe("Home renders every board state", () => {
   test("L6: denied, the thread shows Declined", () => {
     const denied = { ...heldMessage, status: "declined" as const, decision: "deny" as const };
     const html = render(
-      home({ held: [], notice: { text: "Declined. api-claude was notified.", check: true }, open: { kind: "thread", id: "t-api-muse", data: { thread: THREADS[1]!, messages: [first, reply, denied] } } }),
+      home({ held: [], notice: { text: "Declined. api-claude was notified.", check: true }, open: { kind: "thread", id: "t-api-muse", data: { thread: THREADS[1]!, messages: [first, reply, denied], more: false } } }),
     );
     expect(text(html)).toContain("Declined. api-claude was notified.");
     expect(html).toContain('tone-danger is-strong">Declined<');

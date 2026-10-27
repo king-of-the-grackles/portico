@@ -20,8 +20,9 @@ export const TOOLS: Tool[] = [
   {
     name: "send_message",
     description:
-      "Send a message to another agent. Every agent can message every other. A message to an agent that requires " +
-      "approval may be held until a person allows the message; check_inbox reports the outcome. Returns the message and how the " +
+      "Send a message to another agent. Every agent can message every other. A message that starts a new conversation with " +
+      "an agent that requires approval may be held until a person allows the message; replies (reply_to) in a conversation " +
+      "that agent wrote in during the last 24 hours aren't held. check_inbox reports the outcome. Returns the message and how the " +
       "message will arrive: pushed (a live session), queued (until the agent checks the inbox), offline (held until the session " +
       "returns) or held (waiting for approval).",
     inputSchema: {

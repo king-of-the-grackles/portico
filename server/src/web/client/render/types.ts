@@ -30,9 +30,11 @@ export type {
   ThreadView,
 };
 
+/** A page of a thread, oldest first. `more` says older messages remain: the panel offers Show earlier messages. */
 export interface ThreadData {
   thread: ThreadView;
   messages: MessageView[];
+  more: boolean;
 }
 
 export interface AgentData {
@@ -132,6 +134,10 @@ export interface HomeState {
   saved: boolean;
   expanded: boolean;
   confirmRemove: boolean;
+  /** The thread panel is scrolled up from the newest message, so the Newest button shows. */
+  threadUp: boolean;
+  /** Show earlier messages is fetching. Kept apart from `busy`, so deciding a held message still works meanwhile. */
+  loadingEarlier: boolean;
   /** The action in flight, so its button can't be pressed twice. */
   busy: string | null;
 }

@@ -90,10 +90,15 @@ export interface HeldCard extends MessageView {
   facts: { managedBy: PersonRef; replyToRecipient: boolean; earlier: { decision: Decision; at: string }[] };
 }
 
+/** One side of a thread, with who manages the agent: the panel names managers when two people's agents talk. */
+export interface ThreadAgent extends AgentRef {
+  owner: PersonRef;
+}
+
 export interface ThreadView {
   id: string;
-  a: AgentRef;
-  b: AgentRef;
+  a: ThreadAgent;
+  b: ThreadAgent;
   startedBy: string;
   lastMessageAt: string;
   last: { from: AgentRef; subject: string; text: string; status: MessageStatus } | null;
@@ -248,12 +253,19 @@ export function personViews(deps: ViewDeps, me: Person) {
     };
   };
 
+  const threadAgent = (id: string): ThreadAgent => {
+    const agent = agents.get(id);
+    return agent
+      ? { id, display: agents.display(agent), kind: agent.kind, owner: personRef(agent.ownerId) }
+      : { id, display: id, kind: "other", owner: personRef("") };
+  };
+
   const thread = (t: Thread): ThreadView => {
     const summary = messages.threadSummary(t.id);
     return {
       id: t.id,
-      a: agentRef(t.aId),
-      b: agentRef(t.bId),
+      a: threadAgent(t.aId),
+      b: threadAgent(t.bId),
       startedBy: t.startedBy,
       lastMessageAt: t.lastMessageAt,
       last: summary.last
@@ -284,7 +296,16 @@ export function personViews(deps: ViewDeps, me: Person) {
     addedAt: entry.addedAt,
   });
 
-  return { agent, message, held, thread, person, allowEntry, agentRef, personRef };
+  /** A page of a thread's messages, the newest by default: what the thread panel shows. */
+  const threadData = (
+    t: Thread,
+    range: { before?: string; limit?: number } = {},
+  ): { thread: ThreadView; messages: MessageView[]; more: boolean } => {
+    const page = messages.inThread(t.id, range);
+    return { thread: thread(t), messages: page.messages.map(message), more: page.more };
+  };
+
+  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef };
 }
 
 export type PersonViews = ReturnType<typeof personViews>;
