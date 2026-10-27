@@ -12,6 +12,9 @@ import formsTs from "./client/forms.ts" with { type: "text" };
 import inviteTs from "./client/invite.ts" with { type: "text" };
 // @ts-ignore: imported as text, not as a module
 import passkeyTs from "./client/passkey.ts" with { type: "text" };
+// @ts-ignore: imported as text, not as a module
+import localTimeTs from "./client/local-time.ts" with { type: "text" };
+import onboardingCss from "./client/onboarding.css" with { type: "text" };
 
 type Source = { css: string } | { svg: string } | { ts: string };
 
@@ -23,6 +26,8 @@ export const ASSETS: Record<string, Source> = {
   "forms.js": { ts: formsTs as string },
   "invite.js": { ts: inviteTs as string },
   "passkey.js": { ts: passkeyTs as string },
+  "local-time.js": { ts: localTimeTs as string },
+  "onboarding.css": { css: onboardingCss },
 };
 
 const transpiler = new Bun.Transpiler({ loader: "ts", target: "browser" });

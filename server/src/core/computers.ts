@@ -1,8 +1,13 @@
 import type { Database } from "bun:sqlite";
+import { randomInt } from "node:crypto";
+import type { Agents } from "./agents";
+import { checkAgentName } from "./agents";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
-import { hashSecret, newToken } from "./tokens";
-import type { Computer } from "./types";
+import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
+import { hashSecret, LINK_SECRET, newLinkSecret, newToken, sameSecret } from "./tokens";
+import { AGENT_KINDS } from "./types";
+import type { Agent, AgentKind, Computer } from "./types";
 import { slugify } from "./words";
 
 interface ComputerRow {
@@ -18,13 +23,112 @@ function toComputer(row: ComputerRow): Computer {
   return { id: row.id, ownerId: row.owner_id, name: row.name, createdAt: row.created_at, lastSeenAt: row.last_seen_at };
 }
 
+/** Join lines that add a computer. Codex joins as an app agent in this release: its computer integration is unverified. */
+export const COMPUTER_KINDS: readonly AgentKind[] = ["claude-code"];
+/** Join lines for app agents, which ask to sign in and show a code. */
+export const APP_KINDS: readonly AgentKind[] = ["codex", "muse", "grok-bot", "other"];
+/** MCP connectors sign in with OAuth from the server address; they get no join line. */
+export const CONNECTOR_KINDS: readonly AgentKind[] = ["dots", "claude-duet", "other"];
+
+/** A one-time line from Add agent: a computer joins with it, or an app agent asks to sign in with it. */
+export interface JoinLine {
+  id: string;
+  createdBy: string;
+  kind: AgentKind;
+  createdAt: string;
+  expiresAt: string;
+  usedAt: string | null;
+  /** Computer lines: the computer the line added. */
+  computerId: string | null;
+  /** The first agent that joined through the line. */
+  agentId: string | null;
+}
+
+interface JoinLineRow {
+  id: string;
+  created_by: string;
+  kind: string;
+  created_at: string;
+  expires_at: string;
+  used_at: string | null;
+  computer_id: string | null;
+  agent_id: string | null;
+}
+
+function toJoinLine(row: JoinLineRow): JoinLine {
+  return {
+    id: row.id,
+    createdBy: row.created_by,
+    kind: row.kind as AgentKind,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    usedAt: row.used_at,
+    computerId: row.computer_id,
+    agentId: row.agent_id,
+  };
+}
+
+export type SignInStatus = "pending" | "approved" | "denied" | "expired";
+
+/** An app agent's request to join, waiting for the person who made the join line. */
+export interface SignInRequest {
+  id: string;
+  joinLineId: string;
+  kind: AgentKind;
+  /** The name the agent asked for. The person may change the name when approving. */
+  name: string;
+  /** Four digits the agent shows in its chat, so the person can match the request to the chat. */
+  code: string;
+  status: SignInStatus;
+  agentId: string | null;
+  createdAt: string;
+  expiresAt: string;
+  decidedAt: string | null;
+  decidedBy: string | null;
+  /** When the agent's token was handed over, at the first poll after approval. */
+  issuedAt: string | null;
+}
+
+interface SignInRow {
+  id: string;
+  join_line_id: string;
+  kind: string;
+  name: string;
+  code: string;
+  poll_hash: string;
+  status: string;
+  agent_id: string | null;
+  created_at: string;
+  expires_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+  issued_at: string | null;
+}
+
 const MAX_DEDUPE = 99;
 /** A computer's last_seen_at is written at most this often. */
 const TOUCH_INTERVAL_MS = 60_000;
+/** Join lines are deleted a day after they expire; their sign-in requests go with them. */
+const JOIN_LINE_KEEP_MS = DAY_MS;
+/** Registered OAuth clients with no tokens and no codes are deleted after this. */
+const IDLE_CLIENT_MS = 7 * DAY_MS;
+const AGAIN = "Make a new one with Add agent on Portico.";
 
 /** A joining computer's proposed name (usually its hostname) as a computer name: slugged, without `.local`. */
 export function computerSlug(raw: string): string {
   return slugify(raw.trim().replace(/\.local$/i, ""), "computer");
+}
+
+/** The secret of a join line, given alone or as the whole line or link (the part after the last `#`). */
+export function joinSecret(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const secret = raw.slice(raw.lastIndexOf("#") + 1).trim();
+  return LINK_SECRET.test(secret) ? secret : null;
+}
+
+/** Four digits from a secure random source, leading zeros kept. */
+export function signInCode(): string {
+  return String(randomInt(0, 10_000)).padStart(4, "0");
 }
 
 export interface ComputersDeps {
@@ -36,8 +140,8 @@ export interface ComputersDeps {
 }
 
 /**
- * Computers that joined, and their folders' "Join from the folder" switches. The Onboarding track adds join lines and
- * app agents' sign-in requests here.
+ * Computers that joined, and their folders' "Join from the folder" switches; join lines, which add a computer or let
+ * an app agent ask to sign in; and app agents' sign-in requests.
  */
 export class Computers {
   private readonly db: Database;
@@ -53,7 +157,14 @@ export class Computers {
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.log = deps.log ?? (() => {});
+    // A computer line's first session registers through the agents module; linking it here lets the Add agent sheet
+    // see "<name> joined" without the agents module knowing about join lines.
+    this.changes.on((topics) => {
+      if (topics.includes("agents")) this.linkFirstSessions();
+    });
   }
+
+  // ---- computers ----
 
   /** Adds a computer for the owner under the first free form of the proposed name. The token is returned only here. */
   create(ownerId: string, proposedName: string): { computer: Computer; token: string } {
@@ -146,14 +257,323 @@ export class Computers {
     this.changes.emit("agents", "computers");
   }
 
-  /** The Onboarding track's minute sweep (expired sign-in requests) goes here. */
-  sweepMinute(): void {}
+  // ---- join lines ----
 
-  /** The Onboarding track's daily cleanup (old join lines, OAuth codes) goes here. */
-  sweep(): void {}
+  /** A join line for one kind of agent. The secret is returned only here and stored only as a hash. */
+  createJoinLine(personId: string, kind: unknown): { joinLine: JoinLine; secret: string } {
+    if (kind === "dots" || kind === "claude-duet") {
+      throw new PorticoError(
+        "bad_request",
+        `${kind === "dots" ? "dots" : "Claude Duet"} joins as an MCP connector, with the server address instead of a join line.`,
+      );
+    }
+    const kinds = [...COMPUTER_KINDS, ...APP_KINDS];
+    if (!kinds.some((k) => k === kind)) throw new PorticoError("bad_request", `kind must be one of: ${kinds.join(", ")}.`);
+    const secret = newLinkSecret();
+    const at = this.now();
+    const joinLine: JoinLine = {
+      id: this.newId(),
+      createdBy: personId,
+      kind: kind as AgentKind,
+      createdAt: at.toISOString(),
+      expiresAt: new Date(at.getTime() + LIMITS.joinLineHours * HOUR_MS).toISOString(),
+      usedAt: null,
+      computerId: null,
+      agentId: null,
+    };
+    this.db
+      .query(
+        `INSERT INTO join_lines (id, created_by, kind, secret_hash, created_at, expires_at)
+         VALUES ($id, $createdBy, $kind, $hash, $createdAt, $expiresAt)`,
+      )
+      .run({
+        id: joinLine.id,
+        createdBy: personId,
+        kind: joinLine.kind,
+        hash: hashSecret(secret),
+        createdAt: joinLine.createdAt,
+        expiresAt: joinLine.expiresAt,
+      });
+    this.log("join_line_created", { join_line_id: joinLine.id, kind: joinLine.kind });
+    this.changes.emit("join-lines");
+    return { joinLine, secret };
+  }
 
-  private iso(): string {
-    return this.now().toISOString();
+  joinLine(id: string): JoinLine | null {
+    const row = this.db.query("SELECT * FROM join_lines WHERE id = $id").get({ id }) as JoinLineRow | null;
+    return row ? toJoinLine(row) : null;
+  }
+
+  /**
+   * Redeems a computer line: adds a computer for the person who made the line, under the first free form of the
+   * proposed name, and returns its token once. The line works once.
+   */
+  redeem(rawSecret: unknown, proposedName: unknown): { computer: Computer; token: string; joinLine: JoinLine } {
+    const name = typeof proposedName === "string" && proposedName.trim() !== "" ? proposedName.slice(0, 200) : "computer";
+    return this.db.transaction(() => {
+      const line = this.usableLine(rawSecret);
+      if (!COMPUTER_KINDS.includes(line.kind)) {
+        throw new PorticoError("bad_request", "This join line is for an app agent. Follow the steps for app agents at /join.");
+      }
+      const { computer, token } = this.create(line.createdBy, name);
+      const at = this.iso();
+      this.db
+        .query("UPDATE join_lines SET used_at = $at, computer_id = $computerId WHERE id = $id")
+        .run({ id: line.id, at, computerId: computer.id });
+      this.log("computer_joined", { join_line_id: line.id, computer: computer.name });
+      this.changes.emit("join-lines");
+      return { computer, token, joinLine: { ...line, usedAt: at, computerId: computer.id } };
+    })();
+  }
+
+  /**
+   * Sets each recent computer line's agent to the first session registered on its computer, once one has. Returns how
+   * many lines changed.
+   */
+  linkFirstSessions(): number {
+    const changed = this.db
+      .query(
+        `UPDATE join_lines SET agent_id = (
+           SELECT a.id FROM agents a WHERE a.computer_id = join_lines.computer_id AND a.type = 'session'
+           ORDER BY a.created_at, a.id LIMIT 1)
+         WHERE agent_id IS NULL AND computer_id IS NOT NULL AND used_at >= $since
+           AND EXISTS (SELECT 1 FROM agents a WHERE a.computer_id = join_lines.computer_id AND a.type = 'session')`,
+      )
+      .run({ since: this.iso(-LIMITS.joinLineHours * HOUR_MS) }).changes;
+    if (changed > 0) this.changes.emit("join-lines");
+    return changed;
+  }
+
+  // ---- app agents' sign-in requests ----
+
+  /**
+   * An app agent asks to join with an app line. Creating the request uses up the line. The agent shows the 4-digit
+   * code in its chat and polls with the poll secret, which is returned only here.
+   */
+  requestSignIn(rawSecret: unknown, input: { name: unknown; kind?: unknown }): { request: SignInRequest; pollSecret: string } {
+    const name = checkAgentName(input.name);
+    if (input.kind !== undefined && input.kind !== null && !AGENT_KINDS.some((k) => k === input.kind)) {
+      throw new PorticoError("bad_request", `kind must be one of: ${AGENT_KINDS.join(", ")}.`);
+    }
+    return this.db.transaction(() => {
+      const line = this.usableLine(rawSecret);
+      if (!APP_KINDS.includes(line.kind)) {
+        throw new PorticoError("bad_request", "This join line is for Claude Code on a computer. Follow the Claude Code steps at /join.");
+      }
+      // The person picked the kind with the line. Only a line for any other app takes the agent's own word for it.
+      const asked = input.kind as AgentKind | undefined;
+      const kind = line.kind === "other" && asked && APP_KINDS.includes(asked) ? asked : line.kind;
+      const pollSecret = newToken("ps_");
+      const at = this.now();
+      const request: SignInRequest = {
+        id: this.newId(),
+        joinLineId: line.id,
+        kind,
+        name,
+        code: signInCode(),
+        status: "pending",
+        agentId: null,
+        createdAt: at.toISOString(),
+        expiresAt: new Date(at.getTime() + LIMITS.signInRequestMinutes * MINUTE_MS).toISOString(),
+        decidedAt: null,
+        decidedBy: null,
+        issuedAt: null,
+      };
+      this.db
+        .query(
+          `INSERT INTO sign_in_requests (id, join_line_id, kind, name, code, poll_hash, status, created_at, expires_at)
+           VALUES ($id, $lineId, $kind, $name, $code, $pollHash, 'pending', $createdAt, $expiresAt)`,
+        )
+        .run({
+          id: request.id,
+          lineId: line.id,
+          kind,
+          name,
+          code: request.code,
+          pollHash: hashSecret(pollSecret),
+          createdAt: request.createdAt,
+          expiresAt: request.expiresAt,
+        });
+      this.db.query("UPDATE join_lines SET used_at = $at WHERE id = $id").run({ id: line.id, at: request.createdAt });
+      this.log("sign_in_requested", { request_id: request.id, kind });
+      this.changes.emit("approvals", "join-lines");
+      return { request, pollSecret };
+    })();
+  }
+
+  /** The request, reported `expired` once its time is up even before the minute sweep marks it. */
+  signInRequest(id: string): SignInRequest | null {
+    const row = this.db.query("SELECT * FROM sign_in_requests WHERE id = $id").get({ id }) as SignInRow | null;
+    return row ? this.toSignIn(row) : null;
+  }
+
+  /** The sign-in request made with a join line. A line makes at most one. */
+  signInForLine(joinLineId: string): SignInRequest | null {
+    const row = this.db
+      .query("SELECT * FROM sign_in_requests WHERE join_line_id = $joinLineId ORDER BY created_at DESC LIMIT 1")
+      .get({ joinLineId }) as SignInRow | null;
+    return row ? this.toSignIn(row) : null;
+  }
+
+  /** Requests still waiting from join lines the person made, oldest first. */
+  pendingSignIns(personId: string): SignInRequest[] {
+    const rows = this.db
+      .query(
+        `SELECT r.* FROM sign_in_requests r JOIN join_lines l ON l.id = r.join_line_id
+         WHERE l.created_by = $personId AND r.status = 'pending' AND r.expires_at > $now
+         ORDER BY r.created_at, r.id`,
+      )
+      .all({ personId, now: this.iso() }) as SignInRow[];
+    return rows.map((row) => this.toSignIn(row));
+  }
+
+  /**
+   * Approves or denies a request. Only the person who made the join line may decide, and only while the request waits.
+   * Approving adds the app agent under the given name or the requested one (`conflict` when the name is taken).
+   */
+  decideSignIn(
+    agents: Agents,
+    personId: string,
+    id: string,
+    decision: unknown,
+    name?: unknown,
+  ): { request: SignInRequest; agent: Agent | null } {
+    if (decision !== "approve" && decision !== "deny") {
+      throw new PorticoError("bad_request", "decision must be approve or deny.");
+    }
+    return this.db.transaction(() => {
+      const request = this.signInRequest(id);
+      if (!request) throw new PorticoError("not_found", "No such sign in request.");
+      const line = this.joinLine(request.joinLineId);
+      if (!line || line.createdBy !== personId) {
+        throw new PorticoError("not_allowed", "Only the person who made the join line can decide this sign in request.");
+      }
+      if (request.status !== "pending") {
+        throw new PorticoError(
+          "wrong_status",
+          request.status === "expired" ? "This sign in request expired." : `This sign in request was already ${request.status}.`,
+        );
+      }
+      const at = this.iso();
+      let agent: Agent | null = null;
+      if (decision === "approve") {
+        const chosen = name === undefined || name === null || name === "" ? request.name : name;
+        agent = agents.create({ ownerId: personId, name: chosen, kind: request.kind, type: "app" });
+        this.db.query("UPDATE join_lines SET agent_id = $agentId WHERE id = $id AND agent_id IS NULL").run({
+          id: line.id,
+          agentId: agent.id,
+        });
+      }
+      const status: SignInStatus = decision === "approve" ? "approved" : "denied";
+      this.db
+        .query(
+          `UPDATE sign_in_requests SET status = $status, agent_id = $agentId, decided_at = $at, decided_by = $personId
+           WHERE id = $id`,
+        )
+        .run({ id, status, agentId: agent?.id ?? null, at, personId });
+      this.log("sign_in_decided", { request_id: id, decision, agent_id: agent?.id ?? null });
+      this.changes.emit("approvals", "join-lines", "agents");
+      return { request: { ...request, status, agentId: agent?.id ?? null, decidedAt: at, decidedBy: personId }, agent };
+    })();
+  }
+
+  /**
+   * The agent's poll. After approval, the first poll gets the agent's API token, exactly once; later polls only see
+   * the status. A missing or wrong poll secret answers `unauthorized`.
+   */
+  pollSignIn(agents: Agents, id: string, pollSecret: string | null): { request: SignInRequest; agent: Agent | null; token: string | null } {
+    const row = this.db.query("SELECT * FROM sign_in_requests WHERE id = $id").get({ id }) as SignInRow | null;
+    if (!row || !pollSecret || !sameSecret(hashSecret(pollSecret), row.poll_hash)) {
+      throw new PorticoError("unauthorized", "Missing or wrong poll secret for this sign in request.");
+    }
+    const request = this.toSignIn(row);
+    const agent = request.agentId ? agents.get(request.agentId) : null;
+    if (request.status !== "approved" || !agent || request.issuedAt) return { request, agent, token: null };
+    const at = this.iso();
+    const claimed = this.db
+      .query("UPDATE sign_in_requests SET issued_at = $at WHERE id = $id AND issued_at IS NULL")
+      .run({ id, at }).changes;
+    if (claimed === 0) return { request, agent, token: null };
+    const token = agents.issueToken(agent.id, "api");
+    agents.checkedIn(agent);
+    this.log("sign_in_token_issued", { request_id: id, agent_id: agent.id });
+    this.changes.emit("agents", "join-lines");
+    return { request: { ...request, issuedAt: at }, agent, token };
+  }
+
+  // ---- sweeps ----
+
+  /** Marks sign-in requests past their 10 minutes expired. Returns how many. */
+  sweepMinute(): number {
+    const expired = this.db
+      .query("UPDATE sign_in_requests SET status = 'expired' WHERE status = 'pending' AND expires_at <= $now")
+      .run({ now: this.iso() }).changes;
+    if (expired > 0) this.changes.emit("approvals", "join-lines");
+    return expired;
+  }
+
+  /**
+   * Daily cleanup: join lines a day past expiry (with their sign-in requests), expired OAuth codes and connector
+   * tokens, and registered OAuth clients that never got a token.
+   */
+  sweep(): { joinLines: number; oauthCodes: number; tokens: number; oauthClients: number } {
+    const now = this.iso();
+    return this.db.transaction(() => {
+      const joinLines = this.db
+        .query("DELETE FROM join_lines WHERE expires_at < $cutoff")
+        .run({ cutoff: this.iso(-JOIN_LINE_KEEP_MS) }).changes;
+      const oauthCodes = this.db.query("DELETE FROM oauth_codes WHERE expires_at < $now").run({ now }).changes;
+      const tokens = this.db
+        .query("DELETE FROM agent_tokens WHERE expires_at IS NOT NULL AND expires_at < $now")
+        .run({ now }).changes;
+      const oauthClients = this.db
+        .query(
+          `DELETE FROM oauth_clients WHERE created_at < $cutoff
+             AND client_id NOT IN (SELECT client_id FROM agent_tokens WHERE client_id IS NOT NULL)
+             AND client_id NOT IN (SELECT client_id FROM oauth_codes)`,
+        )
+        .run({ cutoff: this.iso(-IDLE_CLIENT_MS) }).changes;
+      return { joinLines, oauthCodes, tokens, oauthClients };
+    })();
+  }
+
+  // ---- helpers ----
+
+  /** The unused, unexpired line with this secret. Unknown secrets are `not_found`; used or expired lines `wrong_status`. */
+  private usableLine(rawSecret: unknown): JoinLine {
+    const secret = joinSecret(rawSecret);
+    const row = secret
+      ? (this.db.query("SELECT * FROM join_lines WHERE secret_hash = $hash").get({ hash: hashSecret(secret) }) as JoinLineRow | null)
+      : null;
+    if (!row) throw new PorticoError("not_found", `This join line isn't valid. ${AGAIN}`);
+    const line = toJoinLine(row);
+    if (line.usedAt) throw new PorticoError("wrong_status", `This join line was already used. ${AGAIN}`);
+    if (Date.parse(line.expiresAt) <= this.now().getTime()) {
+      throw new PorticoError("wrong_status", `This join line expired. ${AGAIN}`);
+    }
+    return line;
+  }
+
+  private toSignIn(row: SignInRow): SignInRequest {
+    const late = row.status === "pending" && Date.parse(row.expires_at) <= this.now().getTime();
+    return {
+      id: row.id,
+      joinLineId: row.join_line_id,
+      kind: row.kind as AgentKind,
+      name: row.name,
+      code: row.code,
+      status: late ? "expired" : (row.status as SignInStatus),
+      agentId: row.agent_id,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      decidedAt: row.decided_at,
+      decidedBy: row.decided_by,
+      issuedAt: row.issued_at,
+    };
+  }
+
+  private iso(offsetMs = 0): string {
+    return new Date(this.now().getTime() + offsetMs).toISOString();
   }
 
   /** The base name, or the first free `<base>-2` … `<base>-99`. */
