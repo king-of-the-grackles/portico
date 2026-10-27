@@ -71,13 +71,18 @@ describe("POST /api/setup", () => {
     expect(res.status).toBe(403);
   });
 
-  test("after setup, a reset link sets a new owner password, signs the owner out elsewhere and signs this browser in", async () => {
+  test("after setup, a reset link sets a new owner password, removes passkeys, signs the owner out elsewhere and signs this browser in", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     const old = signIn(p, chris);
+    p.db
+      .query("INSERT INTO passkeys VALUES ('pk1', $personId, 'cred', 'key', 0, '[]', 'Laptop', 't', NULL)")
+      .run({ personId: chris.id });
     const { token } = p.accounts.createSetupLink({ reset: true });
     const res = await postSetup(p, { token, password: "a-new-owner-password" });
     expect(res.status).toBe(200);
+    // A passkey someone added before the recovery doesn't survive it.
+    expect((p.db.query("SELECT COUNT(*) AS n FROM passkeys").get() as { n: number }).n).toBe(0);
     expect((await p.app.request(`${PUBLIC_URL}/api/me`, { headers: { cookie: old } })).status).toBe(401);
     expect((await p.app.request(`${PUBLIC_URL}/api/me`, { headers: { cookie: cookieFrom(res) } })).status).toBe(200);
     expect((await p.accounts.signIn({ name: "Chris", password: "a-new-owner-password", ip: "local" })).id).toBe(chris.id);

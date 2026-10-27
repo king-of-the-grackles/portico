@@ -259,8 +259,9 @@ export class Accounts {
 
   /**
    * Uses a setup link. Before setup: creates the owner with the name and password, and confirms the public URL. After
-   * setup (a link from `portico setup --reset`): sets a new owner password and signs the owner out everywhere.
-   * Everything is checked before the link is used up.
+   * setup (a link from `portico setup --reset`): sets a new owner password, removes the owner's passkeys and signs the
+   * owner out everywhere, so whoever forced the recovery keeps no way back in. Everything is checked before the link is
+   * used up.
    */
   async setUp(settings: Settings, input: SetupInput): Promise<{ person: Person; recovered: boolean }> {
     const token = typeof input.token === "string" ? input.token : "";
@@ -273,6 +274,7 @@ export class Accounts {
       this.db.transaction(() => {
         this.useSetupLink(token);
         this.people.setPasswordHash(owner.id, hash);
+        this.db.query("DELETE FROM passkeys WHERE person_id = $personId").run({ personId: owner.id });
         this.endSessionsFor(owner.id);
       })();
       return { person: owner, recovered: true };

@@ -113,7 +113,7 @@ Every setting is optional. There is no config file and nothing secret to generat
 |---|---|
 | `portico serve` | Runs Portico. Running locally, `serve` prints the setup link at first start. |
 | `portico setup` | Prints a one-time setup link. Run the command on the host, against the same database as `serve`. |
-| `portico setup --reset` | Prints a new link. Before setup, a new setup link; after setup, a link that sets a new owner password. |
+| `portico setup --reset` | Prints a new link. Before setup, a new setup link; after setup, a link that sets a new owner password and removes the owner's passkeys. |
 | `portico doctor` | Checks that Portico answers at the public address and that setup is done. |
 | `portico join '<line>'` | Joins this computer to Portico with a join line, like `/portico:join` in Claude Code. |
 | `portico leave` | Takes this computer off Portico and undoes the join. |
