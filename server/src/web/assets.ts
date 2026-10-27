@@ -8,6 +8,8 @@ import iconSvg from "./client/icon.svg" with { type: "text" };
 import apiTs from "./client/api.ts" with { type: "text" };
 // @ts-ignore: imported as text, not as a module
 import formsTs from "./client/forms.ts" with { type: "text" };
+// @ts-ignore: imported as text, not as a module
+import inviteTs from "./client/invite.ts" with { type: "text" };
 
 type Source = { css: string } | { svg: string } | { ts: string };
 
@@ -17,6 +19,7 @@ export const ASSETS: Record<string, Source> = {
   "icon.svg": { svg: iconSvg },
   "api.js": { ts: apiTs as string },
   "forms.js": { ts: formsTs as string },
+  "invite.js": { ts: inviteTs as string },
 };
 
 const transpiler = new Bun.Transpiler({ loader: "ts", target: "browser" });
