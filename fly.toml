@@ -1,5 +1,5 @@
 # Fly.io config for Portico (docs/deploy/cloud.md). Nothing to fill in: pass the app's name with -a on each fly command.
-# Portico keeps its database and signing key on the volume at /data. After the first deploy, run
+# Portico keeps the database and signing key on the volume at /data. After the first deploy, run
 # `fly ssh console -a <app name> -C "portico setup"`.
 app = "portico"
 primary_region = "iad"

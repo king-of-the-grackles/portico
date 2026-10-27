@@ -1,7 +1,7 @@
 #!/bin/sh
-# The image's entrypoint and its `portico` command, in one launcher. Whoever starts it (the container itself,
-# `docker exec`, Render's shell or `fly ssh console`), Portico runs as the unprivileged "portico" user with the data
-# folder at /data, so `portico setup` writes to the same database the server uses, and every file stays readable by it.
+# The image's entrypoint and the `portico` command, in one launcher. Whatever starts the launcher (the container
+# itself, `docker exec`, Render's shell or `fly ssh console`), Portico runs as the unprivileged "portico" user with the
+# data folder at /data, so `portico setup` writes to the same database the server uses, and the server can read every file.
 set -e
 BIN=/usr/local/lib/portico/portico
 export PORTICO_DB_PATH="${PORTICO_DB_PATH:-/data/portico.db}"

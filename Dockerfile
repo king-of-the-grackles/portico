@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Builds Portico as a single executable, then copies it into a small Debian image. Everything Portico keeps (the
+# Builds Portico as a single executable, then copies the executable into a small Debian image. Everything Portico keeps (the
 # database and signing.key) lives in /data, so the image needs no config mount and no secrets.
 FROM oven/bun:1.4.2 AS build
 WORKDIR /src
@@ -8,7 +8,7 @@ COPY server/package.json server/package.json
 COPY plugin-claude-code/package.json plugin-claude-code/package.json
 RUN bun install --frozen-lockfile
 COPY server server
-# portico join and portico leave reuse the plugin's code (plugin-claude-code/src/cli-run.ts), so the bundle needs it too.
+# portico join and portico leave reuse the plugin's code (plugin-claude-code/src/cli-run.ts), so the bundle needs that folder too.
 COPY plugin-claude-code/src plugin-claude-code/src
 RUN bun build server/src/cli.ts --compile --no-compile-autoload-bunfig --outfile /out/portico
 

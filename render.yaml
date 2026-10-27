@@ -1,4 +1,4 @@
-# Render Blueprint for Portico (docs/deploy/cloud.md). Nothing to fill in: Portico keeps its database and signing key
+# Render Blueprint for Portico (docs/deploy/cloud.md). Nothing to fill in: Portico keeps the database and signing key
 # on the disk at /data. After the first deploy, open the service's Shell and run `portico setup`.
 # A persistent disk needs a paid instance type (Starter or above).
 services:
