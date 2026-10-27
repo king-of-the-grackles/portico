@@ -1,33 +1,30 @@
-import type { Deliveries, DeliveryAck, HubClient } from "./hub-client";
-import { HubError } from "./hub-client";
 import { errorName, type Logger } from "./log";
+import { ApiError, type DeliveryAck, type Inbox, type PorticoClient } from "./portico-client";
 import { type InboxSocket, SocketError } from "./socket";
 import type { StreamStop } from "./stream";
 
 export interface DeliveryItem {
-  kind: "task" | "result" | "message";
+  kind: "message" | "update";
+  /** The message's ID; for an update, the ID of the held message it reports on. */
   id: string;
-  /** The hub's framed text, posted as is. */
+  /** Portico's framed text, posted as is. */
   text: string;
-  createdAt: string;
+  at: string;
 }
 
-/** Tasks and messages in the order they were sent, then results. */
-export function deliveryItems(d: Deliveries): DeliveryItem[] {
-  const incoming: DeliveryItem[] = [
-    ...d.tasks.map((t) => ({ kind: "task" as const, id: t.id, text: t.framed_message, createdAt: t.created_at })),
-    ...d.messages.map((m) => ({ kind: "message" as const, id: m.id, text: m.framed_message, createdAt: m.created_at })),
-  ];
-  incoming.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-  const results = d.results.map((r) => ({ kind: "result" as const, id: r.id, text: r.framed_message, createdAt: r.created_at }));
-  return [...incoming, ...results];
+/** Messages in the order they were sent, then updates in the order they happened. */
+export function deliveryItems(d: Inbox): DeliveryItem[] {
+  const byTime = (a: DeliveryItem, b: DeliveryItem) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
+  const messages = d.messages.map((m) => ({ kind: "message" as const, id: m.id, text: m.framed_message, at: m.created_at }));
+  const updates = d.updates.map((u) => ({ kind: "update" as const, id: u.message_id, text: u.framed_message, at: u.at }));
+  return [...messages.sort(byTime), ...updates.sort(byTime)];
 }
 
 export interface InboxDeliveryDeps {
-  client: HubClient;
+  client: Pick<PorticoClient, "pendingDeliveries" | "ackDeliveries">;
   socket: Pick<InboxSocket, "post">;
   log: Logger;
-  /** Called when a hub call fails. The plugin reconnects, and the hub nudges on connect if work is still waiting. */
+  /** Called when a call to Portico fails. The plugin reconnects, and Portico nudges on connect if messages are still waiting. */
   onFailure: () => void;
   /** Pauses before retrying after the socket didn't take a post. The last one repeats. */
   retryMs?: number[];
@@ -39,8 +36,8 @@ const HOUR_MS = 3_600_000;
 
 /**
  * On each nudge: peek at what's waiting, post each item into the session's inbox socket, then ack what was posted,
- * so the hub claims only what actually reached the session. When the socket doesn't take a post, nothing after it
- * is posted, the work stays queued, and delivery retries.
+ * so Portico marks delivered only what actually reached the session. When the socket doesn't take a post, nothing
+ * after it is posted, the rest stays waiting, and delivery retries.
  */
 export class InboxDelivery {
   private checking = false;
@@ -73,7 +70,7 @@ export class InboxDelivery {
     } catch (err) {
       this.deps.log("warn", "inbox_check_failed", {
         error: errorName(err),
-        ...(err instanceof HubError ? { status: err.status } : {}),
+        ...(err instanceof ApiError ? { status: err.status } : {}),
       });
       this.deps.onFailure();
     } finally {
@@ -91,7 +88,7 @@ export class InboxDelivery {
     const { client, socket, log } = this.deps;
     this.forgetExpired();
     const items = deliveryItems(await client.pendingDeliveries());
-    const ack: DeliveryAck = { tasks: [], results: [], messages: [] };
+    const ack: DeliveryAck = { messages: [], updates: [] };
     const keys: string[] = [];
     let failure: SocketError | null = null;
     for (const item of items) {
@@ -106,17 +103,17 @@ export class InboxDelivery {
           break;
         }
         this.posted.set(key, this.now() + HOUR_MS);
-        log("info", `${item.kind}_delivered`, item.kind === "message" ? { message_id: item.id } : { task_id: item.id });
+        log("info", `${item.kind}_delivered`, { message_id: item.id });
       }
       ack[`${item.kind}s` as const].push(item.id);
       keys.push(key);
     }
     if (keys.length > 0) {
-      // A HubError here leaves `posted` intact, so the next check acks these again without posting them again.
+      // An ApiError here leaves `posted` intact, so the next check acks these again without posting them again.
       const { acked } = await client.ackDeliveries(ack);
       for (const key of keys) this.posted.delete(key);
-      // The hub caps each list, so check again while acks make progress, until nothing is left.
-      const progress = (acked?.tasks ?? 0) + (acked?.results ?? 0) + (acked?.messages ?? 0);
+      // Portico caps each list, so check again while acks make progress, until nothing is left.
+      const progress = (acked?.messages ?? 0) + (acked?.updates ?? 0);
       if (!failure && progress > 0) this.again = true;
     }
     if (failure) {
@@ -151,30 +148,30 @@ export class InboxDelivery {
   }
 }
 
-/** Wraps the plugin's own notices about the hub connection. */
+/** Wraps the plugin's own notices about the connection to Portico. */
 export function frameNotice(text: string): string {
   return `<portico-notice>\n${text}\n</portico-notice>`;
 }
 
-/** What the session is told when live delivery stops for good. */
+/** What the session is told when live delivery stops for good. A folder that's off stops quietly, with no notice. */
 export function stopNotice(stop: StreamStop): string {
   if (stop.reason === "replaced") {
     return (
-      "Portico delivery stopped: another Claude Code session connected with the same agent token, so tasks for this " +
-      "agent now go there. Restart this session to take delivery back. The Portico tools still work."
+      "Portico delivery stopped: another connection took over this session's live stream. Restart this session to take " +
+      "delivery back. The Portico tools still work."
+    );
+  }
+  if (stop.status === 401) {
+    return (
+      "Portico delivery is off: Portico no longer accepts this computer's token (the computer may have been removed in " +
+      "Settings). Join again with a new join line, then restart this session."
     );
   }
   if (stop.status === 404) {
     return (
-      "Portico delivery is off: the hub address PORTICO_URL has no live stream (404). Set PORTICO_URL to the hub's base " +
-      "address, e.g. https://portico.example.com, without /mcp or /api, and restart this session."
+      "Portico delivery is off: the Portico address in computer.json has no live stream (404). Join again with a new " +
+      "join line, then restart this session."
     );
   }
-  if (stop.status === 403) {
-    return (
-      `Portico delivery is off: the hub refused the live stream (${stop.message}). Set this agent to delivery: push ` +
-      "in portico.yaml, restart the hub, then restart this session. The Portico tools still work."
-    );
-  }
-  return `Portico delivery is off: the hub rejected PORTICO_TOKEN (${stop.message}). Fix the token and restart this session.`;
+  return `Portico delivery is off: Portico refused the live stream (${stop.message}). Restart this session to try again.`;
 }

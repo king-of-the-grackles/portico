@@ -1,8 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PRONOUNS } from "../../hub/test/helpers";
-import { type AllowOutcome, allowLine, allowPorticoTools, claudeSettingsPath, PORTICO_ALLOW_RULE } from "../src/claude-settings";
+import { copyProblems } from "../../server/test/helpers";
+import {
+  type AllowOutcome,
+  allowLine,
+  allowPorticoTools,
+  claudeSettingsPath,
+  PORTICO_ALLOW_RULE,
+  removeLine,
+  removePorticoAllowRule,
+} from "../src/claude-settings";
 import { tempDir } from "./helpers";
 
 const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
@@ -133,12 +141,72 @@ describe("the allow rule in Claude Code's settings", () => {
     const added: AllowOutcome = { kind: "added", path, backup: null };
     const manual: AllowOutcome = { kind: "manual", path, why: "not valid JSON" };
     expect(allowLine(added)).toBe(
-      `Added ${PORTICO_ALLOW_RULE} to permissions.allow in ${path}, so Claude Code runs the network tools without asking. To skip this step, join with --no-allow.`,
+      `Added ${PORTICO_ALLOW_RULE} to permissions.allow in ${path}, so Claude Code runs the Portico tools without asking. To skip this step, join with --no-allow.`,
     );
     expect(allowLine({ kind: "present", path })).toBeNull();
     expect(allowLine(manual)).toBe(
-      `${path} was left unchanged (not valid JSON). To let Claude Code run the network tools without asking, add "${PORTICO_ALLOW_RULE}" to permissions.allow in that file.`,
+      `${path} was left unchanged (not valid JSON). To let Claude Code run the Portico tools without asking, add "${PORTICO_ALLOW_RULE}" to permissions.allow in that file.`,
     );
-    for (const outcome of [added, manual]) expect(allowLine(outcome)).not.toMatch(PRONOUNS);
+    for (const outcome of [added, manual]) expect(copyProblems(allowLine(outcome)!)).toEqual([]);
+  });
+});
+
+describe("taking the allow rule out again", () => {
+  test("removes only the rule, keeping every other key, the order and the file's mode", () => {
+    const path = join(folder(), "settings.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ model: "opus", permissions: { allow: ["Bash(git status)", PORTICO_ALLOW_RULE], deny: ["Read(.env)"] } }),
+    );
+    chmodSync(path, 0o640);
+    expect(removePorticoAllowRule(path)).toEqual({ kind: "removed", path });
+    expect(readFileSync(path, "utf8")).toBe(
+      `${JSON.stringify({ model: "opus", permissions: { allow: ["Bash(git status)"], deny: ["Read(.env)"] } }, null, 2)}\n`,
+    );
+    expect(statSync(path).mode & 0o777).toBe(0o640);
+    expect(removePorticoAllowRule(path)).toEqual({ kind: "absent", path });
+  });
+
+  test("a missing file, or one without the rule, is left alone", () => {
+    const dir = folder();
+    expect(removePorticoAllowRule(join(dir, "none.json"))).toEqual({ kind: "absent", path: join(dir, "none.json") });
+    const path = join(dir, "settings.json");
+    for (const text of ["", "{}", '{ "permissions": {} }', '{ "permissions": { "allow": ["Bash(ls)"] } }']) {
+      writeFileSync(path, text);
+      expect(removePorticoAllowRule(path)).toEqual({ kind: "absent", path });
+      expect(readFileSync(path, "utf8")).toBe(text);
+    }
+  });
+
+  test("goes through a symlink to its target, keeping the link", () => {
+    const dir = folder();
+    const target = join(dir, "dotfiles-settings.json");
+    writeFileSync(target, JSON.stringify({ permissions: { allow: [PORTICO_ALLOW_RULE] } }));
+    const link = join(dir, "settings.json");
+    symlinkSync(target, link);
+    expect(removePorticoAllowRule(link)).toEqual({ kind: "removed", path: link });
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(target)).toEqual({ permissions: { allow: [] } });
+  });
+
+  test("a file that can't be parsed is left alone, with the rule to take out by hand", () => {
+    const path = join(folder(), "settings.json");
+    writeFileSync(path, "{ broken");
+    const outcome = removePorticoAllowRule(path);
+    expect(outcome).toEqual({ kind: "manual", path, why: "not valid JSON" });
+    expect(readFileSync(path, "utf8")).toBe("{ broken");
+    expect(removeLine(outcome)).toBe(
+      `${path} was left unchanged (not valid JSON). Remove "${PORTICO_ALLOW_RULE}" from permissions.allow in that file by hand.`,
+    );
+    writeFileSync(path, '{ "permissions": { "allow": "all" } }');
+    expect(removePorticoAllowRule(path)).toEqual({ kind: "manual", path, why: "permissions.allow is not a list" });
+  });
+
+  test("the CLI lines follow the copy rules", () => {
+    const path = "/h/.claude/settings.json";
+    expect(removeLine({ kind: "removed", path })).toBe(`Removed ${PORTICO_ALLOW_RULE} from permissions.allow in ${path}.`);
+    expect(removeLine({ kind: "absent", path })).toBeNull();
+    expect(copyProblems(removeLine({ kind: "removed", path })!)).toEqual([]);
+    expect(copyProblems(removeLine({ kind: "manual", path, why: "not valid JSON" })!)).toEqual([]);
   });
 });

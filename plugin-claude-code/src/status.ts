@@ -1,13 +1,11 @@
 import { execFile } from "node:child_process";
-import { createHmac } from "node:crypto";
 import { basename, resolve } from "node:path";
-import type { StatusReport } from "./hub-client";
 import { errorName, type Logger } from "./log";
-import { realFolder } from "./machine";
+import type { StatusReport } from "./portico-client";
 import type { OwnSession } from "./registry";
 import { TranscriptTail } from "./transcript";
 
-/** Claude Code's registry status as the hub's: `busy` and `shell` are busy, `idle` and `waiting` stay, anything else is idle. */
+/** Claude Code's registry status as Portico's: `busy` and `shell` are busy, `idle` and `waiting` stay, anything else is idle. */
 export function mapStatus(registryStatus: string | null | undefined): StatusReport["status"] {
   if (registryStatus === "busy" || registryStatus === "shell") return "busy";
   if (registryStatus === "waiting") return "waiting";
@@ -23,11 +21,6 @@ export function composeDoing(title: string | null, task: string | null): string 
   return Array.from(parts.join(" · ")).slice(0, MAX_DOING).join("");
 }
 
-/** HMAC-SHA256 of the folder's real path, keyed with the token: the hub tells folders apart without learning either path. */
-export function folderId(token: string, folder: string): string {
-  return createHmac("sha256", token).update(realFolder(folder)).digest("hex");
-}
-
 function runGit(args: string[]): Promise<string | null> {
   return new Promise((done) => {
     execFile("git", args, { timeout: 5_000, windowsHide: true }, (err, stdout) => done(err ? null : stdout));
@@ -36,7 +29,7 @@ function runGit(args: string[]): Promise<string | null> {
 
 /**
  * The repo's basename (the git top-level folder's, or the folder's own outside git) and the branch (null outside
- * git or on a detached HEAD). Only basenames leave the machine.
+ * git or on a detached HEAD). Only basenames leave the computer.
  */
 export async function gitInfo(
   cwd: string,
@@ -73,7 +66,7 @@ const HEARTBEAT_MS = 60_000;
 const TRANSCRIPT_RETRY_MS = 30_000;
 
 /**
- * Reports this session's status to the hub (spec §5.3): when it changes, checked every poll, and as a heartbeat.
+ * Reports this session's status to Portico: when it changes, checked every poll, and as a heartbeat.
  * Nothing it reads or reports is logged.
  */
 export class SessionWatcher {
@@ -114,7 +107,7 @@ export class SessionWatcher {
     this.timer = undefined;
   }
 
-  /** Reports the current values now, changed or not: after each hello, the hub may have restarted and forgotten them. */
+  /** Reports the current values now, changed or not: after each hello, Portico may have restarted and forgotten them. */
   resend(): void {
     void this.tick(true);
   }

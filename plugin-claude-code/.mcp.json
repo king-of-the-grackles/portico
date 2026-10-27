@@ -2,11 +2,7 @@
   "mcpServers": {
     "portico": {
       "command": "bun",
-      "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "--shell=bun", "--silent", "start"],
-      "env": {
-        "PORTICO_URL": "${PORTICO_URL}",
-        "PORTICO_TOKEN": "${PORTICO_TOKEN}"
-      }
+      "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "--shell=bun", "--silent", "start"]
     }
   }
 }

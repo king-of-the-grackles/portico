@@ -1,209 +1,191 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { copyProblems } from "../../server/test/helpers";
 import { deliveryItems, InboxDelivery, stopNotice } from "../src/delivery";
-import {
-  type Deliveries,
-  type DeliveryAck,
-  HubClient,
-  HubError,
-  type InboxTask,
-  type MessageDelivery,
-  type ResultDelivery,
-} from "../src/hub-client";
-import { createPorticoPlugin } from "../src/plugin";
+import { INSTRUCTIONS } from "../src/instructions";
+import { ApiError, type DeliveryAck, type Inbox, type MessageDelivery, PorticoClient, type UpdateDelivery } from "../src/portico-client";
 import { InboxSocket, SocketError } from "../src/socket";
-import { captureLog, fakeHost, fakeInboxSocket, hubClient, startHub, type TestHub, TOKENS, waitFor } from "./helpers";
+import { appAgent, connected, joinTestComputer, startPortico, startSession, type TestPortico, waitFor } from "./helpers";
 
-type TestAgent = keyof typeof TOKENS;
-
-let hub: TestHub;
-let logs: ReturnType<typeof captureLog>;
+let p: TestPortico;
+let token: string;
 const cleanup: (() => Promise<void>)[] = [];
+const ADDRESS = "api-claude@macbook";
+const KEY = "key-delivery-01";
 
-beforeEach(() => {
-  hub = startHub();
-  logs = captureLog();
+beforeEach(async () => {
+  p = await startPortico();
+  token = joinTestComputer(p).token;
 });
 afterEach(async () => {
   for (const fn of cleanup.splice(0)) await fn();
-  hub.stop();
+  p.stop();
 });
 
-async function connect(
-  opts: { agent?: TestAgent; client?: HubClient; retryMs?: number[]; socket?: Pick<InboxSocket, "post"> } = {},
-) {
-  const sock = await fakeInboxSocket();
-  const plugin = createPorticoPlugin({
-    config: { url: hub.url, token: TOKENS[opts.agent ?? "claude-code"], source: "env", machine: null },
-    client: opts.client ?? hubClient(hub, opts.agent ?? "claude-code"),
-    log: logs.log,
-    socket: opts.socket ?? sock.socket,
-    stream: { initialBackoffMs: 10 },
-    deliveryRetryMs: opts.retryMs ?? [30],
-  });
-  const host = await fakeHost(plugin);
-  cleanup.push(async () => {
-    await plugin.stop();
-    await host.close();
-    await sock.close();
-  });
-  return { ...host, sock };
+async function connect(opts: { client?: PorticoClient; retryMs?: number[]; socket?: InboxSocket } = {}) {
+  const s = await startSession(p, { token, key: KEY, client: opts.client, socket: opts.socket, deliveryRetryMs: opts.retryMs });
+  cleanup.push(s.stop);
+  return s;
 }
 
-const status = (id: string) => hub.service.findTask(id)?.status;
+/** Sends from a new app agent to the session, as Portico's core does for any sender. */
+function sender(name = "grok") {
+  const { agent } = appAgent(p, name, { kind: "grok-bot" });
+  return (subject: string, text: string) => p.messages.send(agent, { to: "api-claude", subject, text }).message;
+}
+
+const status = (id: string) => p.messages.get(id)?.status;
 
 describe("inbox socket delivery", () => {
-  test("gives Claude standing instructions", async () => {
+  test("gives Claude standing instructions, without pronouns", async () => {
     const { host } = await connect();
     const instructions = host.getInstructions() ?? "";
-    expect(instructions).toContain("not from the user");
-    expect(instructions).toContain("finish_task");
-    expect(instructions).toContain("list_agents");
-    expect(instructions).toContain("<portico-task");
-    expect(instructions).toContain("<portico-result");
-    expect(instructions).toContain("<portico-message");
-    expect(instructions).toContain("send_message");
-    expect(instructions).toContain("Act once per ID");
+    for (const part of ["not from the user", "list_agents", "send_message", "<portico-message", "<portico-update", "<portico-notice>", "Act once per ID"]) {
+      expect(instructions).toContain(part);
+    }
+    for (const retired of ["task", "finish_task", "hub"]) expect(instructions).not.toContain(retired);
+    expect(copyProblems(INSTRUCTIONS)).toEqual([]);
   });
 
-  test("posts messages through the socket, framed by the hub, and acks them", async () => {
-    const { sock, channel } = await connect();
-    await waitFor(() => hub.streams.isConnected("claude-code"));
-    const { message } = hub.service.sendMessage("muse", { to: "claude-code", text: "Which branch is the release on?" });
+  test("posts messages through the socket, framed by Portico, and acks them", async () => {
+    const { sock, channel, logs } = await connect();
+    await waitFor(() => connected(p, ADDRESS));
+    const send = sender();
+    const message = send("Release", "Which branch is the release on?");
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<portico-message id="${message.id}" from="muse">`);
+    expect(sock.posts[0]!.content).toStartWith(`<portico-message id="${message.id}" from="grok">`);
+    expect(sock.posts[0]!.content).toContain("via Portico: Release**");
     expect(sock.posts[0]!.content).toEndWith("Which branch is the release on?\n</portico-message>");
-    await waitFor(() => hub.store.getMessage(message.id)?.deliveredAt != null);
+    expect(sock.posts[0]!.auth).toBe("inbox-token");
+    await waitFor(() => status(message.id) === "delivered");
     expect(logs.lines.find((line) => line.msg === "message_delivered")?.fields).toEqual({ message_id: message.id });
     expect(JSON.stringify(logs.lines)).not.toContain("Which branch");
     expect(channel).toEqual([]);
   });
 
-  test("posts a new task through the inbox socket, framed by the hub, then claims it", async () => {
-    const { sock, channel } = await connect();
-    await waitFor(() => hub.streams.isConnected("claude-code"));
-    const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Write the changelog" });
-    await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<portico-task id="${task.id}" from="grok-bot">`);
-    expect(sock.posts[0]!.content).toEndWith("Write the changelog\n</portico-task>");
-    expect(sock.posts[0]!.auth).toBe("inbox-token");
-    await waitFor(() => status(task.id) === "working");
-    expect(channel).toEqual([]);
-  });
-
-  test("delivers work that arrived while disconnected", async () => {
-    const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Waiting already" });
+  test("delivers messages that arrived while disconnected", async () => {
+    // The session registered earlier and is offline now, as after a dropped connection.
+    p.agents.registerSession(p.computers.byName("macbook")!, { key: KEY, repo: "api", folderId: "a".repeat(64) });
+    const message = sender()("Waiting", "Waiting already");
+    expect(status(message.id)).toBe("pending");
     const { sock } = await connect();
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<portico-task id="${task.id}" from="grok-bot">`);
-    await waitFor(() => status(task.id) === "working");
+    expect(sock.posts[0]!.content).toStartWith(`<portico-message id="${message.id}"`);
+    await waitFor(() => status(message.id) === "delivered");
   });
 
-  test("delivers results of tasks the session sent", async () => {
+  test("posts the outcome of a held message this session sent, and marks the outcome reported", async () => {
+    appAgent(p, "muse", { approvalRequired: true });
     const { host, sock } = await connect();
-    await waitFor(() => hub.streams.isConnected("claude-code"));
-    const sent = await host.callTool({ name: "send_task", arguments: { to: "grok-bot", instructions: "Look it up" } });
-    const { task } = JSON.parse((sent.content as { text: string }[])[0]!.text) as { task: { id: string } };
-    hub.service.checkInbox("grok-bot");
-    hub.service.finishTask("grok-bot", { taskId: task.id, result: "Found: Friday" });
+    await waitFor(() => connected(p, ADDRESS));
+    const sent = await host.callTool({ name: "send_message", arguments: { to: "muse", subject: "Read the inbox", text: "x" } });
+    const { message } = JSON.parse((sent.content as { text: string }[])[0]!.text) as { message: { id: string } };
+    expect(status(message.id)).toBe("held");
+    p.approvals.decide(p.owner.id, message.id, "deny");
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<portico-result task_id="${task.id}" from="grok-bot" status="done">`);
-    expect(sock.posts[0]!.content).toContain("not from the user");
-    expect(sock.posts[0]!.content).toEndWith("Found: Friday\n</portico-result>");
-    await waitFor(() => hub.service.findTask(task.id)?.senderNotifiedAt != null);
+    expect(sock.posts[0]!.content).toStartWith(`<portico-update message_id="${message.id}" to="muse" status="declined">`);
+    expect(sock.posts[0]!.content).toContain("declined");
+    await waitFor(() => p.messages.get(message.id)?.senderNotifiedAt != null);
   });
 
-  test("delivers each task once when nudges overlap", async () => {
+  test("delivers each message once when nudges overlap", async () => {
     const { sock } = await connect();
-    await waitFor(() => hub.streams.isConnected("claude-code"));
-    const ids = Array.from({ length: 5 }, (_, i) => hub.service.sendTask("grok-bot", { to: "claude-code", instructions: `job ${i}` }).id);
+    await waitFor(() => connected(p, ADDRESS));
+    const send = sender();
+    const ids = Array.from({ length: 5 }, (_, i) => send(`job ${i}`, `job ${i}`).id);
     await waitFor(() => sock.posts.length === 5);
     await Bun.sleep(100);
     expect(sock.posts).toHaveLength(5);
-    const posted = sock.posts.map((post) => /^<portico-task id="([^"]+)"/.exec(post.content)?.[1]);
+    const posted = sock.posts.map((post) => /^<portico-message id="([^"]+)"/.exec(post.content)?.[1]);
     expect(posted.sort()).toEqual([...ids].sort());
-    for (const id of ids) expect(status(id)).toBe("working");
+    for (const id of ids) expect(status(id)).toBe("delivered");
   });
 
-  test("leaves work queued when the socket refuses, and delivers it on the retry", async () => {
-    const { sock } = await connect();
-    await waitFor(() => hub.streams.isConnected("claude-code"));
+  test("leaves messages waiting when the socket refuses, and delivers them on the retry", async () => {
+    const { sock, logs } = await connect();
+    await waitFor(() => connected(p, ADDRESS));
     sock.mode = "error";
-    const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Refused at first" });
+    const message = sender()("Refused", "Refused at first");
     await Bun.sleep(50);
-    expect(status(task.id)).toBe("queued");
+    expect(status(message.id)).toBe("pending");
     expect(sock.posts).toEqual([]);
     expect(logs.lines.some((line) => line.msg === "inbox_post_failed" && line.fields.code === "refused")).toBe(true);
     sock.mode = "accept";
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<portico-task id="${task.id}"`);
-    await waitFor(() => status(task.id) === "working");
+    expect(sock.posts[0]!.content).toStartWith(`<portico-message id="${message.id}"`);
+    await waitFor(() => status(message.id) === "delivered");
   });
 
-  test("with no socket, claims nothing and logs inbox_socket_missing once", async () => {
-    await connect({ socket: new InboxSocket({ path: () => null, token: () => null }) });
-    await waitFor(() => hub.streams.isConnected("claude-code"));
-    const first = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "First" });
+  test("with no socket, marks nothing delivered and logs inbox_socket_missing once", async () => {
+    const { logs } = await connect({ socket: new InboxSocket({ path: () => null, token: () => null }) });
+    await waitFor(() => connected(p, ADDRESS));
+    const send = sender();
+    const first = send("First", "First");
     await waitFor(() => logs.lines.some((line) => line.msg === "inbox_socket_missing"));
-    const second = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Second" });
+    const second = send("Second", "Second");
     await Bun.sleep(100);
-    expect(status(first.id)).toBe("queued");
-    expect(status(second.id)).toBe("queued");
+    expect(status(first.id)).toBe("pending");
+    expect(status(second.id)).toBe("pending");
     expect(logs.lines.filter((line) => line.msg === "inbox_socket_missing")).toHaveLength(1);
-    expect(logs.lines.some((line) => line.msg === "task_delivered")).toBe(false);
+    expect(logs.lines.some((line) => line.msg === "message_delivered")).toBe(false);
   });
 
   test("an item posted but not acked is acked next time without a second post", async () => {
-    class AckFailsOnce extends HubClient {
+    class AckFailsOnce extends PorticoClient {
       failures = 1;
       override async ackDeliveries(ack: DeliveryAck) {
-        if (this.failures-- > 0) throw new HubError(0, "unreachable", "down");
+        if (this.failures-- > 0) throw new ApiError(0, "unreachable", "down");
         return super.ackDeliveries(ack);
       }
     }
-    const client = new AckFailsOnce({ url: hub.url, token: TOKENS["claude-code"] });
-    const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Post once" });
-    const { sock } = await connect({ client });
+    const client = new AckFailsOnce({ url: p.url, token, sessionKey: KEY });
+    const { sock, logs } = await connect({ client });
+    await waitFor(() => connected(p, ADDRESS));
+    const message = sender()("Once", "Post once");
     await waitFor(() => client.failures < 0);
-    await waitFor(() => status(task.id) === "working");
+    await waitFor(() => status(message.id) === "delivered");
     await Bun.sleep(50);
     expect(sock.posts).toHaveLength(1);
     expect(logs.lines.some((line) => line.msg === "inbox_check_failed")).toBe(true);
   });
 
-  test("after a failed deliveries check, reconnects and delivers on the hub's next nudge", async () => {
-    class FlakyClient extends HubClient {
+  test("after a failed deliveries check, reconnects and delivers on Portico's next nudge", async () => {
+    class FlakyClient extends PorticoClient {
       failures = 1;
-      override async pendingDeliveries(): Promise<Deliveries> {
-        if (this.failures-- > 0) throw new HubError(0, "unreachable", "down");
+      override async pendingDeliveries(): Promise<Inbox> {
+        if (this.failures-- > 0) throw new ApiError(0, "unreachable", "down");
         return super.pendingDeliveries();
       }
     }
-    const flaky = new FlakyClient({ url: hub.url, token: TOKENS["claude-code"] });
-    const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Try again" });
-    const { sock } = await connect({ client: flaky });
+    const flaky = new FlakyClient({ url: p.url, token, sessionKey: KEY });
+    const { sock, logs } = await connect({ client: flaky });
+    await waitFor(() => connected(p, ADDRESS));
+    const message = sender()("Again", "Try again");
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toStartWith(`<portico-task id="${task.id}"`);
+    expect(sock.posts[0]!.content).toStartWith(`<portico-message id="${message.id}"`);
     expect(logs.lines.some((line) => line.msg === "inbox_check_failed")).toBe(true);
   });
 
-  test("checks again after each delivered batch, so a capped delivery list doesn't strand work", async () => {
-    class OneAtATime extends HubClient {
-      override async pendingDeliveries(): Promise<Deliveries> {
+  test("checks again after each delivered batch, so a capped delivery list doesn't strand messages", async () => {
+    class OneAtATime extends PorticoClient {
+      override async pendingDeliveries(): Promise<Inbox> {
         const d = await super.pendingDeliveries();
-        return { ...d, tasks: d.tasks.slice(0, 1) };
+        return { ...d, messages: d.messages.slice(0, 1) };
       }
     }
-    const ids = [1, 2, 3].map((i) => hub.service.sendTask("grok-bot", { to: "claude-code", instructions: `queued ${i}` }).id);
-    const { sock } = await connect({ client: new OneAtATime({ url: hub.url, token: TOKENS["claude-code"] }) });
+    const { sock } = await connect({ client: new OneAtATime({ url: p.url, token, sessionKey: KEY }) });
+    await waitFor(() => connected(p, ADDRESS));
+    const send = sender();
+    // Sent within one tick, so the first nudge finds all three waiting.
+    const ids = [1, 2, 3].map((i) => send(`queued ${i}`, `queued ${i}`).id);
     await waitFor(() => sock.posts.length === 3);
-    for (const id of ids) await waitFor(() => status(id) === "working");
+    for (const id of ids) await waitFor(() => status(id) === "delivered");
   });
 
   test("a permanent stop stops delivery, so an armed retry can't peek, post or ack afterwards", async () => {
-    class Counting extends HubClient {
+    class Counting extends PorticoClient {
       peeks = 0;
       acks = 0;
-      override async pendingDeliveries(): Promise<Deliveries> {
+      override async pendingDeliveries(): Promise<Inbox> {
         this.peeks++;
         return super.pendingDeliveries();
       }
@@ -212,44 +194,42 @@ describe("inbox socket delivery", () => {
         return super.ackDeliveries(ack);
       }
     }
-    const client = new Counting({ url: hub.url, token: TOKENS["claude-code"] });
-    const { sock } = await connect({ client, retryMs: [300] });
-    await waitFor(() => hub.streams.isConnected("claude-code"));
+    const client = new Counting({ url: p.url, token, sessionKey: KEY });
+    const { sock, logs } = await connect({ client, retryMs: [300] });
+    await waitFor(() => connected(p, ADDRESS));
     sock.mode = "error";
-    const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Refused, then replaced" });
+    const message = sender()("Refused", "Refused, then removed");
     await waitFor(() => logs.lines.some((line) => line.msg === "inbox_post_failed"));
-    // The retry is now armed. Let the socket accept again, so only a stopped delivery keeps the task from going out.
+    // The retry is now armed. Let the socket accept again, so only a stopped delivery keeps the message from going out.
     sock.mode = "accept";
     const peeks = client.peeks;
-    const other = await fetch(`${hub.url}/api/stream`, { headers: { authorization: `Bearer ${TOKENS["claude-code"]}` } });
-    try {
-      await waitFor(() => sock.posts.length === 1);
-      expect(sock.posts[0]!.content).toContain("another Claude Code session");
-      await Bun.sleep(400);
-      expect(client.peeks).toBe(peeks);
-      expect(client.acks).toBe(0);
-      expect(sock.posts).toHaveLength(1);
-      expect(status(task.id)).toBe("queued");
-    } finally {
-      await other.body?.cancel();
-    }
+    // The computer is removed: the stream closes, the reconnect gets 401, and the stream stops for good.
+    p.agents.forget(p.computers.remove(p.computers.byName("macbook")!.id));
+    await waitFor(() => sock.posts.length === 1);
+    expect(sock.posts[0]!.content).toContain("no longer accepts this computer's token");
+    await Bun.sleep(400);
+    expect(client.peeks).toBe(peeks);
+    expect(client.acks).toBe(0);
+    expect(sock.posts).toHaveLength(1);
+    expect(p.messages.get(message.id)).toBeNull();
   });
 
   test("stop() clears a pending retry", async () => {
     let peeks = 0;
     const client = {
-      pendingDeliveries: async () => {
+      pendingDeliveries: async (): Promise<Inbox> => {
         peeks++;
-        return { tasks: [{ id: "t1", created_at: "2026-10-21T10:00:00.000Z", framed_message: "T" }], results: [], messages: [] };
+        return { messages: [{ id: "m1", created_at: "2026-10-27T10:00:00.000Z", framed_message: "M" } as MessageDelivery], updates: [] };
       },
-      ackDeliveries: async () => ({ acked: { tasks: 0, results: 0, messages: 0 } }),
-    } as unknown as HubClient;
+      ackDeliveries: async () => ({ acked: { messages: 0, updates: 0 } }),
+    };
     const socket = {
       post: async () => {
         throw new SocketError("refused", "The inbox socket refused the post.");
       },
     };
-    const delivery = new InboxDelivery({ client, socket, log: logs.log, onFailure: () => {}, retryMs: [20] });
+    const logs: string[] = [];
+    const delivery = new InboxDelivery({ client, socket, log: (_l, msg) => logs.push(msg), onFailure: () => {}, retryMs: [20] });
     await delivery.run();
     await waitFor(() => peeks === 2); // the retry fired and armed the next one
     delivery.stop();
@@ -262,61 +242,59 @@ describe("inbox socket delivery", () => {
     expect(host.getServerCapabilities()?.experimental).toBeUndefined();
   });
 
-  test("tells the session through the socket when another session takes the stream over", async () => {
-    const { sock, channel } = await connect();
-    await waitFor(() => hub.streams.isConnected("claude-code"));
-    const other = await fetch(`${hub.url}/api/stream`, { headers: { authorization: `Bearer ${TOKENS["claude-code"]}` } });
-    try {
-      await waitFor(() => sock.posts.length === 1);
-      expect(sock.posts[0]!.content).toContain("<portico-notice>");
-      expect(sock.posts[0]!.content).toContain("another Claude Code session");
-      expect(channel).toEqual([]);
-    } finally {
-      await other.body?.cancel();
-    }
+  test("tells the session when Portico no longer accepts the computer's token", async () => {
+    const { sock } = await connect({ client: new PorticoClient({ url: p.url, token: "pc_not-a-real-token-123456789", sessionKey: KEY }) });
+    await waitFor(() => sock.posts.length === 1);
+    expect(sock.posts[0]!.content).toStartWith("<portico-notice>\nPortico delivery is off: Portico no longer accepts this computer's token");
   });
 
-  test("tells the session when the hub refuses the stream", async () => {
-    const { sock } = await connect({ client: new HubClient({ url: hub.url, token: "not-a-real-token-123456789" }) });
+  test("a rename reaches the session as a notice with the new name", async () => {
+    const { sock, logs } = await connect();
+    await waitFor(() => connected(p, ADDRESS));
+    p.agents.update(p.owner.id, p.agents.byAddress(ADDRESS)!.id, { name: "billing-claude" });
     await waitFor(() => sock.posts.length === 1);
-    expect(sock.posts[0]!.content).toContain("<portico-notice>");
-    expect(sock.posts[0]!.content).toContain("rejected PORTICO_TOKEN");
+    expect(sock.posts[0]!.content).toBe(
+      "<portico-notice>\nThis session is now `billing-claude` on Portico (address `billing-claude@macbook`). Other agents send messages to that name.\n</portico-notice>",
+    );
+    expect(logs.lines).toContainEqual({ level: "info", msg: "session_renamed", fields: { address: "billing-claude@macbook" } });
   });
 
-  test("logs carry IDs, never task text", async () => {
-    const { sock } = await connect();
-    await waitFor(() => hub.streams.isConnected("claude-code"));
-    const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "SECRET-INSTRUCTIONS" });
+  test("logs carry IDs, never message text", async () => {
+    const { sock, logs } = await connect();
+    await waitFor(() => connected(p, ADDRESS));
+    const message = sender()("SECRET-SUBJECT", "SECRET-TEXT");
     await waitFor(() => sock.posts.length === 1);
-    await waitFor(() => status(task.id) === "working");
-    expect(JSON.stringify(logs.lines)).not.toContain("SECRET-INSTRUCTIONS");
-    expect(JSON.stringify(logs.lines)).not.toContain("inbox-token");
-    expect(logs.lines.find((line) => line.msg === "task_delivered")?.fields).toEqual({ task_id: task.id });
+    await waitFor(() => status(message.id) === "delivered");
+    const logged = JSON.stringify(logs.lines);
+    for (const secret of ["SECRET-SUBJECT", "SECRET-TEXT", "inbox-token", token, KEY]) expect(logged).not.toContain(secret);
   });
 });
 
 describe("deliveryItems", () => {
-  test("orders tasks and messages by created_at, then results", () => {
-    const task = (id: string, created_at: string) => ({ id, created_at, framed_message: `T ${id}` }) as InboxTask;
+  test("orders messages by created_at, then updates by when they happened", () => {
     const message = (id: string, created_at: string) => ({ id, created_at, framed_message: `M ${id}` }) as MessageDelivery;
-    const result = (id: string, created_at: string) => ({ id, created_at, framed_message: `R ${id}` }) as ResultDelivery;
+    const update = (message_id: string, at: string) => ({ message_id, at, framed_message: `U ${message_id}` }) as UpdateDelivery;
     const items = deliveryItems({
-      tasks: [task("t-late", "2026-10-21T10:00:03.000Z"), task("t-early", "2026-10-21T10:00:00.000Z")],
-      messages: [message("m-mid", "2026-10-21T10:00:01.000Z")],
-      results: [result("r-old", "2026-10-21T09:00:00.000Z")],
+      messages: [message("m-late", "2026-10-27T10:00:03.000Z"), message("m-early", "2026-10-27T10:00:00.000Z")],
+      updates: [update("u-late", "2026-10-27T09:00:02.000Z"), update("u-early", "2026-10-27T09:00:00.000Z")],
     });
-    expect(items.map((item) => `${item.kind}:${item.id}`)).toEqual(["task:t-early", "message:m-mid", "task:t-late", "result:r-old"]);
-    expect(items.map((item) => item.text)).toEqual(["T t-early", "M m-mid", "T t-late", "R r-old"]);
+    expect(items.map((item) => `${item.kind}:${item.id}`)).toEqual(["message:m-early", "message:m-late", "update:u-early", "update:u-late"]);
+    expect(items.map((item) => item.text)).toEqual(["M m-early", "M m-late", "U u-early", "U u-late"]);
   });
 });
 
-describe("message text", () => {
-  test("stopNotice explains each permanent stop", () => {
-    expect(stopNotice({ reason: "replaced" })).toContain("another Claude Code session");
-    expect(stopNotice({ reason: "rejected", status: 403, message: "Only push agents can open the live stream." })).toContain(
-      "delivery: push",
-    );
-    expect(stopNotice({ reason: "rejected", status: 404, message: "HTTP 404" })).toContain("PORTICO_URL has no live stream (404)");
-    expect(stopNotice({ reason: "rejected", status: 401, message: "Missing or invalid token." })).toContain("PORTICO_TOKEN");
+describe("notice text", () => {
+  test("stopNotice explains each permanent stop, without pronouns or the retired word", () => {
+    const notices = [
+      stopNotice({ reason: "replaced" }),
+      stopNotice({ reason: "rejected", status: 401, code: "unauthorized", message: "Missing or invalid bearer token." }),
+      stopNotice({ reason: "rejected", status: 404, code: "not_found", message: "No such endpoint." }),
+      stopNotice({ reason: "rejected", status: 403, code: "not_allowed", message: "Only sessions on a computer open the live stream." }),
+    ];
+    expect(notices[0]).toContain("another connection took over");
+    expect(notices[1]).toContain("Join again with a new join line");
+    expect(notices[2]).toContain("(404)");
+    expect(notices[3]).toContain("Only sessions on a computer open the live stream.");
+    for (const notice of notices) expect(copyProblems(notice)).toEqual([]);
   });
 });

@@ -1,61 +1,64 @@
 # Portico plugin for Claude Code
 
-Puts a Claude Code session on a Portico hub:
-- On a machine that has joined the hub, every session appears in the hub's live directory as `<repo>-claude@<machine>`, with its status and what it's doing.
-- Tasks, results and messages from other agents arrive in the session through Claude Code's inbox socket. No development flag is needed, and it works in `claude -p` (not `--bare`). Needs Claude Code 2.1.224 or later.
-- The seven Portico tools are available: `list_agents`, `send_task`, `send_message`, `check_inbox`, `finish_task`, `get_task` and `report_event`.
-- Tasks that wait for approval pop up on the desktop (a panel on macOS, a notification on Linux), one per machine, with the hub page as a fallback.
-
-Full setup: [docs/agents/claude-code.md](../docs/agents/claude-code.md).
+Puts Claude Code sessions on Portico:
+- On a computer that has joined Portico, every session appears in the agent list as `<repo>-claude@<computer>`, with its status and current work.
+- Messages from other agents arrive in the session through Claude Code's inbox socket, and so do the outcomes of messages the session sent that waited for approval. No development flag is needed, and it works in `claude -p` (not `--bare`). Needs Claude Code 2.1.224 or later.
+- The three Portico tools are available: `list_agents`, `send_message` (`to`, `subject`, `text`, optional `reply_to`) and `check_inbox`.
+- A message held for approval by one of the computer owner's agents pops up on the desktop (a panel on macOS, a notification on Linux), on one session per computer, with Home as the fallback.
 
 ## Quick start
 
-Requires [Bun](https://bun.sh) on your `PATH`. The plugin installs its own dependencies the first time it starts.
+Requires [Bun](https://bun.sh) on the `PATH`. The plugin installs its own dependencies the first time it starts.
 
 ```sh
 claude plugin marketplace add <path or GitHub owner/repo of portico>
 claude plugin install portico@portico
 ```
 
-Get a join line from the hub owner. The owner makes one with Network → **Add a machine** on the hub page, or with `portico invite` on the hub's host. It looks like `Join my Portico hub: https://portico.example.com/join#<code>`, works once and expires after 24 hours. Join the machine:
+In Portico, **Add agent** › Claude Code shows a join line. It looks like `Join Portico: https://portico.example.com/join#<token>`, works once and expires after 24 hours. Join the computer:
 
 ```sh
-portico join 'Join my Portico hub: https://portico.example.com/join#<code>'
+portico join 'Join Portico: https://portico.example.com/join#<token>'
 ```
 
-If the `portico` command isn't on this machine, run the plugin's own copy:
+If the `portico` command isn't on this computer, run the plugin's own copy:
 
 ```sh
-bun "$(ls -d ~/.claude/plugins/cache/portico/portico/*/ | sort -V | tail -n 1)src/cli.ts" join 'Join my Portico hub: https://portico.example.com/join#<code>'
+bun "$(ls -d ~/.claude/plugins/cache/portico/portico/*/ | sort -V | tail -n 1)src/cli.ts" join 'Join Portico: https://portico.example.com/join#<token>'
 ```
 
-Or, in a Claude Code session started after the install, run `/portico:join <join line>`. Claude checks the line's shape and then runs the join with its Bash tool, behind one normal permission prompt; a line with a quote or a stray character is refused. A hub whose public URL has a path can't use this command: use `portico join <hub address> --code <code>` or the bun one-liner.
+Or, in a Claude Code session started after the install, run `/portico:join <join line>`. Claude checks the line's shape and then runs the join with its Bash tool, behind one normal permission prompt; a line with a quote or a stray character is refused. A Portico whose public URL has a path can't use this command: use `portico join` or the bun one-liner.
 
-The join saves the machine's token in `~/.portico/machine.json` (mode 600). It also adds `mcp__plugin_portico_portico` to `permissions.allow` in `~/.claude/settings.json`, once, so Claude Code doesn't ask before each Portico tool call; pass `--no-allow` to skip that. Sessions started from now on appear on the network; open sessions join after a restart.
+The join saves the computer token in `~/.portico/computer.json` (mode 600). It also adds `mcp__plugin_portico_portico` to `permissions.allow` in `~/.claude/settings.json`, once, so Claude Code doesn't ask before each Portico tool call; pass `--no-allow` to skip that. Sessions started from now on join Portico. Sessions already open join within a few seconds, with a notice that names the session; a session started before the plugin was installed joins after a restart. `--name <computer>` picks the computer's name (the hostname by default), and `--replace` joins again over an existing computer file.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `/portico:join <join line>` | Joins this machine to a hub. |
-| `/portico:off` | Keeps new sessions in the current folder off the network. |
-| `/portico:on` | Puts the folder back on the network. |
+| `/portico:join <join line>` | Joins this computer to Portico. |
+| `/portico:off` | Keeps new sessions in the current folder off Portico. |
+| `/portico:on` | Lets new sessions in the folder join Portico again. |
+| `/portico:leave` | Takes this computer off Portico and undoes the join. |
 
-The same commands run from a shell as `bun <plugin folder>/src/cli.ts join|off|on|status`. `status` shows the machine, the hub and the folders that are off.
+The same commands run from a shell as `bun <plugin folder>/src/cli.ts join|off|on|leave|status`; `status` shows the computer, the Portico address and the folders that are off. `portico join` and `portico leave` do the same as the plugin's join and leave.
+
+## Folders
+
+`/portico:off` and `/portico:on` set the folder's "Join from the folder" switch on Portico, the same switch as in an agent's details on Home, and keep a copy in `computer.json`. Portico has to answer: when it can't be reached, nothing changes. Sessions already open in a folder switched off stay until closed. A session started in a folder that is off gets no Portico tools and stays quiet: no notices, no retries, one log line.
+
+## Leaving
+
+`/portico:leave` (or `portico leave`) removes the computer and its sessions on Portico, deletes `~/.portico/computer.json`, takes the allow rule out of Claude Code's settings, and uninstalls the plugin with `claude plugin uninstall portico@portico` (or prints that command when `claude` isn't on the `PATH`). When Portico can't be reached, the rest still happens, and the computer stays listed in Settings › Computers until removed there.
 
 ## Approvals
 
-A task that waits for approval shows a pop-up on the machine: a floating panel on macOS, a notification with Approve and Deny on Linux. Only one session per machine shows it, and the hub page always works as a fallback. Details and limits: [docs/agents/claude-code.md](../docs/agents/claude-code.md#4-approvals-on-this-machine).
+A message held for approval shows a pop-up on the computer: the subject as the headline, the sender and the receiving agent, the text, and Deny, Always allow and Allow once. Only one session per computer shows it, and Home always works as a fallback.
 
 ## Settings
 
 | Variable | Meaning |
 |---|---|
-| `PORTICO_URL` | The hub's address, for the one-session override. Must be https, except for `localhost` and `127.0.0.1`. |
-| `PORTICO_TOKEN` | An agent's token, for the one-session override. A `portico.yaml` agent needs `delivery: push`. |
 | `PORTICO_POPUP` | `off` turns approval pop-ups off for this session. |
-| `PORTICO_MACHINE_CONFIG` | Where the machine file lives. Default `~/.portico/machine.json`. |
+| `PORTICO_COMPUTER_CONFIG` | Where the computer file lives. Default `~/.portico/computer.json`. |
 
-Setting `PORTICO_URL` and `PORTICO_TOKEN` (both) makes a single session act as that agent instead of using the machine file, which is how the existing `claude-code-dialog` agent keeps working. Do not `export` them: any other Claude Code session that sees them takes delivery over from the real one.
-
-With no `PORTICO_URL` and `PORTICO_TOKEN`, on a machine that hasn't joined (or in a folder that is off), the plugin does nothing in that session. The plugin logs `plugin_idle` in that case; `inbox_socket_missing` means Claude Code is too old or the session runs with `--bare`.
+On a computer that hasn't joined, the plugin offers no tools, logs `plugin_idle`, and looks for `computer.json` every 2 seconds, so the session joins as soon as the computer does. `inbox_socket_missing` in the log means Claude Code is too old or the session runs with `--bare`.

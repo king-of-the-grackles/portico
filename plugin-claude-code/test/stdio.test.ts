@@ -4,35 +4,38 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { sessionBaseName } from "../../hub/src/core/sessions";
-import { writeMachineFile } from "../src/machine";
+import { sessionBaseName } from "../../server/src/core/agents";
+import { folderId, readComputerFile, writeComputerFile } from "../src/computer";
 import {
+  agentAt,
+  appAgent,
   ChannelNotification,
+  ToolListChanged,
+  connected,
   fakeInboxSocket,
   type FakeInboxSocket,
-  joinTestMachine,
-  startHub,
-  type TestHub,
-  TOKENS,
+  joinTestComputer,
+  startPortico,
+  type TestPortico,
   waitFor,
   writeSessionFile,
 } from "./helpers";
 
 const MAIN = join(import.meta.dir, "../src/main.ts");
 
-let hub: TestHub | null = null;
+let p: TestPortico | null = null;
 let sock: FakeInboxSocket | null = null;
 const dirs: string[] = [];
 afterEach(async () => {
-  hub?.stop();
-  hub = null;
+  p?.stop();
+  p = null;
   await sock?.close();
   sock = null;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 function tempFolder(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   dirs.push(dir);
   return dir;
 }
@@ -48,7 +51,7 @@ function childEnv(extra: Record<string, string> = {}): Record<string, string> {
     PATH: process.env.PATH ?? "",
     HOME: home,
     PORTICO_CLAUDE_HOME: join(home, ".claude"),
-    PORTICO_MACHINE_CONFIG: join(home, "machine.json"),
+    PORTICO_COMPUTER_CONFIG: join(home, ".portico", "computer.json"),
     PORTICO_POPUP: "off",
     ...extra,
   };
@@ -86,46 +89,62 @@ function registerSession(env: Record<string, string>, fields: Parameters<typeof 
   writeSessionFile(sessions, process.pid, fields);
 }
 
+/** A joined computer in a fresh home, with a project folder the session runs in. */
+async function joinedComputer(extra: Record<string, string> = {}) {
+  p = await startPortico();
+  const { token, computer } = joinTestComputer(p, "macbook");
+  const project = tempFolder("portico-proj-");
+  const env = childEnv(extra);
+  writeComputerFile(env.PORTICO_COMPUTER_CONFIG!, { url: p.url, computer, token, off: [] });
+  const address = `${sessionBaseName(basename(project))}@macbook`;
+  return { p, token, project, env, address };
+}
+
 describe("the plugin over stdio", () => {
-  test("serves the tools and posts tasks into the inbox socket, with nothing but MCP on stdout", async () => {
-    hub = startHub();
+  test("registers the session, serves the tools and posts messages into the inbox socket, with nothing but MCP on stdout", async () => {
     sock = await fakeInboxSocket();
-    const env = childEnv({
-      PORTICO_URL: hub.url,
-      PORTICO_TOKEN: TOKENS["claude-code"],
+    const { p, token, project, env, address } = await joinedComputer({
       CLAUDE_CODE_MESSAGING_SOCKET: sock.path,
       CLAUDE_CODE_MESSAGING_TOKEN: "stdio-inbox-token",
     });
+    registerSession(env, { sessionId: "s-stdio", cwd: project, status: "busy" });
     const { host, channel, errors, stderr } = await launch(env);
     try {
-      expect((await host.listTools()).tools).toHaveLength(7);
-      await waitFor(() => hub!.streams.isConnected("claude-code"), 5000);
-      const task = hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Over stdio" });
+      expect((await host.listTools()).tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "check_inbox"]);
+      await waitFor(() => connected(p, address), 5000);
+      await waitFor(() => p.presence.get(agentAt(p, address)!.id)?.status === "busy", 5000);
+      // Outside git, the repo is the folder's basename; never the path.
+      expect(p.presence.get(agentAt(p, address)!.id)).toMatchObject({ repo: basename(project), branch: null });
+      expect(agentAt(p, address)?.folder).toBe(basename(project));
+      expect(agentAt(p, address)?.folderId).toBe(folderId(token, project));
+
+      const { agent } = appAgent(p, "grok", { kind: "grok-bot" });
+      p.messages.send(agent, { to: sessionBaseName(basename(project)), subject: "Stdio", text: "Over stdio" });
       await waitFor(() => sock!.posts.length === 1, 5000);
-      expect(sock.posts[0]).toEqual({ auth: "stdio-inbox-token", content: expect.stringContaining("Over stdio\n</portico-task>") });
-      await waitFor(() => hub!.service.findTask(task.id)?.status === "working", 5000);
+      expect(sock.posts[0]).toEqual({ auth: "stdio-inbox-token", content: expect.stringContaining("Over stdio\n</portico-message>") });
       expect(channel).toEqual([]);
-      // Env mode never has pop-ups, and says nothing about them.
-      expect(logged(stderr(), "approval_popup_unavailable")).toEqual([]);
-      expect(logged(stderr(), "plugin_started")).toEqual([expect.objectContaining({ mode: "env", popup: false })]);
+      // PORTICO_POPUP=off: no pop-ups, said once at start, and the stream never declares them.
+      expect(logged(stderr(), "approval_popup_unavailable")).toEqual([
+        expect.objectContaining({ level: "warn", platform: process.platform, reason: "off" }),
+      ]);
+      expect(logged(stderr(), "plugin_started")).toEqual([expect.objectContaining({ computer: "macbook", popup: false, folder_off: false })]);
+      expect(p.agentStreams.popupSessions(p.computers.byName("macbook")!.id)).toEqual([]);
       expect(errors).toEqual([]);
+      for (const secret of [token, project, "Over stdio"]) expect(stderr()).not.toContain(secret);
     } finally {
       await host.close();
     }
   });
 
   test("finds the inbox socket through the session registry when the environment doesn't name it", async () => {
-    hub = startHub();
     sock = await fakeInboxSocket();
-    const env = childEnv({ PORTICO_URL: hub.url, PORTICO_TOKEN: TOKENS["claude-code"] });
-    // The plugin's parent is this test process, so it plays the Claude Code session.
-    const sessions = join(env.PORTICO_CLAUDE_HOME!, "sessions");
-    mkdirSync(sessions, { recursive: true });
-    writeSessionFile(sessions, process.pid, { sessionId: "s-stdio", cwd: "/work", messagingSocketPath: sock.path });
+    const { p, project, env, address } = await joinedComputer();
+    registerSession(env, { sessionId: "s-registry", cwd: project, messagingSocketPath: sock.path });
     const { host } = await launch(env);
     try {
-      await waitFor(() => hub!.streams.isConnected("claude-code"), 5000);
-      hub.service.sendTask("grok-bot", { to: "claude-code", instructions: "Through the registry" });
+      await waitFor(() => connected(p, address), 5000);
+      const { agent } = appAgent(p, "grok", { kind: "grok-bot" });
+      p.messages.send(agent, { to: sessionBaseName(basename(project)), subject: "Registry", text: "Through the registry" });
       await waitFor(() => sock!.posts.length === 1, 5000);
       expect(sock.posts[0]).toEqual({ auth: null, content: expect.stringContaining("Through the registry") });
     } finally {
@@ -133,94 +152,81 @@ describe("the plugin over stdio", () => {
     }
   });
 
-  test("idles with no tools and no channel when PORTICO_URL and PORTICO_TOKEN are unset", async () => {
-    const { host } = await launch(childEnv());
+  test("on a computer that hasn't joined, waits with no tools, then joins when computer.json appears and says so", async () => {
+    sock = await fakeInboxSocket();
+    p = await startPortico();
+    const { token, computer } = joinTestComputer(p, "macbook");
+    const project = tempFolder("portico-proj-");
+    const env = childEnv({ CLAUDE_CODE_MESSAGING_SOCKET: sock.path });
+    registerSession(env, { sessionId: "s-waiting", cwd: project, status: "idle" });
+    const { host, stderr } = await launch(env);
+    let changes = 0;
+    host.setNotificationHandler(ToolListChanged, () => {
+      changes++;
+    });
     try {
-      const capabilities = host.getServerCapabilities() ?? {};
-      expect(capabilities.tools).toBeUndefined();
-      expect(capabilities.experimental).toBeUndefined();
+      expect(host.getServerCapabilities()?.experimental).toBeUndefined();
+      expect((await host.listTools()).tools).toEqual([]);
+      await waitFor(() => logged(stderr(), "plugin_idle").length === 1, 5000);
+
+      // The join in this session writes the computer file.
+      writeComputerFile(env.PORTICO_COMPUTER_CONFIG!, { url: p.url, computer, token, off: [] });
+      const address = `${sessionBaseName(basename(project))}@macbook`;
+      await waitFor(() => connected(p!, address), 8000);
+      await waitFor(() => changes === 1, 5000);
+      expect((await host.listTools()).tools).toHaveLength(3);
+      await waitFor(() => sock!.posts.length === 1, 5000);
+      expect(sock.posts[0]!.content).toContain(`Joined Portico as \`${sessionBaseName(basename(project))}\`.`);
+      expect(logged(stderr(), "computer_joined")).toEqual([expect.objectContaining({ computer: "macbook" })]);
     } finally {
       await host.close();
     }
   });
 
-  test("exits with the problems when the settings are half there", async () => {
-    const proc = Bun.spawn(["bun", MAIN], {
-      cwd: tempFolder("portico-plugin-"),
-      env: childEnv({ PORTICO_URL: "http://portico.example.com" }),
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+  test("exits with the problem when the address in computer.json isn't https", async () => {
+    const env = childEnv();
+    writeComputerFile(env.PORTICO_COMPUTER_CONFIG!, { url: "http://portico.example.com", computer: "macbook", token: "pc_secret", off: [] });
+    const proc = Bun.spawn(["bun", MAIN], { cwd: tempFolder("portico-plugin-"), env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     expect(await proc.exited).toBe(1);
     const stderr = await new Response(proc.stderr).text();
-    expect(stderr).toContain("PORTICO_TOKEN is not set");
-    expect(stderr).toContain("https://");
+    expect(stderr).toContain("the Portico address in computer.json must start with https://");
+    expect(stderr).not.toContain("pc_secret");
     expect(await new Response(proc.stdout).text()).toBe("");
   });
 
-  test("idles when the session's folder is off", async () => {
-    const project = tempFolder("portico-proj-");
-    const env = childEnv();
-    writeMachineFile(env.PORTICO_MACHINE_CONFIG!, {
-      hub: "http://127.0.0.1:9",
-      machine: "macbook",
-      token: "bm_test-machine-token",
-      off: [project],
-    });
+  test("in a folder that is off Portico, stays quiet: no tools, no notice, no path in the log", async () => {
+    sock = await fakeInboxSocket();
+    const { p, token, project, env, address } = await joinedComputer();
+    p.computers.setFolder(p.computers.byName("macbook")!.id, folderId(token, project), basename(project), false);
+    env.CLAUDE_CODE_MESSAGING_SOCKET = sock.path;
     registerSession(env, { sessionId: "s-off", cwd: project, status: "busy" });
     const { host, stderr } = await launch(env);
     try {
-      const capabilities = host.getServerCapabilities() ?? {};
-      expect(capabilities.tools).toBeUndefined();
-      expect(capabilities.experimental).toBeUndefined();
-      await waitFor(() => stderr().includes('"plugin_idle"'), 5000);
+      await waitFor(() => logged(stderr(), "stream_refused").length === 1, 5000);
+      expect(logged(stderr(), "stream_refused")).toEqual([expect.objectContaining({ level: "info", status: 403, code: "folder_off" })]);
+      expect((await host.listTools()).tools).toEqual([]);
+      // The local copy now has the folder off, so the next start is quiet before Portico answers.
+      await waitFor(() => readComputerFile(env.PORTICO_COMPUTER_CONFIG!)?.off.length === 1, 5000);
+      expect(readComputerFile(env.PORTICO_COMPUTER_CONFIG!)?.off).toEqual([project]);
+      await Bun.sleep(150);
+      expect(sock.posts).toEqual([]);
+      expect(agentAt(p, address)).toBeNull();
       expect(stderr()).not.toContain(project);
-      expect(stderr()).not.toContain(realpathSync(project));
     } finally {
       await host.close();
     }
   });
 
-  test("in machine mode, registers and serves the tools", async () => {
-    hub = startHub();
-    sock = await fakeInboxSocket();
-    const { token, machine } = joinTestMachine(hub, "macbook");
-    const project = tempFolder("portico-proj-");
+  test("exits with a JSON error line, naming no path, when computer.json is broken", async () => {
     const env = childEnv();
-    writeMachineFile(env.PORTICO_MACHINE_CONFIG!, { hub: hub.url, machine, token, off: [] });
-    registerSession(env, { sessionId: "s-machine", cwd: project, status: "busy", messagingSocketPath: sock.path });
-    const address = `${sessionBaseName(basename(project))}@macbook`;
-    const { host, errors, stderr } = await launch(env);
-    try {
-      expect((await host.listTools()).tools).toHaveLength(7);
-      await waitFor(() => hub!.streams.isConnected(address), 5000);
-      await waitFor(() => hub!.presence.get(address)?.status === "busy", 5000);
-      // Outside git, the repo is the folder's basename; never the path.
-      expect(hub.presence.get(address)).toMatchObject({ repo: basename(project), branch: null });
-      expect(hub.network.sessionByAddress(sessionBaseName(basename(project)), "macbook")?.folder).toBe(basename(project));
-      // PORTICO_POPUP=off: no pop-ups, said once at start, and the stream never declares them.
-      expect(logged(stderr(), "approval_popup_unavailable")).toEqual([
-        expect.objectContaining({ level: "warn", platform: process.platform, reason: "off" }),
-      ]);
-      expect(logged(stderr(), "plugin_started")).toEqual([expect.objectContaining({ mode: "machine", popup: false })]);
-      expect(hub.streams.popupSessions("macbook")).toEqual([]);
-      expect(errors).toEqual([]);
-      for (const secret of [token, project, realpathSync(project)]) expect(stderr()).not.toContain(secret);
-    } finally {
-      await host.close();
-    }
-  });
-
-  test("exits with a JSON error line, naming no path, when machine.json is broken", async () => {
-    const env = childEnv();
-    writeFileSync(env.PORTICO_MACHINE_CONFIG!, "{ not json");
+    mkdirSync(join(env.HOME!, ".portico"), { recursive: true });
+    writeFileSync(env.PORTICO_COMPUTER_CONFIG!, "{ not json");
     const proc = Bun.spawn(["bun", MAIN], { cwd: tempFolder("portico-plugin-"), env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     expect(await proc.exited).toBe(1);
     const stderr = await new Response(proc.stderr).text();
     const lines = stderr.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(lines).toContainEqual(expect.objectContaining({ level: "error", msg: "machine_file_invalid", error: "MachineFileError" }));
-    expect(stderr).not.toContain(env.PORTICO_MACHINE_CONFIG!);
+    expect(lines).toContainEqual(expect.objectContaining({ level: "error", msg: "computer_file_invalid", error: "ComputerFileError" }));
+    expect(stderr).not.toContain(env.PORTICO_COMPUTER_CONFIG!);
     expect(await new Response(proc.stdout).text()).toBe("");
   });
 });

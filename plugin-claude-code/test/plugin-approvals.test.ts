@@ -1,166 +1,156 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { signIn, testConfig } from "../../hub/test/helpers";
-import { HubClient } from "../src/hub-client";
-import { createPorticoPlugin } from "../src/plugin";
+import type { Agent } from "../../server/src/core/types";
 import type { DialogRunner } from "../src/popup";
-import { captureLog, fakeHost, fakeInboxSocket, fakeRunner, hubClient, joinTestMachine, startHub, type TestHub, waitFor } from "./helpers";
+import { PorticoClient } from "../src/portico-client";
+import { agentAt, appAgent, connected, fakeRunner, joinTestComputer, startPortico, startSession, type TestPortico, waitFor } from "./helpers";
 
-// BASE_YAML sends every task for muse through an ask rule.
-let hub: TestHub;
+let p: TestPortico;
+let token: string;
+let computerId: string;
+let grok: Agent;
 const cleanup: (() => Promise<void>)[] = [];
-beforeEach(() => {
-  hub = realTimeHub();
-});
 
-/**
- * A test hub whose clock reads the real time, so its tasks expire a day from now: the plugin's panels compare the
- * expiry with the real clock, and a task already expired shows no panel.
- */
-function realTimeHub(opts: Parameters<typeof startHub>[1] = {}): TestHub {
-  const started = startHub(testConfig(), opts);
-  started.clock.advance(Date.now() - started.clock.now().getTime());
-  return started;
+async function setUp(opts: { newNonce?: () => string } = {}) {
+  // Real time, so held messages expire a day from now and their panels show.
+  p = await startPortico({ realTime: true, newNonce: opts.newNonce });
+  ({ token, computerId } = joinTestComputer(p, "macbook"));
+  grok = appAgent(p, "grok", { kind: "grok-bot" }).agent;
+  appAgent(p, "muse", { approvalRequired: true });
 }
+
+beforeEach(() => setUp());
 afterEach(async () => {
   for (const fn of cleanup.splice(0)) await fn();
-  hub.stop();
+  p.stop();
 });
 
-async function session(token: string, key: string, repo: string, folderId: string, runner: DialogRunner | null) {
-  const sock = await fakeInboxSocket();
-  const client = new HubClient({ url: hub.url, token, sessionKey: key });
-  const plugin = createPorticoPlugin({
-    config: { url: hub.url, token, source: "machine", machine: "macbook" },
-    client,
-    log: captureLog().log,
-    socket: sock.socket,
-    registration: async () => ({ repo, folderId }),
-    popup: runner,
-    answerRetryMs: [5],
-    stream: { initialBackoffMs: 10 },
-  });
-  const host = await fakeHost(plugin);
-  cleanup.push(async () => {
-    await plugin.stop();
-    await host.close();
-    await sock.close();
-  });
-  return { plugin, client };
+async function session(key: string, repo: string, folderId: string, runner: DialogRunner | null, client?: PorticoClient) {
+  const s = await startSession(p, { token, key, repo, folderId, runner, client });
+  cleanup.push(s.stop);
+  return s;
 }
 
-test("an ask task pops up in the machine's oldest session only, and Approve there queues the task", async () => {
-  const { token } = joinTestMachine(hub, "macbook");
+/** The computer's pop-up sessions, by address. */
+const popups = () => p.agentStreams.popupSessions(computerId).map((id) => p.agents.address(p.agents.get(id)!));
+const hold = (subject = "Read the inbox", text = "Summarize the inbox") =>
+  p.messages.send(grok, { to: "muse", subject, text }).message;
+const status = (id: string) => p.messages.get(id)?.status;
+
+test("a held message pops up in the computer's oldest session only, and Allow once there delivers the message", async () => {
   const first = fakeRunner();
   const second = fakeRunner();
-  await session(token, "key-first-0001", "api", "a".repeat(64), first.runner);
-  await waitFor(() => hub.streams.popupSessions("macbook").length === 1);
-  await session(token, "key-second-002", "web", "b".repeat(64), second.runner);
-  await waitFor(() => hub.streams.popupSessions("macbook").length === 2);
-  const task = hub.service.sendTask("grok-bot", { to: "muse", instructions: "Summarize the inbox" });
+  await session("key-first-0001", "api", "a".repeat(64), first.runner);
+  await waitFor(() => popups().length === 1);
+  await session("key-second-002", "web", "b".repeat(64), second.runner);
+  await waitFor(() => popups().length === 2);
+  const message = hold();
+  expect(message.status).toBe("held");
   await waitFor(() => first.panels.length === 1);
-  expect(first.panels[0]!.prompt).toMatchObject({ taskId: task.id, from: "grok-bot", to: "muse", instructions: "Summarize the inbox" });
-  first.panels[0]!.answer({ kind: "answered", decision: "approve", note: "" });
-  await waitFor(() => hub.service.findTask(task.id)?.status === "queued");
+  expect(first.panels[0]!.prompt).toMatchObject({
+    messageId: message.id,
+    from: "grok",
+    to: "muse",
+    subject: "Read the inbox",
+    text: "Summarize the inbox",
+  });
+  first.panels[0]!.answer({ kind: "answered", decision: "allow_once" });
+  await waitFor(() => status(message.id) === "pending");
+  expect(p.messages.get(message.id)?.decision).toBe("allow_once");
   await Bun.sleep(50);
   expect(second.panels).toEqual([]);
 });
 
-test("Deny with a note denies the task with the note as its reason", async () => {
-  const { token } = joinTestMachine(hub, "macbook");
+test("Always allow adds the sender to the allow list, and Deny declines", async () => {
   const runner = fakeRunner();
-  await session(token, "key-first-0001", "api", "a".repeat(64), runner.runner);
-  await waitFor(() => hub.streams.popupSessions("macbook").length === 1);
-  const task = hub.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
+  await session("key-first-0001", "api", "a".repeat(64), runner.runner);
+  await waitFor(() => popups().length === 1);
+  const denied = hold("First", "x");
   await waitFor(() => runner.panels.length === 1);
-  runner.panels[0]!.answer({ kind: "answered", decision: "deny", note: "Not this week" });
-  await waitFor(() => hub.service.findTask(task.id)?.status === "denied");
-  expect(hub.service.findTask(task.id)?.reason).toBe("Not this week");
+  runner.panels[0]!.answer({ kind: "answered", decision: "deny" });
+  await waitFor(() => status(denied.id) === "declined");
+
+  const allowed = hold("Second", "y");
+  await waitFor(() => runner.panels.length === 2);
+  runner.panels[1]!.answer({ kind: "answered", decision: "always_allow" });
+  await waitFor(() => status(allowed.id) === "pending");
+  const muse = agentAt(p, "muse")!;
+  expect(p.allowList.has(muse.id, grok.id)).toBe(true);
+  // From now on, grok's messages to muse go straight through.
+  expect(hold("Third", "z").status).toBe("pending");
 });
 
-test("approving on the hub page closes the panel", async () => {
-  const { token } = joinTestMachine(hub, "macbook");
+test("deciding on Home closes the panel", async () => {
   const runner = fakeRunner();
-  await session(token, "key-first-0001", "api", "a".repeat(64), runner.runner);
-  await waitFor(() => hub.streams.popupSessions("macbook").length === 1);
-  const task = hub.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
+  await session("key-first-0001", "api", "a".repeat(64), runner.runner);
+  await waitFor(() => popups().length === 1);
+  const message = hold();
   await waitFor(() => runner.panels.length === 1);
-  const cookie = await signIn(hub.app);
-  expect((await hub.app.request(`/hub/tasks/${task.id}/approve`, { method: "POST", headers: { cookie } })).status).toBe(200);
+  p.approvals.decide(p.owner.id, message.id, "allow_once");
   await waitFor(() => runner.panels[0]!.killed);
 });
 
-test("when the session holding the panel stops, the other session on the machine shows it", async () => {
-  const { token } = joinTestMachine(hub, "macbook");
+test("when the session holding the panel stops, the other session on the computer shows it", async () => {
   const first = fakeRunner();
   const second = fakeRunner();
-  const holder = await session(token, "key-first-0001", "api", "a".repeat(64), first.runner);
-  await waitFor(() => hub.streams.popupSessions("macbook").length === 1);
-  await session(token, "key-second-002", "web", "b".repeat(64), second.runner);
-  await waitFor(() => hub.streams.popupSessions("macbook").length === 2);
-  const task = hub.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
+  const holder = await session("key-first-0001", "api", "a".repeat(64), first.runner);
+  await waitFor(() => popups().length === 1);
+  await session("key-second-002", "web", "b".repeat(64), second.runner);
+  await waitFor(() => popups().length === 2);
+  const message = hold();
   await waitFor(() => first.panels.length === 1);
   await holder.plugin.stop();
   expect(first.panels[0]!.killed).toBe(true);
   await waitFor(() => second.panels.length === 1);
-  expect(second.panels[0]!.prompt.taskId).toBe(task.id);
+  expect(second.panels[0]!.prompt.messageId).toBe(message.id);
 });
 
 test("a dropped stream kills the panel, and the reconnect brings it back with the same nonce", async () => {
-  hub.stop();
+  p.stop();
   let made = 0;
-  hub = realTimeHub({ newNonce: () => `nonce-${++made}-aaaaaaaaaaaaaaaa` });
-  const { token } = joinTestMachine(hub, "macbook");
+  await setUp({ newNonce: () => `nonce-${++made}-aaaaaaaaaaaaaaaa` });
   const runner = fakeRunner();
-  const { client } = await session(token, "key-first-0001", "api", "a".repeat(64), runner.runner);
   const nonces: string[] = [];
+  const client = new PorticoClient({ url: p.url, token, sessionKey: "key-first-0001" });
   const answer = client.answerApproval.bind(client);
-  client.answerApproval = (taskId, body) => {
+  client.answerApproval = (messageId, body) => {
     nonces.push(body.nonce);
-    return answer(taskId, body);
+    return answer(messageId, body);
   };
-  await waitFor(() => hub.streams.popupSessions("macbook").length === 1);
-  const task = hub.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
+  await session("key-first-0001", "api", "a".repeat(64), runner.runner, client);
+  await waitFor(() => popups().length === 1);
+  const message = hold();
   await waitFor(() => runner.panels.length === 1);
-  hub.streams.close("api-claude@macbook");
+  p.agentStreams.closeAll([agentAt(p, "api-claude@macbook")!.id]);
   await waitFor(() => runner.panels[0]!.killed);
   await waitFor(() => runner.panels.length === 2);
-  expect(runner.panels[1]!.prompt.taskId).toBe(task.id);
-  runner.panels[1]!.answer({ kind: "answered", decision: "approve", note: "" });
-  await waitFor(() => hub.service.findTask(task.id)?.status === "queued");
+  expect(runner.panels[1]!.prompt.messageId).toBe(message.id);
+  runner.panels[1]!.answer({ kind: "answered", decision: "allow_once" });
+  await waitFor(() => status(message.id) === "pending");
   expect(made).toBe(1);
   expect(nonces).toEqual(["nonce-1-aaaaaaaaaaaaaaaa"]);
 });
 
-test("a session whose panel fails to show reconnects without pop-ups, and the next session on the machine gets the request", async () => {
-  const { token } = joinTestMachine(hub, "macbook");
+test("a session whose panel fails to show reconnects without pop-ups, and the next session on the computer gets the request", async () => {
   const broken = fakeRunner();
   const working = fakeRunner();
-  await session(token, "key-first-0001", "api", "a".repeat(64), broken.runner);
-  await waitFor(() => hub.streams.popupSessions("macbook").length === 1);
-  await session(token, "key-second-002", "web", "b".repeat(64), working.runner);
-  await waitFor(() => hub.streams.popupSessions("macbook").length === 2);
-  const task = hub.service.sendTask("grok-bot", { to: "muse", instructions: "x" });
+  await session("key-first-0001", "api", "a".repeat(64), broken.runner);
+  await waitFor(() => popups().length === 1);
+  await session("key-second-002", "web", "b".repeat(64), working.runner);
+  await waitFor(() => popups().length === 2);
+  const message = hold();
   await waitFor(() => broken.panels.length === 1);
   broken.panels[0]!.answer({ kind: "failed", code: 1 });
   await waitFor(() => working.panels.length === 1);
-  expect(working.panels[0]!.prompt.taskId).toBe(task.id);
-  // The failed session is back on the network, but no longer as a pop-up session.
-  await waitFor(
-    () =>
-      hub.streams.isConnected("api-claude@macbook") &&
-      hub.streams.popupSessions("macbook").join() === "web-claude@macbook",
-  );
-  expect(hub.service.approvalFor(hub.service.findTask(task.id)!)?.popups).toEqual(["macbook"]);
-  working.panels[0]!.answer({ kind: "answered", decision: "approve", note: "" });
-  await waitFor(() => hub.service.findTask(task.id)?.status === "queued");
+  expect(working.panels[0]!.prompt.messageId).toBe(message.id);
+  // The failed session is back on Portico, but no longer as a pop-up session.
+  await waitFor(() => connected(p, "api-claude@macbook") && popups().join() === "web-claude@macbook");
+  working.panels[0]!.answer({ kind: "answered", decision: "allow_once" });
+  await waitFor(() => status(message.id) === "pending");
   expect(broken.panels).toHaveLength(1);
 });
 
-test("a session without a runner never declares pop-ups, and send_task says no machine is online", async () => {
-  const { token } = joinTestMachine(hub, "macbook");
-  await session(token, "key-nopopup-01", "api", "a".repeat(64), null);
-  await waitFor(() => hub.streams.isConnected("api-claude@macbook"));
-  expect(hub.streams.popupSessions("macbook")).toEqual([]);
-  const sent = await hubClient(hub, "grok-bot").sendTask({ to: "muse", instructions: "x" });
-  expect(sent.approval?.popups).toEqual([]);
+test("a session without a runner never declares pop-ups", async () => {
+  await session("key-nopopup-01", "api", "a".repeat(64), null);
+  await waitFor(() => connected(p, "api-claude@macbook"));
+  expect(popups()).toEqual([]);
 });

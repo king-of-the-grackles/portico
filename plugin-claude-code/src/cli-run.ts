@@ -1,9 +1,13 @@
-// Runs before the plugin's dependencies are installed (the join, off and on commands, and the hub's `portico join`), so
-// it imports only node:* and the files beside it. No side effects: src/cli.ts is the entry that calls runCli.
+// Runs before the plugin's dependencies are installed (the join, off, on and leave commands, and the server's
+// `portico join` and `portico leave`), so it imports only node:* and the files beside it. No side effects: src/cli.ts
+// is the entry that calls runCli.
 import { resolve } from "node:path";
 import { allowLine, allowPorticoTools, claudeSettingsPath } from "./claude-settings";
-import { JoinError, joinMachine } from "./join";
-import { isOff, MachineFileError, machineConfigPath, readMachineFile, realFolder, setFolderOff } from "./machine";
+import { ComputerFileError, computerConfigPath, readComputerFile, realFolder } from "./computer";
+import { CommandError } from "./computer-api";
+import { notJoined, switchFolder } from "./folders";
+import { joinComputer } from "./join";
+import { findOnPath, leaveComputer, type LeaveDeps } from "./leave";
 
 /** What a command needs from the outside world, so tests can run commands without a real process. */
 export interface CliIo {
@@ -14,25 +18,26 @@ export interface CliIo {
   err: (line: string) => void;
 }
 
-export interface CliDeps {
+export interface CliDeps extends Pick<LeaveDeps, "findClaude" | "uninstall"> {
   fetch?: typeof fetch;
   hostname?: () => string;
 }
 
-const JOIN_USAGE = "join <line> [--code <code>] [--name <machine>] [--replace] [--no-allow]";
-const JOIN_OPTIONS = ["--code", "--name", "--replace", "--no-allow"];
+const JOIN_USAGE = "join <line> [--name <computer>] [--replace] [--no-allow]";
+const JOIN_OPTIONS = ["--name", "--replace", "--no-allow"];
 
 const USAGE = `Usage: bun src/cli.ts <command>
 
 Commands:
   ${JOIN_USAGE}
-                  Join this machine to a hub with a join line, write the machine file, and allow the network tools in Claude Code.
-  off [folder]    Keep new sessions in a folder (default: the current folder) off the network.
-  on [folder]     Put a folder back on the network for new sessions.
-  status          Show the machine, the hub and the folders off the network.
+                  Join this computer to Portico with a join line, write the computer file, and allow the Portico tools in Claude Code.
+  off [folder]    Keep new sessions in a folder (default: the current folder) off Portico.
+  on [folder]     Let new sessions in a folder join Portico again.
+  leave           Take this computer off Portico: remove the computer there, the computer file and the settings rule, and uninstall the plugin.
+  status          Show the computer, the Portico address and the folders that are off.
   help            Show this message.`;
 
-/** Runs one command and returns the exit code. MachineFileError and JoinError messages go to `err`. */
+/** Runs one command and returns the exit code. CommandError and ComputerFileError messages go to `err`. */
 export async function runCli(argv: string[], io: CliIo, deps: CliDeps = {}): Promise<number> {
   const [command, ...args] = argv;
   try {
@@ -40,9 +45,11 @@ export async function runCli(argv: string[], io: CliIo, deps: CliDeps = {}): Pro
       case "join":
         return await join(args, io, deps);
       case "off":
-        return folderSwitch(args, io, true);
+        return await folderSwitch(args, io, deps, false);
       case "on":
-        return folderSwitch(args, io, false);
+        return await folderSwitch(args, io, deps, true);
+      case "leave":
+        return await leave(args, io, deps);
       case "status":
         return status(args, io);
       case undefined:
@@ -57,7 +64,7 @@ export async function runCli(argv: string[], io: CliIo, deps: CliDeps = {}): Pro
         return 1;
     }
   } catch (err) {
-    if (err instanceof JoinError || err instanceof MachineFileError) {
+    if (err instanceof CommandError || err instanceof ComputerFileError) {
       io.err(err.message);
       return 1;
     }
@@ -70,18 +77,12 @@ function usageError(io: CliIo, problem: string, usage: string): number {
   return 1;
 }
 
-function notJoined(io: CliIo, path: string): number {
-  io.err(`This machine hasn't joined a hub: ${path} doesn't exist. Run join with a join line first.`);
-  return 1;
-}
-
 /**
  * The words that aren't options are joined with spaces into the line: the slash command passes the line as one
  * quoted argument, while a shell user may pass several words.
  */
 async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
   const words: string[] = [];
-  let code: string | undefined;
   let name: string | undefined;
   let replace = false;
   let noAllow = false;
@@ -91,12 +92,10 @@ async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
       replace = true;
     } else if (arg === "--no-allow") {
       noAllow = true;
-    } else if (arg === "--code" || arg === "--name") {
-      // Only another option counts as a missing value: a join code may itself start with "-".
+    } else if (arg === "--name") {
       const value = args[++i];
       if (value === undefined || JOIN_OPTIONS.includes(value)) return usageError(io, `${arg} needs a value.`, JOIN_USAGE);
-      if (arg === "--code") code = value;
-      else name = value;
+      name = value;
     } else if (arg.startsWith("--")) {
       return usageError(io, `Unknown option: ${arg}.`, JOIN_USAGE);
     } else {
@@ -106,61 +105,70 @@ async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
   const line = words.join(" ").trim();
   if (!line) return usageError(io, "A join line is required.", JOIN_USAGE);
 
-  const joined = await joinMachine(
-    { line, code, name, replace },
-    { configPath: machineConfigPath(io.env), fetch: deps.fetch, hostname: deps.hostname },
+  const joined = await joinComputer(
+    { line, name, replace },
+    { configPath: computerConfigPath(io.env), fetch: deps.fetch, hostname: deps.hostname },
   );
-  io.out(`Joined ${joined.hub} as machine "${joined.machine}".`);
+  io.out(`Joined Portico at ${joined.url} as computer "${joined.computer}".`);
   io.out(`Wrote ${joined.path} (mode 600).`);
-  io.out("New Claude Code sessions on this machine now appear on the network. Sessions already open join after a restart.");
-  io.out("To keep a folder off the network, run /portico:off in a Claude Code session in that folder.");
+  io.out("New Claude Code sessions on this computer join Portico automatically. Sessions already open join within a few seconds, or after a restart when the plugin was installed after the session started.");
+  io.out("To keep a folder off Portico, run /portico:off in a Claude Code session in that folder.");
+  for (const folder of joined.unsynced) {
+    io.out(`${folder} was off before, but Portico couldn't be told to keep the folder off. Run /portico:off there again.`);
+  }
   if (!noAllow) {
-    const line = allowLine(allowPorticoTools(claudeSettingsPath(io.env)));
-    if (line) io.out(line);
+    const allowed = allowLine(allowPorticoTools(claudeSettingsPath(io.env)));
+    if (allowed) io.out(allowed);
   }
   return 0;
 }
 
-function folderSwitch(args: string[], io: CliIo, off: boolean): number {
-  const usage = off ? "off [folder]" : "on [folder]";
+async function folderSwitch(args: string[], io: CliIo, deps: CliDeps, joins: boolean): Promise<number> {
+  const usage = joins ? "on [folder]" : "off [folder]";
   const option = args.find((arg) => arg.startsWith("--"));
   if (option !== undefined) return usageError(io, `Unknown option: ${option}.`, usage);
   if (args.length > 1) return usageError(io, "Only one folder at a time.", usage);
-  const path = machineConfigPath(io.env);
-  const current = readMachineFile(path);
-  if (!current) return notJoined(io, path);
+  const { folder } = await switchFolder({
+    configPath: computerConfigPath(io.env),
+    folder: realFolder(resolve(io.cwd, args[0] ?? ".")),
+    joins,
+    fetch: deps.fetch,
+  });
+  io.out(
+    joins
+      ? `${folder} is on Portico again: new sessions there join, and sessions already open there join after a restart.`
+      : `${folder} is off Portico now: new sessions there stay off, and sessions already open there stay until closed.`,
+  );
+  return 0;
+}
 
-  const folder = realFolder(resolve(io.cwd, args[0] ?? "."));
-  const { changed } = setFolderOff(path, folder, off);
-  if (off) {
-    io.out(
-      changed
-        ? `${folder} is now off the network. New sessions there don't register; open sessions there leave after a restart.`
-        : `${folder} was already off the network.`,
-    );
-    return 0;
-  }
-  // The folder may still be off because a folder above it is on the list.
-  const parent = current.off.find((entry) => isOff({ off: [entry] }, folder) && realFolder(entry) !== folder);
-  if (parent !== undefined) {
-    io.out(`${folder} is inside ${parent}, which is off the network. Run on in ${parent} instead.`);
-  } else {
-    io.out(changed ? `${folder} is back on the network for new sessions.` : `${folder} wasn't off the network.`);
-  }
+async function leave(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
+  if (args.length > 0) return usageError(io, `Unexpected argument: ${args[0]}.`, "leave");
+  const lines = await leaveComputer({
+    configPath: computerConfigPath(io.env),
+    settingsPath: claudeSettingsPath(io.env),
+    fetch: deps.fetch,
+    findClaude: deps.findClaude ?? (() => findOnPath("claude", io.env.PATH)),
+    uninstall: deps.uninstall,
+  });
+  for (const line of lines) io.out(line);
   return 0;
 }
 
 function status(args: string[], io: CliIo): number {
   if (args.length > 0) return usageError(io, `Unexpected argument: ${args[0]}.`, "status");
-  const path = machineConfigPath(io.env);
-  const file = readMachineFile(path);
-  if (!file) return notJoined(io, path);
-  io.out(`Machine "${file.machine}" on ${file.hub}.`);
-  io.out(`Machine file: ${path}`);
+  const path = computerConfigPath(io.env);
+  const file = readComputerFile(path);
+  if (!file) {
+    io.err(notJoined(path));
+    return 1;
+  }
+  io.out(`Computer "${file.computer}" on ${file.url}.`);
+  io.out(`Computer file: ${path}`);
   if (file.off.length === 0) {
-    io.out("Folders off the network: none.");
+    io.out("Folders off Portico: none.");
   } else {
-    io.out("Folders off the network:");
+    io.out("Folders off Portico:");
     for (const folder of file.off) io.out(`  ${folder}`);
   }
   return 0;

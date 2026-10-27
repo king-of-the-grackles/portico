@@ -1,7 +1,8 @@
-// Runs before the plugin's dependencies are installed (the join), so it imports only node:* and machine.ts.
+// Runs before the plugin's dependencies are installed (the join and leave commands), so it imports only node:* and
+// computer.ts.
 import { accessSync, chmodSync, constants, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { claudeHome, writeFileAtomically } from "./machine";
+import { claudeHome, writeFileAtomically } from "./computer";
 
 /** Lets Claude Code run every tool of the plugin's MCP server (`portico`) without asking. */
 export const PORTICO_ALLOW_RULE = "mcp__plugin_portico_portico";
@@ -73,16 +74,74 @@ export function allowLine(outcome: AllowOutcome): string | null {
   switch (outcome.kind) {
     case "added":
       return (
-        `Added ${PORTICO_ALLOW_RULE} to permissions.allow in ${outcome.path}, so Claude Code runs the network tools ` +
+        `Added ${PORTICO_ALLOW_RULE} to permissions.allow in ${outcome.path}, so Claude Code runs the Portico tools ` +
         "without asking. To skip this step, join with --no-allow."
       );
     case "present":
       return null;
     case "manual":
       return (
-        `${outcome.path} was left unchanged (${outcome.why}). To let Claude Code run the network tools without asking, ` +
+        `${outcome.path} was left unchanged (${outcome.why}). To let Claude Code run the Portico tools without asking, ` +
         `add "${PORTICO_ALLOW_RULE}" to permissions.allow in that file.`
       );
+  }
+}
+
+export type RemoveOutcome =
+  | { kind: "removed"; path: string }
+  | { kind: "absent"; path: string }
+  | { kind: "manual"; path: string; why: string };
+
+/**
+ * Takes Portico's allow rule back out of Claude Code's user settings, keeping everything else. Written atomically,
+ * through a symlink to its target. When the file can't be read, parsed or written safely, it's left alone and the
+ * outcome says why.
+ */
+export function removePorticoAllowRule(path: string): RemoveOutcome {
+  let target = path;
+  let text: string;
+  try {
+    target = realpathSync(path);
+    text = readFileSync(target, "utf8");
+  } catch (err) {
+    if (code(err) === "ENOENT") return { kind: "absent", path };
+    return { kind: "manual", path, why: `unreadable (${code(err)})` };
+  }
+  if (text.trim() === "") return { kind: "absent", path };
+  let settings: unknown;
+  try {
+    settings = JSON.parse(text);
+  } catch {
+    return { kind: "manual", path, why: "not valid JSON" };
+  }
+  if (!isObject(settings)) return { kind: "manual", path, why: "not a JSON object" };
+  const permissions = settings.permissions;
+  if (permissions === undefined) return { kind: "absent", path };
+  if (!isObject(permissions)) return { kind: "manual", path, why: "permissions is not an object" };
+  const allow = permissions.allow;
+  if (allow === undefined) return { kind: "absent", path };
+  if (!Array.isArray(allow)) return { kind: "manual", path, why: "permissions.allow is not a list" };
+  if (!allow.includes(PORTICO_ALLOW_RULE)) return { kind: "absent", path };
+
+  const next = { ...settings, permissions: { ...permissions, allow: allow.filter((rule) => rule !== PORTICO_ALLOW_RULE) } };
+  try {
+    accessSync(target, constants.W_OK);
+    writeFileAtomically(target, `${JSON.stringify(next, null, 2)}\n`, statSync(target).mode & 0o777);
+    return { kind: "removed", path };
+  } catch (err) {
+    return { kind: "manual", path, why: `not writable (${code(err)})` };
+  }
+}
+
+/** The CLI line for a removal: what changed, or the rule to take out by hand. Null when the rule wasn't there. */
+export function removeLine(outcome: RemoveOutcome): string | null {
+  switch (outcome.kind) {
+    case "removed":
+      return `Removed ${PORTICO_ALLOW_RULE} from permissions.allow in ${outcome.path}.`;
+    case "absent":
+      return null;
+    case "manual":
+      return `${outcome.path} was left unchanged (${outcome.why}). Remove "${PORTICO_ALLOW_RULE}" from permissions.allow in that file by hand.`;
   }
 }
 

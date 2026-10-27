@@ -1,11 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { copyProblems } from "../../server/test/helpers";
 import {
-  type ApprovalPrompt, type ChildLike, childEnv, escapeMarkup, linuxNotifyRunner, MAC_PANEL_SCRIPT, macPanelRunner, panelText,
-  parseNotifyOutput, parsePanelOutput, popupPlatform, type SpawnLike,
+  type ApprovalPrompt, BUTTONS, type ChildLike, childEnv, escapeMarkup, linuxNotifyRunner, MAC_PANEL_SCRIPT, macPanelRunner, panelSubject,
+  panelText, parseNotifyOutput, parsePanelOutput, popupPlatform, type SpawnLike,
 } from "../src/popup";
 
-const PROMPT: ApprovalPrompt = { taskId: "t1", from: "grok-bot", to: "muse", instructions: "Summarize the inbox", expiresAt: "2026-10-21T12:00:00.000Z", slot: 0 };
+const PROMPT: ApprovalPrompt = {
+  messageId: "m1",
+  from: "grok-bot",
+  to: "muse",
+  subject: "Read the inbox",
+  text: "Summarize the inbox",
+  expiresAt: "2026-10-27T12:00:00.000Z",
+  slot: 0,
+};
 
 /** Records each spawn, and lets the test write the child's stdout and end it. */
 function fakeSpawn() {
@@ -101,12 +110,36 @@ describe("the macOS panel", () => {
     expect(MAC_PANEL_SCRIPT).not.toContain("makeKey"); // shown with orderFrontRegardless only
   });
 
-  test("both buttons refuse the keyboard focus, so Tab then Space can never press one", () => {
-    const addButton = MAC_PANEL_SCRIPT.slice(MAC_PANEL_SCRIPT.indexOf("function addButton"), MAC_PANEL_SCRIPT.indexOf("addButton(input.deny"));
+  test("every button refuses the keyboard focus, so Tab then Space can never press one", () => {
+    const addButton = MAC_PANEL_SCRIPT.slice(MAC_PANEL_SCRIPT.indexOf("function addButton"), MAC_PANEL_SCRIPT.indexOf("addButton(input.allowOnce"));
     expect(addButton).toContain("button.refusesFirstResponder = true;");
     expect(MAC_PANEL_SCRIPT.match(/\$\.NSButton\./g)).toHaveLength(1); // every button is made in addButton
-    expect(MAC_PANEL_SCRIPT).toContain('addButton(input.deny, WIDTH - 230, "deny:");');
-    expect(MAC_PANEL_SCRIPT).toContain('addButton(input.approve, WIDTH - 120, "approve:");');
+  });
+
+  test("the buttons end on the right: Deny, Always allow, then Allow once, the primary, far right", () => {
+    expect(BUTTONS.map((button) => button.label)).toEqual(["Deny", "Always allow", "Allow once"]);
+    const calls = [...MAC_PANEL_SCRIPT.matchAll(/addButton\(input\.(\w+), (\d+), (\d+), "(\w+:)", (true|false)\);/g)].map((m) => ({
+      input: m[1]!,
+      right: Number(m[2]),
+      width: Number(m[3]),
+      action: m[4]!,
+      primary: m[5] === "true",
+    }));
+    expect(calls.map((call) => [call.input, call.action, call.primary])).toEqual([
+      ["allowOnce", "allowOnce:", true],
+      ["alwaysAllow", "alwaysAllow:", false],
+      ["deny", "deny:", false],
+    ]);
+    // Each button's right edge sits left of the one before it, with a gap, starting at the right margin.
+    expect(calls[0]!.right).toBe(0);
+    for (let i = 1; i < calls.length; i++) expect(calls[i]!.right).toBeGreaterThan(calls[i - 1]!.right + calls[i - 1]!.width);
+    for (const decision of ["deny", "always_allow", "allow_once"]) expect(MAC_PANEL_SCRIPT).toContain(`reply({ decision: "${decision}" })`);
+  });
+
+  test("the subject is the headline, then who sent the message to whom", () => {
+    expect(MAC_PANEL_SCRIPT).toContain("addLabel(input.heading, HEIGHT - 58, 40, true);");
+    expect(MAC_PANEL_SCRIPT).toContain("addLabel(input.route, HEIGHT - 80, 18, false);");
+    expect(MAC_PANEL_SCRIPT).not.toContain("NSTextField.alloc"); // no note field
   });
 
   test("the body scrolls in a read-only text view, so none of it is out of sight", () => {
@@ -132,24 +165,37 @@ describe("the macOS panel", () => {
     expect(call.args).toEqual(["-l", "JavaScript", "-e", MAC_PANEL_SCRIPT]);
     expect(call.env).toEqual({ PATH: "/usr/bin:/bin", HOME: "/h" });
     expect(JSON.parse(call.stdin)).toEqual({
-      title: "Approval needed", heading: "grok-bot → muse", body: "Summarize the inbox",
-      notePlaceholder: "Note for the sender (sent with Deny)", approve: "Approve", deny: "Deny", slot: 0,
+      title: "Approval needed",
+      heading: "Read the inbox",
+      route: "grok-bot → muse",
+      body: "Summarize the inbox",
+      deny: "Deny",
+      alwaysAllow: "Always allow",
+      allowOnce: "Allow once",
+      slot: 0,
       deadline: Date.parse(PROMPT.expiresAt),
     });
-    call.stdout('{"decision":"deny","note":"Not now"}\n');
+    call.stdout('{"decision":"always_allow"}\n');
     call.exit(0);
-    expect(await panel.result).toEqual({ kind: "answered", decision: "deny", note: "Not now" });
+    expect(await panel.result).toEqual({ kind: "answered", decision: "always_allow" });
+  });
+
+  test("the panel's answer is one of the three decisions; anything else is a failure", () => {
+    expect(parsePanelOutput('{"decision":"allow_once"}')).toEqual({ kind: "answered", decision: "allow_once" });
+    expect(parsePanelOutput('{"decision":"deny"}')).toEqual({ kind: "answered", decision: "deny" });
+    expect(parsePanelOutput('{"decision":"approve"}')).toEqual({ kind: "failed", code: 0 });
   });
 
   test("an answer whose bytes arrive split mid-character reads whole", async () => {
     const fake = fakeSpawn();
     const panel = macPanelRunner({}, fake.spawn)(PROMPT);
-    const line = Buffer.from('{"decision":"deny","note":"Sp\u00E4ter \u{1F642}"}\n');
-    const cut = line.indexOf(Buffer.from("\u{1F642}")) + 2; // inside the emoji's four bytes
+    const emoji = String.fromCodePoint(0x1f642);
+    const line = Buffer.from(`{"decision":"deny","extra":"${emoji}"}\n`);
+    const cut = line.indexOf(Buffer.from(emoji)) + 2; // inside the emoji's four bytes
     fake.calls[0]!.stdout(line.subarray(0, cut));
     fake.calls[0]!.stdout(line.subarray(cut));
     fake.calls[0]!.exit(0);
-    expect(await panel.result).toEqual({ kind: "answered", decision: "deny", note: "Sp\u00E4ter \u{1F642}" });
+    expect(await panel.result).toEqual({ kind: "answered", decision: "deny" });
   });
 
   test("a panel that reached its deadline is dismissed, not failed", async () => {
@@ -172,34 +218,48 @@ describe("the macOS panel", () => {
     expect(await broken.result).toEqual({ kind: "failed", code: 1 });
     expect(parsePanelOutput("garbage")).toEqual({ kind: "failed", code: 0 });
   });
+
+  test("the panel's copy has no pronouns and no retired word", () => {
+    const fake = fakeSpawn();
+    macPanelRunner({}, fake.spawn)(PROMPT);
+    const input = JSON.parse(fake.calls[0]!.stdin) as Record<string, unknown>;
+    for (const key of ["title", "deny", "alwaysAllow", "allowOnce"]) expect(copyProblems(String(input[key]))).toEqual([]);
+  });
 });
 
 describe("the Linux notification", () => {
-  test("runs /usr/bin/notify-send with Approve and Deny actions and an escaped, clipped body", async () => {
+  test("runs /usr/bin/notify-send with the subject as the summary, three actions, and an escaped, clipped body", async () => {
     const fake = fakeSpawn();
     const env = { DISPLAY: ":0", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus", PORTICO_TOKEN: "secret" };
     const runner = linuxNotifyRunner(env, fake.spawn, () => Date.parse(PROMPT.expiresAt) - 60_000);
-    const panel = runner({ ...PROMPT, instructions: `Fix <b>this</b> & ${"x".repeat(300)}` });
+    const panel = runner({ ...PROMPT, text: `Fix <b>this</b> & ${"x".repeat(300)}` });
     const call = fake.calls[0]!;
     expect(call.command).toBe("/usr/bin/notify-send");
-    expect(call.args.slice(0, 7)).toEqual([
-      "--urgency=critical", "--wait", "--action=approve=Approve", "--action=deny=Deny", "--expire-time=60000", "--", "Approval needed",
+    expect(call.args.slice(0, 8)).toEqual([
+      "--urgency=critical",
+      "--wait",
+      "--action=deny=Deny",
+      "--action=always_allow=Always allow",
+      "--action=allow_once=Allow once",
+      "--expire-time=60000",
+      "--",
+      "Read the inbox",
     ]);
-    expect(call.args[7]).toStartWith("grok-bot → muse\n\nFix &lt;b&gt;this&lt;/b&gt; &amp; xxx");
-    expect(call.args[7]).toEndWith("…");
+    expect(call.args[8]).toStartWith("Approval needed: grok-bot → muse\n\nFix &lt;b&gt;this&lt;/b&gt; &amp; xxx");
+    expect(call.args[8]).toEndWith("…");
     expect(call.env).toEqual({ PATH: "/usr/bin:/bin", DISPLAY: ":0", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus" });
-    call.stdout("approve\n");
+    call.stdout("allow_once\n");
     call.exit(0);
-    expect(await panel.result).toEqual({ kind: "answered", decision: "approve", note: "" });
+    expect(await panel.result).toEqual({ kind: "answered", decision: "allow_once" });
   });
 
-  test("the body clips the instructions to 200 characters before escaping, so no entity is cut", () => {
+  test("the body clips the text to 200 characters before escaping, so no entity is cut", () => {
     const fake = fakeSpawn();
     linuxNotifyRunner({ DISPLAY: ":0" }, fake.spawn, () => Date.parse(PROMPT.expiresAt) - 60_000)({
       ...PROMPT,
-      instructions: "&".repeat(300),
+      text: "&".repeat(300),
     });
-    expect(fake.calls[0]!.args[7]).toBe(`grok-bot → muse\n\n${"&amp;".repeat(200)}…`);
+    expect(fake.calls[0]!.args[8]).toBe(`Approval needed: grok-bot → muse\n\n${"&amp;".repeat(200)}…`);
   });
 
   test("the expiry time is clamped to the range notify-send takes", () => {
@@ -207,11 +267,20 @@ describe("the Linux notification", () => {
     const expiry = Date.parse(PROMPT.expiresAt);
     linuxNotifyRunner({ DISPLAY: ":0" }, fake.spawn, () => expiry + 5_000)(PROMPT);
     linuxNotifyRunner({ DISPLAY: ":0" }, fake.spawn, () => expiry - 90 * 86_400_000)(PROMPT);
-    expect(fake.calls.map((call) => call.args[4])).toEqual(["--expire-time=1000", "--expire-time=2147483647"]);
+    expect(fake.calls.map((call) => call.args[5])).toEqual(["--expire-time=1000", "--expire-time=2147483647"]);
   });
 
   test("a notification closed without an action is dismissed", () => {
     expect(parseNotifyOutput("")).toEqual({ kind: "dismissed" });
-    expect(parseNotifyOutput("deny\n")).toEqual({ kind: "answered", decision: "deny", note: "" });
+    expect(parseNotifyOutput("deny\n")).toEqual({ kind: "answered", decision: "deny" });
+    expect(parseNotifyOutput("always_allow\n")).toEqual({ kind: "answered", decision: "always_allow" });
+    expect(parseNotifyOutput("approve\n")).toEqual({ kind: "dismissed" });
+  });
+});
+
+describe("the subject", () => {
+  test("is cleaned to one line of at most 120 characters", () => {
+    expect(panelSubject("Read\nthe   inbox")).toBe("Read the inbox");
+    expect(panelSubject("x".repeat(130))).toBe(`${"x".repeat(120)}…`);
   });
 });

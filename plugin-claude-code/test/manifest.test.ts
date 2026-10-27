@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { joinLine } from "../../hub/src/core/network";
+import { copyProblems, HUB } from "../../server/test/helpers";
+import { JOIN_PREFIX, parseJoinLine } from "../src/join";
 import { SERVER_NAME, SERVER_VERSION } from "../src/plugin";
 
 const ROOT = join(import.meta.dir, "../..");
@@ -18,21 +19,24 @@ test("marketplace, manifest, package and server agree on the name and version", 
   expect(manifest.version).toBe(pkg.version);
   expect(SERVER_NAME).toBe("portico");
   expect(SERVER_VERSION).toBe(pkg.version);
-  expect(pkg.version).toBe("0.4.0");
+  expect(pkg.version).toBe("0.5.0");
   const lock = readFileSync(join(ROOT, "bun.lock"), "utf8");
   expect(/"name": "@portico\/plugin-claude-code",\s*"version": "([^"]+)"/.exec(lock)?.[1]).toBe(pkg.version);
 });
 
-test(".mcp.json starts the server from the plugin folder and passes the two settings through", () => {
+test("the manifest describes messages, with no pronouns, no retired word and no tasks", () => {
+  const manifest = json(join(PLUGIN, ".claude-plugin/plugin.json"));
+  expect(manifest.description).toContain("Portico");
+  expect(copyProblems(manifest.description)).toEqual([]);
+  expect(manifest.description).not.toMatch(/\btasks?\b/i);
+});
+
+test(".mcp.json starts the server from the plugin folder, with no settings to pass through", () => {
   expect(json(join(PLUGIN, ".mcp.json"))).toEqual({
     mcpServers: {
       portico: {
         command: "bun",
         args: ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "--shell=bun", "--silent", "start"],
-        env: {
-          PORTICO_URL: "${PORTICO_URL}",
-          PORTICO_TOKEN: "${PORTICO_TOKEN}",
-        },
       },
     },
   });
@@ -56,14 +60,31 @@ test("plugin source imports nothing from outside the plugin folder, which is all
   }
 });
 
+test("no file name, source line or doc in the plugin says hub", () => {
+  const files = [
+    ...readdirSync(join(PLUGIN, "src")).map((name) => join("src", name)),
+    ...readdirSync(join(PLUGIN, "commands")).map((name) => join("commands", name)),
+    "README.md",
+    ".mcp.json",
+    ".claude-plugin/plugin.json",
+    "package.json",
+  ];
+  for (const file of files) {
+    expect(file).not.toMatch(HUB);
+    expect(readFileSync(join(PLUGIN, file), "utf8")).not.toMatch(HUB);
+  }
+});
+
 const readCommand = (name: string) => readFileSync(join(PLUGIN, "commands", `${name}.md`), "utf8");
 
-test("off and on run the plugin's CLI from the plugin folder through a ! line that takes no arguments", () => {
-  for (const name of ["off", "on"]) {
+test("off, on and leave run the plugin's CLI from the plugin folder through a ! line that takes no arguments", () => {
+  for (const name of ["off", "on", "leave"]) {
     const text = readCommand(name);
     expect(text).toContain("allowed-tools: Bash(bun:*)");
     expect(text).toContain(`!\`bun "\${CLAUDE_PLUGIN_ROOT}/src/cli.ts" ${name}\``);
     expect(text).not.toContain("$ARGUMENTS");
+    // The person's switches: never run by the model, say on another agent's request.
+    expect(text).toContain("disable-model-invocation: true");
   }
 });
 
@@ -73,44 +94,41 @@ test("join never puts the join line in a ! line: Claude checks the line, then ru
   for (const block of text.matchAll(/(?:^|\s)!`([^`]*)`/gm)) expect(block[1]).not.toContain("$ARGUMENTS");
   expect(text).not.toMatch(/(?:^|\s)!`/m);
   expect(text).not.toContain("allowed-tools");
-  expect(text).toContain("Join my Portico hub: ");
+  expect(text).toContain(`\`${JOIN_PREFIX}\``);
   expect(text).toContain(`bun "\${CLAUDE_PLUGIN_ROOT}/src/cli.ts" join '<address>'`);
   expect(text).toContain("--no-allow");
 });
 
-test("join.md accepts the join line the hub hands out", () => {
+test("join.md accepts the join line Portico hands out, and the CLI parses the same line", () => {
   const text = readCommand("join");
-  const hub = "https://portico.example.com";
-  const code = `${"Ab_-".repeat(5)}cd`;
-  const address = `${hub}/join#${code}`;
-  const line = joinLine(hub, code);
+  const token = `${"Ab_-".repeat(5)}cd`;
+  const address = `https://portico.example.com/join#${token}`;
+  const line = `Join Portico: ${address}`;
   // The line is the prefix plus the address, nothing after it, as join.md requires.
-  expect(line.endsWith(address)).toBe(true);
-  const prefix = line.slice(0, -address.length); // "Join my Portico hub: "
-  expect(prefix).not.toBe("");
-  expect(text).toContain(`\`${prefix}\``);
+  expect(line).toBe(`${JOIN_PREFIX}${address}`);
   expect(address).toMatch(new RegExp(/`(\^\(https:[^`]*\$)`/.exec(text)![1]!));
+  expect(parseJoinLine(line)).toEqual({ url: "https://portico.example.com", token });
 });
 
 test("the address shape in join.md accepts real join addresses and nothing a shell would act on", () => {
   const source = /`(\^\(https:[^`]*\$)`/.exec(readCommand("join"))?.[1];
   expect(source).toBeDefined();
   const shape = new RegExp(source!);
-  const code = `${"Ab_-".repeat(5)}cd`;
+  const token = `${"Ab_-".repeat(5)}cd`;
   for (const good of [
-    `https://portico.example.com/join#${code}`,
-    `https://portico.example.com:8443/join#${code}`,
-    `http://localhost:8790/join#${code}`,
-    `http://127.0.0.1/join#${code}`,
+    `https://portico.example.com/join#${token}`,
+    `https://portico.example.com:8443/join#${token}`,
+    `http://localhost:8790/join#${token}`,
+    `http://127.0.0.1/join#${token}`,
   ]) {
     expect(good).toMatch(shape);
   }
-  const base = `https://portico.example.com/join#${code}`;
+  const base = `https://portico.example.com/join#${token}`;
   for (const bad of [
-    `http://portico.example.com/join#${code}`,
-    `https://u:p@portico.example.com/join#${code}`,
+    `http://portico.example.com/join#${token}`,
+    `https://u:p@portico.example.com/join#${token}`,
     "https://portico.example.com/join#short",
-    `Join my Portico hub: ${base}`,
+    `Join Portico: ${base}`,
     ...[" x", "\tx", "\nid", "'", '"', "`id`", "$(id)", ";id", "&id", "|id", "<x", ">x", "\\"].map((tail) => base + tail),
   ]) {
     expect(bad).not.toMatch(shape);
@@ -133,11 +151,14 @@ test("the import check finds every form of import", () => {
   expect(importSpecs(sample)).toEqual(["a", "b", "c", "d", "e", "name"]);
 });
 
-test("cli.ts, cli-run.ts, join.ts, machine.ts and claude-settings.ts import only node built-ins and each other, so they run before bun install", () => {
-  for (const file of ["cli.ts", "cli-run.ts", "join.ts", "machine.ts", "claude-settings.ts"]) {
-    const imports = importSpecs(readFileSync(join(PLUGIN, "src", file), "utf8"));
-    expect(imports.length).toBeGreaterThan(0);
-    for (const spec of imports) expect(spec).toMatch(/^(node:[a-z_/]+|\.\/(cli-run|join|machine|claude-settings))$/);
+const CLI_FILES = ["cli", "cli-run", "join", "folders", "leave", "computer", "computer-api", "claude-settings"];
+
+test("the CLI's files import only node built-ins and each other, so they run before bun install", () => {
+  const allowed = new RegExp(`^(node:[a-z_/]+|\\./(${CLI_FILES.join("|")}))$`);
+  for (const file of CLI_FILES) {
+    const imports = importSpecs(readFileSync(join(PLUGIN, "src", `${file}.ts`), "utf8"));
+    if (file !== "computer-api") expect(imports.length).toBeGreaterThan(0);
+    for (const spec of imports) expect(spec).toMatch(allowed);
   }
 });
 
