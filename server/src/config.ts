@@ -63,6 +63,26 @@ export function ensureSigningKey(dataDir: string): string {
   return key;
 }
 
+/**
+ * The address a cloud platform gives Portico, when Portico runs on one: Render's RENDER_EXTERNAL_URL, or
+ * https://<app>.fly.dev from Fly's FLY_APP_NAME. Null elsewhere.
+ */
+export function platformUrl(env: Env): string | null {
+  const render = env.RENDER_EXTERNAL_URL?.trim();
+  if (render) return cleanPublicUrl(render);
+  const fly = env.FLY_APP_NAME?.trim();
+  if (fly && /^[a-z0-9]+(-[a-z0-9]+)*$/i.test(fly)) return `https://${fly.toLowerCase()}.fly.dev`;
+  return null;
+}
+
+/**
+ * The address host-side commands (setup, doctor) put in links: PORTICO_PUBLIC_URL, else the URL confirmed at setup,
+ * else the platform's address, else this computer's own.
+ */
+export function hostUrl(config: Pick<PorticoConfig, "publicUrl" | "port">, env: Env, saved: string | null): string {
+  return config.publicUrl ?? saved ?? platformUrl(env) ?? `http://localhost:${config.port}`;
+}
+
 /** The config from the environment, with the data folder's signing key, made if missing. */
 export function loadConfig(env: Env = process.env): PorticoConfig {
   const config = parseEnv(env, "");

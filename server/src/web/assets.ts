@@ -10,6 +10,8 @@ import apiTs from "./client/api.ts" with { type: "text" };
 import formsTs from "./client/forms.ts" with { type: "text" };
 // @ts-ignore: imported as text, not as a module
 import inviteTs from "./client/invite.ts" with { type: "text" };
+// @ts-ignore: imported as text, not as a module
+import passkeyTs from "./client/passkey.ts" with { type: "text" };
 
 type Source = { css: string } | { svg: string } | { ts: string };
 
@@ -20,6 +22,7 @@ export const ASSETS: Record<string, Source> = {
   "api.js": { ts: apiTs as string },
   "forms.js": { ts: formsTs as string },
   "invite.js": { ts: inviteTs as string },
+  "passkey.js": { ts: passkeyTs as string },
 };
 
 const transpiler = new Bun.Transpiler({ loader: "ts", target: "browser" });
