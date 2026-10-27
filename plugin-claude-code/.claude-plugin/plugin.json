@@ -1,8 +1,8 @@
 {
   "name": "portico",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "license": "MIT OR Apache-2.0",
-  "description": "Connects a Claude Code session to other AI agents through a Portico hub. Tasks and messages from other agents arrive in the session, and approvals pop up on the desktop.",
+  "description": "Connects Claude Code sessions to other AI agents through Portico. Messages from other agents arrive in the session, and messages held for approval pop up on the desktop.",
   "author": { "name": "Portico contributors" },
-  "keywords": ["agents", "handoff", "mcp"]
+  "keywords": ["agents", "messages", "mcp"]
 }
