@@ -148,19 +148,22 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     return { client, redirectUri };
   };
 
-  /** The rest of the request; a problem here goes back to the client as an OAuth error. */
-  const checkRequest = (fields: Fields): { request: Omit<AuthorizeRequest, "clientId" | "redirectUri"> } | { error: string; description: string } => {
+  /**
+   * The rest of the request. A problem here shows on a page rather than redirecting back to the client: anyone can
+   * register a redirect URI, so an automatic error redirect would make Portico an open redirector (RFC 9700 §4.11).
+   */
+  const checkRequest = (fields: Fields): { request: Omit<AuthorizeRequest, "clientId" | "redirectUri"> } | { problem: string } => {
     if (fields.response_type !== undefined && fields.response_type !== "code") {
-      return { error: "unsupported_response_type", description: "Only response_type=code is supported." };
+      return { problem: "The app asked for a response type other than code." };
     }
     const challenge = fields.code_challenge;
-    if (!validChallenge(challenge)) return { error: "invalid_request", description: "A PKCE code_challenge (S256) is required." };
-    if (fields.code_challenge_method !== "S256") return { error: "invalid_request", description: "code_challenge_method must be S256." };
+    if (!validChallenge(challenge)) return { problem: "The app sent no PKCE code challenge." };
+    if (fields.code_challenge_method !== "S256") return { problem: "The app asked for a PKCE method other than S256." };
     const state = text(fields, "state") ?? null;
-    if (state !== null && state.length > MAX_STATE) return { error: "invalid_request", description: "state is too long." };
+    if (state !== null && state.length > MAX_STATE) return { problem: "The app sent a state value that is too long." };
     const resource = text(fields, "resource") ?? null;
     if (resource !== null && !sameResourceOrigin(resource, base())) {
-      return { error: "invalid_target", description: `resource must be ${base()}/mcp.` };
+      return { problem: `The app asked for a resource other than ${base()}/mcp.` };
     }
     return { request: { state, challenge, resource } };
   };
@@ -174,9 +177,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     const { client, redirectUri } = checked;
     const state = text(fields, "state");
     const rest = checkRequest(fields);
-    if ("error" in rest) {
-      return c.redirect(redirectWith(redirectUri, { error: rest.error, error_description: rest.description, state }), 303);
-    }
+    if ("problem" in rest) return badRequestPage(c, rest.problem);
     const person = c.get("person");
     if (!person) return c.redirect(`/sign-in?next=${encodeURIComponent(authorizeReturnPath(c.req.url))}`, 303);
     if (person.status !== "active") return waitingPage(c);
@@ -203,7 +204,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     const checked = checkClient(fields);
     if ("problem" in checked) throw new PorticoError("bad_request", checked.problem);
     const rest = checkRequest(fields);
-    if ("error" in rest) throw new PorticoError("bad_request", rest.description);
+    if ("problem" in rest) throw new PorticoError("bad_request", rest.problem);
     const kind = CONNECTOR_CHOICES.find((choice) => choice.kind === fields.kind)?.kind;
     if (!kind) throw new PorticoError("bad_request", "Pick dots, Claude Duet or Other.");
     const { client, redirectUri } = checked;

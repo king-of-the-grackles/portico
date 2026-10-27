@@ -248,24 +248,26 @@ describe("the consent page", () => {
     expect(copyProblems(visibleCopy(await unknown.text()) + visibleCopy(await wrong.text()))).toEqual([]);
   });
 
-  test("other problems go back to the client as OAuth errors, with the state", async () => {
+  test("other problems show on a page too: anyone can register a redirect URI, so errors never bounce there", async () => {
     const p = makePortico();
     const cookie = signIn(p, await addOwner(p));
     const clientId = await client(p);
     const { challenge } = pkce();
     const cases: [Record<string, string>, string][] = [
-      [{ code_challenge: "" }, "invalid_request"],
-      [{ code_challenge_method: "plain" }, "invalid_request"],
-      [{ response_type: "token" }, "unsupported_response_type"],
-      [{ resource: "https://elsewhere.example/mcp" }, "invalid_target"],
+      [{ code_challenge: "" }, "no PKCE code challenge"],
+      [{ code_challenge_method: "plain" }, "other than S256"],
+      [{ response_type: "token" }, "response type other than code"],
+      [{ resource: "https://elsewhere.example/mcp" }, "resource other than"],
     ];
-    for (const [extra, error] of cases) {
-      const res = await getAuthorize(p, authorizeQuery(clientId, challenge, extra), cookie);
-      expect(res.status).toBe(303);
-      const back = new URL(res.headers.get("location")!);
-      expect(`${back.origin}${back.pathname}`).toBe(REDIRECT);
-      expect(back.searchParams.get("error")).toBe(error);
-      expect(back.searchParams.get("state")).toBe("state-123");
+    for (const [extra, problem] of cases) {
+      for (const who of [cookie, undefined]) {
+        const res = await getAuthorize(p, authorizeQuery(clientId, challenge, extra), who);
+        expect(res.status).toBe(400);
+        expect(res.headers.get("location")).toBeNull();
+        const html = await res.text();
+        expect(html).toContain(problem);
+        expect(copyProblems(visibleCopy(html))).toEqual([]);
+      }
     }
   });
 
