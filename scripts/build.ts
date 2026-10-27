@@ -13,12 +13,21 @@ for (const target of targets) {
   }
 }
 
-for (const target of targets) {
-  const outfile = `dist/portico-${target.replace(/^bun-/, "")}`;
-  const build = Bun.spawnSync(
-    ["bun", "build", "server/src/cli.ts", "--compile", `--target=${target}`, "--no-compile-autoload-bunfig", `--outfile=${outfile}`],
-    { stdout: "inherit", stderr: "inherit" },
-  );
-  if (build.exitCode !== 0) process.exit(build.exitCode ?? 1);
-  console.log(`Built ${outfile}`);
+const run = (cmd: string[]) => Bun.spawnSync(cmd, { stdout: "inherit", stderr: "inherit" }).exitCode ?? 1;
+
+// Browser modules go into the binary as a generated module; the stub is put back afterwards.
+if (run(["bun", "server/scripts/bundle-client.ts"]) !== 0) process.exit(1);
+let failed = 0;
+try {
+  for (const target of targets) {
+    const outfile = `dist/portico-${target.replace(/^bun-/, "")}`;
+    failed = run([
+      "bun", "build", "server/src/cli.ts", "--compile", `--target=${target}`, "--no-compile-autoload-bunfig", `--outfile=${outfile}`,
+    ]);
+    if (failed !== 0) break;
+    console.log(`Built ${outfile}`);
+  }
+} finally {
+  run(["bun", "server/scripts/bundle-client.ts", "--restore"]);
 }
+process.exit(failed);

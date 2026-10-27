@@ -10,7 +10,7 @@ RUN bun install --frozen-lockfile
 COPY server server
 # portico join and portico leave reuse the plugin's code (plugin-claude-code/src/cli-run.ts), so the bundle needs that folder too.
 COPY plugin-claude-code/src plugin-claude-code/src
-RUN bun build server/src/cli.ts --compile --no-compile-autoload-bunfig --outfile /out/portico
+RUN bun server/scripts/bundle-client.ts && bun build server/src/cli.ts --compile --no-compile-autoload-bunfig --outfile /out/portico
 
 FROM debian:bookworm-slim
 RUN apt-get update \
