@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { copyProblems, HUB } from "../../server/test/helpers";
 import { JOIN_PREFIX, parseJoinLine } from "../src/join";
 import { SERVER_NAME, SERVER_VERSION } from "../src/plugin";
@@ -8,6 +8,9 @@ import { SERVER_NAME, SERVER_VERSION } from "../src/plugin";
 const ROOT = join(import.meta.dir, "../..");
 const PLUGIN = join(ROOT, "plugin-claude-code");
 const json = (path: string) => JSON.parse(readFileSync(path, "utf8"));
+/** Every source file under src/, Codex's bridge included, as paths relative to src/. */
+const srcFiles = () =>
+  (readdirSync(join(PLUGIN, "src"), { recursive: true }) as string[]).filter((name) => name.endsWith(".ts") && !name.includes("logs/"));
 
 test("marketplace, manifest, package and server agree on the name and version", () => {
   const marketplace = json(join(ROOT, ".claude-plugin/marketplace.json"));
@@ -52,17 +55,17 @@ test("the start script keeps stdout clean, and only runtime dependencies are ins
 
 test("plugin source imports nothing from outside the plugin folder, which is all Claude Code copies", () => {
   const src = join(PLUGIN, "src");
-  for (const file of readdirSync(src).filter((name) => name.endsWith(".ts"))) {
+  for (const file of srcFiles()) {
     const text = readFileSync(join(src, file), "utf8");
     for (const match of text.matchAll(/from\s+"(\.{1,2}\/[^"]+)"/g)) {
-      expect(resolve(src, match[1]!).startsWith(src)).toBe(true);
+      expect(resolve(dirname(join(src, file)), match[1]!).startsWith(src)).toBe(true);
     }
   }
 });
 
 test("no file name, source line or doc in the plugin says hub", () => {
   const files = [
-    ...readdirSync(join(PLUGIN, "src")).map((name) => join("src", name)),
+    ...srcFiles().map((name) => join("src", name)),
     ...readdirSync(join(PLUGIN, "commands")).map((name) => join("commands", name)),
     "README.md",
     ".mcp.json",
@@ -151,7 +154,7 @@ test("the import check finds every form of import", () => {
   expect(importSpecs(sample)).toEqual(["a", "b", "c", "d", "e", "name"]);
 });
 
-const CLI_FILES = ["cli", "cli-run", "join", "folders", "leave", "computer", "computer-api", "claude-settings"];
+const CLI_FILES = ["cli", "cli-run", "join", "folders", "leave", "computer", "computer-api", "claude-settings", "codex-config"];
 
 test("the CLI's files import only node built-ins and each other, so they run before bun install", () => {
   const allowed = new RegExp(`^(node:[a-z_/]+|\\./(${CLI_FILES.join("|")}))$`);
@@ -164,7 +167,7 @@ test("the CLI's files import only node built-ins and each other, so they run bef
 
 test("the plugin declares no Claude Code channel anywhere", () => {
   const src = join(PLUGIN, "src");
-  for (const file of readdirSync(src).filter((name) => name.endsWith(".ts"))) {
+  for (const file of srcFiles()) {
     expect(readFileSync(join(src, file), "utf8")).not.toContain("claude/channel");
   }
   expect(readFileSync(join(PLUGIN, ".mcp.json"), "utf8")).not.toContain("PERMISSION_RELAY");

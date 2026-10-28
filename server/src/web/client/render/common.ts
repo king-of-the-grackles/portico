@@ -37,9 +37,8 @@ export const KINDS: Record<AgentKind, KindInfo> = {
     label: "Codex",
     where: "On a computer",
     connector: false,
-    // Codex joins like an app agent in this release: a sign-in request with a code.
-    step: "Send this to Codex, then approve the sign in request here.",
-    wait: "Waiting for the sign in request from Codex",
+    step: "Paste this into Codex on the computer that should join.",
+    wait: "Waiting for Codex to connect",
   },
   muse: {
     label: "Muse",

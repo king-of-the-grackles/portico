@@ -3,6 +3,7 @@
 // is the entry that calls runCli.
 import { resolve } from "node:path";
 import { allowLine, allowPorticoTools, claudeSettingsPath } from "./claude-settings";
+import { codexHome } from "./codex-config";
 import { ComputerFileError, computerConfigPath, readComputerFile, realFolder } from "./computer";
 import { CommandError } from "./computer-api";
 import { notJoined, switchFolder } from "./folders";
@@ -109,8 +110,12 @@ async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
     { line, name, replace },
     { configPath: computerConfigPath(io.env), fetch: deps.fetch, hostname: deps.hostname },
   );
-  io.out(`Joined Portico at ${joined.url} as computer "${joined.computer}".`);
-  io.out(`Wrote ${joined.path} (mode 600).`);
+  if (joined.attached) {
+    io.out(`This computer is already on Portico at ${joined.url} as computer "${joined.computer}". Used the line here.`);
+  } else {
+    io.out(`Joined Portico at ${joined.url} as computer "${joined.computer}".`);
+    io.out(`Wrote ${joined.path} (mode 600).`);
+  }
   io.out("New Claude Code sessions on this computer join Portico automatically. Sessions already open join within a few seconds, or after a restart when the plugin was installed after the session started.");
   io.out("To keep a folder off Portico, run /portico:off in a Claude Code session in that folder.");
   for (const folder of joined.unsynced) {
@@ -147,6 +152,7 @@ async function leave(args: string[], io: CliIo, deps: CliDeps): Promise<number> 
   const lines = await leaveComputer({
     configPath: computerConfigPath(io.env),
     settingsPath: claudeSettingsPath(io.env),
+    codexHome: codexHome(io.env),
     fetch: deps.fetch,
     findClaude: deps.findClaude ?? (() => findOnPath("claude", io.env.PATH)),
     uninstall: deps.uninstall,

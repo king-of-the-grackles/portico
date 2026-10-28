@@ -176,7 +176,12 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
       return c.json({ error: "not_allowed", message: "Only sessions on a computer open the live stream." }, 403);
     }
     const computer = principal.computer;
-    const reg = parseRegistration(c.req.header("x-portico-session"), c.req.header("x-portico-folder"), c.req.query("repo"));
+    const reg = parseRegistration(
+      c.req.header("x-portico-session"),
+      c.req.header("x-portico-folder"),
+      c.req.query("repo"),
+      c.req.header("x-portico-client"),
+    );
     const { agent } = agents.registerSession(computer, reg);
     // Only a session can answer a pop-up, so only its stream may declare pop-ups.
     const info: StreamInfo = { computerId: computer.id, ownerId: computer.ownerId, popup: c.req.header("x-portico-popup") === "1" };

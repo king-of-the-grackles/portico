@@ -54,16 +54,32 @@ export function addressOf(agent: Pick<Agent, "name" | "computer">): string {
   return agent.computer ? `${agent.name}@${agent.computer}` : agent.name;
 }
 
-/**
- * A session's name before deduplication: the slugged repo basename plus `-claude`. The repo part is clipped so the name,
- * even with a `-99` suffix, stays within the 40 characters every agent name allows.
- */
-export function sessionBaseName(repo: string): string {
-  const room = LIMITS.maxNameChars - "-claude".length - "-99".length;
-  return `${slugify(repo, "session").slice(0, room).replace(/-+$/, "")}-claude`;
+/** The coding agents whose sessions join from a computer: Claude Code through its plugin, Codex through its bridge. */
+export const SESSION_CLIENTS = ["claude-code", "codex"] as const;
+export type SessionClient = (typeof SESSION_CLIENTS)[number];
+
+/** Each client's name suffix and label. Only Claude Code sessions are pushed to; Codex sessions check the inbox. */
+const CLIENTS: Record<SessionClient, { suffix: string; label: string; push: boolean }> = {
+  "claude-code": { suffix: "-claude", label: "Claude Code", push: true },
+  codex: { suffix: "-codex", label: "Codex", push: false },
+};
+
+/** A session's client, from its kind. */
+export function sessionClient(agent: Pick<Agent, "kind">): SessionClient {
+  return agent.kind === "codex" ? "codex" : "claude-code";
 }
 
-/** What a session's plugin sends when it opens its stream. */
+/**
+ * A session's name before deduplication: the slugged repo basename plus the client's suffix (`-claude`, `-codex`). The
+ * repo part is clipped so the name, even with a `-99` suffix, stays within the 40 characters every agent name allows.
+ */
+export function sessionBaseName(repo: string, client: SessionClient = "claude-code"): string {
+  const { suffix } = CLIENTS[client];
+  const room = LIMITS.maxNameChars - suffix.length - "-99".length;
+  return `${slugify(repo, "session").slice(0, room).replace(/-+$/, "")}${suffix}`;
+}
+
+/** What a session's plugin or bridge sends when it opens its stream. */
 export interface Registration {
   /** The random ID the plugin made when it started. */
   key: string;
@@ -71,6 +87,8 @@ export interface Registration {
   repo: string;
   /** HMAC of the full folder path, keyed with the computer token. */
   folderId: string;
+  /** Which coding agent the session is. Absent, Claude Code (older plugins send none). */
+  client?: SessionClient;
 }
 
 const KEY = /^[A-Za-z0-9_-]{8,100}$/;
@@ -85,8 +103,8 @@ const TOUCH_INTERVAL_MS = 60_000;
  */
 const INHERIT_AFTER_MS = 3 * 60_000;
 
-/** The registration headers and query, checked. The repo defaults to "session". */
-export function parseRegistration(key: unknown, folderId: unknown, repo: unknown): Registration {
+/** The registration headers and query, checked. The repo defaults to "session", the client to Claude Code (older plugins send none). */
+export function parseRegistration(key: unknown, folderId: unknown, repo: unknown, client?: unknown): Registration {
   if (typeof key !== "string" || !KEY.test(key)) {
     throw new PorticoError("bad_request", "X-Portico-Session must be 8 to 100 letters, digits, hyphens or underscores.");
   }
@@ -99,11 +117,14 @@ export function parseRegistration(key: unknown, folderId: unknown, repo: unknown
   if (typeof repo === "string" && repo.length > MAX_REPO) {
     throw new PorticoError("bad_request", `repo must be at most ${MAX_REPO} characters.`);
   }
+  if (client !== undefined && client !== null && !SESSION_CLIENTS.some((known) => known === client)) {
+    throw new PorticoError("bad_request", `X-Portico-Client must be one of: ${SESSION_CLIENTS.join(", ")}.`);
+  }
   // Stored as the session's folder and shown in its description, so it gets the same cleaning as status text, and
   // only its last path segment is kept, even if a client sends a path.
   const cleaned = typeof repo === "string" ? defang(repo).replace(/\s+/g, " ").trim() : "";
   const segment = cleaned.split(/[\\/]/).filter(Boolean).pop()?.trim() ?? "";
-  return { key, folderId, repo: segment || "session" };
+  return { key, folderId, repo: segment || "session", client: (client as SessionClient | undefined) ?? "claude-code" };
 }
 
 /** The agent list's order: connected sessions by status, then apps and connectors (null), then offline sessions. */
@@ -329,15 +350,16 @@ export class Agents {
     throw new PorticoError("unknown_agent", `No agent named "${to}". Valid agents: ${valid || "none yet"}.`);
   }
 
-  /** Sessions are pushed to; apps and connectors check their inbox. */
+  /** Claude Code sessions are pushed to; Codex sessions, apps and connectors check their inbox. */
   isPush(agent: Agent): boolean {
-    return agent.type === "session";
+    return agent.type === "session" && CLIENTS[sessionClient(agent)].push;
   }
 
-  /** How a message that isn't held reaches the agent right now. */
+  /** How a message that isn't held reaches the agent right now. A session that isn't connected is offline. */
   tier(agent: Agent): Exclude<DeliveryTier, "held"> {
-    if (!this.isPush(agent)) return "queued";
-    return this.isConnected(agent.id) ? "pushed" : "offline";
+    if (agent.type !== "session") return "queued";
+    if (!this.isConnected(agent.id)) return "offline";
+    return this.isPush(agent) ? "pushed" : "queued";
   }
 
   // ---- sessions ----
@@ -347,7 +369,8 @@ export class Agents {
    * minutes is inherited, shortest name first, then most recently seen. Otherwise a new row gets the first free name on the computer: `<repo>-claude`,
    * `-2`, `-3`, and so on. A new key in a folder whose switch is off is refused with `folder_off`.
    */
-  registerSession(computer: Computer, reg: Registration): { agent: Agent; inherited: boolean } {
+  registerSession(computer: Computer, registration: Registration): { agent: Agent; inherited: boolean } {
+    const reg = { ...registration, client: registration.client ?? "claude-code" };
     const at = this.iso();
     const outcome = this.db.transaction(() => {
       const same = this.db
@@ -361,15 +384,21 @@ export class Agents {
       if (this.computers.folderJoins(computer.id, reg.folderId) === false) {
         throw new PorticoError(
           "folder_off",
-          `Sessions in ${reg.repo} on ${computer.name} stay off Portico. Turn the folder back on with /portico:on.`,
+          `Sessions in ${reg.repo} on ${computer.name} stay off Portico. Turn the folder back on with /portico:on in Claude ` +
+            "Code, or with `bun ~/.portico/portico-codex.js on` in a terminal there.",
         );
       }
 
       const sessions = this.sessionsOn(computer.id);
       const quietSince = this.iso(-INHERIT_AFTER_MS);
+      // Only a session of the same kind: a Codex session never takes over a Claude Code session's name and threads.
       const stale = sessions
         .filter(
-          (s) => s.folderId === reg.folderId && !this.isConnected(s.id) && (s.lastSeenAt ?? s.createdAt) <= quietSince,
+          (s) =>
+            s.folderId === reg.folderId &&
+            s.kind === reg.client &&
+            !this.isConnected(s.id) &&
+            (s.lastSeenAt ?? s.createdAt) <= quietSince,
         )
         .sort(
           (a, b) => a.name.length - b.name.length || (b.lastSeenAt ?? "").localeCompare(a.lastSeenAt ?? ""),
@@ -382,7 +411,7 @@ export class Agents {
         return { agent: this.require(stale.id), inherited: true };
       }
 
-      const base = sessionBaseName(reg.repo);
+      const base = sessionBaseName(reg.repo, reg.client);
       const taken = new Set(sessions.map((s) => s.name));
       let name = base;
       for (let n = 2; taken.has(name); n++) {
@@ -395,9 +424,9 @@ export class Agents {
         id,
         ownerId: computer.ownerId,
         name,
-        kind: "claude-code",
+        kind: reg.client,
         type: "session",
-        description: `Claude Code in ${folder} on ${computer.name}`,
+        description: `${CLIENTS[reg.client].label} in ${folder} on ${computer.name}`,
         computerId: computer.id,
         sessionKey: reg.key,
         folder,

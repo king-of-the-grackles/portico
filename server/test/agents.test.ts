@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { sessionBaseName } from "../src/core/agents";
+import { parseRegistration, sessionBaseName } from "../src/core/agents";
 import { addAppAgent, addComputer, addMember, addOwner, addSession, DAY, errorCode, HOUR, makePortico } from "./helpers";
 
 describe("addresses and the agent list", () => {
@@ -94,20 +94,20 @@ describe("session registration", () => {
     const chris = await addOwner(p);
     const { computer } = addComputer(p, chris);
     const folderId = "b".repeat(64);
-    const first = p.agents.registerSession(computer, { key: "key-00001", repo: "api", folderId });
+    const first = p.agents.registerSession(computer, { key: "key-00001", repo: "api", folderId, client: "claude-code" });
     expect(first.agent.name).toBe("api-claude");
     expect(first.agent.ownerId).toBe(chris.id);
-    expect(p.agents.registerSession(computer, { key: "key-00001", repo: "api", folderId }).agent.id).toBe(first.agent.id);
+    expect(p.agents.registerSession(computer, { key: "key-00001", repo: "api", folderId, client: "claude-code" }).agent.id).toBe(first.agent.id);
     p.agentStreams.connect(first.agent.id, { send() {}, close() {} });
-    const second = p.agents.registerSession(computer, { key: "key-00002", repo: "api", folderId });
+    const second = p.agents.registerSession(computer, { key: "key-00002", repo: "api", folderId, client: "claude-code" });
     expect(second.agent.name).toBe("api-claude-2");
     p.agentStreams.closeAll([first.agent.id]);
     // Just disconnected: the session may be between reconnect attempts, so its row isn't up for grabs yet.
-    const fourth = p.agents.registerSession(computer, { key: "key-00004", repo: "api", folderId });
+    const fourth = p.agents.registerSession(computer, { key: "key-00004", repo: "api", folderId, client: "claude-code" });
     expect(fourth).toMatchObject({ inherited: false });
     expect(fourth.agent.name).toBe("api-claude-3");
     p.clock.advance(3 * 60_000);
-    const third = p.agents.registerSession(computer, { key: "key-00003", repo: "api", folderId });
+    const third = p.agents.registerSession(computer, { key: "key-00003", repo: "api", folderId, client: "claude-code" });
     expect(third).toMatchObject({ inherited: true });
     expect(third.agent.id).toBe(first.agent.id);
     expect(sessionBaseName("My Repo!")).toBe("my-repo-claude");
@@ -121,13 +121,56 @@ describe("session registration", () => {
     const chris = await addOwner(p);
     const { computer } = addComputer(p, chris);
     const folderId = "c".repeat(64);
-    const { agent } = p.agents.registerSession(computer, { key: "key-running", repo: "api", folderId });
+    const { agent } = p.agents.registerSession(computer, { key: "key-running", repo: "api", folderId, client: "claude-code" });
     p.agents.update(chris.id, agent.id, { joinFromFolder: false });
     expect(p.agents.joinsFromFolder(p.agents.require(agent.id))).toBe(false);
-    expect(errorCode(() => p.agents.registerSession(computer, { key: "key-new-one", repo: "api", folderId }))).toBe("folder_off");
-    expect(p.agents.registerSession(computer, { key: "key-running", repo: "api", folderId }).agent.id).toBe(agent.id);
+    expect(errorCode(() => p.agents.registerSession(computer, { key: "key-new-one", repo: "api", folderId, client: "claude-code" }))).toBe("folder_off");
+    expect(p.agents.registerSession(computer, { key: "key-running", repo: "api", folderId, client: "claude-code" }).agent.id).toBe(agent.id);
     p.agents.update(chris.id, agent.id, { joinFromFolder: true });
-    expect(errorCode(() => p.agents.registerSession(computer, { key: "key-new-one", repo: "api", folderId }))).toBeNull();
+    expect(errorCode(() => p.agents.registerSession(computer, { key: "key-new-one", repo: "api", folderId, client: "claude-code" }))).toBeNull();
+  });
+
+  test("a Codex session gets a -codex name, its own kind, and never takes over a Claude Code session", async () => {
+    const p = makePortico();
+    const chris = await addOwner(p);
+    const { computer } = addComputer(p, chris);
+    const folderId = "d".repeat(64);
+    const claude = p.agents.registerSession(computer, { key: "key-claude1", repo: "api", folderId, client: "claude-code" });
+    p.clock.advance(3 * 60_000);
+    const codex = p.agents.registerSession(computer, { key: "key-codex01", repo: "api", folderId, client: "codex" });
+    expect(codex).toMatchObject({ inherited: false });
+    expect(codex.agent).toMatchObject({ name: "api-codex", kind: "codex", type: "session", description: "Codex in api on macbook" });
+    expect(codex.agent.id).not.toBe(claude.agent.id);
+    // A later Codex session in the folder inherits the Codex row, as Claude Code sessions do theirs.
+    p.clock.advance(3 * 60_000);
+    const next = p.agents.registerSession(computer, { key: "key-codex02", repo: "api", folderId, client: "codex" });
+    expect(next).toMatchObject({ inherited: true });
+    expect(next.agent.id).toBe(codex.agent.id);
+    expect(sessionBaseName("My Repo!", "codex")).toBe("my-repo-codex");
+    expect(`${sessionBaseName("a-very-long-repository-name-that-goes-on-and-on", "codex")}-99`.length).toBeLessThanOrEqual(40);
+  });
+
+  test("Codex sessions aren't pushed to: connected they're queued, gone they're offline", async () => {
+    const p = makePortico();
+    const chris = await addOwner(p);
+    const { computer } = addComputer(p, chris);
+    const { agent: codex } = p.agents.registerSession(computer, { key: "key-codex01", repo: "api", folderId: "e".repeat(64), client: "codex" });
+    const { agent: claude } = p.agents.registerSession(computer, { key: "key-claude1", repo: "api", folderId: "e".repeat(64), client: "claude-code" });
+    expect(p.agents.isPush(codex)).toBe(false);
+    expect(p.agents.isPush(claude)).toBe(true);
+    expect(p.agents.tier(codex)).toBe("offline");
+    p.agentStreams.connect(codex.id, { send() {}, close() {} });
+    p.agentStreams.connect(claude.id, { send() {}, close() {} });
+    expect(p.agents.tier(codex)).toBe("queued");
+    expect(p.agents.tier(claude)).toBe("pushed");
+  });
+
+  test("registration names the client: Claude Code by default, Codex by header, anything else refused", () => {
+    const key = "key-00001";
+    const folderId = "f".repeat(64);
+    expect(parseRegistration(key, folderId, "api").client).toBe("claude-code");
+    expect(parseRegistration(key, folderId, "api", "codex").client).toBe("codex");
+    expect(errorCode(() => parseRegistration(key, folderId, "api", "cursor"))).toBe("bad_request");
   });
 
   test("sessions offline for a week are deleted; connected ones are kept", async () => {

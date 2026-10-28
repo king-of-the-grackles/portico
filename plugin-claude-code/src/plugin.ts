@@ -9,7 +9,7 @@ import type { PorticoClient, StreamRegistration } from "./portico-client";
 import { type InboxSocket, SocketError } from "./socket";
 import type { SessionWatcher } from "./status";
 import { StreamClient, type StreamClientOptions } from "./stream";
-import { runTool, TOOLS } from "./tools";
+import { inboxText, runTool, TOOLS } from "./tools";
 
 export const SERVER_NAME = "portico";
 export const SERVER_VERSION = "0.5.0";
@@ -33,6 +33,50 @@ export function joinedNotice(name: string): string {
   );
 }
 
+/**
+ * What differs between the coding agents this server runs in: Claude Code through its plugin, Codex through its bridge.
+ * Codex's Stop hook calls check_inbox, and Codex hooks can only call tools the model can see, so a Codex server lists
+ * the tools even while quiet.
+ */
+export interface Host {
+  client: "claude-code" | "codex";
+  /** Standing instructions, sent when the session connects. */
+  instructions: string;
+  /** What a tool call gets while the session's folder is off Portico. */
+  folderOffNote: string;
+  /** Said once a session that was open during the join is registered. */
+  joined: (name: string) => string;
+  /** What a tool call gets on a computer that hasn't joined Portico. */
+  notJoinedNote: string;
+}
+
+export const CLAUDE_CODE_HOST: Host = {
+  client: "claude-code",
+  instructions: INSTRUCTIONS,
+  folderOffNote: FOLDER_OFF_NOTE,
+  joined: joinedNotice,
+  notJoinedNote: NOT_JOINED_NOTE,
+};
+
+/** The Stop hook's own limit is 15 s: the peek and the ack fit well inside it, so a hook Codex gave up on acks nothing. */
+const STOP_HOOK_MS = 5_000;
+
+/** The Stop hook's answer while nothing is waiting, or the server is quiet: no decision. */
+const NO_DECISION: CallToolResult = { content: [{ type: "text", text: "" }] };
+
+/**
+ * What Codex's Stop hook gets from check_inbox with `stop_hook`: nothing when nothing is waiting, otherwise a block
+ * decision whose reason Codex takes as the next prompt, so the session handles the messages without being asked.
+ */
+export function stopHookOutput(inbox: { messages: unknown[]; updates: unknown[] } & Parameters<typeof inboxText>[0]): string {
+  if (inbox.messages.length === 0 && inbox.updates.length === 0) return "";
+  const reason =
+    "Portico: new items arrived for this session from other AI agents, not from the user. Handle each one as its frame " +
+    "says, and reply with send_message and reply_to when an answer is useful.\n\n" +
+    inboxText(inbox);
+  return JSON.stringify({ decision: "block", reason });
+}
+
 /** The session's folder switch, as the local copy in computer.json has it. Portico holds the switch itself. */
 export interface FolderSwitch {
   /** The local copy has the folder off: the session starts with no tools, until Portico says otherwise. */
@@ -44,8 +88,13 @@ export interface FolderSwitch {
 export interface PorticoPluginDeps {
   client: PorticoClient;
   log: Logger;
-  /** Claude Code's inbox socket, where messages, updates and notices are posted. */
-  socket: Pick<InboxSocket, "post">;
+  /**
+   * Claude Code's inbox socket, where messages, updates and notices are posted. Null for a host Portico can't push to
+   * (Codex): the session checks its inbox, and notices go out with its next tool result.
+   */
+  socket: Pick<InboxSocket, "post"> | null;
+  /** Default: Claude Code. */
+  host?: Host;
   /** What the stream open registers: the repo basename and the folder ID. Called before each open. */
   registration?: () => Promise<StreamRegistration>;
   /** Reports the session's status. Started by the first hello, told to resend on each later one, stopped with the plugin. */
@@ -74,6 +123,8 @@ export interface PorticoPlugin {
   /** Opens the live stream. Runs by itself once the MCP handshake completes. */
   start(): void;
   stop(): Promise<void>;
+  /** Tells the session something about its connection: posted with a socket, otherwise added to the next tool result. */
+  notice(text: string): void;
 }
 
 /** Names and addresses Portico makes: lowercase letters, digits, hyphens, and the `@` of an address. */
@@ -85,21 +136,54 @@ const SAFE_NAME = /^[a-z0-9][a-z0-9@.-]{0,120}$/;
  */
 export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
   const { client, log, socket } = deps;
+  const host = deps.host ?? CLAUDE_CODE_HOST;
   const watcher = deps.watcher ?? null;
   let watching = false;
   let announced = false;
+  /** Without a socket: notices waiting for the next tool result. */
+  const notes: string[] = [];
   /** While quiet, the note a tool call gets instead of a tool; null when the tools are offered. */
-  let quiet: string | null = deps.folder?.off ? FOLDER_OFF_NOTE : deps.joining ? JOINING_NOTE : null;
+  let quiet: string | null = deps.folder?.off ? host.folderOffNote : deps.joining ? JOINING_NOTE : null;
   const server =
     deps.server ??
-    new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: { tools: { listChanged: true } }, instructions: INSTRUCTIONS });
+    new Server(
+      { name: SERVER_NAME, version: SERVER_VERSION },
+      { capabilities: { tools: { listChanged: true } }, instructions: host.instructions },
+    );
   // These replace a waiting server's handlers.
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: quiet === null ? TOOLS : [] }));
-  server.setRequestHandler(CallToolRequestSchema, (request, extra): Promise<CallToolResult> | CallToolResult => {
-    if (quiet !== null) return { content: [{ type: "text", text: quiet }], isError: true };
-    // A cancelled call (Esc in Claude Code) ends its request, so a waiting check_inbox picks up nothing.
-    return runTool(client, request.params.name, (request.params.arguments ?? {}) as Record<string, unknown>, extra.signal);
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: quiet === null || host.client === "codex" ? TOOLS : [] }));
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
+    const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+    // Codex's Stop hook, not the model: its answer is read as hook output, so it carries nothing else.
+    if (isStopHook(host, request.params.name, args)) return quiet === null ? stopHook(extra.signal) : NO_DECISION;
+    const result: CallToolResult =
+      quiet !== null
+        ? { content: [{ type: "text", text: quiet }], isError: true }
+        : // A cancelled call (Esc) ends its request, so a waiting check_inbox picks up nothing.
+          await runTool(client, request.params.name, args, extra.signal, { pull: !socket });
+    for (const text of notes.splice(0)) result.content.push({ type: "text", text });
+    return result;
   });
+
+  /**
+   * Peeks at what's waiting, and acks it only once the answer is ready: when Codex gives up on the hook or cancels it,
+   * or Portico is slow, nothing is acked and the items wait for the next turn's hook or check_inbox.
+   */
+  const stopHook = async (signal: AbortSignal): Promise<CallToolResult> => {
+    try {
+      const pending = await client.pendingDeliveries({ signal, timeoutMs: STOP_HOOK_MS });
+      const text = stopHookOutput(pending);
+      if (!text) return NO_DECISION;
+      await client.ackDeliveries(
+        { messages: pending.messages.map((m) => m.id), updates: pending.updates.map((u) => u.message_id) },
+        { signal, timeoutMs: STOP_HOOK_MS },
+      );
+      return signal.aborted ? NO_DECISION : { content: [{ type: "text", text }] };
+    } catch (err) {
+      log("warn", "stop_hook_failed", { error: errorName(err) });
+      return NO_DECISION;
+    }
+  };
 
   /** Offers the tools (null) or takes them away with a note, and tells Claude Code when the list changed. */
   const setQuiet = (note: string | null) => {
@@ -108,28 +192,36 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     if (changed) server.sendToolListChanged().catch((err) => log("warn", "tool_list_notice_failed", { error: errorName(err) }));
   };
 
-  const post = (text: string) =>
-    socket
+  const post = async (text: string) => {
+    if (!socket) {
+      notes.push(text);
+      return;
+    }
+    await socket
       .post(frameNotice(text))
       .catch((err) => log("warn", "notice_failed", err instanceof SocketError ? { code: err.code } : { error: errorName(err) }));
+  };
 
-  const delivery = new InboxDelivery({
-    client,
-    socket,
-    log,
-    retryMs: deps.deliveryRetryMs,
-    onFailure: () => stream.reconnect(),
-  });
+  // Only with a socket: without one, the session picks messages up with check_inbox and the Stop hook.
+  const delivery = socket
+    ? new InboxDelivery({
+        client,
+        socket,
+        log,
+        retryMs: deps.deliveryRetryMs,
+        onFailure: () => stream.reconnect(),
+      })
+    : null;
 
   const onHello = (data: unknown) => {
     const { address, name } = (data ?? {}) as { address?: unknown; name?: unknown };
     if (typeof address === "string") log("info", "session_registered", { address });
     // Portico registered the session, so the folder is on there, whatever the local copy said.
-    if (quiet === FOLDER_OFF_NOTE) deps.folder?.record(false);
+    if (quiet === host.folderOffNote) deps.folder?.record(false);
     setQuiet(null);
     if (deps.joining && !announced && typeof name === "string" && SAFE_NAME.test(name)) {
       announced = true;
-      void post(joinedNotice(name));
+      void post(host.joined(name));
     }
     if (!watcher) return;
     // Status reports start once Portico knows this session: its key means nothing there before the hello.
@@ -164,7 +256,7 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     onEvent: (event, data) => {
       if (event === "hello") onHello(data);
       else if (event === "renamed") onRenamed(data);
-      else if (event === "nudge") void delivery.run();
+      else if (event === "nudge") void delivery?.run();
       else if (event === "approval_request") panels.request(data);
       else if (event === "approval_closed") panels.closed(data);
     },
@@ -172,13 +264,13 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     onDisconnect: () => panels.closeAll(),
     onStop: (stop) => {
       // Delivery is over for good too: a retry armed by an earlier socket failure must not peek, post or ack now.
-      delivery.stop();
+      delivery?.stop();
       // So are status reports: Portico would refuse them.
       watcher?.stop();
       if (stop.reason === "rejected" && stop.code === "folder_off") {
         // The folder is off on Portico: quiet. The stream logged its one line; nothing is posted into the session.
-        if (quiet !== FOLDER_OFF_NOTE) deps.folder?.record(true);
-        setQuiet(FOLDER_OFF_NOTE);
+        if (quiet !== host.folderOffNote) deps.folder?.record(true);
+        setQuiet(host.folderOffNote);
         return;
       }
       void post(stopNotice(stop));
@@ -194,20 +286,36 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     start: () => stream.start(),
     stop: async () => {
       watcher?.stop();
-      delivery.stop();
+      delivery?.stop();
       panels.closeAll();
       await stream.stop();
     },
+    notice: (text) => void post(text),
   };
 }
 
+/** Whether a call is Codex's Stop hook: check_inbox with `stop_hook`, which only a Codex server answers as one. */
+function isStopHook(host: Host, name: string, args: Record<string, unknown>): boolean {
+  return host.client === "codex" && name === "check_inbox" && args.stop_hook === true;
+}
+
 /**
- * For sessions on a computer that hasn't joined Portico: no tools, and no instructions. When the computer joins while
- * the session is open, the full plugin takes this server over (createPorticoPlugin with `server`), and the tools follow.
+ * For sessions on a computer that hasn't joined Portico: no tools for Claude Code, and no instructions. When the
+ * computer joins while the session is open, the full plugin takes this server over (createPorticoPlugin with
+ * `server`), and the tools follow. Codex gets its instructions from the start (a server's instructions are read once),
+ * and the tools listed, so its Stop hook finds check_inbox.
  */
-export function createWaitingServer(): Server {
-  const server = new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: { tools: { listChanged: true } } });
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [] }));
-  server.setRequestHandler(CallToolRequestSchema, () => ({ content: [{ type: "text", text: NOT_JOINED_NOTE }], isError: true }));
+export function createWaitingServer(host: Host = CLAUDE_CODE_HOST): Server {
+  const codex = host.client === "codex";
+  const server = new Server(
+    { name: SERVER_NAME, version: SERVER_VERSION },
+    { capabilities: { tools: { listChanged: true } }, ...(codex ? { instructions: host.instructions } : {}) },
+  );
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: codex ? TOOLS : [] }));
+  server.setRequestHandler(CallToolRequestSchema, (request) =>
+    isStopHook(host, request.params.name, (request.params.arguments ?? {}) as Record<string, unknown>)
+      ? NO_DECISION
+      : { content: [{ type: "text", text: host.notJoinedNote }], isError: true },
+  );
   return server;
 }

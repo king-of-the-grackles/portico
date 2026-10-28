@@ -23,10 +23,13 @@ function toComputer(row: ComputerRow): Computer {
   return { id: row.id, ownerId: row.owner_id, name: row.name, createdAt: row.created_at, lastSeenAt: row.last_seen_at };
 }
 
-/** Join lines that add a computer. Codex joins as an app agent in this release: its computer integration is unverified. */
-export const COMPUTER_KINDS: readonly AgentKind[] = ["claude-code"];
+/** Join lines for coding agents on a computer: the computer joins, then each session registers itself. */
+export const COMPUTER_KINDS: readonly AgentKind[] = ["claude-code", "codex"];
 /** Join lines for app agents, which ask to sign in and show a code. */
-export const APP_KINDS: readonly AgentKind[] = ["codex", "muse", "grok-bot", "other"];
+export const APP_KINDS: readonly AgentKind[] = ["muse", "grok-bot", "other"];
+
+const COMPUTER_LABELS: Partial<Record<AgentKind, string>> = { "claude-code": "Claude Code", codex: "Codex" };
+const APP_LINE = "This join line is for an app agent. Follow the steps for app agents at /join.";
 /** MCP connectors sign in with OAuth from the server address; they get no join line. */
 export const CONNECTOR_KINDS: readonly AgentKind[] = ["dots", "claude-duet", "other"];
 
@@ -312,9 +315,7 @@ export class Computers {
     const name = typeof proposedName === "string" && proposedName.trim() !== "" ? proposedName.slice(0, 200) : "computer";
     return this.db.transaction(() => {
       const line = this.usableLine(rawSecret);
-      if (!COMPUTER_KINDS.includes(line.kind)) {
-        throw new PorticoError("bad_request", "This join line is for an app agent. Follow the steps for app agents at /join.");
-      }
+      if (!COMPUTER_KINDS.includes(line.kind)) throw new PorticoError("bad_request", APP_LINE);
       const { computer, token } = this.create(line.createdBy, name);
       const at = this.iso();
       this.db
@@ -327,17 +328,42 @@ export class Computers {
   }
 
   /**
-   * Sets each recent computer line's agent to the first session registered on its computer, once one has. Returns how
-   * many lines changed.
+   * Uses a computer line on a computer that already joined, e.g. a Codex line on a computer where Claude Code joined
+   * first: the line is marked used by that computer, and no second computer is made. Only the computer's own person's
+   * line can attach.
+   */
+  attach(computer: Computer, rawSecret: unknown): JoinLine {
+    return this.db.transaction(() => {
+      const line = this.usableLine(rawSecret);
+      if (!COMPUTER_KINDS.includes(line.kind)) throw new PorticoError("bad_request", APP_LINE);
+      if (line.createdBy !== computer.ownerId) {
+        throw new PorticoError(
+          "not_allowed",
+          "This join line is from a different person than the one this computer joined for. Ask that person for a join line.",
+        );
+      }
+      const at = this.iso();
+      this.db
+        .query("UPDATE join_lines SET used_at = $at, computer_id = $computerId WHERE id = $id")
+        .run({ id: line.id, at, computerId: computer.id });
+      this.log("join_line_attached", { join_line_id: line.id, computer: computer.name });
+      this.changes.emit("join-lines");
+      return { ...line, usedAt: at, computerId: computer.id };
+    })();
+  }
+
+  /**
+   * Sets each recent computer line's agent to the first session of the line's kind registered on its computer since the
+   * line was used, once one has. A session that took over an older row (same folder, same kind) counts by when it
+   * registered, which its last_seen_at records.
    */
   linkFirstSessions(): number {
+    const first = `FROM agents a WHERE a.computer_id = join_lines.computer_id AND a.type = 'session'
+           AND a.kind = join_lines.kind AND COALESCE(a.last_seen_at, a.created_at) >= join_lines.used_at`;
     const changed = this.db
       .query(
-        `UPDATE join_lines SET agent_id = (
-           SELECT a.id FROM agents a WHERE a.computer_id = join_lines.computer_id AND a.type = 'session'
-           ORDER BY a.created_at, a.id LIMIT 1)
-         WHERE agent_id IS NULL AND computer_id IS NOT NULL AND used_at >= $since
-           AND EXISTS (SELECT 1 FROM agents a WHERE a.computer_id = join_lines.computer_id AND a.type = 'session')`,
+        `UPDATE join_lines SET agent_id = (SELECT a.id ${first} ORDER BY COALESCE(a.last_seen_at, a.created_at), a.id LIMIT 1)
+         WHERE agent_id IS NULL AND computer_id IS NOT NULL AND used_at >= $since AND EXISTS (SELECT 1 ${first})`,
       )
       .run({ since: this.iso(-LIMITS.joinLineHours * HOUR_MS) }).changes;
     if (changed > 0) this.changes.emit("join-lines");
@@ -358,7 +384,8 @@ export class Computers {
     return this.db.transaction(() => {
       const line = this.usableLine(rawSecret);
       if (!APP_KINDS.includes(line.kind)) {
-        throw new PorticoError("bad_request", "This join line is for Claude Code on a computer. Follow the Claude Code steps at /join.");
+        const label = COMPUTER_LABELS[line.kind] ?? "a coding agent";
+        throw new PorticoError("bad_request", `This join line is for ${label} on a computer. Follow the ${label} steps at /join.`);
       }
       // The person picked the kind with the line. Only a line for any other app takes the agent's own word for it.
       const asked = input.kind as AgentKind | undefined;

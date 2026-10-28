@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { removeLine, removePorticoAllowRule } from "./claude-settings";
+import { type Outcome, setServer, setStopHook } from "./codex-config";
 import { type ComputerFile, ComputerFileError, readComputerFile, removeComputerFile } from "./computer";
 import { callPortico, CommandError, refusal } from "./computer-api";
 
@@ -20,6 +21,18 @@ export interface LeaveDeps {
   findClaude?: () => string | null;
   /** Runs `claude plugin uninstall portico@portico` and returns its exit status (null when it didn't exit). */
   uninstall?: (claude: string) => number | null;
+  /** Codex's folder: a Codex join added Portico there, and Codex shouldn't keep starting the bridge. */
+  codexHome?: string;
+}
+
+/** Takes Portico's MCP server and Stop hook out of Codex's files. Returns the lines to print. */
+export function removeFromCodex(home: string): string[] {
+  const line = (outcome: Outcome, what: string, manual: string) =>
+    outcome.kind === "written" ? `${what} in ${outcome.path}.` : outcome.kind === "manual" ? `${outcome.path} was left unchanged (${outcome.why}). ${manual}` : null;
+  return [
+    line(setServer(home, null), "Removed Portico's MCP server", "Remove the [mcp_servers.portico] table by hand."),
+    line(setStopHook(home, false), "Removed Portico's Stop hook", "Remove the Portico Stop hook by hand."),
+  ].filter((text): text is string => text !== null);
 }
 
 /**
@@ -42,6 +55,7 @@ export async function leaveComputer(deps: LeaveDeps): Promise<string[]> {
   if (removeComputerFile(deps.configPath)) lines.push(`Removed ${deps.configPath}.`);
   const rule = removeLine(removePorticoAllowRule(deps.settingsPath));
   if (rule) lines.push(rule);
+  if (deps.codexHome) lines.push(...removeFromCodex(deps.codexHome));
 
   const claude = (deps.findClaude ?? (() => findOnPath("claude", process.env.PATH)))();
   if (!claude) {
@@ -58,7 +72,7 @@ export async function leaveComputer(deps: LeaveDeps): Promise<string[]> {
   return lines;
 }
 
-async function tellPortico(file: ComputerFile, doFetch?: typeof fetch): Promise<string> {
+export async function tellPortico(file: ComputerFile, doFetch?: typeof fetch): Promise<string> {
   const where = `Remove computer "${file.computer}" in Settings › Computers.`;
   try {
     const answer = await callPortico(file.url, "DELETE", "/api/computer", { token: file.token, fetch: doFetch });

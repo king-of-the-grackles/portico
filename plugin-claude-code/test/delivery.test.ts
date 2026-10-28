@@ -64,7 +64,7 @@ describe("inbox socket delivery", () => {
 
   test("delivers messages that arrived while disconnected", async () => {
     // The session registered earlier and is offline now, as after a dropped connection.
-    p.agents.registerSession(p.computers.byName("macbook")!, { key: KEY, repo: "api", folderId: "a".repeat(64) });
+    p.agents.registerSession(p.computers.byName("macbook")!, { key: KEY, repo: "api", folderId: "a".repeat(64), client: "claude-code" });
     const message = sender()("Waiting", "Waiting already");
     expect(status(message.id)).toBe("pending");
     const { sock } = await connect();

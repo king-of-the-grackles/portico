@@ -170,6 +170,70 @@ describe("computer join", () => {
   });
 });
 
+describe("Codex on a computer", () => {
+  test("a Codex line joins a computer, says its kind, and the sheet waits for the first Codex session", async () => {
+    const { p, owner } = await setup();
+    const line = await makeLine(p, owner, "codex");
+    const res = await join(p, line.secret);
+    expect(res.status).toBe(201);
+    const { token, kind } = (await res.json()) as { token: string; kind: string };
+    expect(kind).toBe("codex");
+    // A Claude Code session on the computer isn't what the Codex line waits for.
+    await openSessionStream(p, token, { key: "claude-session", repo: "api" });
+    let state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
+    expect(state.joinLine.agent).toBeNull();
+    const codex = await openSessionStream(p, token, { key: "codex-session", repo: "api", client: "codex" });
+    expect(codex.hello).toMatchObject({ name: "api-codex", address: "api-codex@chris-macbook" });
+    state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
+    expect(state.joinLine.agent).toMatchObject({ name: "api-codex", computer: { name: "chris-macbook" } });
+    await codex.events.cancel();
+  });
+
+  test("a computer that already joined uses a Codex line with POST /lines: no second computer", async () => {
+    const { p, owner } = await setup();
+    const first = (await (await join(p, (await makeLine(p, owner)).secret)).json()) as { token: string; computer: { id: string } };
+    const line = await makeLine(p, owner, "codex");
+    const res = await callAs(p, { token: first.token }, "POST", "/api/computer/lines", { token: line.secret });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ computer: { id: first.computer.id, name: "chris-macbook" }, kind: "codex" });
+    expect(p.computers.joinLine(line.id)).toMatchObject({ computerId: first.computer.id, usedAt: expect.any(String) });
+    // Used once.
+    expect((await callAs(p, { token: first.token }, "POST", "/api/computer/lines", { token: line.secret })).status).toBe(409);
+    const codex = await openSessionStream(p, first.token, { key: "codex-session", repo: "web", client: "codex" });
+    const state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
+    expect(state.joinLine.agent?.name).toBe("web-codex");
+    await codex.events.cancel();
+  });
+
+  test("a Codex session that takes over an older Codex row in its folder still counts as the line's session", async () => {
+    const { p, owner } = await setup();
+    const first = (await (await join(p, (await makeLine(p, owner, "codex")).secret)).json()) as { token: string };
+    const old = await openSessionStream(p, first.token, { key: "codex-old", repo: "api", client: "codex" });
+    await old.events.cancel();
+    await flush();
+    p.clock.advance(5 * 60_000);
+    const line = await makeLine(p, owner, "codex");
+    expect((await callAs(p, { token: first.token }, "POST", "/api/computer/lines", { token: line.secret })).status).toBe(200);
+    const next = await openSessionStream(p, first.token, { key: "codex-new", repo: "api", client: "codex" });
+    expect(next.hello.name).toBe("api-codex");
+    const state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
+    expect(state.joinLine.agent?.name).toBe("api-codex");
+    await next.events.cancel();
+  });
+
+  test("POST /lines needs the computer token, and only the computer's own person's line attaches", async () => {
+    const { p, owner, member } = await setup();
+    const first = (await (await join(p, (await makeLine(p, owner)).secret)).json()) as { token: string };
+    const mayas = await makeLine(p, member, "codex");
+    expect((await p.app.request("/api/computer/lines", { method: "POST", body: "{}" })).status).toBe(401);
+    const res = await callAs(p, { token: first.token }, "POST", "/api/computer/lines", { token: mayas.secret });
+    expect(res.status).toBe(403);
+    expect(p.computers.joinLine(mayas.id)?.usedAt).toBeNull();
+    const muse = await makeLine(p, owner, "muse");
+    expect((await callAs(p, { token: first.token }, "POST", "/api/computer/lines", { token: muse.secret })).status).toBe(400);
+  });
+});
+
 describe("leaving and folders", () => {
   test("DELETE /api/computer removes the computer and its sessions, and closes their streams", async () => {
     const { p, chris } = await setup();

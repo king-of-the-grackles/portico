@@ -110,6 +110,7 @@ export function addSession(
     key,
     repo: opts.repo ?? "api",
     folderId: opts.folderId ?? `${keys}`.padStart(64, "0"),
+    client: opts.client ?? "claude-code",
   });
   if (opts.approvalRequired) agent = p.agents.update(computer.ownerId, agent.id, { approvalRequired: true });
   return { agent, key };
@@ -156,7 +157,7 @@ export async function callPerson(
 export async function openSessionStream(
   p: { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } },
   token: string,
-  opts: { key: string; repo?: string; folderId?: string; popup?: boolean },
+  opts: { key: string; repo?: string; folderId?: string; popup?: boolean; client?: "claude-code" | "codex" },
 ): Promise<{ res: Response; events: ReturnType<typeof sseReader>; hello: HelloEvent }> {
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
@@ -164,6 +165,7 @@ export async function openSessionStream(
     "x-portico-folder": opts.folderId ?? "a".repeat(64),
   };
   if (opts.popup) headers["x-portico-popup"] = "1";
+  if (opts.client) headers["x-portico-client"] = opts.client;
   const res = await p.app.request(`/api/agent/stream?repo=${encodeURIComponent(opts.repo ?? "api")}`, { headers });
   if (res.status !== 200) throw new Error(`stream open failed with ${res.status}: ${await res.text()}`);
   const events = sseReader(res);

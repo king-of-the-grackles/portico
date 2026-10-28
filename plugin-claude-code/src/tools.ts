@@ -83,8 +83,20 @@ export function inboxText(inbox: Inbox, waited = false): string {
   return lines.join("\n");
 }
 
-/** Runs one of the three tools against Portico. Portico's errors become tool errors, as on its /mcp. */
-export async function runTool(client: PorticoClient, name: string, args: Args, signal?: AbortSignal): Promise<CallToolResult> {
+/** After a send from a session Portico can't push to (Codex), as Portico's /mcp says it to apps and connectors. */
+export const WAIT_HINT = `If a reply is expected, call check_inbox with wait: ${MAX_INBOX_WAIT_SECONDS} to wait for the reply.`;
+
+/**
+ * Runs one of the three tools against Portico. Portico's errors become tool errors, as on its /mcp. With `pull`, the
+ * session isn't pushed to, so a send that reaches the receiver ends with how to wait for the reply.
+ */
+export async function runTool(
+  client: PorticoClient,
+  name: string,
+  args: Args,
+  signal?: AbortSignal,
+  opts: { pull?: boolean } = {},
+): Promise<CallToolResult> {
   try {
     switch (name) {
       case "list_agents":
@@ -102,6 +114,7 @@ export async function runTool(client: PorticoClient, name: string, args: Args, s
         const result = json({ message, delivery });
         // A held message's note, as its own line, as on Portico's /mcp.
         if (note) result.content.push({ type: "text", text: note });
+        if (opts.pull && (delivery === "pushed" || delivery === "queued")) result.content.push({ type: "text", text: WAIT_HINT });
         return result;
       }
       case "check_inbox": {

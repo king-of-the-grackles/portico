@@ -8,7 +8,8 @@ COPY server/package.json server/package.json
 COPY plugin-claude-code/package.json plugin-claude-code/package.json
 RUN bun install --frozen-lockfile
 COPY server server
-# portico join and portico leave reuse the plugin's code (plugin-claude-code/src/cli-run.ts), so the bundle needs that folder too.
+# portico join and portico leave reuse the plugin's code (plugin-claude-code/src/cli-run.ts), and Portico serves the Codex
+# bridge built from plugin-claude-code/src/codex/, so the build needs that folder too.
 COPY plugin-claude-code/src plugin-claude-code/src
 RUN bun server/scripts/bundle-client.ts && bun build server/src/cli.ts --compile --no-compile-autoload-bunfig --outfile /out/portico
 

@@ -75,17 +75,37 @@ export interface Joined {
   path: string;
   /** With replace: folders kept off that Portico couldn't be told about. */
   unsynced: string[];
+  /**
+   * The computer had joined this Portico already (say, Claude Code first, then Codex): the line was used on that
+   * computer, and computer.json is as it was.
+   */
+  attached: boolean;
 }
 
 /**
- * Redeems the join line's token on Portico and writes computer.json. With replace, the folders that were off are
- * switched off on Portico again, since the new computer starts with every folder on. Throws CommandError (or
+ * Redeems the join line's token on Portico and writes computer.json. A computer that joined the same Portico already
+ * uses the line there instead, so Claude Code and Codex on one computer share it. With replace, the folders that were
+ * off are switched off on Portico again, since the new computer starts with every folder on. Throws CommandError (or
  * ComputerFileError) when the join can't go ahead.
  */
 export async function joinComputer(opts: JoinOptions, deps: JoinDeps): Promise<Joined> {
   const { url, token: joinToken } = parseJoinLine(opts.line);
   const path = deps.configPath;
   const existing = readExisting(path, opts.replace === true);
+  if (existing && !opts.replace && existing.url === url) {
+    const answer = await callPortico(url, "POST", "/api/computer/lines", {
+      token: existing.token,
+      body: { token: joinToken },
+      fetch: deps.fetch,
+    });
+    if (answer.status === 401) {
+      throw new CommandError(
+        `Portico no longer accepts this computer's token (the computer may have been removed in Settings). The join line is still unused: run again with --replace to join as a new computer.`,
+      );
+    }
+    if (!answer.ok) throw new CommandError(refusal(url, answer));
+    return { url, computer: existing.computer, path, unsynced: [], attached: true };
+  }
   if (existing && !opts.replace) {
     throw new CommandError(
       `${path} already exists (computer "${existing.computer}" on ${existing.url}). Nothing was written. Run again with --replace to join again.`,
@@ -119,7 +139,7 @@ export async function joinComputer(opts: JoinOptions, deps: JoinDeps): Promise<J
       unsynced.push(folder);
     }
   }
-  return { url, computer, path, unsynced };
+  return { url, computer, path, unsynced, attached: false };
 }
 
 /** The current computer file, or null. With replace, a broken file counts as none, so joining again repairs it. */

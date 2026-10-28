@@ -264,11 +264,11 @@ describe("Home renders every board state", () => {
     expect(t).toContain("Waiting for the sign in request from Muse");
   });
 
-  test("Codex joins like an app agent in this release", () => {
+  test("Codex joins from a computer, like Claude Code", () => {
     const add = addState({ pick: "codex", copied: true, lines: { codex: { id: "j3", kind: "codex", line: "Join Portico: https://portico.example.com/join#x", expiresAt: at(12, 0, -1) } } });
     const t = text(render(home({ add })));
-    expect(t).toContain("Send this to Codex, then approve the sign in request here.");
-    expect(t).toContain("Waiting for the sign in request from Codex");
+    expect(t).toContain("Paste this into Codex on the computer that should join.");
+    expect(t).toContain("Waiting for Codex to connect");
   });
 
   test("C3: the sign in request arrives in the sheet with its code", () => {

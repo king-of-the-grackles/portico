@@ -83,10 +83,15 @@ describe("asking to join", () => {
     expect(p.computers.signInRequest(fromMuse.id)?.kind).toBe("muse");
   });
 
-  test("Codex joins as an app agent in this release", async () => {
+  test("a Codex line is for a computer: asking to sign in with it is refused, and the line stays usable", async () => {
     const { p, owner } = await setup();
     const line = await makeLine(p, owner, "codex");
-    expect((await ask(p, { token: line.secret, name: "codex-laptop" })).status).toBe(201);
+    const res = await ask(p, { token: line.secret, name: "codex-laptop" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { message: string }).message).toBe(
+      "This join line is for Codex on a computer. Follow the Codex steps at /join.",
+    );
+    expect(p.computers.joinLine(line.id)?.usedAt).toBeNull();
   });
 });
 

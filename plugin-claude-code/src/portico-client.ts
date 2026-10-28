@@ -73,6 +73,8 @@ export interface StreamRegistration {
   repo: string;
   /** HMAC-SHA256 of the folder's real path, keyed with the computer token. */
   folderId: string;
+  /** Which coding agent the session is. Absent, Portico takes the session for Claude Code. */
+  client?: "claude-code" | "codex";
 }
 
 /** This session's live status, for `POST /api/agent/status`. */
@@ -146,13 +148,13 @@ export class PorticoClient {
   }
 
   /** Peeks at what is waiting for this session, changing nothing. */
-  pendingDeliveries(): Promise<Inbox> {
-    return this.call("GET", "/api/agent/deliveries");
+  pendingDeliveries(opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<Inbox> {
+    return this.call("GET", "/api/agent/deliveries", undefined, opts);
   }
 
   /** Marks the posted messages delivered and the posted updates reported. */
-  ackDeliveries(ack: DeliveryAck): Promise<{ acked: { messages: number; updates: number } }> {
-    return this.call("POST", "/api/agent/deliveries/ack", ack);
+  ackDeliveries(ack: DeliveryAck, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<{ acked: { messages: number; updates: number } }> {
+    return this.call("POST", "/api/agent/deliveries/ack", ack, opts);
   }
 
   reportStatus(report: StatusReport): Promise<{ ok: true }> {
@@ -175,6 +177,7 @@ export class PorticoClient {
     if (registration) {
       path += `?repo=${encodeURIComponent(registration.repo)}`;
       headers["x-portico-folder"] = registration.folderId;
+      if (registration.client) headers["x-portico-client"] = registration.client;
     }
     if (opts.popup) headers["x-portico-popup"] = "1";
     return this.doFetch(`${this.opts.url}${path}`, { headers, signal });

@@ -64,7 +64,7 @@ describe("joinComputer", () => {
     const server = portico();
     const path = configPath();
     const joined = await joinComputer({ line: `Join Portico: ${server.url}/join#${TOKEN}` }, { configPath: path, hostname });
-    expect(joined).toEqual({ url: server.url, computer: "macbook-pro", path, unsynced: [] });
+    expect(joined).toEqual({ url: server.url, computer: "macbook-pro", path, unsynced: [], attached: false });
     expect(server.requests).toEqual([
       { method: "POST", path: "/api/computer/join", token: null, body: { token: TOKEN, computer: "macbook-pro" } },
     ]);
