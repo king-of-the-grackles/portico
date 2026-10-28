@@ -225,14 +225,14 @@ describe("the consent page", () => {
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
 
-  test("ChatGPT means dots, and a taken name gets the first free form", async () => {
+  test("ChatGPT means Dots, and a taken name gets the first free form", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     addAppAgent(p, chris, "dots", { kind: "dots" });
     const clientId = await client(p, "ChatGPT");
     const html = await (await getAuthorize(p, authorizeQuery(clientId, pkce().challenge), signIn(p, chris))).text();
     expect(html).toContain('value="dots-2" aria-describedby');
-    expect(html).toMatch(/value="dots" checked>dots/);
+    expect(html).toMatch(/value="dots" checked>Dots/);
     expect(guessKind("Claude Duet")).toBe("claude-duet");
     expect(guessKind("Cursor")).toBe("other");
   });

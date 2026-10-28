@@ -83,7 +83,7 @@ const asking = agent({
   doing: "Which migration path",
 });
 const gone = agent({ id: "a-gone", name: "api-claude", label: "Claude Code (api)", kind: "claude-code", type: "session", status: "offline", lastSeen: at(18, 4, 1) });
-const mayaDot = agent({ id: "a-dot", name: "maya-dot", label: "dots", kind: "dots", owner: MAYA, mine: false });
+const mayaDot = agent({ id: "a-dot", name: "maya-dot", label: "Dots", kind: "dots", owner: MAYA, mine: false });
 const AGENTS = [claude, asking, grok, codex, gone, mayaDot];
 
 const ref = (a: AgentView) => ({ id: a.id, display: a.display, label: a.label, kind: a.kind });
@@ -447,7 +447,7 @@ describe("the navigation", () => {
       "Not running (1)",
       "Add agent",
       "Maya Okafor",
-      "dots",
+      "Dots",
     );
     expect(html).not.toContain('data-key="n-a-gone"');
     expect(render(state({ quietOpen: true }))).toContain('data-key="n-a-gone"');

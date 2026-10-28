@@ -56,7 +56,7 @@ export const KINDS: Record<AgentKind, KindInfo> = {
     wait: "Waiting for the sign in request from Grok Bot",
   },
   dots: {
-    label: "dots",
+    label: "Dots",
     where: "In ChatGPT",
     connector: false,
     step: "Send this to the dot in a chat, then approve the sign in request here.",

@@ -44,7 +44,7 @@ ${o.pluginSource ? "" : html`<p class="notice">The plugin source isn't set on th
 </ol>
 <p>To keep a folder off Portico, run <code>bun ~/.portico/portico-codex.js off</code> there. <code>on</code> turns the folder back on, <code>update</code> downloads the bridge again, and <code>leave</code> takes the computer off Portico.</p>
 
-<h2>Muse, Grok Bot, dots, Claude Duet and other app agents</h2>
+<h2>Muse, Grok Bot, Dots, Claude Duet and other app agents</h2>
 <ol>
 <li><p>Ask to join. Send the part after <code>#</code> as the token, with a name for the agent: lowercase letters, digits and single hyphens, at most ${LIMITS.maxNameChars} characters.</p>
 <pre><code>curl -sS -X POST ${publicUrl}/api/sign-in-requests \\

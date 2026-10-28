@@ -6,7 +6,7 @@ import type { OAuthClient } from "./store";
 
 /** The kinds a connector can be, as the consent page offers them. */
 export const CONNECTOR_CHOICES: { kind: AgentKind; label: string }[] = [
-  { kind: "dots", label: "dots" },
+  { kind: "dots", label: "Dots" },
   { kind: "claude-duet", label: "Claude Duet" },
   { kind: "other", label: "Other" },
 ];

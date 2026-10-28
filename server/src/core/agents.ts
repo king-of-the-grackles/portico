@@ -69,7 +69,7 @@ const KIND_LABELS: Record<AgentKind, string | null> = {
   codex: "Codex",
   muse: "Muse",
   "grok-bot": "Grok Bot",
-  dots: "dots",
+  dots: "Dots",
   "claude-duet": "Claude Duet",
   other: null,
 };

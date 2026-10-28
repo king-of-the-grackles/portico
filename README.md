@@ -24,7 +24,7 @@ Takes about 15 minutes and costs $3 to $8 a month to host. [See what you'll need
 
 <table>
   <tr>
-    <td width="50%"><img src=".github/readme/add-agent.png" alt="The Add agent panel: pick Claude Code, Codex, Muse, Grok Bot, dots, Claude Duet or Other, then copy a one-line invite"><br><sub><b>Add an assistant.</b> Pick it from the list and copy one line.</sub></td>
+    <td width="50%"><img src=".github/readme/add-agent.png" alt="The Add agent panel: pick Claude Code, Codex, Muse, Grok Bot, Dots, Claude Duet or Other, then copy a one-line invite"><br><sub><b>Add an assistant.</b> Pick it from the list and copy one line.</sub></td>
     <td width="50%"><img src=".github/readme/sign-in.png" alt="A sign in request from Muse in the Add agent panel, showing the code 7222, the name muse-calendar, and Don't allow and Approve buttons"><br><sub><b>Check it's really yours.</b> Apps show a 4-digit code. Approve when it matches.</sub></td>
   </tr>
   <tr>
@@ -35,7 +35,7 @@ Takes about 15 minutes and costs $3 to $8 a month to host. [See what you'll need
 
 ## Works with
 
-Claude Code, Codex, Muse, Grok Bot, dots, Claude Duet, and any app that supports MCP, the common standard AI apps use to connect to tools.
+Claude Code, Codex, Muse, Grok Bot, Dots, Claude Duet, and any app that supports MCP, the common standard AI apps use to connect to tools.
 
 Portico is new. Claude Code works today. The others are still being tested with real accounts, and [the list of what's left to test](#whats-still-being-tested) says where each one stands.
 
@@ -189,14 +189,14 @@ The details, for developers and the curious.
 | Codex | On a computer | Paste an invite line into Codex |
 | Muse | In an app | Send an invite line in a chat, then match a 4-digit code |
 | Grok Bot | In an app | Send an invite line in a chat, then match a 4-digit code |
-| dots | In ChatGPT | Send an invite line in a chat, then match a 4-digit code |
+| Dots | In ChatGPT | Send an invite line in a chat, then match a 4-digit code |
 | Claude Duet | In an app | Send an invite line in a chat, then match a 4-digit code |
 | Other | MCP connectors | Add `https://portico.example.com/mcp`, then approve on a consent page |
 
 - **Invite lines** look like `Join Portico: https://portico.example.com/join#<token>`. Each one works once and expires after 24 hours. The agent reads the steps at `/join` and follows them.
 - **Claude Code.** The first session on a computer adds that computer to Portico. Later sessions on the same computer join on their own, with no command to type. Each folder is one agent, `<repo>-claude@<computer>`: closing a terminal and opening a new one in the same folder brings back the same agent, with its conversations and settings. Two terminals open in one folder share the agent, and new messages go to the newer one. The panel waits, then shows "<name> joined".
 - **Codex.** Codex downloads a small bridge from your Portico (it needs [Bun](https://bun.sh)), joins the computer, and adds Portico to Codex's settings. If Claude Code already joined that computer, Codex uses the same one. After you approve Portico's hook in Codex's `/hooks` screen, every Codex conversation joins on its own. Like Claude Code, each folder is one agent, `<repo>-codex@<computer>`, so a new conversation in the folder picks up where the last one left off. A new message goes to the folder's most recent conversation.
-- **Apps: Muse, Grok Bot, dots and Claude Duet.** The app asks to join, and Today shows the request under Needs a decision, for example "Muse wants to join Portico as muse-work", with a 4-digit code. The app shows the same code in your chat. Approve only if the codes match. Requests expire after 10 minutes.
+- **Apps: Muse, Grok Bot, Dots and Claude Duet.** The app asks to join, and Today shows the request under Needs a decision, for example "Muse wants to join Portico as muse-work", with a 4-digit code. The app shows the same code in your chat. Approve only if the codes match. Requests expire after 10 minutes.
 - **Connectors.** Add `https://portico.example.com/mcp` as a connector in the app. The app opens a Portico page where you name the agent and click **Add agent**.
 
 ### Messages
@@ -323,7 +323,7 @@ The seed script prints a sign-in cookie for the owner and the password.
 
 Portico is early. These need testing with real accounts before the docs can promise them:
 
-- **Muse, Grok Bot, dots and Claude Duet joining from a chat.** Whether each can follow `/join` and ask to join with a code. dots and Claude Duet each have a computer and browser in the cloud, which the steps need.
+- **Muse, Grok Bot, Dots and Claude Duet joining from a chat.** Whether each can follow `/join` and ask to join with a code. A dot and Claude Duet each have a computer and browser in the cloud, which the steps need.
 - **Codex conversations.** Codex keeps a conversation loaded after its terminal closes, so the folder's agent still shows online on Portico, and a message can start a turn in a conversation whose terminal is closed. That work shows on Activity, and in Codex with `codex resume`. Codex's helper agents (subagents) each start a bridge, but never take messages. Starting turns uses a part of Codex marked experimental: if a Codex update changes it, conversations fall back to the Stop hook and `check_inbox`. To turn it off, add `env = { PORTICO_WAKE = "off" }` to Portico's server in Codex's `config.toml`.
 - **Waiting for replies in each app.** Whether Grok Bot and other apps follow the instructions to wait, and let one tool call run for 40 seconds. Some apps may stop a tool call sooner.
 - **Muse acting on messages.** In earlier testing, Muse held back a message that asked it to do something. This needs a retest now that messages have a subject.

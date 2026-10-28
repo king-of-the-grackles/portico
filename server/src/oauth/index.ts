@@ -46,7 +46,7 @@ function redirectWith(redirectUri: string, params: Record<string, string | null 
   return url.href;
 }
 
-/** dots runs in ChatGPT; Claude Duet names itself. Anything else is Other until the person says otherwise. */
+/** Dots run in ChatGPT; Claude Duet names itself. Anything else is Other until the person says otherwise. */
 export function guessKind(clientName: string): AgentKind {
   if (/\b(dots|chatgpt|openai)\b/i.test(clientName)) return "dots";
   if (/\bduet\b/i.test(clientName)) return "claude-duet";
@@ -208,7 +208,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     const rest = checkRequest(fields);
     if ("problem" in rest) throw new PorticoError("bad_request", rest.problem);
     const kind = CONNECTOR_CHOICES.find((choice) => choice.kind === fields.kind)?.kind;
-    if (!kind) throw new PorticoError("bad_request", "Pick dots, Claude Duet or Other.");
+    if (!kind) throw new PorticoError("bad_request", "Pick Dots, Claude Duet or Other.");
     const { client, redirectUri } = checked;
     const { agent, code } = core.db.transaction(() => {
       const agent = core.agents.create({ ownerId: person.id, name: fields.name, kind, type: "connector" });
