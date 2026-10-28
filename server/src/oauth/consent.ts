@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { html } from "hono/html";
 import type { AgentKind, Person } from "../core/types";
-import { CSP, HOMEMARK, narrowPage, sendPage } from "../web/layout";
+import { CSP, HOMEMARK, narrowPage, sendPage, utcClock } from "../web/layout";
 import type { OAuthClient } from "./store";
 
 /** The kinds a connector can be, as the consent page offers them. */
@@ -34,9 +34,6 @@ function initial(name: string): string {
   return (Array.from(name.trim())[0] ?? "?").toUpperCase();
 }
 
-function utcTime(at: Date): string {
-  return `${String(at.getUTCHours()).padStart(2, "0")}:${String(at.getUTCMinutes()).padStart(2, "0")} UTC`;
-}
 
 /**
  * Where a form on this page may send the browser: Portico itself, and the client's redirect URI, so the plain form
@@ -65,7 +62,7 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
       <span class="logo logo-lg logo-tile" aria-hidden="true">${initial(o.client.name)}</span>
       <div>
         <h1>${o.client.name} wants to add an agent to Portico</h1>
-        <p class="tnum consent-when">Requested at <time datetime="${o.requestedAt.toISOString()}" data-local-time>${utcTime(o.requestedAt)}</time>.</p>
+        <p class="tnum consent-when">Requested at <time datetime="${o.requestedAt.toISOString()}" data-local-time>${utcClock(o.requestedAt)}</time>.</p>
         <p class="consent-where">Approving sends access to <strong>${redirectHost(o.request.redirectUri)}</strong>. Any app can use the name ${o.client.name}: approve only when ${redirectHost(o.request.redirectUri)} belongs to the app being added.</p>
       </div>
     </div>

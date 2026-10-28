@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentView, HeldCard, MessageView, PersonView, SignInView, ThreadView } from "../src/api/views";
-import { agentState, esc, expiresIn } from "../src/web/client/render/common";
-import { homeState, messageStatus, renderHome } from "../src/web/client/render/home";
-import type { AddState, HomeState } from "../src/web/client/render/types";
+import type { AgentPageData } from "../src/api/agents";
+import type { TaskListData, TodayData } from "../src/api/tasks";
+import type { ActivityView, AgentView, HeldCard, MessageView, PersonView, SignInView, TaskView } from "../src/api/views";
+import { agentState, clock, dayHeading, duration, esc, expiresIn, longDate } from "../src/web/client/render/common";
+import { homeState, renderHome } from "../src/web/client/render/home";
+import { taskLine } from "../src/web/client/render/tasks";
+import type { HomeState } from "../src/web/client/render/types";
 import {
   addAppAgent,
   addComputer,
@@ -15,19 +18,15 @@ import {
   visibleCopy,
 } from "./helpers";
 
-// ---- fixtures shaped like the person API's views, after the canvas's sample data ----
+// ---- fixtures shaped like the person API's views ----
 
-/** Local times, so clock labels read the same in any time zone. */
+/** Local times, so clock labels read the same in any time zone. Tuesday, October 27, 2026 at noon. */
 const NOW = new Date(2026, 9, 27, 12, 0).getTime();
 const at = (h: number, m: number, daysAgo = 0) => new Date(2026, 9, 27 - daysAgo, h, m).toISOString();
 
 const CHRIS = { id: "p-chris", name: "Chris" };
 const MAYA = { id: "p-maya", name: "Maya Okafor" };
-const PRIYA = { id: "p-priya", name: "Priya Shah" };
-
-function person(p: { id: string; name: string }, role: "owner" | "member", agentCount = 0): PersonView {
-  return { ...p, role, status: "active", isMe: true, agentCount };
-}
+const ME: PersonView = { ...CHRIS, role: "owner", status: "active", isMe: true, agentCount: 3 };
 
 function agent(o: Partial<AgentView> & { id: string; name: string }): AgentView {
   return {
@@ -48,47 +47,57 @@ function agent(o: Partial<AgentView> & { id: string; name: string }): AgentView 
     repo: null,
     branch: null,
     lastSeen: at(11, 56),
-    checkInMinutes: 10,
+    checkInMinutes: null,
     approvalRequired: false,
     createdAt: at(9, 0, 5),
     ...o,
   };
 }
 
-function session(o: Partial<AgentView> & { id: string; name: string; computer: { id: string; name: string } }): AgentView {
-  return agent({ kind: "claude-code", type: "session", checkInMinutes: null, joinFromFolder: true, status: "idle", ...o });
-}
-
-const GROK_DESC =
-  "Web research, long errands and anything that needs a browser for a while. Good at comparing prices, finding primary sources and summarizing long threads on X into a few lines.";
-
-const MACBOOK = { id: "c-macbook", name: "macbook" };
-const STUDIO = { id: "c-studio", name: "studio" };
-const LINUX = { id: "c-linux", name: "maya-linux" };
-
-const dialog = session({ id: "a-dialog", name: "dialog-claude", computer: MACBOOK, repo: "dialog", branch: "fix/webhook-retry", status: "busy", doing: "Fixing webhook retries: adding a backoff test" });
-const api = session({ id: "a-api", name: "api-claude", computer: MACBOOK, repo: "api", branch: "billing-v2", status: "waiting", doing: "Billing migration: stopped at a permission prompt" });
-const MUSE_DESC =
-  "Personal assistant with access to email, calendar, texts, and Facebook and Instagram messages. Handles scheduling, inbox triage and quick replies. Asks before sending anything or sharing personal details with anyone outside the family.";
-const muse = agent({ id: "a-muse", name: "muse", description: MUSE_DESC, approvalRequired: true, lastSeen: at(11, 56) });
-const grok = agent({ id: "a-grok", name: "grok", kind: "grok-bot", description: GROK_DESC, lastSeen: at(11, 48) });
-const duet = agent({ id: "a-duet", name: "duet", kind: "claude-duet", type: "connector", lastSeen: at(11, 59) });
-const mayaCodex = session({ id: "a-codex", name: "maya-codex", kind: "codex", owner: MAYA, mine: false, computer: LINUX, repo: "portico", branch: "join-page", status: "busy", doing: "Rewriting the join page for agents" });
-const mayaDot = agent({ id: "a-dot", name: "maya-dot", kind: "dots", type: "connector", owner: MAYA, mine: false, checkInMinutes: 15, lastSeen: at(11, 58) });
-const web = session({ id: "a-web", name: "web-claude", computer: STUDIO, repo: "web", branch: "redesign", status: "offline", lastSeen: at(18, 4, 1) });
-const AGENTS = [dialog, api, muse, grok, duet, mayaCodex, mayaDot, web];
+const grok = agent({ id: "a-grok", name: "chris-grokbot", label: "Grok Bot", kind: "grok-bot", type: "connector" });
+const codex = agent({ id: "a-codex", name: "codex", label: "Codex", kind: "codex" });
+const claude = agent({
+  id: "a-claude",
+  name: "portico-claude",
+  label: "Claude Code (portico)",
+  kind: "claude-code",
+  type: "session",
+  computer: { id: "c1", name: "macbook" },
+  folder: "portico",
+  repo: "portico",
+  branch: "main",
+  joinFromFolder: true,
+  status: "busy",
+  doing: "Running the tests",
+  liveRuns: 2,
+});
+const asking = agent({
+  id: "a-ask",
+  name: "portico-codex",
+  label: "Codex (portico)",
+  kind: "codex",
+  type: "session",
+  computer: { id: "c1", name: "macbook" },
+  folder: "portico",
+  status: "waiting",
+  doing: "Which migration path",
+});
+const gone = agent({ id: "a-gone", name: "api-claude", label: "Claude Code (api)", kind: "claude-code", type: "session", status: "offline", lastSeen: at(18, 4, 1) });
+const mayaDot = agent({ id: "a-dot", name: "maya-dot", label: "dots", kind: "dots", owner: MAYA, mine: false });
+const AGENTS = [claude, asking, grok, codex, gone, mayaDot];
 
 const ref = (a: AgentView) => ({ id: a.id, display: a.display, label: a.label, kind: a.kind });
 
-function message(o: Partial<MessageView> & { id: string; from: AgentView; to: AgentView; text: string }): MessageView {
+function message(o: Partial<MessageView> & { id: string; from: AgentView; to: AgentView }): MessageView {
   return {
-    threadId: "t-api-muse",
+    threadId: "t1",
     subject: "A subject",
+    text: "The text",
     replyTo: null,
     status: "delivered",
-    createdAt: at(10, 18),
-    expiresAt: at(10, 18, -1),
-    deliveredAt: at(10, 19),
+    createdAt: at(11, 0),
+    expiresAt: at(11, 0, -1),
+    deliveredAt: at(11, 1),
     decision: null,
     decidedAt: null,
     decidedBy: null,
@@ -98,87 +107,129 @@ function message(o: Partial<MessageView> & { id: string; from: AgentView; to: Ag
   };
 }
 
-const first = message({ id: "m1", from: api, to: muse, text: "Please find a time with Sam this week for the billing review.", decision: "allow_once", decidedAt: at(10, 19), decidedBy: CHRIS });
-const reply = message({ id: "m2", from: muse, to: api, subject: "Thursday 2pm confirmed", text: "Sam confirmed Thursday 2pm for the billing review. Calendar invite sent.", createdAt: at(10, 23), deliveredAt: at(10, 24), replyTo: { id: "m1", from: ref(api), subject: "A subject", text: "Please find a time with Sam this week for the billing review.", createdAt: at(10, 18) } });
-const heldMessage = message({
-  id: "m3",
-  from: api,
-  to: muse,
-  subject: "Add the migration doc link to Thursday's billing review invite",
-  text: "Thanks. Please add the migration doc link to the invite: docs/billing-v2.md",
-  status: "held",
-  createdAt: at(11, 58),
-  expiresAt: at(11, 58, -1),
-  deliveredAt: null,
-});
 const HELD: HeldCard = {
-  ...heldMessage,
-  replyTo: { id: "m2", from: ref(muse), subject: "Thursday 2pm confirmed", text: reply.text, createdAt: at(10, 23) },
-  facts: { managedBy: CHRIS, replyToRecipient: true, earlier: [{ decision: "allow_once", at: at(10, 19) }] },
+  ...message({ id: "m-held", from: grok, to: claude, subject: "Deploy the People export to staging", status: "held", deliveredAt: null, createdAt: at(11, 58), expiresAt: at(18, 0) }),
+  facts: { managedBy: CHRIS, replyToRecipient: false, earlier: [] },
 };
+const SIGN_IN: SignInView = { id: "s1", kind: "muse", name: "muse-work", code: "4821", status: "pending", createdAt: at(11, 58), expiresAt: at(12, 8) };
 
-function thread(id: string, a: AgentView, b: AgentView, last: MessageView, extra: Partial<ThreadView> = {}): ThreadView {
+function task(o: Partial<TaskView> & { id: string; from: AgentView; to: AgentView }): TaskView {
   return {
-    id,
-    a: { ...ref(a), owner: a.owner },
-    b: { ...ref(b), owner: b.owner },
-    startedBy: a.id,
-    lastMessageAt: last.createdAt,
-    last: { from: last.from, subject: last.subject, text: last.text, status: last.status },
-    count: 3,
-    held: 0,
-    ...extra,
+    subject: "A task",
+    state: "delivered",
+    outcome: "in_progress",
+    startedAt: at(10, 0),
+    updatedAt: at(10, 5),
+    endedAt: null,
+    answer: null,
+    heldMessageId: null,
+    messageCount: 1,
+    project: null,
+    steps: [
+      { kind: "asked", at: at(10, 0), by: null, decision: null },
+      { kind: "seen", at: at(10, 1), by: null, decision: null },
+    ],
+    ...o,
+    from: ref(o.from),
+    to: ref(o.to),
   };
 }
 
-const grokDialogLast = message({ id: "m9", threadId: "t-grok-dialog", from: dialog, to: grok, text: "Thanks. Adding an alert for anything older than an hour in that table.", createdAt: at(10, 42), status: "pending", deliveredAt: null });
-const THREADS = [
-  thread("t-grok-dialog", grok, dialog, grokDialogLast),
-  thread("t-api-muse", api, muse, heldMessage, { held: 1 }),
-  thread("t-codex-portico", mayaCodex, dialog, message({ id: "m7", threadId: "t-codex-portico", from: mayaCodex, to: dialog, text: "The join page copy is ready for review on the join-page branch.", createdAt: at(9, 47) })),
-];
+const REVIEW = task({
+  id: "t-review",
+  from: grok,
+  to: codex,
+  subject: "Review request: Wingman Event Bot",
+  state: "answered",
+  outcome: "done",
+  startedAt: at(9, 9),
+  endedAt: at(9, 17),
+  answer: { id: "m-answer", subject: "Review done", summary: "Two bugs found, both fixed", createdAt: at(9, 17) },
+  messageCount: 2,
+  steps: [
+    { kind: "asked", at: at(9, 9), by: null, decision: null },
+    { kind: "seen", at: at(9, 9), by: null, decision: null },
+    { kind: "answered", at: at(9, 17), by: null, decision: null },
+    { kind: "answer_seen", at: at(9, 21), by: null, decision: null },
+  ],
+});
+const OPEN = task({ id: "t-open", from: asking, to: claude, subject: "Schema migration plan", startedAt: at(11, 25), project: "portico" });
+const DENIED = task({
+  id: "t-denied",
+  from: claude,
+  to: codex,
+  subject: "Clean up old worktrees",
+  state: "denied",
+  outcome: "failed",
+  startedAt: at(11, 15, 1),
+  endedAt: at(11, 20, 1),
+  steps: [
+    { kind: "asked", at: at(11, 15, 1), by: null, decision: null },
+    { kind: "held", at: at(11, 15, 1), by: null, decision: null },
+    { kind: "denied", at: at(11, 20, 1), by: CHRIS, decision: "deny" },
+  ],
+});
+const HELD_TASK = task({
+  id: "m-held",
+  from: grok,
+  to: claude,
+  subject: HELD.subject,
+  state: "needs_approval",
+  outcome: "decide",
+  startedAt: at(11, 58),
+  heldMessageId: "m-held",
+  project: "portico",
+  steps: [
+    { kind: "asked", at: at(11, 58), by: null, decision: null },
+    { kind: "held", at: at(11, 58), by: null, decision: null },
+  ],
+});
 
-const SIGN_IN: SignInView = { id: "s1", kind: "muse", name: "muse-work", code: "4821", status: "pending", createdAt: at(11, 58), expiresAt: at(12, 8) };
+const TODAY: TodayData = {
+  since: at(0, 0),
+  counts: { decide: 3, inProgress: 1, done: 1, failed: 0 },
+  decisions: { held: [HELD], signIns: [SIGN_IN], waiting: [asking] },
+  inProgress: [OPEN],
+  done: [REVIEW],
+  failed: [],
+};
 
-function home(o: Partial<HomeState> = {}): HomeState {
+const TASKS: TaskListData = {
+  tasks: [HELD_TASK, OPEN, REVIEW, DENIED],
+  counts: { decide: 1, in_progress: 1, done: 1, failed: 1 },
+  more: false,
+  projects: ["portico"],
+};
+
+function state(o: Partial<HomeState> = {}): HomeState {
   const base = homeState({
-    me: person(CHRIS, "owner", 6),
+    me: ME,
     publicUrl: "https://portico.example.com",
     agents: AGENTS,
-    approvals: { held: [HELD], signIns: [] },
-    threads: THREADS,
-    open: null,
+    approvals: { held: [HELD], signIns: [SIGN_IN] },
+    route: { page: "today" },
+    today: TODAY,
+    tasks: null,
+    agentPage: null,
     now: NOW,
   });
   return { ...base, ...o };
 }
 
-function addState(o: Partial<AddState> = {}): AddState {
-  return {
-    pick: "claude-code",
-    lines: { "claude-code": { id: "j1", kind: "claude-code", line: "Join Portico: https://portico.example.com/join#T4mWq8Zr2LpX6Kd1", expiresAt: at(12, 0, -1) } },
-    lineError: "",
-    copied: false,
-    stage: "pick",
-    signIn: null,
-    reqName: "",
-    reqError: "",
-    joined: null,
-    busy: false,
-    ...o,
-  };
-}
-
-/** Renders Home and checks the copy rules on what a reader sees. */
-function render(state: HomeState): string {
-  const html = renderHome(state);
+/** Renders a page and checks the copy rules on what a reader sees. */
+function render(s: HomeState): string {
+  const html = renderHome(s);
   expect(copyProblems(visibleCopy(html))).toEqual([]);
   return html;
 }
 
 /** The text a reader sees, tags dropped and whitespace squeezed. */
 function text(html: string): string {
-  return html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+  return html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ");
 }
 
 function inOrder(html: string, ...parts: string[]): void {
@@ -190,463 +241,281 @@ function inOrder(html: string, ...parts: string[]): void {
   }
 }
 
-// ---- the render states on the canvas ----
+// ---- the pages ----
 
-describe("Home renders every board state", () => {
-  test("A2: no agents yet", () => {
-    const html = render(home({ me: person(CHRIS, "owner"), agents: [], held: [], threads: [] }));
+describe("Today", () => {
+  test("the date, the counts, what needs a decision, in progress and done today", () => {
+    const t = text(render(state()));
+    expect(t).toContain("Today Tuesday, October 27");
+    expect(t).toContain("3 need a decision");
+    expect(t).toContain("1 in progress");
+    expect(t).toContain("1 done");
+    inOrder(t, "Needs a decision", "In progress", "Done today");
+  });
+
+  test("a held message: who wants what, why it waits, and Don't allow, Always allow <sender>, Allow once at the right", () => {
+    const html = render(state());
     const t = text(html);
+    expect(t).toContain("Grok Bot wants to ask Claude Code (portico): Deploy the People export to staging");
+    expect(t).toContain(
+      "First time Grok Bot has asked Claude Code (portico) for anything, and new contacts need approval. Expires today at 6:00 PM.",
+    );
+    inOrder(t, "Show message", "Don't allow", "Always allow Grok Bot", "Allow once");
+    expect(html).not.toContain("The text");
+    expect(text(render(state({ shownMessages: { "m-held": true } })))).toContain("The text");
+  });
+
+  test("an app asking to join shows its code; a coding agent with a question points to its terminal", () => {
+    const t = text(render(state()));
+    expect(t).toContain("Muse wants to join Portico as muse-work");
+    expect(t).toContain("Approve only if Muse shows the code 4821 . Expires in 8 min.");
+    inOrder(t, "Don't allow", "Approve muse-work");
+    expect(t).toContain("Codex (portico) has a question");
+    expect(t).toContain("Which migration path. Answer in the terminal on macbook.");
+  });
+
+  test("task rows read status, task, who, when; a done task shows the answer's summary and how long it took", () => {
+    const t = text(render(state()));
+    expect(t).toContain("In progress Schema migration plan Seen at 10:01 AM, no answer yet. Codex (portico) → Claude Code (portico) 11:25 AM");
+    expect(t).toContain("Done Review request: Wingman Event Bot Two bugs found, both fixed Grok Bot → Codex 9:09 AM, 8 min");
+  });
+
+  test("the didn't go through chip counts every one today, not only those listed", () => {
+    const many = { ...TODAY, counts: { ...TODAY.counts, failed: 35 }, failed: [OPEN] };
+    expect(text(render(state({ today: many })))).toContain("35 didn't go through");
+  });
+
+  test("nothing yet: plain empty lines, and Add your first agent before any agent of the person's", () => {
+    const empty: TodayData = {
+      ...TODAY,
+      counts: { decide: 0, inProgress: 0, done: 0, failed: 0 },
+      decisions: { held: [], signIns: [], waiting: [] },
+      inProgress: [],
+      done: [],
+    };
+    const t = text(render(state({ today: empty, held: [], signIns: [], agents: [mayaDot] })));
+    expect(t).toContain("Nothing needs a decision.");
+    expect(t).toContain("Nothing in progress.");
+    expect(t).toContain("Nothing done yet today.");
     expect(t).toContain("Add your first agent");
-    expect(t).toContain("Connect Claude Code, Codex or a chat app like Muse with one line.");
-    expect(t).toContain("No threads yet. Threads show up here when agents message each other.");
-    expect(html).not.toContain("Needs approval");
-    // The primary action sits far right: the row reverses, so Add agent comes first in the source.
-    inOrder(html, 'class="first-actions"', "Add agent", "Invite a person");
-  });
-
-  test("A2 for a member who joins after others: agents from others are already here", () => {
-    const html = render(home({ me: { ...person(PRIYA, "member"), id: PRIYA.id }, agents: AGENTS.map((a) => ({ ...a, mine: false })), held: [] }));
-    expect(text(html)).toContain("Agents from Chris and Maya Okafor are already on Portico. Each new agent can message every agent here.");
-    expect(html).not.toContain("Invite a person");
-  });
-
-  test("B1: Add agent with Claude Code picked shows the join line", () => {
-    const html = render(home({ add: addState() }));
-    const t = text(html);
-    expect(t).toContain("One line connects any agent to Portico.");
-    expect(t).toContain("Paste this into Claude Code on the computer that should join.");
-    expect(html).toContain('value="Join Portico: https://portico.example.com/join#T4mWq8Zr2LpX6Kd1"');
-    expect(t).toContain("Single use. Expires in 24 h.");
-    expect(html).toContain('role="radio" aria-checked="true" class="tile is-selected" data-action="add-pick" data-id="claude-code"');
-    for (const label of ["Claude Code", "Codex", "Muse", "Grok Bot", "dots", "Claude Duet", "Other"]) expect(t).toContain(label);
-    expect(html).not.toContain("Waiting for");
-  });
-
-  test("B2: after Copy the sheet waits", () => {
-    const t = text(render(home({ add: addState({ copied: true }) })));
-    expect(t).toContain("Copied");
-    expect(t).toContain("Waiting for Claude Code to connect");
-  });
-
-  test("B4: the sheet confirms the join", () => {
-    const joined = session({ id: "a-new", name: "dialog-claude", computer: MACBOOK, status: "idle" });
-    const html = render(home({ add: addState({ stage: "joined", joined }) }));
-    const t = text(html);
-    expect(t).toContain("dialog-claude joined.");
-    expect(t).toContain("From macbook. Other Claude Code sessions started there join automatically.");
-    inOrder(html, "Add another agent", ">Done<");
-    expect(html).not.toContain("Pick an agent");
-  });
-
-  test("B5: the new agent's details open with a notice", () => {
-    const fresh = session({ id: "a-dialog", name: "dialog-claude", computer: MACBOOK, repo: "dialog", branch: "main", status: "idle" });
-    const html = render(
-      home({
-        agents: [fresh],
-        held: [],
-        threads: [],
-        open: { kind: "agent", id: fresh.id, data: { agent: fresh, allowList: [] } },
-        filter: fresh.id,
-        notice: { text: "dialog-claude joined from macbook." },
-      }),
-    );
-    const t = text(html);
-    expect(t).toContain("dialog-claude joined from macbook.");
-    expect(t).toContain("Showing dialog-claude");
-    expect(t).toContain("Doing Nothing in progress Folder dialog on main Computer macbook");
-    expect(t).toContain("Join from the dialog folder");
-    expect(t).toContain("New sessions in dialog on macbook join Portico automatically.");
-    expect(t).toContain("No threads with dialog-claude yet.");
-  });
-
-  test("C1: Muse picked and copied waits for the sign in request", () => {
-    const add = addState({ pick: "muse", copied: true, lines: { muse: { id: "j2", kind: "muse", line: "Join Portico: https://portico.example.com/join#R8vNc3Lq7TbW1yZe", expiresAt: at(12, 0, -1) } } });
-    const t = text(render(home({ add })));
-    expect(t).toContain("Send this to Muse in a chat, then approve the sign in request here.");
-    expect(t).toContain("Waiting for the sign in request from Muse");
-  });
-
-  test("Codex joins from a computer, like Claude Code", () => {
-    const add = addState({ pick: "codex", copied: true, lines: { codex: { id: "j3", kind: "codex", line: "Join Portico: https://portico.example.com/join#x", expiresAt: at(12, 0, -1) } } });
-    const t = text(render(home({ add })));
-    expect(t).toContain("Paste this into Codex on the computer that should join.");
-    expect(t).toContain("Waiting for Codex to connect");
-  });
-
-  test("C3: the sign in request arrives in the sheet with its code", () => {
-    const add = addState({ pick: "muse", copied: true, stage: "request", signIn: SIGN_IN, reqName: "muse-work" });
-    const html = render(home({ add }));
-    const t = text(html);
-    expect(t).toContain("Sign in request from Muse");
-    expect(t).toContain("Expires in 8 min.");
-    expect(t).toContain("Code 4821");
-    expect(t).toContain("Approve only if Muse shows the same code.");
-    expect(html).toContain('value="muse-work"');
-    expect(t).toContain("Other agents use this name when sending messages.");
-    inOrder(html, 'class="req-card', ">Deny<", ">Approve<");
-    expect(html).not.toContain("Pick an agent");
-  });
-
-  test("C4: approved, muse-work joins", () => {
-    const work = agent({ id: "a-work", name: "muse-work", lastSeen: null, checkInMinutes: null, createdAt: at(11, 59, 0) });
-    const t = text(render(home({ add: addState({ pick: "muse", stage: "joined", joined: work }) })));
-    expect(t).toContain("muse-work joined.");
-    expect(t).toContain("Waiting to connect.");
-  });
-
-  test("C5: done, with a prompt to add a description", () => {
-    const work = agent({ id: "a-work", name: "muse-work", checkInMinutes: 10, lastSeen: null, createdAt: at(12, 0) });
-    const t = text(
-      render(home({ agents: [...AGENTS, work], open: { kind: "agent", id: work.id, data: { agent: work, allowList: [] } }, filter: work.id, notice: { text: "muse-work joined." } })),
-    );
-    expect(t).toContain("muse-work joined.");
-    expect(t).toContain("Checks in every 10 min. Joined just now");
-    expect(t).toContain("Add a description so other agents know what muse-work handles.");
-    expect(t).toContain("Add description");
-  });
-
-  test("D1: connectors use the /mcp address", () => {
-    const html = render(home({ add: addState({ pick: "dots", copied: true }) }));
-    const t = text(html);
-    expect(t).toContain("Add this as a connector in ChatGPT. Portico then opens a page to approve the connection.");
-    expect(html).toContain('value="https://portico.example.com/mcp"');
-    expect(html).toContain(">Server address<");
-    expect(t).toContain("Works only after approval.");
-    expect(t).toContain("Waiting for the sign in from ChatGPT");
-  });
-
-  test("a description over 200 characters clamps behind More", () => {
-    const open = { kind: "agent" as const, id: muse.id, data: { agent: muse, allowList: [] } };
-    const html = render(home({ open }));
-    expect(html).toContain('class="desc clamped"');
-    expect(html).toContain('aria-expanded="false" data-action="desc-more">More<');
-    expect(render(home({ open, expanded: true }))).toContain(">Less<");
-  });
-
-  test("E1: an agent's details", () => {
-    const html = render(home({ open: { kind: "agent", id: grok.id, data: { agent: grok, allowList: [] } }, filter: grok.id }));
-    const t = text(html);
-    expect(t).toContain("grok Grok Bot");
-    expect(t).toContain("Checks in every 10 min. Seen 12 min ago");
-    expect(t).toContain("Showing grok");
-    expect(html).toContain('class="desc"');
-    expect(html).toContain('aria-label="Edit grok"');
-    expect(html).toContain('role="switch" aria-checked="false"');
-    expect(t).toContain("Remove grok");
-  });
-
-  test("E2: Approval required on, with an empty Always allow list", () => {
-    const on = { ...grok, approvalRequired: true };
-    const html = render(home({ agents: AGENTS.map((a) => (a.id === on.id ? on : a)), open: { kind: "agent", id: on.id, data: { agent: on, allowList: [] } } }));
-    const t = text(html);
-    expect(html).toContain('role="switch" aria-checked="true"');
-    expect(t).toContain("Always allow These senders skip approval.");
-    expect(t).toContain("None yet. Choosing Always allow on a held message adds the sender here.");
-    expect(html).toContain('aria-label="Approval required"');
-  });
-
-  test("F1: the held card reads top to bottom as the board lays out", () => {
-    const html = render(home());
-    const card = html.slice(html.indexOf('data-key="h-m3"'));
-    inOrder(
-      card,
-      "Add the migration doc link to Thursday&#39;s billing review invite",
-      "api-claude",
-      ">to<",
-      "muse",
-      "11:58. Expires in 24 h.",
-      "Managed by Chris",
-      "Reply to muse",
-      "Allowed once at 10:19",
-      "muse, 10:23:",
-      "Sam confirmed Thursday 2pm",
-      "Thanks. Please add the migration doc link",
-      ">View thread<",
-      ">Deny<",
-      ">Always allow<",
-      ">Allow once<",
-    );
-    expect(card).toContain('class="btn btn-link start"');
-    expect(card).toContain('aria-label="Checked by Portico"');
-    const t = text(html);
-    expect(t).toContain("Needs approval 1");
-    expect(t).toContain("1 awaiting approval");
-  });
-
-  test("F1: the quote shows the replied message's time", () => {
-    expect(text(render(home()))).toContain("muse, 10:23: Sam confirmed");
-  });
-
-  test("F2: View thread opens the thread with the held message marked", () => {
-    const data = { thread: THREADS[1]!, messages: [first, reply, heldMessage], more: false };
-    const html = render(home({ open: { kind: "thread", id: "t-api-muse", data } }));
-    const t = text(html);
-    expect(t).toContain("api-claude and muse");
-    expect(t).toContain("Allowed once, read 10:19");
-    expect(t).toContain("Read 10:24");
-    expect(html).toContain('class="msg is-held starts-conv"');
-    expect(t).toContain("Awaiting approval");
-    expect(t).toContain("Messages older than 30 days are deleted.");
-    expect(html).toContain('aria-current="true" data-action="open-thread" data-id="t-api-muse"');
-  });
-
-  test("F3: Always allow delivers and the thread shows the decision", () => {
-    const allowed = { ...heldMessage, status: "pending" as const, decision: "always_allow" as const, decidedAt: at(10, 30) };
-    const data = { thread: THREADS[1]!, messages: [first, reply, allowed], more: false };
-    const html = render(home({ held: [], notice: { text: "Delivered. api-claude is now always allowed.", check: true }, open: { kind: "thread", id: "t-api-muse", data } }));
-    const t = text(html);
-    expect(t).toContain("Delivered. api-claude is now always allowed.");
-    expect(html).toContain('class="notice-strip notice-check enter"');
-    expect(t).toContain("Always allowed, unread");
-    expect(html).not.toContain("Needs approval");
-  });
-
-  test("F5: the thread opens at the newest, with both logos, subjects and a line where a new conversation starts", () => {
-    const data = { thread: THREADS[1]!, messages: [first, reply, heldMessage], more: false };
-    const html = render(home({ open: { kind: "thread", id: "t-api-muse", data } }));
-    const panel = html.slice(html.indexOf('class="panel panel-thread'));
-    expect(panel).toContain('<span class="pair"><img class="logo logo-md"');
-    expect(panel).toContain('class="msgs-scroll"');
-    expect(panel).toContain('<p class="msg-subject">Thursday 2pm confirmed</p>');
-    // The first message follows a day label and the reply continues its conversation: only the held message starts one.
-    expect(panel.match(/starts-conv/g)).toHaveLength(1);
-    expect(panel).not.toContain("newest-btn");
-    expect(render(home({ threadUp: true, open: { kind: "thread", id: "t-api-muse", data } }))).toContain('data-action="thread-newest"');
-  });
-
-  test("F6: the person who decides gets Deny, Always allow and Allow once on the held message in the thread", () => {
-    const data = { thread: THREADS[1]!, messages: [first, reply, heldMessage], more: false };
-    const html = render(home({ open: { kind: "thread", id: "t-api-muse", data } }));
-    const panel = html.slice(html.indexOf('class="panel panel-thread'));
-    expect(panel.match(/data-action="decide" data-id="m3"/g)).toHaveLength(3);
-    inOrder(panel, 'data-decision="deny"', 'data-decision="always_allow"', 'data-decision="allow_once"');
-    expect(panel).not.toContain("Waiting for");
-  });
-
-  test("F7: agents managed by two people: each message names its manager, and a held message says who decides", () => {
-    const toMaya = message({ id: "x1", threadId: "t-api-dot", from: api, to: mayaDot, subject: "Switch checkout to discount_total", text: "Please switch the checkout page too.", status: "held", deliveredAt: null, createdAt: at(11, 40) });
-    const fromMaya = message({ id: "x0", threadId: "t-api-dot", from: mayaDot, to: api, subject: "Gift card orders", text: "Totals are off for gift cards.", createdAt: at(11, 10) });
-    const data = { thread: thread("t-api-dot", api, mayaDot, toMaya, { held: 1 }), messages: [fromMaya, toMaya], more: false };
-    const html = render(home({ open: { kind: "thread", id: "t-api-dot", data } }));
-    const panel = html.slice(html.indexOf('class="panel panel-thread'));
-    const t = text(panel);
-    expect(t).toContain("C Chris and M Maya Okafor");
-    expect(panel.match(/class="msg-manager"/g)).toHaveLength(2);
-    expect(t).toContain("Waiting for Maya Okafor to approve.");
-    expect(panel).not.toContain('data-action="decide"');
-  });
-
-  test("F8: earlier pages load on request", () => {
-    const data = { thread: THREADS[1]!, messages: [reply, heldMessage], more: true };
-    const html = render(home({ open: { kind: "thread", id: "t-api-muse", data } }));
-    expect(html).toContain('data-action="thread-earlier"');
-    expect(text(html)).toContain("Show earlier messages");
-    expect(text(html)).not.toContain("older than 30 days");
-  });
-
-  test("F4: the Always allow list, with Remove on each sender", () => {
-    const allowList = [
-      { sender: ref(dialog), addedBy: CHRIS, addedAt: at(9, 0, 5) },
-      { sender: ref(api), addedBy: CHRIS, addedAt: at(10, 30) },
-    ];
-    const html = render(home({ held: [], open: { kind: "agent", id: muse.id, data: { agent: muse, allowList } }, filter: muse.id }));
-    const t = text(html);
-    expect(t).toContain("dialog-claude since Oct 22");
-    expect(t).toContain("api-claude since today");
-    expect(html.match(/data-action="allow-remove"/g)).toHaveLength(2);
-  });
-
-  test("G1: a thread transcript with read and unread messages", () => {
-    const msgs = [
-      message({ id: "g1", threadId: "t-grok-dialog", from: grok, to: dialog, text: "Does the billing webhook retry on 5xx? A customer says a payment notice never arrived.", createdAt: at(10, 31), deliveredAt: at(10, 31) }),
-      grokDialogLast,
-    ];
-    const html = render(home({ open: { kind: "thread", id: "t-grok-dialog", data: { thread: THREADS[0]!, messages: msgs, more: false } } }));
-    const t = text(html);
-    expect(t).toContain("grok: checks in every 10 min");
-    expect(t).toContain("dialog-claude: working");
-    expect(t).toContain("Today");
-    expect(t).toContain("Read 10:31");
-    expect(t).toContain("Unread");
-    expect(html).toContain('class="tnum msg-status tone-ochre is-strong"');
-  });
-
-  test("G2: a session that needs input", () => {
-    const html = render(home({ open: { kind: "agent", id: api.id, data: { agent: api, allowList: [] } }, filter: api.id }));
-    const t = text(html);
-    expect(t).toContain("Needs input on macbook");
-    expect(t).toContain("Doing Billing migration: stopped at a permission prompt");
-    expect(t).toContain("Folder api on billing-v2");
-    expect(t).toContain("Manage computers in Settings");
-    expect(html).toContain('href="/settings#computers"');
-    // Sessions are managed from the computer: no rename and no Remove row.
-    expect(html).not.toContain('data-action="edit-start"');
-    expect(html).not.toContain("Remove api-claude");
-  });
-
-  test("H1: editing the name and description", () => {
-    const html = render(
-      home({ open: { kind: "agent", id: grok.id, data: { agent: grok, allowList: [] } }, edit: { name: "grok-research", description: GROK_DESC, error: "" } }),
-    );
-    const t = text(html);
-    expect(html).toContain('value="grok-research"');
-    expect(t).toContain(`Shown to other agents in the directory. ${GROK_DESC.length}/500`);
-    inOrder(html, 'data-form="agent-save"', ">Cancel<", ">Save<");
-    expect(html).not.toContain('aria-label="Edit grok"');
-  });
-
-  test("H2: saved", () => {
-    const renamed = { ...grok, name: "grok-research", display: "grok-research" };
-    const t = text(render(home({ open: { kind: "agent", id: grok.id, data: { agent: renamed, allowList: [] } }, saved: true })));
-    expect(t).toContain("grok-research Grok Bot");
-    expect(t).toContain("Saved.");
-  });
-
-  test("I7: a member's Home, after approval", () => {
-    const priyaHome = home({
-      me: { ...person(PRIYA, "member"), id: PRIYA.id },
-      agents: AGENTS.map((a) => ({ ...a, mine: false })),
-      held: [],
-      threads: [],
-      notice: { text: "Welcome to Portico. Approved by Chris at 10:14." },
-    });
-    const html = render(priyaHome);
-    const t = text(html);
-    expect(t).toContain("Welcome to Portico. Approved by Chris at 10:14.");
-    expect(t).toContain("Priya Shah");
-    expect(html).not.toContain("Invite a person");
-    // The signed-in person's group comes first, with Add agent, even with no agents yet.
-    inOrder(html, "Priya Shah", "Add agent", "Chris", "Maya Okafor");
-  });
-
-  test("J1: Remove asks to confirm", () => {
-    const html = render(home({ open: { kind: "agent", id: duet.id, data: { agent: duet, allowList: [] } }, confirmRemove: true }));
-    const row = html.slice(html.indexOf("Remove duet"));
-    inOrder(row, "Signs duet out of Portico. Adding duet back takes a new join line.", ">Cancel<", "Confirm: remove duet");
-    expect(row).toContain('class="btn btn-danger"');
-  });
-
-  test("J2: removed", () => {
-    const t = text(render(home({ agents: AGENTS.filter((a) => a.id !== duet.id), notice: { text: "duet removed and signed out." } })));
-    expect(t).toContain("duet removed and signed out.");
-  });
-
-  test("K1: the account menu", () => {
-    const html = render(home({ acctOpen: true }));
-    expect(html).toContain('aria-expanded="true"');
-    const menu = html.slice(html.indexOf('role="menu"'));
-    inOrder(menu, "Signed in as Chris, owner", 'href="/settings"', "Settings", 'data-action="sign-out"', "Sign out");
-  });
-
-  test("L1: a sign in request waits in the agents list and under Needs approval", () => {
-    const html = render(home({ signIns: [SIGN_IN], open: { kind: "signin", id: SIGN_IN.id }, filter: "signin:s1" }));
-    const t = text(html);
-    expect(t).toContain("muse-work Sign in request waiting");
-    expect(t).toContain("Muse asks to join as muse-work");
-    expect(t).toContain("Code 4821 Approve only if Muse shows the same code.");
-    expect(t).toContain("Showing muse-work");
-    expect(t).toContain("Finish setup");
-    expect(t).toContain("Send Muse the join line.");
-    expect(t).toContain("Approve the sign in request under Needs approval.");
-    expect(t).toContain("muse-work shows as connected.");
-    expect(t).toContain("Waiting to connect");
-    // Filtered to the request: the held message to muse isn't shown.
-    expect(html).not.toContain('data-key="h-m3"');
-    expect(t).toContain("Needs approval 1");
-  });
-
-  test("L2: the stream dropped", () => {
-    const html = render(home({ reconnecting: true }));
-    expect(text(html)).toContain("Updates paused. Reconnecting.");
-    expect(html.match(/role="status"/g)?.length).toBe(1);
-  });
-
-  test("L3: someone else's agent is read-only", () => {
-    const html = render(home({ open: { kind: "agent", id: mayaCodex.id, data: { agent: mayaCodex, allowList: null } }, filter: mayaCodex.id }));
-    const t = text(html);
-    expect(t).toContain("Managed by Maya Okafor.");
-    expect(html).not.toContain('data-action="edit-start"');
-    expect(html).not.toContain('role="switch"');
-    expect(html).not.toContain("Remove maya-codex");
-  });
-
-  test("L4: an offline session, from the folded Offline group", () => {
-    const html = render(home({ offlineOpen: true, open: { kind: "agent", id: web.id, data: { agent: web, allowList: [] } }, filter: web.id }));
-    const t = text(html);
-    expect(html).toContain('aria-expanded="true" data-action="offline-toggle"');
-    expect(t).toContain("Offline (1)");
-    expect(t).toContain("Offline. Seen yesterday 18:04");
-    expect(t).toContain("Offline sessions leave the list after 24 h.");
-    expect(html).not.toContain('role="switch"');
-    expect(html).toContain('class="arow is-current is-offline"');
-  });
-
-  test("L5: a name already in use", () => {
-    const html = render(
-      home({ open: { kind: "agent", id: grok.id, data: { agent: grok, allowList: [] } }, edit: { name: "muse", description: GROK_DESC, error: "Name already in use." } }),
-    );
-    expect(html).toContain('role="alert" class="field-error">Name already in use.<');
-    expect(html).toContain('aria-invalid="true"');
-  });
-
-  test("L6: denied, the thread shows Declined", () => {
-    const denied = { ...heldMessage, status: "declined" as const, decision: "deny" as const };
-    const html = render(
-      home({ held: [], notice: { text: "Declined. api-claude was notified.", check: true }, open: { kind: "thread", id: "t-api-muse", data: { thread: THREADS[1]!, messages: [first, reply, denied], more: false } } }),
-    );
-    expect(text(html)).toContain("Declined. api-claude was notified.");
-    expect(html).toContain('tone-danger is-strong">Declined<');
+    expect(t).toContain("Agents from Maya Okafor are already on Portico.");
   });
 });
 
-describe("Home rendering rules", () => {
-  test("the agents list: the signed-in person first, others by person, offline folded last", () => {
-    const html = render(home());
-    inOrder(html, 'data-key="g-p-chris"', "dialog-claude", "api-claude", "muse", "grok", "duet", 'data-key="add-row"', 'data-key="g-p-maya"', "maya-codex", "maya-dot", "Offline (1)");
-    expect(html).not.toContain('data-key="a-a-web"');
+describe("Activity", () => {
+  const activity = (o: Partial<HomeState> = {}) => state({ route: { page: "activity" }, tasks: TASKS, ...o });
+
+  test("status chips with counts, Agent and Project filters, and rows grouped by day", () => {
+    const html = render(activity());
     const t = text(html);
-    expect(t).toContain("Working on macbook");
-    expect(t).toContain("Checks in every 15 min");
-    expect(t).toContain("1 waiting for approval");
+    expect(t).toContain("All 4");
+    inOrder(t, "Needs a decision 1", "In progress 1", "Done 1", "Didn't go through 1");
+    expect(html).toContain('<option value="portico">portico</option>');
+    expect(html).toContain('<option value="a-grok">Grok Bot</option>');
+    inOrder(t, "Status Task Who When", "Today, Tuesday, October 27", "Deploy the People export", "Yesterday, Monday, October 26", "Clean up old worktrees");
+    expect(t).toContain("Not allowed by Chris.");
   });
 
-  test("only the owner sees Invite a person", () => {
-    expect(render(home())).toContain('href="/settings#people"');
-    expect(render(home({ me: { ...person(MAYA, "member"), id: MAYA.id } }))).not.toContain("Invite a person");
+  test("the chosen filters show as pressed and selected", () => {
+    const html = render(activity({ filter: { outcome: "done", agent: "a-grok", project: "portico" } }));
+    expect(html).toMatch(/aria-pressed="true" data-action="outcome" data-id="done"/);
+    expect(html).toContain('<option value="a-grok" selected>Grok Bot</option>');
+    expect(html).toContain('<option value="portico" selected>portico</option>');
   });
 
-  test("agent-written and person-written text is escaped", () => {
-    const evil = "<img src=x onerror=alert(1)>";
-    const bad = agent({ id: "a-bad", name: "bad", description: evil });
-    const html = renderHome(
-      home({
-        agents: [bad],
-        held: [{ ...HELD, subject: evil, text: evil }],
-        threads: [thread("t-x", bad, muse, message({ id: "mx", from: bad, to: muse, text: evil }))],
-        open: { kind: "agent", id: bad.id, data: { agent: bad, allowList: [] } },
-        notice: { text: evil },
-      }),
+  test("an opened row shows its steps and every message; a held one carries the decision", () => {
+    const messages = [
+      message({ id: "m1", from: grok, to: codex, subject: "Review request", text: "Please review the bots.", createdAt: at(9, 9) }),
+      message({ id: "m2", from: codex, to: grok, subject: "Review done", text: "Two bugs, both fixed.", createdAt: at(9, 17) }),
+    ];
+    const t = text(render(activity({ openTasks: { "t-review": { task: REVIEW, messages }, "m-held": null } })));
+    expect(t).toContain("Asked 9:09 AM Seen by Codex 9:09 AM Answered 9:17 AM Answer seen by Grok Bot 9:21 AM");
+    inOrder(t, "Please review the bots.", "Two bugs, both fixed.");
+    expect(t).toContain("Loading the messages.");
+    inOrder(t, "Deploy the People export", "Don't allow", "Always allow Grok Bot", "Allow once");
+  });
+
+  test("joins, sessions and setting changes show among the tasks when asked, narrowed by project", () => {
+    const events: ActivityView[] = [
+      { id: "e1", at: at(11, 30), kind: "session_started", agent: ref(claude), other: null, person: null, detail: { client: "claude-code" } },
+      { id: "e2", at: at(11, 40), kind: "approval_switched", agent: ref(grok), other: null, person: CHRIS, detail: { on: true } },
+      { id: "e3", at: at(9, 0), kind: "decision", agent: ref(codex), other: ref(claude), person: CHRIS, detail: { decision: "deny" } },
+    ];
+    expect(text(render(activity({ events })))).not.toContain("Claude Code (portico) started");
+    const t = text(render(activity({ showEvents: true, events })));
+    inOrder(t, "Deploy the People export", "Setting New contacts need approval for Grok Bot: on Chris", "Session Claude Code (portico) started", "Schema migration plan");
+    expect(t).toContain("Decision Not allowed: Claude Code (portico) to Codex Chris");
+    const narrowed = text(render(activity({ showEvents: true, events, filter: { outcome: null, agent: null, project: "portico" } })));
+    expect(narrowed).toContain("Claude Code (portico) started");
+    expect(narrowed).not.toContain("for Grok Bot: on");
+  });
+
+  test("filters that match nothing say so; more tasks show a button", () => {
+    const none = { ...TASKS, tasks: [], counts: { decide: 0, in_progress: 0, done: 0, failed: 0 } };
+    expect(text(render(activity({ tasks: none, filter: { outcome: "done", agent: null, project: null } })))).toContain(
+      "No tasks match these filters.",
     );
-    expect(html).not.toContain("<img src=x");
-    expect(html).toContain(esc(evil));
+    expect(text(render(activity({ tasks: none })))).toContain("No tasks yet.");
+    expect(text(render(activity({ tasks: { ...TASKS, more: true } })))).toContain("Show earlier tasks");
+  });
+});
+
+describe("an agent's page", () => {
+  const page = (a: AgentView, o: Partial<AgentPageData> = {}, s: Partial<HomeState> = {}) =>
+    state({
+      route: { page: "agent", id: a.id },
+      agentPage: {
+        agent: a,
+        allowList: a.mine ? [] : null,
+        taskCounts: { decide: 1, in_progress: 1, done: 1, failed: 0 },
+        worksWith: [{ agent: ref(codex), tasks: 3, lastAt: at(9, 17) }],
+        runs: [],
+        runCount: 0,
+        ...o,
+      },
+      tasks: { ...TASKS, tasks: [HELD_TASK, REVIEW] },
+      ...s,
+    });
+
+  test("the header, what needs a decision, tasks from the agent's side, and who it works with", () => {
+    const t = text(render(page(grok)));
+    expect(t).toContain("Grok Bot Available. Last checked in 4 min ago");
+    expect(t).toContain("No job description yet. Add a job description so other agents know what Grok Bot handles.");
+    inOrder(t, "Needs a decision", "Grok Bot wants to ask Claude Code (portico)", "Tasks", "All 3", "Needs a decision 1", "In progress 1", "Done 1");
+    expect(t).not.toContain("Didn't go through 0");
+    expect(t).toContain("To Claude Code (portico)");
+    expect(t).toContain("To Codex");
+    expect(t).toContain("Codex 3 tasks, last at 9:17 AM");
+  });
+
+  test("Details and Settings open on request; a session shows its folder, branch, computer and sessions", () => {
+    expect(text(render(page(claude)))).not.toContain("Folder portico");
+    const runs = [
+      { id: "r2", agent: ref(claude), client: "claude-code" as const, startedAt: at(11, 0), lastSeenAt: at(11, 59), endedAt: null, live: true },
+      { id: "r1", agent: ref(claude), client: "claude-code" as const, startedAt: at(9, 0), lastSeenAt: at(9, 40), endedAt: at(9, 40), live: false },
+    ];
+    const t = text(render(page(claude, { runs, runCount: 2 }, { detailsOpen: true, settingsOpen: true })));
+    expect(t).toContain("Claude Code (portico) Working");
+    expect(t).toContain("Running the tests");
+    expect(t).toContain("Folder portico Branch main Computer macbook Sessions 2 sessions in the last 30 days, 2 open now");
+    expect(t).toContain("Started 11:00 AM, open now");
+    expect(t).toContain("Started 9:00 AM, stopped 9:40 AM");
+    expect(t).toContain("New contacts need approval Off. Any agent can send Claude Code (portico) a task.");
+    expect(t).toContain("New sessions in portico join Portico");
+    expect(t).not.toContain("Remove Claude Code");
+  });
+
+  test("an app's settings: the approval switch, Always allowed senders, and Remove with a confirmation", () => {
+    const protectedGrok = { ...grok, approvalRequired: true };
+    const allowList = [{ sender: ref(codex), addedBy: CHRIS, addedAt: at(9, 0, 3) }];
+    const t = text(render(page(protectedGrok, { allowList }, { settingsOpen: true })));
+    expect(t).toContain("New contacts need approval On.");
+    expect(t).toContain("Always allowed Codex since Oct 24 Remove");
+    expect(t).toContain("Remove Grok Bot Signs Grok Bot out of Portico and deletes Grok Bot's tasks.");
+    expect(text(render(page(protectedGrok, { allowList }, { settingsOpen: true, confirmRemove: true })))).toContain(
+      "Confirm: remove Grok Bot",
+    );
+  });
+
+  test("a session agent can be removed once no terminal is open in the folder", () => {
+    expect(text(render(page(claude, {}, { settingsOpen: true })))).not.toContain("Remove Claude Code");
+    const stopped = { ...claude, status: "offline" as const, liveRuns: 0 };
+    expect(text(render(page(stopped, {}, { settingsOpen: true })))).toContain(
+      "Remove Claude Code (portico) Deletes the agent and the agent's tasks. A new session in portico adds the agent back.",
+    );
+  });
+
+  test("someone else's agent shows who manages it and no Settings", () => {
+    const html = render(page(mayaDot));
+    expect(text(html)).toContain("Managed by Maya Okafor");
+    expect(html).not.toContain('data-action="settings-toggle"');
+  });
+});
+
+describe("the navigation", () => {
+  test("Today with its count, Activity, the agents in plain words, quiet ones folded, others' agents by person", () => {
+    const html = render(state());
+    const t = text(html);
+    expect(t).toContain("Today 3 waiting for a decision");
+    inOrder(
+      t,
+      "Claude Code (portico) Working",
+      "Codex (portico) Has a question",
+      "Grok Bot Available",
+      "Codex Available",
+      "Muse (muse-work) Waiting to join",
+      "Not running (1)",
+      "Add agent",
+      "Maya Okafor",
+      "dots",
+    );
+    expect(html).not.toContain('data-key="n-a-gone"');
+    expect(render(state({ quietOpen: true }))).toContain('data-key="n-a-gone"');
+    expect(render(state({ route: { page: "activity" }, tasks: TASKS }))).toMatch(
+      /href="\/activity" data-action="go" data-href="\/activity" aria-current="page"/,
+    );
+  });
+});
+
+describe("rendering rules", () => {
+  test("agent-written and person-written text is escaped everywhere", () => {
+    const evil = "<img src=x onerror=alert(1)>";
+    const bad = { ...grok, label: evil, description: evil };
+    const evilTask = { ...REVIEW, subject: evil, answer: { ...REVIEW.answer!, summary: evil } };
+    for (const s of [
+      state({ agents: [bad], held: [{ ...HELD, subject: evil, text: evil }], shownMessages: { "m-held": true }, notice: { text: evil } }),
+      state({ route: { page: "activity" }, tasks: { ...TASKS, tasks: [evilTask], projects: [evil] } }),
+      state({
+        route: { page: "agent", id: bad.id },
+        agents: [bad],
+        agentPage: { agent: bad, allowList: [], taskCounts: { decide: 0, in_progress: 0, done: 1, failed: 0 }, worksWith: [], runs: [], runCount: 0 },
+        tasks: { ...TASKS, tasks: [evilTask] },
+      }),
+    ]) {
+      const html = renderHome(s);
+      expect(html).not.toContain("<img src=x");
+      expect(html).toContain(esc(evil));
+    }
   });
 
   test("no inline event handlers: every action is a data-action", () => {
-    const html = renderHome(home({ add: addState(), acctOpen: true, open: { kind: "agent", id: muse.id, data: { agent: muse, allowList: [] } } }));
+    const html = renderHome(state({ acctOpen: true, navOpen: true }));
     expect(html).not.toMatch(/\son[a-z]+=/i);
     expect(html).toContain('data-action="decide"');
   });
 
-  test("statuses and times", () => {
-    expect(agentState(web, NOW)).toMatchObject({ label: "Offline", online: false, seen: "Seen yesterday 18:04" });
-    expect(agentState(agent({ id: "x", name: "x", lastSeen: null, checkInMinutes: null }), NOW).label).toBe("Waiting to connect");
+  test("12-hour times and US dates", () => {
+    expect(clock(at(0, 5))).toBe("12:05 AM");
+    expect(clock(at(12, 0))).toBe("12:00 PM");
+    expect(clock(at(17, 9))).toBe("5:09 PM");
+    expect(longDate(at(9, 0), NOW)).toBe("Tuesday, October 27");
+    expect(dayHeading(at(9, 0, 1), NOW)).toBe("Yesterday, Monday, October 26");
+    expect(dayHeading(at(9, 0, 4), NOW)).toBe("Friday, October 23");
     expect(expiresIn(at(12, 30), NOW)).toBe("Expires in 30 min.");
+    expect(expiresIn(at(18, 0, -1), NOW)).toBe("Expires tomorrow at 6:00 PM.");
     expect(expiresIn(at(11, 0), NOW)).toBe("Expired.");
-    expect(messageStatus({ ...heldMessage, status: "expired" }, NOW).text).toBe("Expired");
+    expect(duration(at(9, 9), at(9, 17))).toBe("8 min");
+    expect(duration(at(9, 0), at(11, 5))).toBe("2 h 5 min");
+  });
+
+  test("agent states in plain words", () => {
+    expect(agentState(claude, NOW).label).toBe("Working");
+    expect(agentState(asking, NOW).label).toBe("Has a question");
+    expect(agentState({ ...claude, status: "idle" }, NOW).label).toBe("Available");
+    expect(agentState(gone, NOW)).toMatchObject({ label: "Not running", online: false });
+    expect(agentState({ ...grok, lastSeen: null }, NOW).label).toBe("Waiting to join");
+  });
+
+  test("each task state's line", () => {
+    expect(taskLine({ ...OPEN, state: "queued" })).toBe("Queued until Claude Code (portico) checks for messages.");
+    expect(taskLine({ ...OPEN, state: "no_answer" })).toBe("No answer within 24 hours.");
+    expect(taskLine({ ...OPEN, state: "expired", steps: [] })).toBe("Expired before Claude Code (portico) checked for messages.");
+    expect(taskLine({ ...HELD_TASK, state: "expired" })).toBe("Expired: no decision within 24 hours.");
+    expect(taskLine({ ...REVIEW, answer: { ...REVIEW.answer!, summary: null } })).toBe("Review done");
   });
 });
 
-// ---- the pages ----
+// ---- the pages the server sends ----
 
 async function setup() {
   const p = makePortico();
@@ -669,10 +538,10 @@ function firstData(html: string): Record<string, any> {
   return JSON.parse(match![1]!);
 }
 
-describe("Home pages", () => {
-  test("signed out, each Home route goes to sign in and comes back", async () => {
+describe("the pages", () => {
+  test("signed out, each page goes to sign in and comes back", async () => {
     const { p } = await setup();
-    for (const path of ["/", "/c/t1", "/a/a1"]) {
+    for (const path of ["/", "/activity", "/a/a1", "/c/t1"]) {
       const res = await p.app.request(path);
       expect(res.status).toBe(303);
       expect(res.headers.get("location")).toBe(path === "/" ? "/sign-in" : `/sign-in?next=${encodeURIComponent(path)}`);
@@ -687,7 +556,7 @@ describe("Home pages", () => {
     expect(res.headers.get("location")).toBe("/invite");
   });
 
-  test("the page carries its first data in the person API's shapes, and the first render", async () => {
+  test("Today carries its first data in the person API's shapes, and the first render", async () => {
     const { p, owner, held } = await setup();
     const res = await p.app.request("/", { headers: { cookie: owner } });
     expect(res.status).toBe(200);
@@ -695,48 +564,55 @@ describe("Home pages", () => {
     const data = firstData(html);
     const api = async (path: string) => (await p.app.request(path, { headers: { cookie: owner } })).json();
     expect(data.page).toBe("home");
+    expect(data.route).toEqual({ page: "today" });
     expect(data.me).toEqual((await api("/api/me")).person);
     expect(data.agents).toEqual((await api("/api/agents")).agents);
     expect(data.approvals).toEqual(await api("/api/approvals"));
-    expect(data.threads).toEqual((await api("/api/threads")).threads);
-    expect(data.open).toBeNull();
+    expect(data.today).toEqual(await api(`/api/today?since=${encodeURIComponent(data.today.since)}`));
     expect(data.approvals.held.map((m: { id: string }) => m.id)).toEqual([held.id]);
+    expect(html).toContain("<title>Today on Portico</title>");
     expect(html).toContain('<script type="module" src="/assets/app.js">');
     expect(html).toContain('href="/assets/app.css"');
-    expect(html).toContain('<div id="app">');
     expect(html).toContain("Flights to Denver");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
 
-  test("/c/:threadId opens the thread; /a/:agentId opens the agent, with the allow list for its manager only", async () => {
-    const { p, owner, member, held, museAgent, grokAgent } = await setup();
-    const thread = firstData(await (await p.app.request(`/c/${held.threadId}`, { headers: { cookie: owner } })).text());
-    expect(thread.open).toMatchObject({ kind: "thread", id: held.threadId });
-    expect(thread.open.data.messages.map((m: { subject: string }) => m.subject)).toEqual(["Flights to Denver"]);
-    const mine = firstData(await (await p.app.request(`/a/${museAgent.id}`, { headers: { cookie: owner } })).text());
-    expect(mine.open).toMatchObject({ kind: "agent", id: museAgent.id, data: { agent: { name: "muse", mine: true }, allowList: [] } });
-    const theirs = firstData(await (await p.app.request(`/a/${grokAgent.id}`, { headers: { cookie: member } })).text());
-    expect(theirs.open.data).toMatchObject({ agent: { name: "grok", mine: false }, allowList: null });
-    const nothing = firstData(await (await p.app.request("/a/nobody", { headers: { cookie: owner } })).text());
-    expect(nothing.open).toBeNull();
+  test("Activity and an agent's page carry their tasks; an unknown agent goes to Today; old thread links go to Activity", async () => {
+    const { p, owner, grokAgent, chrisOnly } = await setup();
+    const api = async (path: string) => (await p.app.request(path, { headers: { cookie: owner } })).json();
+    const activityHtml = await (await p.app.request("/activity", { headers: { cookie: owner } })).text();
+    const activity = firstData(activityHtml);
+    expect(activity.route).toEqual({ page: "activity" });
+    expect(activity.tasks).toEqual(await api("/api/tasks"));
+    expect(activityHtml).toContain("Webhook retries");
+    expect(copyProblems(visibleCopy(activityHtml))).toEqual([]);
+    const agentHtml = await (await p.app.request(`/a/${grokAgent.id}`, { headers: { cookie: owner } })).text();
+    const agentPage = firstData(agentHtml);
+    expect(agentPage.route).toEqual({ page: "agent", id: grokAgent.id });
+    expect(agentPage.agentPage).toEqual(await api(`/api/agents/${grokAgent.id}`));
+    expect(agentPage.tasks).toEqual(await api(`/api/tasks?agent=${grokAgent.id}`));
+    expect(agentHtml).toContain("<title>Grok Bot on Portico</title>");
+    expect(copyProblems(visibleCopy(agentHtml))).toEqual([]);
+    const unknown = await p.app.request("/a/nobody", { headers: { cookie: owner } });
+    expect(unknown.headers.get("location")).toBe("/");
+    const old = await p.app.request(`/c/${chrisOnly.threadId}`, { headers: { cookie: owner } });
+    expect(old.headers.get("location")).toBe("/activity");
   });
 
-  test("a member sees every agent, only threads with the member's agents, and no invite link", async () => {
-    const { p, member, chrisOnly, shared } = await setup();
-    const html = await (await p.app.request("/", { headers: { cookie: member } })).text();
+  test("a member sees every agent, only tasks with the member's agents, and no invite link", async () => {
+    const { p, member, shared } = await setup();
+    const html = await (await p.app.request("/activity", { headers: { cookie: member } })).text();
     const data = firstData(html);
     expect(data.agents.map((a: { name: string }) => a.name).sort()).toEqual(["dialog-claude", "grok", "maya-dot", "muse"].sort());
-    expect(data.threads.map((t: { id: string }) => t.id)).toEqual([shared.threadId]);
+    expect(data.tasks.tasks.map((t: { id: string }) => t.id)).toEqual([shared.id]);
     expect(data.approvals.held).toEqual([]);
     expect(html).not.toContain("Invite a person");
-    // A thread the member can't see opens nothing, the same as one that doesn't exist.
-    const hidden = firstData(await (await p.app.request(`/c/${chrisOnly.threadId}`, { headers: { cookie: member } })).text());
-    expect(hidden.open).toBeNull();
   });
 
-  test("Home's browser modules, styles and agent icons are served", async () => {
+  test("the browser modules, styles and agent icons are served", async () => {
     const p = makePortico();
-    for (const path of ["app.js", "render/common.js", "render/home.js", "render/settings.js"]) {
+    const modules = ["app.js", "render/common.js", "render/home.js", "render/nav.js", "render/today.js", "render/activity.js"];
+    for (const path of [...modules, "render/agent.js", "render/tasks.js", "render/settings.js"]) {
       const res = await p.app.request(`/assets/${path}`);
       expect(res.headers.get("content-type")).toContain("text/javascript");
       const body = await res.text();

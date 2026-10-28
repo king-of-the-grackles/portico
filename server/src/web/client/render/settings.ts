@@ -126,7 +126,7 @@ export function renderComputers(s: SettingsState): string {
 // ---- Account ----
 
 function passkeyRow(s: SettingsState, k: PasskeyView): string {
-  const used = k.lastUsedAt ? ` Used ${ago(k.lastUsedAt, s.now).replace(/^today \d\d:\d\d$/, "today")}.` : "";
+  const used = k.lastUsedAt ? ` Used ${ago(k.lastUsedAt, s.now).replace(/^today at \d{1,2}:\d\d [AP]M$/, "today")}.` : "";
   return `<div class="inner-row" data-key="k-${esc(k.id)}"><span class="row-text"><span class="strong">${esc(k.name)}</span><span class="row-help tnum">Added ${date(k.createdAt, s.now)}.${used}</span></span><span class="actions"><button type="button" class="btn btn-text" data-action="passkey-remove" data-id="${esc(k.id)}"${when(s.busy === `passkey:${k.id}`, " disabled")}>Remove</button></span></div>`;
 }
 
@@ -193,7 +193,7 @@ export function renderSettings(s: SettingsState): string {
   ${renderHeader({ me: s.me, acctOpen: s.acctOpen, page: "settings" })}
   ${renderAddSheet(s.add, { publicUrl: s.publicUrl, now: s.now })}
   <main id="settings-main" class="settings-main">
-    <a class="linkbtn back" href="/">${ICON.arrowLeft()}Home</a>
+    <a class="linkbtn back" href="/">${ICON.arrowLeft()}Today</a>
     <h1 class="h-page">Settings</h1>
     ${when(s.reconnecting, `<div role="status" class="reconnecting enter" data-key="reconnecting"><span class="dot dot-pending"></span>Updates paused. Reconnecting.</div>`)}
     <div class="settings-cols">

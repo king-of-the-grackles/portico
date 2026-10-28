@@ -1,14 +1,15 @@
-// Home and Settings in the browser. The server embeds the first data and the first render; from then on the page
+// Today, Activity, the agent pages and Settings in the browser. The server embeds the first data and the first render; from then on the page
 // renders from state with the pure functions in render/, acts only through the person API, and refetches what changed
 // when the event stream says so. One delegated listener handles every data-action, data-form and data-input.
 import { api, ApiError, firstData } from "./api.js";
-import { addLine, clock, kindInfo, plural, THREAD_PAGE } from "./render/common.js";
+import { addLine, clock, kindInfo, midnight, plural } from "./render/common.js";
 import { homeState, renderHome } from "./render/home.js";
 import { renderSettings, settingsState } from "./render/settings.js";
 import type {
+  ActivityView,
   AddState,
-  AgentData,
   AgentKind,
+  AgentPageData,
   AgentView,
   ClaimView,
   ComputerView,
@@ -20,11 +21,13 @@ import type {
   PasskeyView,
   PersonRow,
   PersonView,
+  Route,
   SettingsData,
   SettingsState,
   SignInView,
-  ThreadData,
-  ThreadView,
+  TaskDetail,
+  TaskListData,
+  TodayData,
 } from "./render/types.js";
 
 const NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -64,6 +67,11 @@ function patchNode(from: Node, to: Node): void {
     return;
   }
   morphChildren(a, b);
+  // A select shows its selected attribute's option, unless it's in use.
+  if (a instanceof HTMLSelectElement && document.activeElement !== a) {
+    const chosen = (b as HTMLSelectElement).querySelector("option[selected]")?.getAttribute("value") ?? "";
+    if (a.value !== chosen) a.value = chosen;
+  }
 }
 
 function morphChildren(from: Node, to: Node): void {
@@ -452,7 +460,32 @@ function listen(handlers: {
   });
 }
 
-// ---- Home ----
+// ---- Today, Activity and the agent pages ----
+
+const ROUTES: [RegExp, (m: RegExpExecArray) => Route][] = [
+  [/^\/$/, () => ({ page: "today" })],
+  [/^\/activity\/?$/, () => ({ page: "activity" })],
+  [/^\/a\/([^/]+)\/?$/, (m) => ({ page: "agent", id: decodeURIComponent(m[1]!) })],
+];
+
+function routeOf(path: string): Route {
+  for (const [pattern, make] of ROUTES) {
+    const m = pattern.exec(path);
+    if (m) return make(m);
+  }
+  return { page: "today" };
+}
+
+function pathOf(route: Route): string {
+  return route.page === "today" ? "/" : route.page === "activity" ? "/activity" : `/a/${encodeURIComponent(route.id)}`;
+}
+
+function query(params: Record<string, string | null | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value) q.set(key, value);
+  const text = q.toString();
+  return text ? `?${text}` : "";
+}
 
 function startHome(root: HTMLElement, data: HomeData): void {
   const page = new Page<HomeState>(root, homeState({ ...data, now: Date.now() }), renderHome);
@@ -460,7 +493,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
   const add = new AddFlow(page, (agent) => {
     if (!agent) return;
     go(`/a/${agent.id}`);
-    page.set({ notice: { text: agent.computer ? `${agent.display} joined from ${agent.computer.name}.` : `${agent.display} joined.` } });
+    note(agent.computer ? `${agent.label} joined from ${agent.computer.name}.` : `${agent.label} joined.`);
   });
 
   const note = (text: string, check = false) => page.set({ notice: { text, check } });
@@ -469,131 +502,145 @@ function startHome(root: HTMLElement, data: HomeData): void {
     if (text) page.set({ notice: { text, error: true } });
   };
 
-  // -- fetching --
+  // -- fetching: each loader drops its answer if the page moved on meanwhile --
   const loadAgents = async () => page.set({ agents: (await api<{ agents: AgentView[] }>("GET", "/api/agents")).agents });
   const loadApprovals = async () => {
     const r = await api<{ held: HeldCard[]; signIns: SignInView[] }>("GET", "/api/approvals");
     page.set({ held: r.held, signIns: r.signIns });
   };
-  const loadThreads = async () => page.set({ threads: (await api<{ threads: ThreadView[] }>("GET", "/api/threads")).threads });
   const loadMe = async () => page.set({ me: (await api<{ person: PersonView }>("GET", "/api/me")).person });
 
+  const loadToday = async () => {
+    const today = await api<TodayData>("GET", `/api/today${query({ since: midnight(Date.now()) })}`);
+    if (s().route.page === "today") page.set({ today });
+  };
 
-  const loadOpen = async () => {
-    const open = s().open;
-    if (!open || open.kind === "signin") return;
+  let taskTickets = 0;
+  /** The tasks for the page: Activity's filters, or the agent's own tasks. `more` adds the next page. */
+  const loadTasks = async (more = false) => {
+    const route = s().route;
+    if (route.page === "today") return;
+    const f = s().filter;
+    const shown = s().tasks;
+    const before = more && shown?.tasks.length ? shown.tasks[shown.tasks.length - 1]!.startedAt : null;
+    // A refresh fetches at least as many as already show, so nothing on screen disappears.
+    const limit = !more && shown && shown.tasks.length > 50 ? String(shown.tasks.length) : null;
+    const path = `/api/tasks${query({
+      outcome: f.outcome,
+      agent: route.page === "agent" ? route.id : f.agent,
+      project: route.page === "agent" ? null : f.project,
+      before,
+      limit,
+    })}`;
+    if (more) page.set({ loadingMore: true });
+    // Only the latest request's answer is shown: a slow one for earlier filters never replaces a newer list.
+    const ticket = ++taskTickets;
     try {
-      if (open.kind === "thread") {
-        // Everything on screen comes back fresh in one call, plus room for what arrived since.
-        const shown = open.data?.messages.length ?? 0;
-        const limit = shown > THREAD_PAGE ? `?limit=${shown + 50}` : "";
-        const data = await api<ThreadData>("GET", `/api/threads/${encodeURIComponent(open.id)}${limit}`);
-        const now = s().open;
-        if (now?.kind === "thread" && now.id === open.id) page.set({ open: { ...now, data } });
-      } else {
-        const data = await api<AgentData>("GET", `/api/agents/${encodeURIComponent(open.id)}`);
-        const now = s().open;
-        if (now?.kind === "agent" && now.id === open.id) page.set({ open: { ...now, data } });
-      }
+      const list = await api<TaskListData>("GET", path);
+      if (ticket !== taskTickets) return;
+      const now = s().route;
+      if (now.page !== route.page || (now.page === "agent" && route.page === "agent" && now.id !== route.id)) return;
+      if (more) {
+        const current = s().tasks;
+        page.set({ tasks: { ...list, tasks: [...(current?.tasks ?? []), ...list.tasks] } });
+      } else page.set({ tasks: list });
+    } finally {
+      if (more) page.set({ loadingMore: false });
+    }
+  };
+
+  const loadEvents = async () => {
+    if (s().route.page !== "activity" || !s().showEvents) return;
+    const agent = s().filter.agent;
+    const { entries } = await api<{ entries: ActivityView[] }>("GET", `/api/activity${query({ agent })}`);
+    if (s().route.page === "activity" && s().showEvents && s().filter.agent === agent) page.set({ events: entries });
+  };
+
+  const loadAgentPage = async () => {
+    const route = s().route;
+    if (route.page !== "agent") return;
+    try {
+      const agentPage = await api<AgentPageData>("GET", `/api/agents/${encodeURIComponent(route.id)}`);
+      const now = s().route;
+      if (now.page === "agent" && now.id === route.id) page.set({ agentPage });
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
-        if (location.pathname !== "/") history.replaceState(null, "", "/");
-        page.set({ open: null, filter: s().filter === open.id ? null : s().filter });
-      } else fail(err);
+        go("/");
+        note("That agent isn't on Portico any more.");
+      } else throw err;
     }
   };
 
-  const loadEarlier = async () => {
-    const open = s().open;
-    const first = open?.kind === "thread" ? open.data?.messages[0] : undefined;
-    if (open?.kind !== "thread" || !open.data || !first || s().loadingEarlier) return;
-    page.set({ loadingEarlier: true });
+  const loadTask = async (id: string) => {
     try {
-      const path = `/api/threads/${encodeURIComponent(open.id)}?before=${encodeURIComponent(first.id)}`;
-      const earlier = await api<ThreadData>("GET", path);
-      const now = s().open;
-      if (now?.kind === "thread" && now.id === open.id && now.data) {
-        page.set({ open: { ...now, data: { ...now.data, messages: [...earlier.messages, ...now.data.messages], more: earlier.more } } });
-      }
+      const detail = await api<TaskDetail>("GET", `/api/tasks/${encodeURIComponent(id)}`);
+      if (id in s().openTasks) page.set({ openTasks: { ...s().openTasks, [id]: detail } });
     } catch (err) {
-      fail(err);
-    } finally {
-      page.set({ loadingEarlier: false });
+      if (err instanceof ApiError && err.status === 404) {
+        const { [id]: _gone, ...rest } = s().openTasks;
+        page.set({ openTasks: rest });
+      } else throw err;
     }
   };
 
-  // The thread scrolls in a reversed column: scrollTop is 0 at the newest message and negative above it.
-  document.addEventListener(
-    "scroll",
-    (event) => {
-      const el = event.target;
-      if (!(el instanceof HTMLElement) || !el.classList.contains("msgs-scroll")) return;
-      const up = el.scrollTop < -120;
-      if (up !== s().threadUp) page.set({ threadUp: up });
-    },
-    true,
-  );
-
-  const toNewest = () => {
-    const el = document.querySelector<HTMLElement>(".msgs-scroll");
-    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    el?.scrollTo({ top: 0, behavior: smooth ? "smooth" : "auto" });
+  /** Everything the current page shows. */
+  const loadPage = () => {
+    const route = s().route;
+    const jobs: Promise<unknown>[] = [];
+    if (route.page === "today") jobs.push(loadToday());
+    else jobs.push(loadTasks());
+    if (route.page === "activity") jobs.push(loadEvents());
+    if (route.page === "agent") jobs.push(loadAgentPage());
+    for (const id of Object.keys(s().openTasks)) jobs.push(loadTask(id));
+    return settle(jobs);
   };
+
+  const settle = (jobs: Promise<unknown>[]) =>
+    Promise.all(jobs.map((job) => job.catch((err) => (err instanceof ApiError && err.status === 401 ? failure(err) : fail(err)))));
 
   const refresh = (topics: string[]) => {
     const t = new Set(topics);
     const jobs: Promise<unknown>[] = [];
     if (t.has("agents") || t.has("people")) jobs.push(loadAgents());
     if (t.has("approvals")) jobs.push(loadApprovals());
-    if (t.has("threads") || t.has("approvals")) jobs.push(loadThreads());
     if (t.has("me")) jobs.push(loadMe());
-    const open = s().open;
-    if (open?.kind === "thread" && (t.has("threads") || t.has("approvals"))) jobs.push(loadOpen());
-    if (open?.kind === "agent" && (t.has("agents") || t.has("approvals"))) jobs.push(loadOpen());
+    const route = s().route;
+    const tasksChanged = t.has("threads") || t.has("approvals");
+    if (route.page === "today" && (tasksChanged || t.has("agents"))) jobs.push(loadToday());
+    if (route.page !== "today" && tasksChanged) jobs.push(loadTasks());
+    if (route.page === "activity" && (t.has("activity") || t.has("agents"))) jobs.push(loadEvents());
+    if (route.page === "agent" && (tasksChanged || t.has("agents") || t.has("activity"))) jobs.push(loadAgentPage());
+    if (tasksChanged) for (const id of Object.keys(s().openTasks)) jobs.push(loadTask(id));
     if (s().add && (t.has("join-lines") || t.has("approvals") || t.has("agents"))) jobs.push(add.check());
-    void Promise.all(jobs.map((job) => job.catch((err) => (err instanceof ApiError && err.status === 401 ? failure(err) : null))));
+    void settle(jobs);
   };
 
   // -- routes --
-  const routeOf = (path: string): { kind: "thread" | "agent"; id: string } | null => {
-    const m = /^\/(c|a)\/([^/]+)\/?$/.exec(path);
-    if (!m) return null;
-    return { kind: m[1] === "c" ? "thread" : "agent", id: decodeURIComponent(m[2]!) };
-  };
-
   const applyRoute = () => {
     const route = routeOf(location.pathname);
-    // Opening something new clears what the last action said, as the boards do.
-    const reset = {
+    const prior = s().route;
+    const same = pathOf(prior) === pathOf(route);
+    page.set({
+      route,
+      navOpen: false,
+      acctOpen: false,
       edit: null,
       saved: false,
-      expanded: false,
       confirmRemove: false,
-      acctOpen: false,
-      agentsOpen: false,
-      notice: null,
-      threadUp: false,
-    };
-    if (!route) {
-      page.set({ open: null, ...reset });
-      return;
-    }
-    const prior = s().open;
-    if (route.kind === "thread") {
-      const data = prior?.kind === "thread" && prior.id === route.id ? prior.data : null;
-      page.set({ open: { kind: "thread", id: route.id, data }, ...reset });
-    } else {
-      const agent = s().agents.find((a) => a.id === route.id);
-      const keep = prior?.kind === "agent" && prior.id === route.id ? prior.data : null;
-      const data = keep ?? (agent ? { agent, allowList: null } : null);
-      page.set({
-        open: { kind: "agent", id: route.id, data },
-        filter: route.id,
-        offlineOpen: s().offlineOpen || agent?.status === "offline",
-        ...reset,
-      });
-    }
-    void loadOpen();
+      notice: same ? s().notice : null,
+      ...(same
+        ? {}
+        : {
+            tasks: null,
+            openTasks: {},
+            filter: { outcome: null, agent: null, project: null },
+            detailsOpen: false,
+            settingsOpen: false,
+            agentPage: route.page === "agent" && s().agentPage?.agent.id === route.id ? s().agentPage : null,
+          }),
+    });
+    if (!same) window.scrollTo(0, 0);
+    void loadPage();
   };
 
   const go = (path: string) => {
@@ -602,24 +649,24 @@ function startHome(root: HTMLElement, data: HomeData): void {
   };
 
   // -- actions --
-  const openAgent = () => (s().open?.kind === "agent" ? (s().open as { data: AgentData | null }).data?.agent ?? null : null);
+  const pageAgent = () => (s().route.page === "agent" ? s().agentPage?.agent ?? null : null);
 
   const updateAgent = (agent: AgentView) => {
-    const open = s().open;
+    const agentPage = s().agentPage;
     page.set({
       agents: s().agents.map((a) => (a.id === agent.id ? agent : a)),
-      open: open?.kind === "agent" && open.id === agent.id ? { ...open, data: { agent, allowList: open.data?.allowList ?? null } } : open,
+      agentPage: agentPage && agentPage.agent.id === agent.id ? { ...agentPage, agent } : agentPage,
     });
   };
 
   const patchAgent = async (key: string, changes: Record<string, unknown>) => {
-    const agent = openAgent();
+    const agent = pageAgent();
     if (!agent || s().busy) return;
     page.set({ busy: `${key}:${agent.id}` });
     try {
       const r = await api<{ agent: AgentView }>("PATCH", `/api/agents/${encodeURIComponent(agent.id)}`, changes);
       updateAgent(r.agent);
-      void loadOpen();
+      void settle([loadAgentPage()]);
     } catch (err) {
       fail(err);
     } finally {
@@ -636,10 +683,10 @@ function startHome(root: HTMLElement, data: HomeData): void {
       page.set({ held: s().held.filter((m) => m.id !== id) });
       note(
         decision === "allow_once"
-          ? `Delivered to ${card.to.display}.`
+          ? `Allowed once. Sent to ${card.to.label}.`
           : decision === "always_allow"
-            ? `Delivered. ${card.from.display} is now always allowed.`
-            : `Declined. ${card.from.display} was notified.`,
+            ? `Sent. ${card.from.label} is always allowed now.`
+            : `Not allowed. ${card.from.label} was told.`,
         true,
       );
       refresh(["approvals", "threads", "agents"]);
@@ -661,10 +708,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
         ...(decision === "approve" ? { name: request.name } : {}),
       });
       page.set({ signIns: s().signIns.filter((r) => r.id !== id) });
-      if (s().open?.kind === "signin" && s().open!.id === id) page.set({ open: null });
-      if (s().filter === `signin:${id}`) page.set({ filter: null });
       if (decision === "deny") {
-        note("Sign in request declined.");
+        note(`${request.name} wasn't allowed to join.`);
         return;
       }
       await loadAgents();
@@ -680,7 +725,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
   };
 
   const saveEdit = async () => {
-    const agent = openAgent();
+    const agent = pageAgent();
     const edit = s().edit;
     if (!agent || !edit || s().busy) return;
     const name = edit.name.trim();
@@ -711,19 +756,35 @@ function startHome(root: HTMLElement, data: HomeData): void {
   };
 
   const removeAgent = async (id: string) => {
-    const agent = s().agents.find((a) => a.id === id) ?? openAgent();
+    const agent = s().agents.find((a) => a.id === id) ?? pageAgent();
     if (!agent || s().busy) return;
     page.set({ busy: `remove:${id}` });
     try {
       await api("DELETE", `/api/agents/${encodeURIComponent(id)}`);
-      page.set({ agents: s().agents.filter((a) => a.id !== id), filter: null, confirmRemove: false });
+      page.set({ agents: s().agents.filter((a) => a.id !== id), confirmRemove: false });
       go("/");
-      note(`${agent.display} removed and signed out.`);
+      note(`${agent.label} removed and signed out.`);
     } catch (err) {
       fail(err);
     } finally {
       page.set({ busy: null });
     }
+  };
+
+  const toggleTask = (id: string) => {
+    const open = s().openTasks;
+    if (id in open) {
+      const { [id]: _closed, ...rest } = open;
+      page.set({ openTasks: rest });
+      return;
+    }
+    page.set({ openTasks: { ...open, [id]: null } });
+    void settle([loadTask(id)]);
+  };
+
+  const setFilter = (patch: Partial<HomeState["filter"]>) => {
+    page.set({ filter: { ...s().filter, ...patch }, openTasks: {} });
+    void settle([loadTasks(), loadEvents()]);
   };
 
   listen({
@@ -733,35 +794,45 @@ function startHome(root: HTMLElement, data: HomeData): void {
     escape() {
       if (s().acctOpen) page.set({ acctOpen: false });
       else if (s().add) add.close();
-      else if (s().agentsOpen) page.set({ agentsOpen: false });
-      else if (s().open) {
-        if (s().open!.kind === "signin") page.set({ open: null });
-        else go("/");
-      }
+      else if (s().navOpen) page.set({ navOpen: false });
+      else if (s().edit) page.set({ edit: null });
     },
     input(name, value) {
       const edit = s().edit;
       if (name === "edit-name" && edit) page.set({ edit: { ...edit, name: value, error: "" } });
       else if (name === "edit-desc" && edit) page.set({ edit: { ...edit, description: value.slice(0, 500) } });
       else if (name === "add-req-name") add.setName(value);
+      else if (name === "filter-agent") setFilter({ agent: value || null });
+      else if (name === "filter-project") setFilter({ project: value || null });
     },
     form(name) {
       if (name === "agent-save") void saveEdit();
       else if (name === "add-approve") void add.decide("approve");
     },
-    action(name, el) {
+    action(name, el, event) {
       const id = el.dataset.id ?? "";
       switch (name) {
+        case "go": {
+          // A modified click opens a new tab, as any link does.
+          const mouse = event as MouseEvent;
+          if (mouse.metaKey || mouse.ctrlKey || mouse.shiftKey || mouse.button === 1) {
+            window.open(el.dataset.href ?? "/", "_blank");
+            return;
+          }
+          return go(el.dataset.href ?? "/");
+        }
         case "acct-toggle":
           return page.set({ acctOpen: !s().acctOpen });
         case "sign-out":
           return void signOut();
-        case "agents-open":
-          return page.set({ agentsOpen: true, acctOpen: false });
-        case "agents-close":
-          return page.set({ agentsOpen: false });
+        case "nav-open":
+          return page.set({ navOpen: true, acctOpen: false });
+        case "nav-close":
+          return page.set({ navOpen: false });
+        case "quiet-toggle":
+          return page.set({ quietOpen: !s().quietOpen });
         case "add-open":
-          page.set({ agentsOpen: false });
+          page.set({ navOpen: false });
           return add.open();
         case "add-close":
           return add.close();
@@ -775,55 +846,54 @@ function startHome(root: HTMLElement, data: HomeData): void {
           return add.another();
         case "add-done":
           return add.done();
-        case "offline-toggle":
-          return page.set({ offlineOpen: !s().offlineOpen });
         case "open-agent":
           return go(`/a/${encodeURIComponent(id)}`);
-        case "open-thread":
-          return go(`/c/${encodeURIComponent(id)}`);
-        case "thread-earlier":
-          return void loadEarlier();
-        case "thread-newest":
-          return toNewest();
-        case "open-signin":
-          if (location.pathname !== "/") history.pushState(null, "", "/");
-          return page.set({ open: { kind: "signin", id }, filter: `signin:${id}`, agentsOpen: false, confirmRemove: false, edit: null });
-        case "close-panel":
-          if (s().open?.kind === "signin") return page.set({ open: null, confirmRemove: false });
-          return go("/");
-        case "clear-filter":
-          return page.set({ filter: null });
+        case "task-toggle":
+          return toggleTask(id);
+        case "message-toggle":
+          return page.set({ shownMessages: { ...s().shownMessages, [id]: !s().shownMessages[id] } });
+        case "outcome":
+          return setFilter({ outcome: (id || null) as HomeState["filter"]["outcome"] });
+        case "events-toggle": {
+          const showEvents = !s().showEvents;
+          page.set({ showEvents, events: showEvents ? s().events : null });
+          if (showEvents) void settle([loadEvents()]);
+          return;
+        }
+        case "more":
+          return void settle([loadTasks(true)]);
+        case "details-toggle":
+          return page.set({ detailsOpen: !s().detailsOpen });
+        case "settings-toggle":
+          return page.set({ settingsOpen: !s().settingsOpen, confirmRemove: false });
         case "decide":
           return void decide(id, el.dataset.decision as "allow_once" | "always_allow" | "deny");
         case "signin-approve":
           return void decideSignIn(id, "approve");
         case "signin-deny":
-        case "signin-remove":
           return void decideSignIn(id, "deny");
         case "edit-start": {
-          const agent = openAgent();
-          if (agent) page.set({ edit: { name: agent.name, description: agent.description, error: "" }, saved: false });
+          const agent = pageAgent();
+          if (agent) page.set({ edit: { name: agent.name, description: agent.description, error: "" }, saved: false, settingsOpen: true });
           return;
         }
         case "edit-cancel":
           return page.set({ edit: null });
-        case "desc-more":
-          return page.set({ expanded: !s().expanded });
         case "toggle-approval": {
-          const agent = openAgent();
+          const agent = pageAgent();
           if (agent) void patchAgent("approval", { approvalRequired: !agent.approvalRequired });
           return;
         }
         case "toggle-folder": {
-          const agent = openAgent();
+          const agent = pageAgent();
           if (agent) void patchAgent("folder", { joinFromFolder: agent.joinFromFolder === false });
           return;
         }
         case "allow-remove": {
-          const agent = openAgent();
+          const agent = pageAgent();
           if (!agent) return;
           api("DELETE", `/api/agents/${encodeURIComponent(agent.id)}/allow/${encodeURIComponent(id)}`)
-            .then(loadOpen)
+            .then(loadAgentPage)
             .catch(fail);
           return;
         }
@@ -841,7 +911,10 @@ function startHome(root: HTMLElement, data: HomeData): void {
   connectStream({
     changed: refresh,
     down: (isDown) => page.set({ reconnecting: isDown }),
-    back: () => refresh(["agents", "approvals", "threads", "me", "join-lines"]),
+    back: () => {
+      refresh(["agents", "approvals", "me", "join-lines"]);
+      void loadPage();
+    },
   });
   setInterval(() => page.set({ now: Date.now() }), 30_000);
 
@@ -857,7 +930,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
   }
 
   page.paint();
-  if (s().open && s().open!.kind !== "signin" && !(s().open as { data: unknown }).data) void loadOpen();
+  // The server rendered with its own day; Today counts from the browser's midnight.
+  void loadPage();
 }
 
 // ---- Settings ----

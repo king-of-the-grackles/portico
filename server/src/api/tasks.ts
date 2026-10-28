@@ -5,7 +5,15 @@ import { type Task, TASK_OUTCOMES, type TaskOutcome } from "../core/tasks";
 import type { Person } from "../core/types";
 import { type PersonEnv, currentPerson } from "./context";
 import { pendingSignIns } from "./sign-ins";
-import { type ActivityView, agentsInOrder, personViews } from "./views";
+import {
+  type ActivityView,
+  type AgentView,
+  agentsInOrder,
+  type HeldCard,
+  personViews,
+  type SignInView,
+  type TaskView,
+} from "./views";
 
 /** The agents whose tasks and activity the person sees: everyone's for the owner (null), a member's own otherwise. */
 export function visibleAgents(core: Core, me: Person): string[] | null {
@@ -32,6 +40,86 @@ function projects(core: Core, visible: string[] | null): string[] {
   return [...new Set(folders)].sort((a, b) => a.localeCompare(b));
 }
 
+/** What GET /api/today answers. */
+export interface TodayData {
+  since: string;
+  counts: { decide: number; inProgress: number; done: number; failed: number };
+  decisions: { held: HeldCard[]; signIns: SignInView[]; waiting: AgentView[] };
+  inProgress: TaskView[];
+  done: TaskView[];
+  failed: TaskView[];
+}
+
+/** The start of the server's day: Today's default when the page doesn't send its own. */
+export function serverMidnight(now: Date): string {
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  return midnight.toISOString();
+}
+
+/** Today: what needs the person's decision, what's in progress, and what ended since `since`. */
+export function todayData(core: Core, me: Person, since: string): TodayData {
+  const views = personViews(core, me);
+  const tasks = core.tasks.all({ visible: visibleAgents(core, me) });
+  const held = core.approvals.heldFor(me.id).map(views.held);
+  const signIns = pendingSignIns(core, me);
+  const waiting = agentsInOrder(core.agents, me)
+    .filter((a) => a.ownerId === me.id && core.agents.entry(a).status === "waiting")
+    .map(views.agent);
+  const inProgress = tasks.filter((t) => t.outcome === "in_progress");
+  const ended = (outcome: TaskOutcome) => tasks.filter((t) => t.outcome === outcome && t.endedAt !== null && t.endedAt >= since);
+  const done = ended("done");
+  const failed = ended("failed");
+  return {
+    since,
+    counts: { decide: held.length + signIns.length + waiting.length, inProgress: inProgress.length, done: done.length, failed: failed.length },
+    decisions: { held, signIns, waiting },
+    inProgress: inProgress.slice(0, 20).map(views.task),
+    done: done.slice(0, 20).map(views.task),
+    failed: failed.slice(0, 20).map(views.task),
+  };
+}
+
+/** What GET /api/tasks answers. */
+export interface TaskListData {
+  tasks: TaskView[];
+  counts: Record<TaskOutcome, number>;
+  more: boolean;
+  projects: string[];
+}
+
+export interface TaskQuery {
+  agent?: string | null;
+  project?: string | null;
+  outcome?: string | null;
+  before?: string | null;
+  limit?: number;
+}
+
+/** A page of tasks for the person, filtered by agent, project and outcome, with every outcome's count. */
+export function taskListData(core: Core, me: Person, query: TaskQuery): TaskListData {
+  const views = personViews(core, me);
+  const visible = visibleAgents(core, me);
+  if (query.outcome && !TASK_OUTCOMES.includes(query.outcome as TaskOutcome)) {
+    throw new PorticoError("bad_request", `outcome must be one of: ${TASK_OUTCOMES.join(", ")}.`);
+  }
+  const anyOf = query.project
+    ? core.agents
+        .all()
+        .filter((a) => a.type === "session" && a.folder === query.project)
+        .map((a) => a.id)
+    : undefined;
+  const page = core.tasks.list({
+    visible,
+    agentId: query.agent || undefined,
+    anyOf,
+    outcome: (query.outcome as TaskOutcome | null) || undefined,
+    before: timeParam(query.before ?? undefined) ?? undefined,
+    limit: query.limit !== undefined && Number.isFinite(query.limit) ? query.limit : 50,
+  });
+  return { tasks: page.tasks.map(views.task), counts: page.counts, more: page.more, projects: projects(core, visible) };
+}
+
 /**
  * The control plane's reads: /api/today (what needs a decision, what's in progress, what got done), /api/tasks (every
  * task, filtered), /api/tasks/:id (one task's steps and messages) and /api/activity (joins, sessions, decisions and
@@ -42,57 +130,22 @@ export function taskRoutes(core: Core): Hono<PersonEnv> {
 
   route.get("/today", (c) => {
     const me = currentPerson(c);
-    const views = personViews(core, me);
-    const visible = visibleAgents(core, me);
     // The page sends the start of its own day; without it, the server's.
-    const midnight = new Date(core.now());
-    midnight.setHours(0, 0, 0, 0);
-    const since = timeParam(c.req.query("since")) ?? midnight.toISOString();
-    const tasks = core.tasks.all({ visible });
-    const held = core.approvals.heldFor(me.id).map(views.held);
-    const signIns = pendingSignIns(core, me);
-    const waiting = agentsInOrder(core.agents, me)
-      .filter((a) => a.ownerId === me.id && core.agents.entry(a).status === "waiting")
-      .map(views.agent);
-    const inProgress = tasks.filter((t) => t.outcome === "in_progress");
-    const ended = (outcome: TaskOutcome) => tasks.filter((t) => t.outcome === outcome && t.endedAt !== null && t.endedAt >= since);
-    const done = ended("done");
-    const failed = ended("failed");
-    return c.json({
-      since,
-      counts: { decide: held.length + signIns.length + waiting.length, inProgress: inProgress.length, done: done.length, failed: failed.length },
-      decisions: { held, signIns, waiting },
-      inProgress: inProgress.slice(0, 20).map(views.task),
-      done: done.slice(0, 20).map(views.task),
-      failed: failed.slice(0, 20).map(views.task),
-    });
+    return c.json(todayData(core, me, timeParam(c.req.query("since")) ?? serverMidnight(core.now())));
   });
 
   route.get("/tasks", (c) => {
     const me = currentPerson(c);
-    const views = personViews(core, me);
-    const visible = visibleAgents(core, me);
-    const outcome = c.req.query("outcome");
-    if (outcome && !TASK_OUTCOMES.includes(outcome as TaskOutcome)) {
-      throw new PorticoError("bad_request", `outcome must be one of: ${TASK_OUTCOMES.join(", ")}.`);
-    }
-    const project = c.req.query("project");
-    const anyOf = project
-      ? core.agents
-          .all()
-          .filter((a) => a.type === "session" && a.folder === project)
-          .map((a) => a.id)
-      : undefined;
     const limit = Number(c.req.query("limit") ?? 50);
-    const page = core.tasks.list({
-      visible,
-      agentId: c.req.query("agent") || undefined,
-      anyOf,
-      outcome: (outcome as TaskOutcome | undefined) || undefined,
-      before: timeParam(c.req.query("before")) ?? undefined,
-      limit: Number.isFinite(limit) ? limit : 50,
-    });
-    return c.json({ tasks: page.tasks.map(views.task), counts: page.counts, more: page.more, projects: projects(core, visible) });
+    return c.json(
+      taskListData(core, me, {
+        agent: c.req.query("agent"),
+        project: c.req.query("project"),
+        outcome: c.req.query("outcome"),
+        before: c.req.query("before"),
+        limit,
+      }),
+    );
   });
 
   route.get("/tasks/:id", (c) => {

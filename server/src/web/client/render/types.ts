@@ -1,6 +1,10 @@
 // The shapes Home and Settings render from. Every API shape comes from the person API's views; these types add only
 // the page's own state (what is open, what is being edited). Type-only, so the browser build carries nothing.
+import type { AgentPageData } from "../../../api/agents";
+import type { TaskListData, TodayData } from "../../../api/tasks";
 import type {
+  ActivityView,
+  AgentRef,
   AgentView,
   AllowEntry,
   ClaimView,
@@ -10,13 +14,18 @@ import type {
   MessageView,
   PasskeyView,
   PersonView,
+  RunView,
   SignInView,
-  ThreadView,
+  TaskView,
 } from "../../../api/views";
+import type { TaskOutcome } from "../../../core/tasks";
 import type { AgentKind } from "../../../core/types";
 
 export type {
+  ActivityView,
   AgentKind,
+  AgentPageData,
+  AgentRef,
   AgentView,
   AllowEntry,
   ClaimView,
@@ -26,37 +35,41 @@ export type {
   MessageView,
   PasskeyView,
   PersonView,
+  RunView,
   SignInView,
-  ThreadView,
+  TaskListData,
+  TaskOutcome,
+  TaskView,
+  TodayData,
 };
 
-/** A page of a thread, oldest first. `more` says older messages remain: the panel offers Show earlier messages. */
-export interface ThreadData {
-  thread: ThreadView;
+/** Which page of the control plane is showing: Today (/), Activity (/activity) or an agent's page (/a/:id). */
+export type Route = { page: "today" } | { page: "activity" } | { page: "agent"; id: string };
+
+/** What GET /api/tasks/:id answers: one task's steps and every message in it, oldest first. */
+export interface TaskDetail {
+  task: TaskView;
   messages: MessageView[];
-  more: boolean;
 }
 
-export interface AgentData {
-  agent: AgentView;
-  allowList: AllowEntry[] | null;
+/** The Activity page's filters. */
+export interface ActivityFilter {
+  outcome: TaskOutcome | null;
+  agent: string | null;
+  project: string | null;
 }
 
-/** The right panel on Home: a thread, an agent's details, or an app agent's sign-in request waiting for approval. */
-export type OpenPanel =
-  | { kind: "thread"; id: string; data: ThreadData | null }
-  | { kind: "agent"; id: string; data: AgentData | null }
-  | { kind: "signin"; id: string };
-
-/** Home's first data, embedded by the server: the same shapes GET /api/me, /api/agents, /api/approvals and /api/threads answer. */
+/** Home's first data, embedded by the server: the same shapes the person API answers, for the page the URL names. */
 export interface HomeData {
   page: "home";
   me: PersonView;
   publicUrl: string;
   agents: AgentView[];
   approvals: { held: HeldCard[]; signIns: SignInView[] };
-  threads: ThreadView[];
-  open: OpenPanel | null;
+  route: Route;
+  today: TodayData | null;
+  tasks: TaskListData | null;
+  agentPage: AgentPageData | null;
 }
 
 /** A person as GET /api/people lists them: the view plus when the person joined. */
@@ -111,7 +124,7 @@ export interface EditState {
   error: string;
 }
 
-/** What Home renders. */
+/** What Today, Activity and the agent pages render. */
 export interface HomeState {
   now: number;
   me: PersonView;
@@ -119,25 +132,33 @@ export interface HomeState {
   agents: AgentView[];
   held: HeldCard[];
   signIns: SignInView[];
-  threads: ThreadView[];
-  open: OpenPanel | null;
-  /** The agents list selection that narrows Needs approval and Threads: an agent ID, or "signin:<id>". */
-  filter: string | null;
-  offlineOpen: boolean;
+  route: Route;
+  today: TodayData | null;
+  /** Activity's tasks, or an agent page's, for the current filters. */
+  tasks: TaskListData | null;
+  filter: ActivityFilter;
+  /** Activity: joins, sessions and setting changes shown among the tasks. */
+  showEvents: boolean;
+  events: ActivityView[] | null;
+  agentPage: AgentPageData | null;
+  /** Task rows opened to show their steps, by task ID; null while loading. */
+  openTasks: Record<string, TaskDetail | null>;
+  /** Decision cards showing the whole message. */
+  shownMessages: Record<string, boolean>;
+  /** The agent page's folds. */
+  detailsOpen: boolean;
+  settingsOpen: boolean;
+  quietOpen: boolean;
   acctOpen: boolean;
-  /** Phone: the agents list open full screen. */
-  agentsOpen: boolean;
+  /** Phone: the navigation open over the page. */
+  navOpen: boolean;
   notice: Notice | null;
   reconnecting: boolean;
   add: AddState | null;
   edit: EditState | null;
   saved: boolean;
-  expanded: boolean;
   confirmRemove: boolean;
-  /** The thread panel is scrolled up from the newest message, so the Newest button shows. */
-  threadUp: boolean;
-  /** Show earlier messages is fetching. Kept apart from `busy`, so deciding a held message still works meanwhile. */
-  loadingEarlier: boolean;
+  loadingMore: boolean;
   /** The action in flight, so its button can't be pressed twice. */
   busy: string | null;
 }

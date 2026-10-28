@@ -9,9 +9,10 @@ export function esc(value: unknown): string {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ESCAPES[ch]!);
 }
 
-/** `attr` when the condition holds, for boolean attributes and optional classes. */
-export function when(condition: unknown, text: string): string {
-  return condition ? text : "";
+/** `text` when the condition holds, for boolean attributes, optional classes and parts. A function is only called then. */
+export function when(condition: unknown, text: string | (() => string)): string {
+  if (!condition) return "";
+  return typeof text === "function" ? text() : text;
 }
 
 // ---- agent kinds ----
@@ -96,9 +97,11 @@ export function logo(kind: string, cls = "", alt = ""): string {
 /** A thread page's size, as the server's THREAD_PAGE. */
 export const THREAD_PAGE = 200;
 
-// ---- time ----
+// ---- time: 12-hour clock, US dates ----
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DAY = 86_400_000;
 
 function startOfDay(ms: number): number {
@@ -106,21 +109,34 @@ function startOfDay(ms: number): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-/** Days from `iso`'s calendar day to now's: 0 today, 1 yesterday. */
+/** Days from `iso`'s calendar day to now's: 0 today, 1 yesterday, -1 tomorrow. */
 function daysAgo(iso: string, now: number): number {
   return Math.round((startOfDay(now) - startOfDay(Date.parse(iso))) / DAY);
 }
 
-/** "10:42", 24-hour local time. */
+/** The start of now's day, for Today's "since". */
+export function midnight(now: number): string {
+  return new Date(startOfDay(now)).toISOString();
+}
+
+/** "5:09 PM", local time. */
 export function clock(iso: string): string {
   const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const h = d.getHours();
+  return `${h % 12 || 12}:${String(d.getMinutes()).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 }
 
 /** "Oct 22", with the year when it isn't this year. */
 export function date(iso: string, now: number): string {
   const d = new Date(iso);
   const day = `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+  return d.getFullYear() === new Date(now).getFullYear() ? day : `${day}, ${d.getFullYear()}`;
+}
+
+/** "Tuesday, October 27", with the year when it isn't this year. */
+export function longDate(iso: string, now: number): string {
+  const d = new Date(iso);
+  const day = `${WEEKDAYS[d.getDay()]}, ${MONTH_NAMES[d.getMonth()]} ${d.getDate()}`;
   return d.getFullYear() === new Date(now).getFullYear() ? day : `${day}, ${d.getFullYear()}`;
 }
 
@@ -132,7 +148,21 @@ export function dayLabel(iso: string, now: number): string {
   return date(iso, now);
 }
 
-/** A list's time column: "10:42" today, then "Yesterday", then "Oct 22". */
+/** Activity's day headings: "Today, Tuesday, October 27", "Yesterday, Monday, October 26", "Friday, October 23". */
+export function dayHeading(iso: string, now: number): string {
+  const days = daysAgo(iso, now);
+  const long = longDate(iso, now);
+  if (days === 0) return `Today, ${long}`;
+  if (days === 1) return `Yesterday, ${long}`;
+  return long;
+}
+
+/** Whether two times fall on the same local day. */
+export function sameDay(a: string, b: string): boolean {
+  return startOfDay(Date.parse(a)) === startOfDay(Date.parse(b));
+}
+
+/** A list's time column: "10:42 AM" today, then "Yesterday", then "Oct 22". */
 export function shortWhen(iso: string, now: number): string {
   const days = daysAgo(iso, now);
   if (days === 0) return clock(iso);
@@ -140,14 +170,14 @@ export function shortWhen(iso: string, now: number): string {
   return date(iso, now);
 }
 
-/** "just now", "4 min ago", "today 09:12", "yesterday 18:04", "Oct 22". */
+/** "just now", "4 min ago", "today at 9:12 AM", "yesterday at 6:04 PM", "Oct 22". */
 export function ago(iso: string, now: number): string {
   const minutes = Math.floor((now - Date.parse(iso)) / 60_000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes} min ago`;
   const days = daysAgo(iso, now);
-  if (days === 0) return `today ${clock(iso)}`;
-  if (days === 1) return `yesterday ${clock(iso)}`;
+  if (days === 0) return `today at ${clock(iso)}`;
+  if (days === 1) return `yesterday at ${clock(iso)}`;
   return date(iso, now);
 }
 
@@ -156,17 +186,28 @@ export function sinceDay(iso: string, now: number): string {
   return daysAgo(iso, now) === 0 ? "today" : date(iso, now);
 }
 
-/** "at 10:19" today, otherwise "on Oct 22". */
+/** "at 10:19 AM" today, otherwise "on Oct 22". */
 export function atWhen(iso: string, now: number): string {
   return daysAgo(iso, now) === 0 ? `at ${clock(iso)}` : `on ${date(iso, now)}`;
 }
 
-/** "Expires in 24 h." or "Expires in 8 min." */
+/** "Expires in 8 min." within the hour, then "Expires today at 6:00 PM.", "Expires tomorrow at 6:00 PM." or "Expires Oct 29 at 6:00 PM." */
 export function expiresIn(iso: string, now: number): string {
   const ms = Date.parse(iso) - now;
   if (ms <= 0) return "Expired.";
-  if (ms >= 3_600_000) return `Expires in ${Math.round(ms / 3_600_000)} h.`;
-  return `Expires in ${Math.max(1, Math.ceil(ms / 60_000))} min.`;
+  if (ms < 3_600_000) return `Expires in ${Math.max(1, Math.ceil(ms / 60_000))} min.`;
+  const days = daysAgo(iso, now);
+  const day = days === 0 ? "today" : days === -1 ? "tomorrow" : date(iso, now);
+  return `Expires ${day} at ${clock(iso)}.`;
+}
+
+/** How long something took: "1 min", "8 min", "2 h 5 min", "3 days". */
+export function duration(fromIso: string, toIso: string): string {
+  const minutes = Math.max(1, Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 60_000));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+  return `${Math.round(hours / 24)} days`;
 }
 
 export function plural(n: number, one: string, many = `${one}s`): string {
@@ -176,10 +217,11 @@ export function plural(n: number, one: string, many = `${one}s`): string {
 // ---- agents ----
 
 export interface AgentState {
-  /** "Working", "Checks in every 10 min", "Offline". */
+  /** Plain words: Working, Has a question, Available, Not running, Waiting to join. */
   label: string;
   dot: string;
   ink: string;
+  /** Running now, or (apps and connectors) joined and checking in. */
   online: boolean;
   /** "Seen 4 min ago", "Joined just now", or null. */
   seen: string | null;
@@ -190,8 +232,8 @@ const MUTED = "#4E625C";
 const OCHRE = "#8A4F0E";
 
 /**
- * How an agent shows in the list. Sessions show their reported status while connected. Apps and connectors check in:
- * their rhythm once known, "Waiting to connect" until the first check-in.
+ * How an agent shows everywhere: sessions by their live status while a terminal is open, Not running otherwise. Apps
+ * and connectors are Available once they've checked in, and Waiting to join until then.
  */
 export function agentState(agent: AgentView, now: number): AgentState {
   const seen = agent.lastSeen ? `Seen ${ago(agent.lastSeen, now)}` : null;
@@ -200,34 +242,29 @@ export function agentState(agent: AgentView, now: number): AgentState {
       case "busy":
         return { label: "Working", dot: "dot-working", ink: TEAL, online: true, seen };
       case "waiting":
-        return { label: "Needs input", dot: "dot-input", ink: OCHRE, online: true, seen };
+        return { label: "Has a question", dot: "dot-input", ink: OCHRE, online: true, seen };
       case "offline":
-        return { label: "Offline", dot: "dot-offline", ink: MUTED, online: false, seen };
+        return { label: "Not running", dot: "dot-offline", ink: MUTED, online: false, seen };
       default:
-        return { label: "Idle", dot: "dot-idle", ink: MUTED, online: true, seen };
+        return { label: "Available", dot: "dot-idle", ink: MUTED, online: true, seen };
     }
   }
   const joined = `Joined ${ago(agent.createdAt, now)}`;
-  if (agent.checkInMinutes !== null) {
-    return { label: `Checks in every ${agent.checkInMinutes} min`, dot: "dot-checkin", ink: MUTED, online: true, seen: seen ?? joined };
-  }
-  if (agent.lastSeen) return { label: "Connected", dot: "dot-checkin", ink: MUTED, online: true, seen };
-  return { label: "Waiting to connect", dot: "dot-pending", ink: OCHRE, online: true, seen: joined };
+  if (agent.lastSeen) return { label: "Available", dot: "dot-checkin", ink: MUTED, online: true, seen };
+  return { label: "Waiting to join", dot: "dot-pending", ink: OCHRE, online: true, seen: joined };
 }
 
-/** The agents list's second line: "Working on macbook", "Checks in every 10 min", "Seen yesterday 18:04". */
+/** The navigation's second line: "Working", "Has a question", "Not running", with the computer when it helps. */
 export function agentSub(agent: AgentView, now: number): string {
-  const s = agentState(agent, now);
-  if (!s.online) return s.seen ?? "Offline";
-  if (agent.computer) return `${s.label} on ${agent.computer.name}`;
-  return s.label;
+  return agentState(agent, now).label;
 }
 
-/** The details panel's status line: "Working", "Checks in every 10 min. Seen 4 min ago", "Offline. Seen yesterday 18:04". */
+/** The agent page's status line: "Working", "Available. Last checked in at 5:21 PM", "Not running. Last seen yesterday at 6:04 PM". */
 export function agentStatusLine(agent: AgentView, now: number): string {
   const s = agentState(agent, now);
-  if (!s.online) return s.seen ? `Offline. ${s.seen}` : "Offline";
-  if (agent.type !== "session" && s.seen) return `${s.label}. ${s.seen}`;
+  if (!agent.lastSeen) return s.label;
+  if (agent.type !== "session") return `${s.label}. Last checked in ${ago(agent.lastSeen, now)}`;
+  if (!s.online) return `${s.label}. Last seen ${ago(agent.lastSeen, now)}`;
   return s.label;
 }
 
@@ -298,7 +335,7 @@ export const ICON = {
 };
 
 /** The Portico mark, linking Home. */
-export const HOMEMARK = `<a class="homemark" href="/" aria-label="Portico home"><svg width="24" height="22" viewBox="0 0 30 26" fill="none" stroke="#1F6F5C" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M2 9 L15 2 L28 9 Z"></path><path d="M6 12 V22 M12 12 V22 M18 12 V22 M24 12 V22"></path><path d="M2 24 H28"></path></svg></a>`;
+export const HOMEMARK = `<a class="homemark" href="/" aria-label="Portico, Today"><svg width="24" height="22" viewBox="0 0 30 26" fill="none" stroke="#1F6F5C" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M2 9 L15 2 L28 9 Z"></path><path d="M6 12 V22 M12 12 V22 M18 12 V22 M24 12 V22"></path><path d="M2 24 H28"></path></svg></a>`;
 
 // ---- the header ----
 
@@ -388,7 +425,7 @@ export function renderAddSheet(add: AddState | null, ctx: { publicUrl: string; n
         <input id="req-name" class="field${when(add.reqError, " is-invalid")}" name="name" value="${esc(add.reqName)}" data-input="add-req-name" aria-describedby="req-name-help" aria-invalid="${Boolean(add.reqError)}" autocomplete="off">
         <span id="req-name-help" class="req-help">Other agents use this name when sending messages.</span>
         ${when(add.reqError, `<span role="alert" class="field-error">${esc(add.reqError)}</span>`)}
-        <span class="actions"><button type="button" class="btn btn-text" data-action="add-deny"${when(add.busy, " disabled")}>Deny</button><button type="submit" class="btn btn-primary"${when(add.busy, " disabled")}>Approve</button></span>
+        <span class="actions"><button type="button" class="btn btn-text" data-action="add-deny"${when(add.busy, " disabled")}>Don't allow</button><button type="submit" class="btn btn-primary"${when(add.busy, " disabled")}>Approve</button></span>
       </form>
     </section>`;
   }

@@ -40,16 +40,16 @@ async function checkLink(): Promise<void> {
   }
 }
 
-/** "at 10:12" today, or "on Oct 27 at 10:12", in the reader's own time zone. */
+/** "at 10:12 AM" today, or "on Oct 27 at 10:12 AM", in the reader's own time zone. */
 function showSentAt(): void {
   const when = document.querySelector<HTMLElement>("[data-when]");
   const time = when?.querySelector("time");
   if (!when || !time) return;
   const at = new Date(time.dateTime);
   if (Number.isNaN(at.getTime())) return;
-  time.textContent = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  time.textContent = at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   const today = at.toDateString() === new Date().toDateString();
-  when.replaceChildren(today ? "at " : `on ${at.toLocaleDateString([], { month: "short", day: "numeric" })} at `, time);
+  when.replaceChildren(today ? "at " : `on ${at.toLocaleDateString("en-US", { month: "short", day: "numeric" })} at `, time);
 }
 
 function waitForApproval(): void {

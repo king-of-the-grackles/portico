@@ -98,13 +98,13 @@ describe("Settings renders every board state", () => {
   test("the template: People, Computers and Account", () => {
     const html = render(settings());
     const t = text(html);
-    inOrder(html, ">Home<", ">Settings<", 'href="#people"', 'href="#computers"', 'href="#account"');
+    inOrder(html, ">Today<", ">Settings<", 'href="#people"', 'href="#computers"', 'href="#account"');
     expect(t).toContain("Each invited person can add agents to Portico.");
     expect(t).toContain("Chris Owner. 9 agents.");
     expect(t).toContain("Maya Okafor Joined Oct 23. 2 agents.");
     expect(t).toContain("Claude Code and Codex sessions join Portico from these computers. Removing a computer signs out every session on that computer.");
     expect(t).toContain("macbook 3 sessions. Seen just now.");
-    expect(t).toContain("studio 2 sessions, 1 offline. Seen yesterday 18:04.");
+    expect(t).toContain("studio 2 sessions, 1 offline. Seen yesterday at 6:04 PM.");
     expect(t).toContain("Name Chris");
     expect(t).toContain("Changing the password signs out other browsers.");
     expect(t).toContain("Passkeys Sign in without a password.");
@@ -147,7 +147,7 @@ describe("Settings renders every board state", () => {
   test("I5: a claim to approve", () => {
     const html = render(settings({ claims: [{ personId: "p-priya", name: "Priya Shah", inviteName: "Priya", claimedAt: at(10, 12) }] }));
     const t = text(html);
-    expect(t).toContain("Priya Shah Claimed the invite for Priya at 10:12. Approve to finish joining.");
+    expect(t).toContain("Priya Shah Claimed the invite for Priya at 10:12 AM. Approve to finish joining.");
     inOrder(html, 'class="srow srow-claim"', ">Decline<", ">Approve<");
   });
 

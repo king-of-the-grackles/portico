@@ -89,3 +89,10 @@ export function safeNext(value: unknown): string {
   });
   return unsafe ? "/" : value;
 }
+
+/** "5:09 PM UTC": a time the server shows before the browser puts it in the reader's own time zone. */
+export function utcClock(at: Date | string): string {
+  const d = typeof at === "string" ? new Date(at) : at;
+  const h = d.getUTCHours();
+  return `${h % 12 || 12}:${String(d.getUTCMinutes()).padStart(2, "0")} ${h < 12 ? "AM" : "PM"} UTC`;
+}

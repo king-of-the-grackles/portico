@@ -44,7 +44,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
     if (/^\/(api|mcp|oauth|\.well-known)(\/|$)/.test(c.req.path)) {
       return c.json({ error: "not_found", message: "No such endpoint." }, 404);
     }
-    return narrowPage(c, { title: "Not found", status: 404, main: html`<h1>Nothing here</h1><p class="lead"><a href="/">Go to Home</a></p>` });
+    return narrowPage(c, { title: "Not found", status: 404, main: html`<h1>Nothing here</h1><p class="lead"><a href="/">Go to Today</a></p>` });
   });
   app.onError(handleError);
   return app;

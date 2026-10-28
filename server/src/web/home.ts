@@ -1,34 +1,27 @@
 import { type Context, Hono } from "hono";
 import { html, raw } from "hono/html";
+import { agentPageData } from "../api/agents";
 import type { PersonEnv } from "../api/context";
 import { pendingSignIns } from "../api/sign-ins";
-import { agentsInOrder, canSeeThread, personViews } from "../api/views";
+import { serverMidnight, taskListData, todayData } from "../api/tasks";
+import { agentsInOrder, personViews } from "../api/views";
 import type { Core } from "../core/core";
 import type { Person } from "../core/types";
 import { homeState, renderHome } from "./client/render/home";
-import type { HomeData, OpenPanel } from "./client/render/types";
+import type { HomeData, Route } from "./client/render/types";
 import { sendPage, signInPath } from "./layout";
 
-/** Home's first data: the same shapes GET /api/me, /api/agents, /api/approvals and /api/threads answer. */
-export function homeData(core: Core, me: Person, open: { kind: "thread" | "agent"; id: string } | null): HomeData {
+/**
+ * The first data for a page: the same shapes the person API answers. Today counts from the server's midnight; the
+ * browser fetches again from its own right away.
+ */
+export function homeData(core: Core, me: Person, route: Route): HomeData {
   const views = personViews(core, me);
-  const involving = me.role === "owner" ? undefined : core.agents.ownedBy(me.id).map((a) => a.id);
-  let panel: OpenPanel | null = null;
-  if (open?.kind === "thread") {
-    const thread = core.messages.thread(open.id);
-    if (thread && canSeeThread(core.agents, me, thread)) {
-      panel = {
-        kind: "thread",
-        id: thread.id,
-        data: views.threadData(thread),
-      };
-    }
-  } else if (open?.kind === "agent") {
-    const agent = core.agents.get(open.id);
-    if (agent) {
-      const allowList = agent.ownerId === me.id ? core.approvals.allowListFor(me.id, agent.id).map(views.allowEntry) : null;
-      panel = { kind: "agent", id: agent.id, data: { agent: views.agent(agent), allowList } };
-    }
+  let resolved = route;
+  let agentPage: HomeData["agentPage"] = null;
+  if (route.page === "agent") {
+    if (core.agents.get(route.id)) agentPage = agentPageData(core, me, route.id);
+    else resolved = { page: "today" };
   }
   return {
     page: "home",
@@ -36,31 +29,41 @@ export function homeData(core: Core, me: Person, open: { kind: "thread" | "agent
     publicUrl: core.settings.publicUrl(),
     agents: agentsInOrder(core.agents, me).map(views.agent),
     approvals: { held: core.approvals.heldFor(me.id).map(views.held), signIns: pendingSignIns(core, me) },
-    threads: core.messages.threads({ involving }).map(views.thread),
-    open: panel,
+    route: resolved,
+    today: resolved.page === "today" ? todayData(core, me, serverMidnight(core.now())) : null,
+    tasks:
+      resolved.page === "activity"
+        ? taskListData(core, me, {})
+        : resolved.page === "agent"
+          ? taskListData(core, me, { agent: resolved.id })
+          : null,
+    agentPage,
   };
 }
 
-/** Home: /, /c/:threadId (a thread open in the right panel) and /a/:agentId (an agent's details). */
+/** Today (/), Activity (/activity) and each agent's page (/a/:agentId). An old thread link (/c/:id) goes to Activity. */
 export function homePage(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
-  const home = (c: Context<PersonEnv>, open: { kind: "thread" | "agent"; id: string } | null) => {
+  const page = (c: Context<PersonEnv>, open: Route) => {
     const me = c.get("person");
     if (!me) return c.redirect(signInPath(c.req.url), 303);
     // A claimed invite waits for the owner on the invite page.
     if (me.status === "pending") return c.redirect("/invite", 303);
     const data = homeData(core, me, open);
+    if (open.page === "agent" && data.route.page !== "agent") return c.redirect("/", 303);
     const first = renderHome(homeState({ ...data, now: core.now().getTime() }));
+    const title = data.route.page === "activity" ? "Activity" : data.route.page === "agent" ? (data.agentPage?.agent.label ?? "Agent") : "Today";
     return sendPage(c, {
-      title: "Portico",
+      title: `${title} on Portico`,
       body: html`<div id="app">${raw(first)}</div>`,
       data,
       scripts: ["app.js"],
       styles: ["app.css"],
     });
   };
-  route.get("/", (c) => home(c, null));
-  route.get("/c/:threadId", (c) => home(c, { kind: "thread", id: c.req.param("threadId") }));
-  route.get("/a/:agentId", (c) => home(c, { kind: "agent", id: c.req.param("agentId") }));
+  route.get("/", (c) => page(c, { page: "today" }));
+  route.get("/activity", (c) => page(c, { page: "activity" }));
+  route.get("/a/:agentId", (c) => page(c, { page: "agent", id: c.req.param("agentId") }));
+  route.get("/c/:threadId", (c) => (c.get("person") ? c.redirect("/activity", 303) : c.redirect(signInPath(c.req.url), 303)));
   return route;
 }

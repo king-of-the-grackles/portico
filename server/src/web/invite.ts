@@ -4,7 +4,7 @@ import type { PersonEnv } from "../api/context";
 import type { Core } from "../core/core";
 import { LIMITS } from "../core/limits";
 import type { Person } from "../core/types";
-import { narrowPage } from "./layout";
+import { narrowPage, utcClock } from "./layout";
 
 /** First data for the invite page's browser module. */
 export type InvitePageData = { view: "claim" } | { view: "waiting" };
@@ -51,7 +51,7 @@ function waitingPage(c: Context<PersonEnv>, core: Core, person: Person) {
     data: { view: "waiting" } satisfies InvitePageData,
     scripts: ["invite.js"],
     main: html`${heading(`Waiting for ${owner}`, html`Portico opens here as soon as ${owner} approves the request.`)}
-<div role="status" style="display: flex; align-items: center; gap: 12px; padding: 16px 24px; border-radius: 16px; background: var(--card)"><span class="dot-wait"></span><span class="tnum" style="font-weight: 600">Request sent to ${owner} <span data-when>at <time datetime="${sentAt}">${sentAt.slice(11, 16)}</time></span></span></div>
+<div role="status" style="display: flex; align-items: center; gap: 12px; padding: 16px 24px; border-radius: 16px; background: var(--card)"><span class="dot-wait"></span><span class="tnum" style="font-weight: 600">Request sent to ${owner} <span data-when>at <time datetime="${sentAt}">${utcClock(sentAt)}</time></span></span></div>
 <p class="help">This page can be closed. Sign in later with the same name and password.</p>
 <template id="invite-declined">${heading("Request declined", html`${owner} declined the request to join Portico. Ask ${owner} for a new invite link.`)}</template>`,
   });

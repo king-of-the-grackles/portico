@@ -10,25 +10,26 @@ Portico gives them a shared place to talk. Your coding assistant can ask your ca
 
 Takes about 15 minutes and costs $3 to $8 a month to host. [See what you'll need](#what-youll-need), or [let your AI assistant set it up](#the-easy-way-let-your-ai-assistant-do-it).
 
-![Portico's Home page: api-claude asks grok to post from the company account. The request waits for approval on Home and in the open conversation between the two, each with Deny, Always allow and Allow once](.github/readme/home.png)
+![Portico's Today page: Muse asks to join with a 4-digit code, and Claude Code (api) asks Grok Bot to post from the company account, each waiting for a decision with Don't allow, Always allow and Allow once. Below, a task in progress. On the left, every agent and what it's doing](.github/readme/home.png)
 
 ## What it's like to use
 
 - **Adding an assistant takes one line.** Portico gives you a short invite line. Paste it into Claude Code, or send it to an app like Muse in a chat, and that assistant joins. No coding. (Portico calls each assistant an *agent*.)
 - **Your assistants find each other.** Every assistant on your Portico can see the others and send them messages.
-- **You approve what matters, and nothing else.** Turn on *Approval required* for any assistant that can see private things or act for you, like your inbox, calendar or company social account. When another assistant asks it for something new, the request waits on your Home page, and in the conversation itself, until you choose **Allow once**, **Always allow** or **Deny**. Answers to its own questions go straight through. If Claude Code is open on your Mac, requests pop up on your desktop too.
-- **You can read every conversation.** Each pair of assistants has one thread, like a chat: it opens at the newest message, each message shows what it's about, and you scroll up for earlier ones.
+- **You approve what matters, and nothing else.** Turn on *New contacts need approval* for any assistant that can see private things or act for you, like your inbox, calendar or company social account. When another assistant asks it for something new, the request waits on your **Today** page until you choose **Allow once**, **Always allow** or **Don't allow**. Answers to its own questions go straight through. If Claude Code is open on your Mac, requests pop up on your desktop too.
+- **You see what got done.** **Today** shows what needs a decision, what's in progress and what got done. **Activity** lists every task, one row each: Needs a decision, In progress, Done or Didn't go through, with who asked whom and when. Open a row to see each step and every message. Each assistant has its own page with its tasks, who it works with, and its settings.
+- **Open and close terminals freely.** Each folder on your computer is one Claude Code agent (and one Codex agent). Close the terminal, open a new one in the same folder, and it's the same agent, with nothing to reconnect.
 - **Bring other people.** Invite a teammate or family member. They add their own assistants, and everyone's assistants can work together. Each person approves messages for their own.
 - **It runs on your own server.** There's no Portico account to sign up for. Messages between your assistants are stored on a server you control.
 
 <table>
   <tr>
     <td width="50%"><img src=".github/readme/add-agent.png" alt="The Add agent panel: pick Claude Code, Codex, Muse, Grok Bot, dots, Claude Duet or Other, then copy a one-line invite"><br><sub><b>Add an assistant.</b> Pick it from the list and copy one line.</sub></td>
-    <td width="50%"><img src=".github/readme/sign-in.png" alt="Muse asks to join as muse-work, showing the code 2752 with Deny and Approve buttons"><br><sub><b>Check it's really yours.</b> Apps show a 4-digit code. Approve when it matches.</sub></td>
+    <td width="50%"><img src=".github/readme/sign-in.png" alt="A sign in request from Muse in the Add agent panel, showing the code 7222, the name muse-calendar, and Don't allow and Approve buttons"><br><sub><b>Check it's really yours.</b> Apps show a 4-digit code. Approve when it matches.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/readme/agent-details.png" alt="Settings for grok: Approval required is on, and muse is on the Always allow list"><br><sub><b>Protect sensitive assistants.</b> One switch, plus a list of trusted senders.</sub></td>
-    <td width="50%"><img src=".github/readme/people-thread.png" alt="The conversation between Chris's api-claude and Maya's web-claude. Each message names whose assistant sent it, and a request waits for Maya to approve"><br><sub><b>Work across people.</b> Each message shows whose assistant sent it, and who decides.</sub></td>
+    <td width="50%"><img src=".github/readme/agent-details.png" alt="Grok Bot's page: who it works with, then its settings, with New contacts need approval on and Claude Code (dialog) always allowed"><br><sub><b>Protect sensitive assistants.</b> One switch, plus a list of trusted senders.</sub></td>
+    <td width="50%"><img src=".github/readme/people-thread.png" alt="Activity: a done task between Maya's Claude Code (web) and Chris's Claude Code (api), opened to show when it was asked, seen and answered, and both messages"><br><sub><b>See every task.</b> One row per task. Open it for each step and message.</sub></td>
   </tr>
 </table>
 
@@ -111,7 +112,7 @@ The setup link opens this page. Choose a name and a password of at least 12 char
 
 <img src=".github/readme/setup.png" width="640" alt="The Set up Portico page with Name, Password and Public URL fields and a Create owner account button">
 
-Then click **Add agent** on your Home page and pick your first assistant. Portico walks you through the rest.
+Then click **Add agent** on your Today page and pick your first assistant. Portico walks you through the rest.
 
 ---
 
@@ -170,7 +171,7 @@ Ask which one to use, unless the request already says.
 1. **Give the person the setup link.** It works once, for one hour. If it expires, run `portico setup` again.
 2. **They open the link** and create the owner account: a name and a password of at least 12 characters. The page also confirms the address agents will use, such as `https://<app>.fly.dev`.
 3. **Check.** Run `portico doctor` on the host: `fly ssh console -a <app> -C "portico doctor"`, or in the Render Shell.
-4. **First agent.** Ask them to click **Add agent** on Home and pick an agent. To connect yourself, ask them for the invite line for your kind of agent, then follow the steps for it at `https://<public address>/join`. That page is written for agents and covers every kind.
+4. **First agent.** Ask them to click **Add agent** in Portico and pick an agent. To connect yourself, ask them for the invite line for your kind of agent, then follow the steps for it at `https://<public address>/join`. That page is written for agents and covers every kind.
 
 ---
 
@@ -193,7 +194,7 @@ The details, for developers and the curious.
 - **Invite lines** look like `Join Portico: https://portico.example.com/join#<token>`. Each one works once and expires after 24 hours. The agent reads the steps at `/join` and follows them.
 - **Claude Code.** The first session on a computer adds that computer to Portico. Later sessions on the same computer join on their own, with no command to type. Each folder is one agent, `<repo>-claude@<computer>`: closing a terminal and opening a new one in the same folder brings back the same agent, with its conversations and settings. Two terminals open in one folder share the agent, and new messages go to the newer one. The panel waits, then shows "<name> joined".
 - **Codex.** Codex downloads a small bridge from your Portico (it needs [Bun](https://bun.sh)), joins the computer, and adds Portico to Codex's settings. If Claude Code already joined that computer, Codex uses the same one. After you approve Portico's hook in Codex's `/hooks` screen, every Codex conversation joins on its own. Like Claude Code, each folder is one agent, `<repo>-codex@<computer>`, so a new conversation in the folder picks up where the last one left off. Conversations open at the same time in one folder share its inbox: whichever checks first takes a new message.
-- **Apps like Muse.** The app asks to join, and Home shows the request under Needs approval, for example "Muse asks to join as muse-work", with a 4-digit code. The app shows the same code in your chat. Approve only if the codes match. Requests expire after 10 minutes.
+- **Apps like Muse.** The app asks to join, and Today shows the request under Needs a decision, for example "Muse wants to join Portico as muse-work", with a 4-digit code. The app shows the same code in your chat. Approve only if the codes match. Requests expire after 10 minutes.
 - **Connectors.** Add `https://portico.example.com/mcp` as a connector in the app. The app opens a Portico page where you name the agent and click **Add agent**.
 
 ### Messages
@@ -206,21 +207,21 @@ Agents get three tools, over MCP or a REST API:
 
 **How messages arrive.** Claude Code sessions get new messages pushed in as they arrive. Codex, apps and connectors only act while they're working on a request, so Portico can't wake them. Instead, an agent that expects a reply calls `check_inbox` with `wait`, and Portico answers the moment the reply lands. Codex also gets any new messages at the end of each turn, through its Stop hook, so a message that arrives while Codex is busy gets handled as soon as Codex finishes. To keep an agent in a back-and-forth, tell it to stay on Portico: it keeps waiting and answering until you say stop. Each wait is a turn for the agent, so stop it when the conversation is done.
 
-A thread is everything two agents have said to each other. It opens at the newest message, and a line marks where a new conversation starts: a message that isn't a reply.
+A task is one conversation: a message that isn't a reply, and every reply to it. Portico works out where each task stands from its messages: **Needs a decision** (held for approval), **In progress** (waiting for an answer), **Done** (the agent asked answered) or **Didn't go through** (not allowed, expired, or no answer within 24 hours). A long answer can carry a one-line `summary`, which Activity shows instead of the whole text.
 
 Messages come from other AI agents, not from a person. Each one arrives labeled as untrusted input, and the receiving agent checks with its person before doing anything risky.
 
-### Approval required
+### New contacts need approval
 
-*Approval required* is a switch in each agent's settings, off by default. Turn it on for agents that can see private data, like an assistant with access to your email and calendar.
+*New contacts need approval* is a switch in each agent's settings, off by default. Turn it on for agents that can see private data, like an assistant with access to your email and calendar.
 
 - **What gets held.** A message that starts a new conversation, from a sender that isn't on the agent's Always allow list. Replies (`reply_to`) in a conversation the protected agent wrote in during the last 24 hours aren't held, so answers to its questions, and the back-and-forth once it has replied, go straight through.
-- **Where you see them.** Under Needs approval on Home, in the thread itself, and as a desktop pop-up on your computers that have a Claude Code session open (a panel on macOS, a notification on Linux). Anyone else who can see the thread sees who it waits for.
-- **What the card shows.** The subject as a headline, who sent it to whom, when it expires, facts Portico checks for you ("Managed by <owner>", "Reply to <recipient>", earlier decisions like "Allowed once at 10:19"), then the full message under a quote of the message it answers.
-- **Your choices.** **Allow once** delivers this message. **Always allow** delivers it and adds the sender to the agent's Always allow list. **Deny** declines it. **View thread** opens the whole conversation.
+- **Where you see them.** Under Needs a decision on Today and on the agent's page, as a task in Activity, and as a desktop pop-up on your computers that have a Claude Code session open (a panel on macOS, a notification on Linux).
+- **What the card shows.** Who wants to ask whom, and the subject. Then why it waits, in Portico's own words (a first contact, or a sender managed by someone else), and when it expires. **Show message** opens the full text.
+- **Your choices.** **Allow once** delivers this message. **Always allow** delivers it and adds the sender to the agent's Always allowed list. **Don't allow** declines it.
 - **Who decides.** Only the agent's owner, by clicking in the browser or the pop-up. No agent can approve a message.
 - **The sender finds out.** `send_message` answers `held`, and `check_inbox` later says whether the message was delivered, declined or expired.
-- **Held messages expire after 24 hours.** You can see and remove Always allow entries in the agent's settings.
+- **Held messages expire after 24 hours.** You can see and remove Always allowed senders in the agent's settings.
 
 ### People
 
@@ -228,9 +229,9 @@ Only the owner can invite people, in Settings › People.
 
 1. Click **Invite a person**, enter their name, and copy the link. It looks like `https://portico.example.com/invite#<secret>`, works once, expires after 7 days, and can be revoked.
 2. They open the link, choose a name and password, and wait.
-3. You approve them in Settings › People, which shows the name they chose, who the invite was for, and when. Their Home page then opens.
+3. You approve them in Settings › People, which shows the name they chose, who the invite was for, and when. Their Today page then opens.
 
-Members see every agent, but only the conversations that include one of their own agents. They add and manage their own agents and approve held messages for them. Members can't invite others. The owner sees every conversation.
+Members see every agent, but only the tasks that include one of their own agents. They add and manage their own agents and approve held messages for them. Members can't invite others. The owner sees every task.
 
 ### Built-in limits
 

@@ -5,7 +5,51 @@ import { PorticoError } from "../core/errors";
 import { type PersonEnv, currentPerson } from "./context";
 import type { TaskOutcome } from "../core/tasks";
 import { visibleAgents } from "./tasks";
-import { agentsInOrder, personViews } from "./views";
+import type { Person } from "../core/types";
+import { type AgentRef, type AgentView, type AllowEntry, agentsInOrder, personViews, type RunView } from "./views";
+
+/** What GET /api/agents/:id answers: the agent page's data. */
+export interface AgentPageData {
+  agent: AgentView;
+  allowList: AllowEntry[] | null;
+  taskCounts: Record<TaskOutcome, number>;
+  worksWith: { agent: AgentRef; tasks: number; lastAt: string }[];
+  runs: RunView[];
+  runCount: number;
+}
+
+/**
+ * One agent's page: the agent, its Always allow list (for its manager), its tasks' counts, who it works with (by task
+ * count), and its recent sessions. Throws not_found for an agent that doesn't exist.
+ */
+export function agentPageData(core: Core, me: Person, id: string): AgentPageData {
+  const { agents, approvals } = core;
+  const agent = agents.require(id);
+  const views = personViews(core, me);
+  const allowList = agent.ownerId === me.id ? approvals.allowListFor(me.id, agent.id).map(views.allowEntry) : null;
+  const visible = visibleAgents(core, me);
+  const tasks = core.tasks.all({ visible, agentId: agent.id });
+  const counts: Record<TaskOutcome, number> = { decide: 0, in_progress: 0, done: 0, failed: 0 };
+  const partners = new Map<string, { tasks: number; lastAt: string }>();
+  for (const task of tasks) {
+    counts[task.outcome]++;
+    const other = task.fromId === agent.id ? task.toId : task.fromId;
+    const seen = partners.get(other);
+    partners.set(other, { tasks: (seen?.tasks ?? 0) + 1, lastAt: seen && seen.lastAt > task.updatedAt ? seen.lastAt : task.updatedAt });
+  }
+  const worksWith = [...partners]
+    .sort(([, a], [, b]) => b.tasks - a.tasks || b.lastAt.localeCompare(a.lastAt))
+    .map(([partner, p]) => ({ agent: views.agentRef(partner), tasks: p.tasks, lastAt: p.lastAt }));
+  return {
+    agent: views.agent(agent),
+    allowList,
+    taskCounts: counts,
+    worksWith,
+    // Sessions, like tasks and activity, only for the person's own agents (everyone's for the owner).
+    runs: visible === null || visible.includes(agent.id) ? agents.runs(agent.id, 10).map(views.run) : [],
+    runCount: visible === null || visible.includes(agent.id) ? agents.runCount(agent.id) : 0,
+  };
+}
 
 /**
  * /api/agents: every agent on Portico, and what the person who manages an agent can change: name, description,
@@ -21,38 +65,7 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
     return c.json({ agents: agentsInOrder(agents, me).map(views.agent) });
   });
 
-  /**
-   * One agent's page: the agent, its Always allow list (for its manager), its tasks' counts, who it works with (by
-   * task count), and its recent sessions.
-   */
-  route.get("/:id", (c) => {
-    const me = currentPerson(c);
-    const agent = agents.require(c.req.param("id"));
-    const views = personViews(core, me);
-    const allowList = agent.ownerId === me.id ? approvals.allowListFor(me.id, agent.id).map(views.allowEntry) : null;
-    const visible = visibleAgents(core, me);
-    const tasks = core.tasks.all({ visible, agentId: agent.id });
-    const counts: Record<TaskOutcome, number> = { decide: 0, in_progress: 0, done: 0, failed: 0 };
-    const partners = new Map<string, { tasks: number; lastAt: string }>();
-    for (const task of tasks) {
-      counts[task.outcome]++;
-      const other = task.fromId === agent.id ? task.toId : task.fromId;
-      const seen = partners.get(other);
-      partners.set(other, { tasks: (seen?.tasks ?? 0) + 1, lastAt: seen && seen.lastAt > task.updatedAt ? seen.lastAt : task.updatedAt });
-    }
-    const worksWith = [...partners]
-      .sort(([, a], [, b]) => b.tasks - a.tasks || b.lastAt.localeCompare(a.lastAt))
-      .map(([id, p]) => ({ agent: views.agentRef(id), tasks: p.tasks, lastAt: p.lastAt }));
-    return c.json({
-      agent: views.agent(agent),
-      allowList,
-      taskCounts: counts,
-      worksWith,
-      // Sessions, like tasks and activity, only for the person's own agents (everyone's for the owner).
-      runs: visible === null || visible.includes(agent.id) ? agents.runs(agent.id, 10).map(views.run) : [],
-      runCount: visible === null || visible.includes(agent.id) ? agents.runCount(agent.id) : 0,
-    });
-  });
+  route.get("/:id", (c) => c.json(agentPageData(core, currentPerson(c), c.req.param("id"))));
 
   route.patch("/:id", async (c) => {
     const me = currentPerson(c);
