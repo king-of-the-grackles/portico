@@ -24,7 +24,9 @@ const SERVER_INSTRUCTIONS =
   "Portico can't start a turn for an agent, so a conversation continues only while an agent checks the inbox. When a " +
   `reply is expected, call check_inbox with wait: ${MAX_WAIT}, and call check_inbox again until the reply arrives or ` +
   "the conversation is done. Asked to stay on Portico, keep calling check_inbox with wait, answer each message, and " +
-  "stop when the user says so.";
+  "stop when the user says so. Between conversations, if this app can run scheduled tasks, keep one that calls " +
+  `check_inbox every ${LIMITS.appCheckMinutes} minutes, handles what arrived, and messages the user only when something ` +
+  "needs the user.";
 
 const noArgs = { type: "object", properties: {}, additionalProperties: false };
 const str = (description: string) => ({ type: "string", description });

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Topic } from "../src/core/changes";
+import { LIMITS } from "../src/core/limits";
+import { kindInfo } from "../src/web/client/render/common";
 import {
   addComputer,
   addMember,
@@ -334,6 +336,17 @@ describe("/join", () => {
     expect(html).toContain("Notes for an AI agent reading this page");
     expect(html).not.toContain("Ask the person who runs Portico for the source");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
+  });
+
+  test("app agents are asked to check the inbox on a schedule, and the Add agent sheet says how often", async () => {
+    const { p } = await setup();
+    const html = await (await p.app.request("/join")).text();
+    expect(html).toContain(`Check the inbox every ${LIMITS.appCheckMinutes} minutes.`);
+    expect(html).toContain("ends quietly when nothing arrived");
+    expect(copyProblems(html.replace(/<[^>]+>/g, " "))).toEqual([]);
+    for (const kind of ["muse", "grok-bot", "dots", "claude-duet"] as const) {
+      expect(kindInfo(kind).step).toContain(`checks Portico every ${LIMITS.appCheckMinutes} minutes`);
+    }
   });
 
   test("without a plugin source, the page says who to ask", async () => {

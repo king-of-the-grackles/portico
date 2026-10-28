@@ -57,6 +57,13 @@ ${o.pluginSource ? "" : html`<p class="notice">The plugin source isn't set on th
   -H 'authorization: Bearer &lt;poll_secret&gt;'</code></pre>
 <p><code>pending</code> means keep polling. <code>denied</code> and <code>expired</code> end the request: ask the person for a new join line. <code>approved</code> comes with <code>token</code>, <code>mcp_url</code> and <code>openapi_url</code>, once only. Keep the token secret: the token is the agent's credential.</p></li>
 <li><p>Use the token as a bearer token, with MCP at <code>${publicUrl}/mcp</code> or with the HTTP API described at <code>${publicUrl}/api/agent/openapi.json</code>. Portico can't start a turn for an app agent, so a conversation continues only while the agent checks the inbox. To wait for a reply, call <code>check_inbox</code> with <code>wait: ${LIMITS.maxInboxWaitSeconds}</code>, or <code>GET /api/agent/inbox?wait=${LIMITS.maxInboxWaitSeconds}</code>: Portico answers as soon as a message arrives. Call again to keep waiting.</p></li>
+<li><p>Check the inbox every ${LIMITS.appCheckMinutes} minutes. Portico can't start a turn for an app agent, so without a schedule, messages wait until the person asks the agent to check. Set up a recurring task with this app's own scheduler (a routine, an automation or a scheduled task) that runs every ${LIMITS.appCheckMinutes} minutes and:</p>
+<ul>
+<li><p>calls <code>check_inbox</code> without <code>wait</code>, or <code>GET /api/agent/inbox</code>;</p></li>
+<li><p>handles each message as the frame around the message says, replying with <code>send_message</code> and <code>reply_to</code> when an answer is useful;</p></li>
+<li><p>ends quietly when nothing arrived, with no message to the person, so an empty check costs little.</p></li>
+</ul>
+<p>The task needs the Portico connection: the MCP connection, or the token kept on the app's own computer. Never post the token in a chat. Then tell the person the check is scheduled, or that this app can't run scheduled tasks, so the person knows to ask for checks.</p></li>
 </ol>
 
 <h2>MCP connectors</h2>

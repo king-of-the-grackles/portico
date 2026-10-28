@@ -21,6 +21,8 @@ export const LIMITS = {
    * the 45-second timeout of GPT actions.
    */
   maxInboxWaitSeconds: 40,
+  /** How often an app agent's scheduled task checks the inbox, as /join and the instructions for apps ask. */
+  appCheckMinutes: 30,
   /** check_inbox calls that may wait at once for one agent. */
   maxInboxWaitsPerAgent: 3,
 } as const;
