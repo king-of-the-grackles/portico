@@ -27,11 +27,11 @@ function toComputer(row: ComputerRow): Computer {
 /** Join lines for coding agents on a computer: the computer joins, then each session registers itself. */
 export const COMPUTER_KINDS: readonly AgentKind[] = ["claude-code", "codex"];
 /** Join lines for app agents, which ask to sign in and show a code. */
-export const APP_KINDS: readonly AgentKind[] = ["muse", "grok-bot", "other"];
+export const APP_KINDS: readonly AgentKind[] = ["muse", "grok-bot", "dots", "claude-duet", "other"];
 
 const COMPUTER_LABELS: Partial<Record<AgentKind, string>> = { "claude-code": "Claude Code", codex: "Codex" };
 const APP_LINE = "This join line is for an app agent. Follow the steps for app agents at /join.";
-/** MCP connectors sign in with OAuth from the server address; they get no join line. */
+/** Kinds an MCP connector can be, signing in with OAuth from the server address instead of a join line. */
 export const CONNECTOR_KINDS: readonly AgentKind[] = ["dots", "claude-duet", "other"];
 
 /** A one-time line from Add agent: a computer joins with it, or an app agent asks to sign in with it. */
@@ -269,12 +269,6 @@ export class Computers {
 
   /** A join line for one kind of agent. The secret is returned only here and stored only as a hash. */
   createJoinLine(personId: string, kind: unknown): { joinLine: JoinLine; secret: string } {
-    if (kind === "dots" || kind === "claude-duet") {
-      throw new PorticoError(
-        "bad_request",
-        `${kind === "dots" ? "dots" : "Claude Duet"} joins as an MCP connector, with the server address instead of a join line.`,
-      );
-    }
     const kinds = [...COMPUTER_KINDS, ...APP_KINDS];
     if (!kinds.some((k) => k === kind)) throw new PorticoError("bad_request", `kind must be one of: ${kinds.join(", ")}.`);
     const secret = newLinkSecret();

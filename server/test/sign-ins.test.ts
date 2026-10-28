@@ -83,6 +83,19 @@ describe("asking to join", () => {
     expect(p.computers.signInRequest(fromMuse.id)?.kind).toBe("muse");
   });
 
+  test("dots and Claude Duet ask to join from a chat like Muse, and join as apps of their own kind", async () => {
+    const { p, owner } = await setup();
+    for (const [kind, name] of [["dots", "alfred-dot"], ["claude-duet", "duet-home"]] as const) {
+      const line = await makeLine(p, owner, kind);
+      const asked = await json<Asked>(ask(p, { token: line.secret, name, kind: "muse" }));
+      expect(p.computers.signInRequest(asked.id)?.kind).toBe(kind);
+      const decided = await json<{ agent: { name: string; kind: string; type: string } }>(
+        callPerson(p, owner, "POST", `/api/approvals/sign-ins/${asked.id}`, { decision: "approve" }),
+      );
+      expect(decided.agent).toMatchObject({ name, kind, type: "app" });
+    }
+  });
+
   test("a Codex line is for a computer: asking to sign in with it is refused, and the line stays usable", async () => {
     const { p, owner } = await setup();
     const line = await makeLine(p, owner, "codex");

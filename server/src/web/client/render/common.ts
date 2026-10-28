@@ -58,16 +58,16 @@ export const KINDS: Record<AgentKind, KindInfo> = {
   dots: {
     label: "dots",
     where: "In ChatGPT",
-    connector: true,
-    step: "Add this as a connector in ChatGPT. Portico then opens a page to approve the connection.",
-    wait: "Waiting for the sign in from ChatGPT",
+    connector: false,
+    step: "Send this to the dot in a chat, then approve the sign in request here.",
+    wait: "Waiting for the sign in request from the dot",
   },
   "claude-duet": {
     label: "Claude Duet",
     where: "In an app",
-    connector: true,
-    step: "Add this as a connector in Claude Duet. Portico then opens a page to approve the connection.",
-    wait: "Waiting for the sign in from Claude Duet",
+    connector: false,
+    step: "Send this to Claude Duet in a chat, then approve the sign in request here.",
+    wait: "Waiting for the sign in request from Claude Duet",
   },
   other: {
     label: "Other",

@@ -62,14 +62,11 @@ describe("join lines", () => {
     expect(line.line).toMatch(/^Join Portico: https:\/\/portico\.example\.com\/join#[A-Za-z0-9_-]{22}$/);
     expect(line.kind).toBe("claude-code");
     expect(Date.parse(line.expiresAt) - p.now().getTime()).toBe(24 * HOUR);
-    for (const kind of ["codex", "muse", "grok-bot", "other"]) expect((await makeLine(p, owner, kind)).kind).toBe(kind);
+    for (const kind of ["codex", "muse", "grok-bot", "dots", "claude-duet", "other"]) expect((await makeLine(p, owner, kind)).kind).toBe(kind);
   });
 
-  test("connectors get no line, unknown kinds are refused, and signing in comes first", async () => {
+  test("unknown kinds are refused, and signing in comes first", async () => {
     const { p, owner } = await setup();
-    const dots = await callPerson(p, owner, "POST", "/api/join-lines", { kind: "dots" });
-    expect(dots.status).toBe(400);
-    expect(((await dots.json()) as { message: string }).message).toContain("MCP connector");
     expect((await callPerson(p, owner, "POST", "/api/join-lines", { kind: "robot" })).status).toBe(400);
     expect((await callPerson(p, null, "POST", "/api/join-lines", { kind: "claude-code" })).status).toBe(401);
   });

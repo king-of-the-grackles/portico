@@ -32,6 +32,6 @@ describe("/join for Codex", () => {
     expect(html).toContain(`curl -fsS ${PUBLIC_URL}/codex/portico-codex.js -o ~/.portico/portico-codex.js`);
     expect(html).toContain(`bun ~/.portico/portico-codex.js join 'Join Portico: ${PUBLIC_URL}/join#&lt;secret&gt;'`);
     expect(html).toContain("open <code>/hooks</code> and approve the Portico Stop hook");
-    expect(html).toContain("<h2>Muse, Grok Bot and other app agents</h2>");
+    expect(html).toContain("<h2>Muse, Grok Bot, dots, Claude Duet and other app agents</h2>");
   });
 });
