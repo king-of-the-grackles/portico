@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { randomInt } from "node:crypto";
+import type { Activity } from "./activity";
 import type { Agents } from "./agents";
 import { checkAgentName } from "./agents";
 import type { Changes } from "./changes";
@@ -137,6 +138,7 @@ export function signInCode(): string {
 export interface ComputersDeps {
   db: Database;
   changes: Changes;
+  activity?: Activity;
   now?: () => Date;
   newId?: () => string;
   log?: (msg: string, fields: Record<string, unknown>) => void;
@@ -149,6 +151,7 @@ export interface ComputersDeps {
 export class Computers {
   private readonly db: Database;
   private readonly changes: Changes;
+  private readonly activity: Activity | undefined;
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
@@ -157,6 +160,7 @@ export class Computers {
   constructor(deps: ComputersDeps) {
     this.db = deps.db;
     this.changes = deps.changes;
+    this.activity = deps.activity;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.log = deps.log ?? (() => {});
@@ -186,6 +190,7 @@ export class Computers {
       )
       .run({ id: computer.id, ownerId, name: computer.name, tokenHash: hashSecret(token), createdAt: computer.createdAt });
     this.log("computer_added", { computer: computer.name });
+    this.activity?.record("computer_joined", { personId: ownerId, detail: { computer: computer.name } });
     this.changes.emit("computers", "agents");
     return { computer, token };
   }
@@ -498,6 +503,9 @@ export class Computers {
         )
         .run({ id, status, agentId: agent?.id ?? null, at, personId });
       this.log("sign_in_decided", { request_id: id, decision, agent_id: agent?.id ?? null });
+      if (decision === "deny") {
+        this.activity?.record("sign_in_denied", { personId, detail: { name: request.name, kind: request.kind } });
+      }
       this.changes.emit("approvals", "join-lines", "agents");
       return { request: { ...request, status, agentId: agent?.id ?? null, decidedAt: at, decidedBy: personId }, agent };
     })();

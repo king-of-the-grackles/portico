@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startupProblem } from "../src/commands/serve";
 import { BASE_VERSION, openDb, prepare, SCHEMA_VERSION, SchemaMismatchError } from "../src/db";
-import type { Migration } from "../src/migrations";
+import { MIGRATIONS, type Migration } from "../src/migrations";
 
 const versionOf = (db: Database) => (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
 
@@ -232,6 +232,39 @@ describe("database", () => {
          VALUES ('s5', 'p1', 'api-claude-5', 'claude-code', 'session', '', 'c1', 'api', '${F}', 't')`,
       ),
     ).toThrow();
+    db.close();
+  });
+
+  test("102: each message gets its conversation's first message as its task, and a reply whose original is gone starts one", () => {
+    const path = tempPath("portico.db");
+    const old = new Database(path, { create: true, strict: true });
+    prepare(old, { migrations: MIGRATIONS.slice(0, 1) });
+    old.run(`INSERT INTO people (id, name, role, status, password_hash, created_at) VALUES ('p1', 'Chris', 'owner', 'active', 'h', 't')`);
+    for (const [id, name] of [["a1", "grok"], ["a2", "muse"]]) {
+      old.run(
+        `INSERT INTO agents (id, owner_id, name, kind, type, description, created_at) VALUES ('${id}', 'p1', '${name}', 'muse', 'app', '', 't')`,
+      );
+    }
+    old.run("INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at) VALUES ('t1', 'a1', 'a2', 'a1', 't', 't')");
+    const message = old.query(
+      `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, reply_to, status, created_at, expires_at)
+       VALUES ($id, 't1', $from, $to, 's', 't', $replyTo, 'delivered', $at, $at)`,
+    );
+    message.run({ id: "m1", from: "a1", to: "a2", replyTo: null, at: "2026-10-20T10:00:00.000Z" });
+    message.run({ id: "m2", from: "a2", to: "a1", replyTo: "m1", at: "2026-10-20T10:01:00.000Z" });
+    message.run({ id: "m3", from: "a1", to: "a2", replyTo: "m2", at: "2026-10-20T10:02:00.000Z" });
+    message.run({ id: "m4", from: "a2", to: "a1", replyTo: "pruned", at: "2026-10-20T10:03:00.000Z" });
+    message.run({ id: "m5", from: "a1", to: "a2", replyTo: "m4", at: "2026-10-20T10:04:00.000Z" });
+    old.close();
+    const db = openDb(path);
+    expect(db.query("SELECT id, root_id, summary FROM messages ORDER BY id").all()).toEqual([
+      { id: "m1", root_id: "m1", summary: null },
+      { id: "m2", root_id: "m1", summary: null },
+      { id: "m3", root_id: "m1", summary: null },
+      { id: "m4", root_id: "m4", summary: null },
+      { id: "m5", root_id: "m4", summary: null },
+    ]);
+    expect((db.query("SELECT COUNT(*) AS n FROM activity").get() as { n: number }).n).toBe(0);
     db.close();
   });
 

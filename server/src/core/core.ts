@@ -3,6 +3,7 @@ import type { AgentStreams } from "../agent-api/stream";
 import type { PersonStreams } from "../api/events";
 import type { Desk } from "../desk";
 import type { Accounts } from "./accounts";
+import type { Activity } from "./activity";
 import type { Agents } from "./agents";
 import type { AllowList, Approvals } from "./approvals";
 import type { Changes } from "./changes";
@@ -11,6 +12,7 @@ import type { Messages } from "./messages";
 import type { People } from "./people";
 import type { Presence } from "./presence";
 import type { Settings } from "./settings";
+import type { Tasks } from "./tasks";
 import type { PorticoConfig } from "./types";
 
 /**
@@ -29,6 +31,8 @@ export interface Core {
   messages: Messages;
   approvals: Approvals;
   allowList: AllowList;
+  activity: Activity;
+  tasks: Tasks;
   presence: Presence;
   agentStreams: AgentStreams;
   personStreams: PersonStreams;

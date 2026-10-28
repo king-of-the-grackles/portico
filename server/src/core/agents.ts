@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { Bindings } from "../db";
+import type { Activity } from "./activity";
 import type { Changes } from "./changes";
 import type { Computers } from "./computers";
 import { PorticoError } from "./errors";
@@ -60,6 +61,17 @@ export type SessionClient = (typeof SESSION_CLIENTS)[number];
 const CLIENTS: Record<SessionClient, { suffix: string; label: string; push: boolean }> = {
   "claude-code": { suffix: "-claude", label: "Claude Code", push: true },
   codex: { suffix: "-codex", label: "Codex", push: false },
+};
+
+/** What people call each kind of agent. */
+const KIND_LABELS: Record<AgentKind, string | null> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  muse: "Muse",
+  "grok-bot": "Grok Bot",
+  dots: "dots",
+  "claude-duet": "Claude Duet",
+  other: null,
 };
 
 /** A session's client, from its kind. */
@@ -205,8 +217,12 @@ export interface AgentsDeps {
   computers: Computers;
   presence: Presence;
   changes: Changes;
+  activity?: Activity;
   /** Whether the agent has an open stream. A connected session stays listed however long ago its row was written. */
   isConnected?: (agentId: string) => boolean;
+  /** How many of the agent's runs have a stream open, and whether one run does. */
+  liveRuns?: (agentId: string) => number;
+  isRunLive?: (runId: string) => boolean;
   /** Closes the agents' streams, once they're removed. */
   disconnect?: (agentIds: string[]) => void;
   /** Runs after a rename, so a connected session can learn its new address. */
@@ -225,7 +241,10 @@ export class Agents {
   private readonly computers: Computers;
   private readonly presence: Presence;
   private readonly changes: Changes;
+  private readonly activity: Activity | undefined;
   private readonly isConnected: (agentId: string) => boolean;
+  readonly liveRuns: (agentId: string) => number;
+  readonly isRunLive: (runId: string) => boolean;
   private readonly disconnect: (agentIds: string[]) => void;
   private readonly renamed: (agent: Agent) => void;
   private readonly now: () => Date;
@@ -237,7 +256,10 @@ export class Agents {
     this.computers = deps.computers;
     this.presence = deps.presence;
     this.changes = deps.changes;
+    this.activity = deps.activity;
     this.isConnected = deps.isConnected ?? (() => false);
+    this.liveRuns = deps.liveRuns ?? ((id) => (this.isConnected(id) ? 1 : 0));
+    this.isRunLive = deps.isRunLive ?? (() => false);
     this.disconnect = deps.disconnect ?? (() => {});
     this.renamed = deps.renamed ?? (() => {});
     this.now = deps.now ?? (() => new Date());
@@ -302,6 +324,35 @@ export class Agents {
       }) as { n: number }
     ).n;
     return n === 1 ? agent.name : addressOf(agent);
+  }
+
+  /**
+   * The name people see: "Claude Code (portico)" for a session, with the computer added when the same coding agent has
+   * that folder name on another computer; the kind ("Grok Bot") for an app or connector, with its name added when
+   * another app has the same kind; the name itself for kind Other.
+   */
+  label(agent: Agent): string {
+    if (agent.type === "session") {
+      const client = CLIENTS[sessionClient(agent)].label;
+      const folder = agent.folder ?? agent.name;
+      const twins = this.db
+        .query(
+          `SELECT SUM(computer_id IS $computerId) AS here, SUM(computer_id IS NOT $computerId) AS elsewhere FROM agents
+           WHERE type = 'session' AND kind = $kind AND folder = $folder AND id != $id`,
+        )
+        .get({ kind: agent.kind, folder, computerId: agent.computerId, id: agent.id }) as { here: number | null; elsewhere: number | null };
+      // Another folder with the same name on this computer: the agent's own name tells them apart.
+      if ((twins.here ?? 0) > 0) return `${client} (${agent.name})`;
+      return (twins.elsewhere ?? 0) > 0 && agent.computer ? `${client} (${folder} on ${agent.computer})` : `${client} (${folder})`;
+    }
+    const kind = KIND_LABELS[agent.kind];
+    if (!kind) return agent.name;
+    const twins = (
+      this.db
+        .query("SELECT COUNT(*) AS n FROM agents WHERE type != 'session' AND kind = $kind AND id != $id")
+        .get({ kind: agent.kind, id: agent.id }) as { n: number }
+    ).n;
+    return twins > 0 ? `${kind} (${agent.name})` : kind;
   }
 
   /**
@@ -449,6 +500,7 @@ export class Agents {
           lastSeenAt: at,
         });
         this.log("session_registered", { agent_id: agentId });
+        this.activity?.record("agent_joined", { agentId, personId: computer.ownerId, detail: { via: "folder", client: reg.client } });
       } else {
         this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: agentId, at });
       }
@@ -487,6 +539,26 @@ export class Agents {
       this.db
         .query("SELECT * FROM agent_runs WHERE agent_id = $agentId ORDER BY started_at DESC, id LIMIT $limit")
         .all({ agentId, limit }) as RunRow[]
+    ).map(toRun);
+  }
+
+  /**
+   * Runs of these agents (all agents with null) with an event (start or end) before `before`, latest such event first:
+   * sessions for the activity record. A long run that ended recently comes first, however long ago it started.
+   */
+  recentRuns(agentIds: string[] | null, opts: { before?: string; limit?: number } = {}): Run[] {
+    const before = opts.before ?? "9999";
+    const bindings: Record<string, string | number> = { limit: Math.min(Math.max(opts.limit ?? 100, 1), 500), before };
+    const clauses = ["started_at < $before"];
+    if (agentIds) {
+      if (agentIds.length === 0) return [];
+      clauses.push(`agent_id IN (${agentIds.map((id, i) => ((bindings[`a${i}`] = id), `$a${i}`)).join(", ")})`);
+    }
+    const latest = "CASE WHEN ended_at IS NOT NULL AND ended_at < $before THEN ended_at ELSE started_at END";
+    return (
+      this.db
+        .query(`SELECT * FROM agent_runs WHERE ${clauses.join(" AND ")} ORDER BY ${latest} DESC, id LIMIT $limit`)
+        .all(bindings) as RunRow[]
     ).map(toRun);
   }
 
@@ -537,6 +609,7 @@ export class Agents {
       lastSeenAt: null,
     });
     this.log("agent_added", { agent_id: id, kind: input.kind, type: input.type });
+    this.activity?.record("agent_joined", { agentId: id, personId: input.ownerId, detail: { via: input.type } });
     this.changes.emit("agents");
     return this.require(id);
   }
@@ -597,6 +670,7 @@ export class Agents {
   /** Name and description edits go live at once. A name already in use answers `conflict`. */
   update(personId: string, agentId: string, changes: AgentChanges): Agent {
     const agent = this.requireManaged(personId, agentId);
+    const folderBefore = this.joinsFromFolder(agent);
     const sets: string[] = [];
     const bindings: Bindings = { id: agent.id };
     let renamed = false;
@@ -636,6 +710,15 @@ export class Agents {
     }
     if (sets.length > 0) this.db.query(`UPDATE agents SET ${sets.join(", ")} WHERE id = $id`).run(bindings);
     const updated = this.require(agent.id);
+    const record = (kind: "renamed" | "approval_switched" | "folder_switched", detail: Record<string, string | boolean>) =>
+      this.activity?.record(kind, { agentId: agent.id, personId, detail });
+    if (renamed) record("renamed", { from: agent.name, to: updated.name });
+    if (typeof changes.approvalRequired === "boolean" && changes.approvalRequired !== agent.approvalRequired) {
+      record("approval_switched", { on: changes.approvalRequired });
+    }
+    if (typeof changes.joinFromFolder === "boolean" && changes.joinFromFolder !== folderBefore) {
+      record("folder_switched", { on: changes.joinFromFolder });
+    }
     if (renamed) {
       this.log("agent_renamed", { agent_id: agent.id });
       this.renamed(updated);
@@ -654,6 +737,7 @@ export class Agents {
   remove(personId: string, agentId: string): Agent {
     const agent = this.requireManaged(personId, agentId);
     this.db.query("DELETE FROM agents WHERE id = $id").run({ id: agent.id });
+    this.activity?.record("agent_removed", { personId, detail: { name: addressOf(agent), kind: agent.kind } });
     this.forget([agent.id]);
     this.log("agent_removed", { agent_id: agent.id });
     this.changes.emit("agents", "threads", "approvals", "computers");

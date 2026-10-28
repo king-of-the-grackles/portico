@@ -135,6 +135,11 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
               },
               text: { type: "string", description: `Up to ${LIMITS.maxMessageKb} KB.` },
               reply_to: { type: "string", description: "The ID of the message this answers." },
+              summary: {
+                type: "string",
+                maxLength: LIMITS.maxSubjectChars,
+                description: "Optional, for a long answer: one line saying what the answer found or did, shown in Portico's activity list.",
+              },
             },
           }),
           responses: {

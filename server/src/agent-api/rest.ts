@@ -18,6 +18,7 @@ const SendBody = z.object({
   subject: z.string(),
   text: z.string(),
   reply_to: z.string().optional(),
+  summary: z.string().optional(),
 });
 const AckIds = z.array(z.string()).max(DELIVERY_BATCH_MAX).default([]);
 const AckBody = z.object({ messages: AckIds, updates: AckIds });
@@ -75,6 +76,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       subject: body.subject,
       text: body.text,
       replyTo: body.reply_to,
+      summary: body.summary,
     });
     agents.checkedIn(agent);
     return c.json({ message: views.message(message), delivery, ...(note ? { note } : {}) }, 201);

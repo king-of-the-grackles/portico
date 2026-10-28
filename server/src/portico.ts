@@ -4,6 +4,7 @@ import { helloFor, AgentStreams } from "./agent-api/stream";
 import { PersonStreams } from "./api/events";
 import { buildApp } from "./app";
 import { Accounts } from "./core/accounts";
+import { Activity } from "./core/activity";
 import { Agents } from "./core/agents";
 import { AllowList, Approvals } from "./core/approvals";
 import { Changes } from "./core/changes";
@@ -14,6 +15,7 @@ import { Messages } from "./core/messages";
 import { People } from "./core/people";
 import { Presence } from "./core/presence";
 import { Settings } from "./core/settings";
+import { Tasks } from "./core/tasks";
 import type { Notice, PorticoConfig } from "./core/types";
 import { Desk } from "./desk";
 import { errorName, log } from "./log";
@@ -55,18 +57,23 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const personStreams = new PersonStreams();
   changes.on((topics) => personStreams.broadcast(topics));
 
+  // Its own IDs: activity rows never shift the IDs tests expect for everything else.
+  const activity = new Activity({ db, changes, now });
   const people = new People({ db, changes, signingKey: config.signingKey, now, newId });
   const accounts = new Accounts({ db, people, now, newId });
-  const computers = new Computers({ db, changes, now, newId, log: logInfo });
+  const computers = new Computers({ db, changes, activity, now, newId, log: logInfo });
   const agents: Agents = new Agents({
     db,
     computers,
     presence,
     changes,
+    activity,
     now,
     newId,
     log: logInfo,
     isConnected: (id) => agentStreams.isConnected(id),
+    liveRuns: (id) => agentStreams.liveRuns(id),
+    isRunLive: (runId) => agentStreams.isRunConnected(runId),
     disconnect: (ids) => {
       agentStreams.closeAll(ids);
       inboxWaits.wake(...ids);
@@ -142,7 +149,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     notify,
     log: logInfo,
   });
-  const approvals = new Approvals({ db, agents, messages, people, allowList, changes, now, notify, log: logInfo });
+  const tasks = new Tasks({ db, now });
+  const approvals = new Approvals({ db, agents, messages, people, allowList, changes, activity, now, notify, log: logInfo });
 
   const core: Core = {
     config,
@@ -156,6 +164,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     messages,
     approvals,
     allowList,
+    activity,
+    tasks,
     presence,
     agentStreams,
     personStreams,
@@ -188,6 +198,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     sweepDaily() {
       sweep("history", () => messages.prune());
       sweep("runs", () => agents.pruneRuns());
+      sweep("activity", () => activity.prune());
       sweep("web_sessions", () => accounts.sweep());
       sweep("people", () => people.sweep());
       sweep("computers", () => computers.sweep());

@@ -115,6 +115,10 @@ export interface Message {
   text: string;
   /** The message this one answers. */
   replyTo: string | null;
+  /** The first message of its conversation (its reply_to chain): the task it belongs to. Its own ID for a new one. */
+  rootId: string;
+  /** Optional, one line, at most 120 characters: the sender's own summary of a long answer, shown on the task. */
+  summary: string | null;
   status: MessageStatus;
   /** Set when the message was held for approval; it stays set after the decision. */
   heldAt: string | null;

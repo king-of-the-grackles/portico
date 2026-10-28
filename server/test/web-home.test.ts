@@ -33,6 +33,8 @@ function agent(o: Partial<AgentView> & { id: string; name: string }): AgentView 
   return {
     address: o.name,
     display: o.name,
+    label: o.name,
+    liveRuns: 0,
     kind: "muse",
     type: "app",
     description: "",
@@ -76,7 +78,7 @@ const mayaDot = agent({ id: "a-dot", name: "maya-dot", kind: "dots", type: "conn
 const web = session({ id: "a-web", name: "web-claude", computer: STUDIO, repo: "web", branch: "redesign", status: "offline", lastSeen: at(18, 4, 1) });
 const AGENTS = [dialog, api, muse, grok, duet, mayaCodex, mayaDot, web];
 
-const ref = (a: AgentView) => ({ id: a.id, display: a.display, kind: a.kind });
+const ref = (a: AgentView) => ({ id: a.id, display: a.display, label: a.label, kind: a.kind });
 
 function message(o: Partial<MessageView> & { id: string; from: AgentView; to: AgentView; text: string }): MessageView {
   return {

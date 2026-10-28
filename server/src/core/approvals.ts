@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { Activity } from "./activity";
 import type { Agents } from "./agents";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
@@ -60,6 +61,7 @@ export interface ApprovalsDeps {
   people: People;
   allowList: AllowList;
   changes: Changes;
+  activity?: Activity;
   now?: () => Date;
   notify?: (notice: Notice) => void;
   log?: (msg: string, fields: Record<string, unknown>) => void;
@@ -73,6 +75,7 @@ export class Approvals {
   private readonly people: People;
   private readonly allowList: AllowList;
   private readonly changes: Changes;
+  private readonly activity: Activity | undefined;
   private readonly now: () => Date;
   private readonly notify: (notice: Notice) => void;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
@@ -84,6 +87,7 @@ export class Approvals {
     this.people = deps.people;
     this.allowList = deps.allowList;
     this.changes = deps.changes;
+    this.activity = deps.activity;
     this.now = deps.now ?? (() => new Date());
     this.notify = deps.notify ?? (() => {});
     this.log = deps.log ?? (() => {});
@@ -123,6 +127,12 @@ export class Approvals {
       this.log("message_decided", { message_id: m.id, decision: choice });
       this.notify({ kind: "message_decided", message: m });
     }
+    this.activity?.record("decision", {
+      agentId: held.toId,
+      otherId: held.fromId,
+      personId,
+      detail: { decision: choice, messageId: held.id, count: String(decided.length) },
+    });
     this.changes.emit("approvals", "threads", "agents");
     return message;
   }
@@ -137,6 +147,7 @@ export class Approvals {
   removeAllowed(personId: string, agentId: string, senderId: string): void {
     this.agents.requireManaged(personId, agentId);
     if (!this.allowList.remove(agentId, senderId)) throw new PorticoError("not_found", "That sender isn't on the list.");
+    this.activity?.record("allow_removed", { agentId, otherId: senderId, personId });
     this.changes.emit("agents");
   }
 

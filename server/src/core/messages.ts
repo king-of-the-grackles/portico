@@ -15,6 +15,8 @@ interface MessageRow {
   subject: string;
   text: string;
   reply_to: string | null;
+  root_id: string | null;
+  summary: string | null;
   status: string;
   held_at: string | null;
   decision: string | null;
@@ -44,6 +46,8 @@ function toMessage(row: MessageRow): Message {
     subject: row.subject,
     text: row.text,
     replyTo: row.reply_to,
+    rootId: row.root_id ?? row.id,
+    summary: row.summary,
     status: row.status as MessageStatus,
     heldAt: row.held_at,
     decision: row.decision as Decision | null,
@@ -90,6 +94,19 @@ export function checkSubject(value: unknown): string {
     throw new PorticoError("bad_request", `subject can be at most ${LIMITS.maxSubjectChars} characters.`);
   }
   return subject;
+}
+
+/** An optional summary: trimmed, one line, at most 120 characters; empty or absent is none. */
+export function checkSummary(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw new PorticoError("bad_request", "summary must be a string.");
+  const summary = value.trim();
+  if (summary === "") return null;
+  if (/[\r\n]/.test(summary)) throw new PorticoError("bad_request", "summary must be one line.");
+  if (Array.from(summary).length > LIMITS.maxSubjectChars) {
+    throw new PorticoError("bad_request", `summary can be at most ${LIMITS.maxSubjectChars} characters.`);
+  }
+  return summary;
 }
 
 function checkText(value: unknown): string {
@@ -147,13 +164,15 @@ export class Messages {
    */
   send(
     caller: Agent,
-    input: { to?: unknown; subject: unknown; text: unknown; replyTo?: unknown },
+    input: { to?: unknown; subject: unknown; text: unknown; replyTo?: unknown; summary?: unknown },
   ): { message: Message; delivery: DeliveryTier; note: string | null } {
     const subject = checkSubject(input.subject);
     const text = checkText(input.text);
+    const summary = checkSummary(input.summary);
     let receiver: Agent | null =
       typeof input.to === "string" && input.to.trim() !== "" ? this.agents.resolve(input.to, caller.id) : null;
     let replyTo: string | null = null;
+    let rootId: string | null = null;
     if (input.replyTo !== undefined && input.replyTo !== null && input.replyTo !== "") {
       const original = typeof input.replyTo === "string" ? this.get(input.replyTo) : null;
       if (!original || (original.toId !== caller.id && original.fromId !== caller.id)) {
@@ -165,6 +184,7 @@ export class Messages {
       }
       receiver ??= this.agents.require(other);
       replyTo = original.id;
+      rootId = original.rootId;
     }
     if (!receiver) throw new PorticoError("bad_request", "to is required unless reply_to is given.");
     if (receiver.id === caller.id) throw new PorticoError("bad_request", "An agent can't send a message to itself.");
@@ -177,14 +197,17 @@ export class Messages {
         receiver.approvalRequired &&
         !this.alwaysAllows(receiver.id, caller.id) &&
         !(replyTo !== null && this.receiverInConversation(replyTo, receiver.id));
+      const id = this.newId();
       const m: Message = {
-        id: this.newId(),
+        id,
         threadId: thread.id,
         fromId: caller.id,
         toId: receiver.id,
         subject,
         text,
         replyTo,
+        rootId: rootId ?? id,
+        summary,
         status: held ? "held" : "pending",
         heldAt: held ? at : null,
         decision: null,
@@ -499,12 +522,19 @@ export class Messages {
     return expired;
   }
 
-  /** Deletes messages older than the history limit, and threads left empty. */
+  /**
+   * Deletes whole tasks (a conversation's messages, by root_id) whose newest message is older than the history limit
+   * and that wait on nothing, then threads left empty. A task never loses its first message while its replies stay.
+   */
   prune(): { messages: number; threads: number } {
     const cutoff = this.iso(-LIMITS.historyDays * DAY_MS);
     return this.db.transaction(() => {
       const messages = this.db
-        .query("DELETE FROM messages WHERE created_at < $cutoff AND status NOT IN ('held', 'pending')")
+        .query(
+          `DELETE FROM messages WHERE COALESCE(root_id, id) IN (
+             SELECT COALESCE(root_id, id) FROM messages GROUP BY COALESCE(root_id, id)
+             HAVING MAX(created_at) < $cutoff AND SUM(status IN ('held', 'pending')) = 0)`,
+        )
         .run({ cutoff }).changes;
       const threads = this.db
         .query("DELETE FROM threads WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = threads.id)")
@@ -562,10 +592,10 @@ export class Messages {
   private insert(m: Message): void {
     this.db
       .query(
-        `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, reply_to, status, held_at, decision,
-           decided_by, decided_at, created_at, expires_at, delivered_at, sender_notified_at)
-         VALUES ($id, $threadId, $fromId, $toId, $subject, $text, $replyTo, $status, $heldAt, $decision,
-           $decidedBy, $decidedAt, $createdAt, $expiresAt, $deliveredAt, $senderNotifiedAt)`,
+        `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, reply_to, root_id, summary, status, held_at,
+           decision, decided_by, decided_at, created_at, expires_at, delivered_at, sender_notified_at)
+         VALUES ($id, $threadId, $fromId, $toId, $subject, $text, $replyTo, $rootId, $summary, $status, $heldAt,
+           $decision, $decidedBy, $decidedAt, $createdAt, $expiresAt, $deliveredAt, $senderNotifiedAt)`,
       )
       .run({ ...m });
   }

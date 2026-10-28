@@ -114,5 +114,36 @@ const folderAgents: Migration = (db) => {
   );
 };
 
+/**
+ * 102: tasks and the activity record. A message's root_id is the first message of its conversation (its reply_to
+ * chain), so a task is every message with one root. A reply can carry a one-line summary. The activity table records
+ * joins, decisions and settings changes; sessions come from agent_runs.
+ */
+const tasksAndActivity: Migration = (db) => {
+  db.run("ALTER TABLE messages ADD COLUMN summary TEXT");
+  db.run("ALTER TABLE messages ADD COLUMN root_id TEXT");
+  // Oldest first, so each reply's original already has its root. An original pruned away makes the reply a root.
+  const rows = db.query("SELECT id, reply_to FROM messages ORDER BY created_at, rowid").all() as { id: string; reply_to: string | null }[];
+  const roots = new Map<string, string>();
+  const set = db.query("UPDATE messages SET root_id = $root WHERE id = $id");
+  for (const row of rows) {
+    const root = (row.reply_to && roots.get(row.reply_to)) || row.id;
+    roots.set(row.id, root);
+    set.run({ id: row.id, root });
+  }
+  db.run("CREATE INDEX messages_root ON messages (root_id, created_at)");
+  db.run(`CREATE TABLE activity (
+    id TEXT PRIMARY KEY,
+    at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    agent_id TEXT REFERENCES agents (id) ON DELETE SET NULL,
+    other_id TEXT REFERENCES agents (id) ON DELETE SET NULL,
+    person_id TEXT REFERENCES people (id) ON DELETE SET NULL,
+    detail TEXT NOT NULL
+  )`);
+  db.run("CREATE INDEX activity_at ON activity (at)");
+  db.run("CREATE INDEX activity_agent ON activity (agent_id, at)");
+};
+
 /** Every change since the first schema (version 100), oldest first: the first is version 101. Never edit a shipped one. */
-export const MIGRATIONS: readonly Migration[] = [folderAgents];
+export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity];

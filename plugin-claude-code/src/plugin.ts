@@ -12,7 +12,10 @@ import { StreamClient, type StreamClientOptions } from "./stream";
 import { inboxText, runTool, TOOLS } from "./tools";
 
 export const SERVER_NAME = "portico";
-export const SERVER_VERSION = "0.5.0";
+export const SERVER_VERSION = "0.6.0";
+
+/** A Codex conversation with no Portico tool call for this long shows available, in case its Stop hook never runs. */
+const CODEX_IDLE_AFTER_MS = 10 * 60_000;
 
 /** What a tool call gets while the session's folder is off Portico. */
 export const FOLDER_OFF_NOTE =
@@ -154,8 +157,15 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: quiet === null || host.client === "codex" ? TOOLS : [] }));
   server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
-    // Codex's Stop hook, not the model: its answer is read as hook output, so it carries nothing else.
-    if (isStopHook(host, request.params.name, args)) return quiet === null ? stopHook(extra.signal) : NO_DECISION;
+    // Codex's Stop hook, not the model: its answer is read as hook output, so it carries nothing else. The turn is over,
+    // so the conversation shows as available on Portico.
+    if (isStopHook(host, request.params.name, args)) {
+      if (quiet !== null) return NO_DECISION;
+      codexStatus("idle");
+      return stopHook(extra.signal);
+    }
+    // Codex has no status of its own to watch: a Portico tool call means the conversation is in a turn.
+    if (quiet === null) codexStatus("busy");
     const result: CallToolResult =
       quiet !== null
         ? { content: [{ type: "text", text: quiet }], isError: true }
@@ -164,6 +174,30 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     for (const text of notes.splice(0)) result.content.push({ type: "text", text });
     return result;
   });
+
+  /**
+   * Codex only: reports the conversation working or available, once per change and in order. Without a Stop hook (not
+   * approved yet), a conversation quiet for CODEX_IDLE_AFTER_MS shows available again. A failed report is only logged.
+   */
+  let lastCodexStatus: "busy" | "idle" | null = null;
+  let codexReports: Promise<unknown> = Promise.resolve();
+  let codexIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  const codexStatus = (status: "busy" | "idle") => {
+    if (host.client !== "codex") return;
+    clearTimeout(codexIdleTimer);
+    if (status === "busy") {
+      codexIdleTimer = setTimeout(() => codexStatus("idle"), CODEX_IDLE_AFTER_MS);
+      codexIdleTimer.unref?.();
+    }
+    if (status === lastCodexStatus) return;
+    lastCodexStatus = status;
+    codexReports = codexReports
+      .then(() => client.reportStatus({ status, doing: null, repo: null, branch: null }))
+      .catch((err) => {
+        lastCodexStatus = null;
+        log("warn", "status_report_failed", { error: errorName(err) });
+      });
+  };
 
   /**
    * Peeks at what's waiting, and acks it only once the answer is ready: when Codex gives up on the hook or cancels it,
@@ -287,6 +321,7 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     stop: async () => {
       watcher?.stop();
       delivery?.stop();
+      clearTimeout(codexIdleTimer);
       panels.closeAll();
       await stream.stop();
     },

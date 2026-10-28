@@ -35,6 +35,10 @@ export const TOOLS: Tool[] = [
         ),
         text: str(`The message, in plain text. Up to ${MAX_MESSAGE_KB} KB.`),
         reply_to: str("Optional. The ID of the message this answers."),
+        summary: str(
+          `Optional, for a long answer: one line, at most ${MAX_SUBJECT_CHARS} characters, saying what the answer ` +
+            "found or did. A person scanning Portico's activity list reads this instead of the whole text.",
+        ),
       },
       required: ["subject", "text"],
       additionalProperties: false,
@@ -104,12 +108,14 @@ export async function runTool(
       case "send_message": {
         const to = optional(args, "to");
         const replyTo = optional(args, "reply_to");
+        const summary = optional(args, "summary");
         // Missing fields go as empty strings, so Portico answers with its own plain error.
         const { message, delivery, note } = await client.sendMessage({
           subject: optional(args, "subject") ?? "",
           text: optional(args, "text") ?? "",
           ...(to !== undefined ? { to } : {}),
           ...(replyTo !== undefined ? { reply_to: replyTo } : {}),
+          ...(summary !== undefined ? { summary } : {}),
         });
         const result = json({ message, delivery });
         // A held message's note, as its own line, as on Portico's /mcp.

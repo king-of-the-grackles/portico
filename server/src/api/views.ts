@@ -1,7 +1,9 @@
-import type { Agents } from "../core/agents";
+import type { ActivityEntry, ActivityKind } from "../core/activity";
+import type { Agents, Run } from "../core/agents";
 import type { Approvals } from "../core/approvals";
 import type { Messages } from "../core/messages";
 import type { People } from "../core/people";
+import type { Task, TaskOutcome, TaskState, TaskStepKind } from "../core/tasks";
 import type {
   Agent,
   AgentKind,
@@ -33,6 +35,8 @@ export interface PersonView extends PersonRef {
 export interface AgentRef {
   id: string;
   display: string;
+  /** The name people see: "Claude Code (portico)", "Grok Bot". */
+  label: string;
   kind: AgentKind;
 }
 
@@ -41,6 +45,8 @@ export interface AgentView {
   name: string;
   address: string;
   display: string;
+  /** The name people see: "Claude Code (portico)", "Grok Bot". */
+  label: string;
   kind: AgentKind;
   type: AgentType;
   description: string;
@@ -59,6 +65,8 @@ export interface AgentView {
   checkInMinutes: number | null;
   approvalRequired: boolean;
   createdAt: string;
+  /** Sessions: how many terminals or Codex conversations are open in the folder now. */
+  liveRuns: number;
 }
 
 export interface AllowEntry {
@@ -104,6 +112,49 @@ export interface ThreadView {
   last: { from: AgentRef; subject: string; text: string; status: MessageStatus } | null;
   count: number;
   held: number;
+}
+
+/** One task: a conversation between two agents, with where it stands. */
+export interface TaskView {
+  id: string;
+  subject: string;
+  from: AgentRef;
+  to: AgentRef;
+  state: TaskState;
+  outcome: TaskOutcome;
+  startedAt: string;
+  updatedAt: string;
+  endedAt: string | null;
+  /** The latest answer: its subject, and the one-line summary its sender wrote, if any. */
+  answer: { id: string; subject: string; summary: string | null; createdAt: string } | null;
+  heldMessageId: string | null;
+  messageCount: number;
+  /** A session's folder on either side, for the Project filter. */
+  project: string | null;
+  steps: { kind: TaskStepKind; at: string; by: PersonRef | null; decision: Decision | null }[];
+}
+
+/** One run of a session agent: a terminal or a Codex conversation. */
+export interface RunView {
+  id: string;
+  agent: AgentRef;
+  client: "claude-code" | "codex";
+  startedAt: string;
+  lastSeenAt: string;
+  /** Null while open. A run Portico lost track of (it restarted) shows its last sighting. */
+  endedAt: string | null;
+  live: boolean;
+}
+
+/** One line of the activity record: joins, sessions, decisions and settings changes. */
+export interface ActivityView {
+  id: string;
+  at: string;
+  kind: ActivityKind | "session_started" | "session_ended";
+  agent: AgentRef | null;
+  other: AgentRef | null;
+  person: PersonRef | null;
+  detail: Record<string, string | boolean | null>;
 }
 
 // Shapes other tracks build. Kept here so every client agrees on them.
@@ -174,9 +225,16 @@ export function personViews(deps: ViewDeps, me: Person) {
     const person = peopleById.get(id);
     return { id, name: person?.name ?? "" };
   };
+  const refs = new Map<string, AgentRef>();
   const agentRef = (id: string): AgentRef => {
+    const known = refs.get(id);
+    if (known) return known;
     const agent = agents.get(id);
-    return agent ? { id, display: agents.display(agent), kind: agent.kind } : { id, display: id, kind: "other" };
+    const ref: AgentRef = agent
+      ? { id, display: agents.display(agent), label: agents.label(agent), kind: agent.kind }
+      : { id, display: id, label: id, kind: "other" };
+    refs.set(id, ref);
+    return ref;
   };
 
   const agent = (a: Agent): AgentView => {
@@ -186,6 +244,7 @@ export function personViews(deps: ViewDeps, me: Person) {
       name: a.name,
       address: entry.address,
       display: entry.display,
+      label: agents.label(a),
       kind: a.kind,
       type: a.type,
       description: a.description,
@@ -202,6 +261,7 @@ export function personViews(deps: ViewDeps, me: Person) {
       checkInMinutes: entry.checkInMinutes,
       approvalRequired: a.approvalRequired,
       createdAt: a.createdAt,
+      liveRuns: agents.liveRuns(a.id),
     };
   };
 
@@ -256,8 +316,8 @@ export function personViews(deps: ViewDeps, me: Person) {
   const threadAgent = (id: string): ThreadAgent => {
     const agent = agents.get(id);
     return agent
-      ? { id, display: agents.display(agent), kind: agent.kind, owner: personRef(agent.ownerId) }
-      : { id, display: id, kind: "other", owner: personRef("") };
+      ? { id, display: agents.display(agent), label: agents.label(agent), kind: agent.kind, owner: personRef(agent.ownerId) }
+      : { id, display: id, label: id, kind: "other", owner: personRef("") };
   };
 
   const thread = (t: Thread): ThreadView => {
@@ -305,7 +365,54 @@ export function personViews(deps: ViewDeps, me: Person) {
     return { thread: thread(t), messages: page.messages.map(message), more: page.more };
   };
 
-  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef };
+  const projectOf = (id: string): string | null => {
+    const a = agents.get(id);
+    return a?.type === "session" ? a.folder : null;
+  };
+
+  const task = (t: Task): TaskView => ({
+    id: t.id,
+    subject: t.subject,
+    from: agentRef(t.fromId),
+    to: agentRef(t.toId),
+    state: t.state,
+    outcome: t.outcome,
+    startedAt: t.startedAt,
+    updatedAt: t.updatedAt,
+    endedAt: t.endedAt,
+    answer: t.answer,
+    heldMessageId: t.heldMessageId,
+    messageCount: t.messageCount,
+    project: projectOf(t.toId) ?? projectOf(t.fromId),
+    steps: t.steps.map((step) => ({
+      kind: step.kind,
+      at: step.at,
+      by: step.personId ? personRef(step.personId) : null,
+      decision: step.decision,
+    })),
+  });
+
+  const run = (r: Run): RunView => ({
+    id: r.id,
+    agent: agentRef(r.agentId),
+    client: r.client,
+    startedAt: r.startedAt,
+    lastSeenAt: r.lastSeenAt,
+    endedAt: r.endedAt,
+    live: agents.isRunLive(r.id),
+  });
+
+  const activity = (e: ActivityEntry): ActivityView => ({
+    id: e.id,
+    at: e.at,
+    kind: e.kind,
+    agent: e.agentId ? agentRef(e.agentId) : null,
+    other: e.otherId ? agentRef(e.otherId) : null,
+    person: e.personId ? personRef(e.personId) : null,
+    detail: e.detail,
+  });
+
+  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef, task, run, activity };
 }
 
 export type PersonViews = ReturnType<typeof personViews>;

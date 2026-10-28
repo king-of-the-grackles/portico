@@ -32,6 +32,8 @@ function sessionOn(id: string, computer: { id: string; name: string }, status: A
     name: "dialog-claude",
     address: `dialog-claude@${computer.name}`,
     display: "dialog-claude",
+    label: "Claude Code (dialog)",
+    liveRuns: 0,
     kind: "claude-code",
     type: "session",
     description: "",

@@ -130,6 +130,7 @@ export class PorticoClient {
     subject: string;
     text: string;
     reply_to?: string;
+    summary?: string;
   }): Promise<{ message: MessageView; delivery: DeliveryTier; note?: string }> {
     return this.call("POST", "/api/agent/messages", body);
   }

@@ -220,6 +220,24 @@ describe("session registration", () => {
   });
 });
 
+describe("labels", () => {
+  test("a session is its coding agent and folder; the computer or the name tells same-named folders apart", async () => {
+    const p = makePortico();
+    const chris = await addOwner(p);
+    const { computer: mac } = addComputer(p, chris, "macbook");
+    const { computer: studio } = addComputer(p, chris, "studio");
+    const a = p.agents.registerSession(mac, { key: "key-00001", repo: "portico", folderId: "1".repeat(64) }).agent;
+    expect(p.agents.label(a)).toBe("Claude Code (portico)");
+    const b = p.agents.registerSession(studio, { key: "key-00002", repo: "portico", folderId: "2".repeat(64) }).agent;
+    expect(p.agents.label(b)).toBe("Claude Code (portico on studio)");
+    const c = p.agents.registerSession(mac, { key: "key-00003", repo: "portico", folderId: "3".repeat(64) }).agent;
+    expect([p.agents.label(p.agents.require(a.id)), p.agents.label(c)]).toEqual(["Claude Code (portico-claude)", "Claude Code (portico-claude-2)"]);
+    const grok = addAppAgent(p, chris, "chris-grokbot", { kind: "grok-bot" }).agent;
+    expect(p.agents.label(grok)).toBe("Grok Bot");
+    expect(p.agents.label(addAppAgent(p, chris, "other-bot", { kind: "other" }).agent)).toBe("other-bot");
+  });
+});
+
 describe("what an agent's manager can change", () => {
   test("rename and describe go live; a name in use is a conflict", async () => {
     const p = makePortico();

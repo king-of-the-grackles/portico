@@ -57,6 +57,10 @@ export function mcpTools() {
           ),
           text: str(`The message, in plain text. Up to ${LIMITS.maxMessageKb} KB.`),
           reply_to: str("Optional. The ID of the message this answers."),
+          summary: str(
+            `Optional, for a long answer: one line, at most ${LIMITS.maxSubjectChars} characters, saying what the answer ` +
+              "found or did. A person scanning Portico's activity list reads this instead of the whole text.",
+          ),
         },
         required: ["subject", "text"],
         additionalProperties: false,
@@ -124,6 +128,7 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
         subject: arg("subject") ?? "",
         text: arg("text") ?? "",
         replyTo: arg("reply_to"),
+        summary: arg("summary"),
       });
       agents.checkedIn(agent);
       const content = json({ message: views.message(message), delivery });

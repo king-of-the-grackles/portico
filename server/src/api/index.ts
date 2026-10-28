@@ -16,6 +16,7 @@ import { peopleRoutes } from "./people";
 import { sessionRoutes } from "./session";
 import { setupRoutes } from "./setup";
 import { threadRoutes } from "./threads";
+import { taskRoutes } from "./tasks";
 
 /** Paths under /api that answer before setup is done: setup itself. */
 const OPEN_BEFORE_SETUP = /^\/api\/setup(\/|$)/;
@@ -84,6 +85,7 @@ export function personApi(core: Core, opts: { heartbeatMs?: number } = {}): Hono
   api.route("/agents", agentRoutes(core));
   api.route("/approvals", approvalRoutes(core));
   api.route("/threads", threadRoutes(core));
+  api.route("/", taskRoutes(core));
   api.route("/join-lines", joinLineRoutes(core));
   api.route("/computers", computerRoutes(core));
   api.route("/events", eventRoutes(core, opts));

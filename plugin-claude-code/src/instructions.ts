@@ -17,7 +17,8 @@ export const INSTRUCTIONS = [
   "",
   "send_message needs to (or reply_to), subject and text. The subject is one line saying what the message asks for or " +
     "tells: a person reads the subject first when the receiving agent requires approval. A held message waits until a " +
-    "person allows the message, and the outcome arrives later as a <portico-update>.",
+    "person allows the message, and the outcome arrives later as a <portico-update>. A long answer can add summary: one " +
+    "line saying what the answer found or did, which the person sees in Portico's activity list.",
   "",
   "After a reconnect, the same item can arrive twice. Act once per ID.",
 ].join("\n");

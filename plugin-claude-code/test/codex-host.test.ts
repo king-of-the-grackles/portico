@@ -57,6 +57,17 @@ describe("a Codex conversation's server", () => {
     expect(p.messages.unreadCount(codex.id)).toBe(1);
   });
 
+  test("a Portico tool call shows the conversation working; the Stop hook at the turn's end shows it available", async () => {
+    const { p, host } = await conversation();
+    await waitFor(() => p.agents.byAddress("api-codex@macbook") !== null && p.agentStreams.isConnected(p.agents.byAddress("api-codex@macbook")!.id), 5000);
+    const codex = () => p.agents.entry(p.agents.byAddress("api-codex@macbook")!);
+    expect(codex().status).toBe("idle");
+    await host.callTool({ name: "list_agents", arguments: {} });
+    await waitFor(() => codex().status === "busy");
+    await host.callTool({ name: "check_inbox", arguments: { stop_hook: true } });
+    await waitFor(() => codex().status === "idle");
+  });
+
   test("in a folder that's off, the tools stay listed so the Stop hook finds check_inbox, and the hook says nothing", async () => {
     const { host } = await conversation({ off: true });
     expect((await host.listTools()).tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "check_inbox"]);
