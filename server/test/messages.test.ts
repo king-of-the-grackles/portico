@@ -66,7 +66,7 @@ describe("sending", () => {
     const { p, chris, grok } = await setup();
     const { agent: session } = addSession(p, addComputer(p, chris).computer);
     const sent: string[] = [];
-    p.agentStreams.connect(session.id, { send: (event) => sent.push(event), close() {} });
+    p.agentStreams.connect(session.id, session.id, { send: (event) => sent.push(event), close() {} });
     const { message, delivery } = p.messages.send(grok, { to: session.name, subject: "s", text: "t" });
     expect(delivery).toBe("pushed");
     await flush();

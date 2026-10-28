@@ -21,7 +21,6 @@ interface AgentRow {
   description: string;
   computer_id: string | null;
   computer: string | null;
-  session_key: string | null;
   folder: string | null;
   folder_id: string | null;
   approval_required: number;
@@ -39,7 +38,6 @@ function toAgent(row: AgentRow): Agent {
     description: row.description,
     computerId: row.computer_id,
     computer: row.computer,
-    sessionKey: row.session_key,
     folder: row.folder,
     folderId: row.folder_id,
     approvalRequired: row.approval_required === 1,
@@ -81,7 +79,7 @@ export function sessionBaseName(repo: string, client: SessionClient = "claude-co
 
 /** What a session's plugin or bridge sends when it opens its stream. */
 export interface Registration {
-  /** The random ID the plugin made when it started. */
+  /** The random ID the plugin made when it started: names the run. An identifier, not a secret. */
   key: string;
   /** The repo basename. */
   repo: string;
@@ -97,11 +95,40 @@ const MAX_REPO = 200;
 const MAX_DEDUPE = 99;
 /** A session's last_seen_at is written by its status reports at most this often. */
 const TOUCH_INTERVAL_MS = 60_000;
-/**
- * A disconnected session's row can be taken over by a new session in its folder only after this long, so a session
- * between reconnect attempts (the plugin waits at most a minute) keeps its name, threads and messages.
- */
-const INHERIT_AFTER_MS = 3 * 60_000;
+
+/** One process start of a session agent: Claude Code or a Codex conversation, in the agent's folder. */
+export interface Run {
+  id: string;
+  agentId: string;
+  computerId: string;
+  client: SessionClient;
+  startedAt: string;
+  lastSeenAt: string;
+  /** When its stream closed; null while open, or when Portico stopped before it closed. */
+  endedAt: string | null;
+}
+
+interface RunRow {
+  id: string;
+  agent_id: string;
+  computer_id: string;
+  client: string;
+  started_at: string;
+  last_seen_at: string;
+  ended_at: string | null;
+}
+
+function toRun(row: RunRow): Run {
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    computerId: row.computer_id,
+    client: row.client === "codex" ? "codex" : "claude-code",
+    startedAt: row.started_at,
+    lastSeenAt: row.last_seen_at,
+    endedAt: row.ended_at,
+  };
+}
 
 /** The registration headers and query, checked. The repo defaults to "session", the client to Claude Code (older plugins send none). */
 export function parseRegistration(key: unknown, folderId: unknown, repo: unknown, client?: unknown): Registration {
@@ -365,20 +392,23 @@ export class Agents {
   // ---- sessions ----
 
   /**
-   * The same key reconnecting keeps its row. Otherwise a session in the same folder that has been disconnected for 3
-   * minutes is inherited, shortest name first, then most recently seen. Otherwise a new row gets the first free name on the computer: `<repo>-claude`,
-   * `-2`, `-3`, and so on. A new key in a folder whose switch is off is refused with `folder_off`.
+   * Each coding agent in each folder is one agent; each process start is a run of it. The same key reconnecting keeps
+   * its run. A new key in the folder is a new run of the folder's agent, made the first time with the first free name on
+   * the computer: `<repo>-claude`, then `-2`, `-3` for other folders with the same name. A new key in a folder whose
+   * switch is off is refused with `folder_off`.
    */
-  registerSession(computer: Computer, registration: Registration): { agent: Agent; inherited: boolean } {
+  registerSession(computer: Computer, registration: Registration): { agent: Agent; runId: string; created: boolean } {
     const reg = { ...registration, client: registration.client ?? "claude-code" };
     const at = this.iso();
     const outcome = this.db.transaction(() => {
       const same = this.db
-        .query(`${SELECT} WHERE a.computer_id = $computerId AND a.session_key = $key`)
-        .get({ computerId: computer.id, key: reg.key }) as AgentRow | null;
+        .query("SELECT agent_id, id FROM agent_runs WHERE computer_id = $computerId AND session_key = $key")
+        .get({ computerId: computer.id, key: reg.key }) as { agent_id: string; id: string } | null;
       if (same) {
-        this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: same.id, at });
-        return { agent: this.require(same.id), inherited: false };
+        this.presence.startRun(same.id);
+        this.db.query("UPDATE agent_runs SET last_seen_at = $at, ended_at = NULL WHERE id = $id").run({ id: same.id, at });
+        this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: same.agent_id, at });
+        return { agent: this.require(same.agent_id), runId: same.id, created: false };
       }
 
       if (this.computers.folderJoins(computer.id, reg.folderId) === false) {
@@ -389,77 +419,98 @@ export class Agents {
         );
       }
 
-      const sessions = this.sessionsOn(computer.id);
-      const quietSince = this.iso(-INHERIT_AFTER_MS);
-      // Only a session of the same kind: a Codex session never takes over a Claude Code session's name and threads.
-      const stale = sessions
-        .filter(
-          (s) =>
-            s.folderId === reg.folderId &&
-            s.kind === reg.client &&
-            !this.isConnected(s.id) &&
-            (s.lastSeenAt ?? s.createdAt) <= quietSince,
+      const existing = this.db
+        .query(
+          `SELECT id FROM agents WHERE type = 'session' AND computer_id = $computerId AND folder_id = $folderId AND kind = $kind`,
         )
-        .sort(
-          (a, b) => a.name.length - b.name.length || (b.lastSeenAt ?? "").localeCompare(a.lastSeenAt ?? ""),
-        )[0];
-      if (stale) {
-        this.db
-          .query("UPDATE agents SET session_key = $key, last_seen_at = $at WHERE id = $id")
-          .run({ id: stale.id, key: reg.key, at });
-        this.log("session_inherited", { agent_id: stale.id });
-        return { agent: this.require(stale.id), inherited: true };
+        .get({ computerId: computer.id, folderId: reg.folderId, kind: reg.client }) as { id: string } | null;
+      let agentId = existing?.id;
+      if (!agentId) {
+        const base = sessionBaseName(reg.repo, reg.client);
+        const taken = new Set(this.sessionsOn(computer.id).map((s) => s.name));
+        let name = base;
+        for (let n = 2; taken.has(name); n++) {
+          if (n > MAX_DEDUPE) throw new PorticoError("rate_limited", `Too many sessions named ${base} on ${computer.name}.`);
+          name = `${base}-${n}`;
+        }
+        const folder = reg.repo.slice(0, 100);
+        agentId = this.newId();
+        this.insert({
+          id: agentId,
+          ownerId: computer.ownerId,
+          name,
+          kind: reg.client,
+          type: "session",
+          description: `${CLIENTS[reg.client].label} in ${folder} on ${computer.name}`,
+          computerId: computer.id,
+          folder,
+          folderId: reg.folderId,
+          createdAt: at,
+          lastSeenAt: at,
+        });
+        this.log("session_registered", { agent_id: agentId });
+      } else {
+        this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: agentId, at });
       }
-
-      const base = sessionBaseName(reg.repo, reg.client);
-      const taken = new Set(sessions.map((s) => s.name));
-      let name = base;
-      for (let n = 2; taken.has(name); n++) {
-        if (n > MAX_DEDUPE) throw new PorticoError("rate_limited", `Too many sessions named ${base} on ${computer.name}.`);
-        name = `${base}-${n}`;
-      }
-      const folder = reg.repo.slice(0, 100);
-      const id = this.newId();
-      this.insert({
-        id,
-        ownerId: computer.ownerId,
-        name,
-        kind: reg.client,
-        type: "session",
-        description: `${CLIENTS[reg.client].label} in ${folder} on ${computer.name}`,
-        computerId: computer.id,
-        sessionKey: reg.key,
-        folder,
-        folderId: reg.folderId,
-        createdAt: at,
-        lastSeenAt: at,
-      });
-      this.log("session_registered", { agent_id: id });
-      return { agent: this.require(id), inherited: false };
+      const runId = this.newId();
+      this.db
+        .query(
+          `INSERT INTO agent_runs (id, agent_id, computer_id, session_key, client, started_at, last_seen_at)
+           VALUES ($id, $agentId, $computerId, $key, $client, $at, $at)`,
+        )
+        .run({ id: runId, agentId, computerId: computer.id, key: reg.key, client: reg.client, at });
+      this.log("run_started", { agent_id: agentId, run_id: runId });
+      return { agent: this.require(agentId), runId, created: !existing };
     })();
     this.changes.emit("agents");
     return outcome;
   }
 
-  /** The session behind a computer token and a session key, or null when the key isn't registered there. */
-  sessionByKey(computerId: string, key: string): Agent | null {
+  /** The session and run behind a computer token and a session key, or null when the key isn't registered there. */
+  sessionByKey(computerId: string, key: string): { agent: Agent; runId: string } | null {
     const row = this.db
-      .query(`${SELECT} WHERE a.computer_id = $computerId AND a.session_key = $key`)
-      .get({ computerId, key }) as AgentRow | null;
-    return row ? toAgent(row) : null;
+      .query("SELECT agent_id, id FROM agent_runs WHERE computer_id = $computerId AND session_key = $key")
+      .get({ computerId, key }) as { agent_id: string; id: string } | null;
+    const agent = row ? this.get(row.agent_id) : null;
+    return agent ? { agent, runId: row!.id } : null;
   }
 
-  /** Writes last_seen_at when a session's stream closes. Does nothing when the row is gone. */
-  seen(agentId: string): void {
-    this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: agentId, at: this.iso() });
+  /** The agent a run belongs to, or null when the run is gone. */
+  byRun(runId: string): Agent | null {
+    const row = this.db.query("SELECT agent_id FROM agent_runs WHERE id = $runId").get({ runId }) as { agent_id: string } | null;
+    return row ? this.get(row.agent_id) : null;
+  }
+
+  /** The agent's runs, newest first. */
+  runs(agentId: string, limit = 20): Run[] {
+    return (
+      this.db
+        .query("SELECT * FROM agent_runs WHERE agent_id = $agentId ORDER BY started_at DESC, id LIMIT $limit")
+        .all({ agentId, limit }) as RunRow[]
+    ).map(toRun);
+  }
+
+  /** How many runs the agent has had, as far back as they're kept. */
+  runCount(agentId: string): number {
+    return (this.db.query("SELECT COUNT(*) AS n FROM agent_runs WHERE agent_id = $agentId").get({ agentId }) as { n: number }).n;
+  }
+
+  /** Ends a run when its stream closes, and writes when the agent was last here. Does nothing when the rows are gone. */
+  seen(agentId: string, runId: string): void {
+    const at = this.iso();
+    this.db.query("UPDATE agent_runs SET last_seen_at = $at, ended_at = $at WHERE id = $id").run({ id: runId, at });
+    this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: agentId, at });
+    this.presence.endRun(agentId, runId);
     this.changes.emit("agents");
   }
 
-  /** Writes a session's last_seen_at for a status report, at most once a minute. */
-  touch(agent: Agent): void {
+  /** Writes a session's last_seen_at for a status report, at most once a minute, on the agent and its run. */
+  touch(agent: Agent, runId?: string | null): void {
     const now = this.now();
     if (agent.lastSeenAt && now.getTime() - Date.parse(agent.lastSeenAt) < TOUCH_INTERVAL_MS) return;
-    this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: agent.id, at: now.toISOString() });
+    const at = now.toISOString();
+    this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: agent.id, at });
+    if (runId) this.db.query("UPDATE agent_runs SET last_seen_at = $at WHERE id = $id").run({ id: runId, at });
   }
 
   // ---- apps and connectors ----
@@ -480,7 +531,6 @@ export class Agents {
       type: input.type,
       description: input.description === undefined ? "" : checkDescription(input.description),
       computerId: null,
-      sessionKey: null,
       folder: null,
       folderId: null,
       createdAt: this.iso(),
@@ -616,23 +666,20 @@ export class Agents {
     for (const id of agentIds) this.presence.forget(id);
   }
 
-  /** Deletes sessions offline for a week. Returns how many. */
-  sweep(): number {
-    const cutoff = this.iso(-LIMITS.sessionRetentionDays * DAY_MS);
-    const stale = (
+  /**
+   * Deletes runs last seen more than the history window ago, except a run that may still be open (no end, and its
+   * agent connected). Agents themselves are kept. Returns how many.
+   */
+  pruneRuns(): number {
+    const cutoff = this.iso(-LIMITS.historyDays * DAY_MS);
+    const old = (
       this.db
-        .query("SELECT id FROM agents WHERE type = 'session' AND COALESCE(last_seen_at, created_at) < $cutoff")
-        .all({ cutoff }) as { id: string }[]
-    )
-      .map((row) => row.id)
-      .filter((id) => !this.isConnected(id));
-    const remove = this.db.query("DELETE FROM agents WHERE id = $id");
-    for (const id of stale) remove.run({ id });
-    if (stale.length > 0) {
-      for (const id of stale) this.presence.forget(id);
-      this.changes.emit("agents", "threads");
-    }
-    return stale.length;
+        .query("SELECT id, agent_id, ended_at FROM agent_runs WHERE COALESCE(ended_at, last_seen_at) < $cutoff")
+        .all({ cutoff }) as { id: string; agent_id: string; ended_at: string | null }[]
+    ).filter((run) => run.ended_at !== null || !this.isConnected(run.agent_id));
+    const remove = this.db.query("DELETE FROM agent_runs WHERE id = $id");
+    for (const run of old) remove.run({ id: run.id });
+    return old.length;
   }
 
   // ---- helpers ----
@@ -657,9 +704,9 @@ export class Agents {
   private insert(a: Omit<Agent, "computer" | "approvalRequired">): void {
     this.db
       .query(
-        `INSERT INTO agents (id, owner_id, name, kind, type, description, computer_id, session_key, folder, folder_id,
+        `INSERT INTO agents (id, owner_id, name, kind, type, description, computer_id, folder, folder_id,
            approval_required, created_at, last_seen_at)
-         VALUES ($id, $ownerId, $name, $kind, $type, $description, $computerId, $sessionKey, $folder, $folderId,
+         VALUES ($id, $ownerId, $name, $kind, $type, $description, $computerId, $folder, $folderId,
            0, $createdAt, $lastSeenAt)`,
       )
       .run({
@@ -670,7 +717,6 @@ export class Agents {
         type: a.type,
         description: a.description,
         computerId: a.computerId,
-        sessionKey: a.sessionKey,
         folder: a.folder,
         folderId: a.folderId,
         createdAt: a.createdAt,

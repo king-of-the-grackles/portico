@@ -39,7 +39,7 @@ export function popupAnswerRoutes(deps: PopupAnswerDeps): Hono<AgentEnv> {
     const messageId = c.req.param("messageId");
     const refused = (why: "decided" | "no_request") =>
       log("warn", "popup_answer_refused", { message_id: clip(messageId, 64), agent_id: agent.id, why });
-    const state = deps.desk.check(messageId, agent.id, body.nonce);
+    const state = deps.desk.check(messageId, c.get("runId") ?? "", body.nonce);
     if (state !== "open") {
       refused(state === "closed" ? "decided" : "no_request");
       if (state === "closed") throw new PorticoError("wrong_status", "The message was already decided.");

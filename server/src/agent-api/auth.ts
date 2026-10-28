@@ -5,7 +5,8 @@ import { PorticoError } from "../core/errors";
 import type { Agent, Computer } from "../core/types";
 
 /** Who a bearer token (plus, for a computer token, a session key) speaks for. */
-export type Principal = { type: "agent"; agent: Agent } | { type: "computer"; computer: Computer };
+/** A session also names its run: the process the session key came from. */
+export type Principal = { type: "agent"; agent: Agent; runId: string | null } | { type: "computer"; computer: Computer };
 
 export interface Resolver {
   /** Portico's public URL, for the 401's pointer to the OAuth metadata. */
@@ -33,10 +34,10 @@ export function makeResolver(agents: Agents, computers: Computers, publicUrl: ()
       if (!computer) return null;
       if (!sessionKey) return { type: "computer", computer };
       const session = agents.sessionByKey(computer.id, sessionKey);
-      return session ? { type: "agent", agent: session } : null;
+      return session ? { type: "agent", agent: session.agent, runId: session.runId } : null;
     }
     const agent = agents.byToken(token);
-    return agent ? { type: "agent", agent } : null;
+    return agent ? { type: "agent", agent, runId: null } : null;
   };
   return {
     publicUrl,
@@ -48,7 +49,7 @@ export function makeResolver(agents: Agents, computers: Computers, publicUrl: ()
   };
 }
 
-export type AgentEnv = { Variables: { agent: Agent } };
+export type AgentEnv = { Variables: { agent: Agent; runId: string | null } };
 
 /** For a computer token whose session key isn't registered: before the first hello, or after a refused registration. */
 export const NOT_REGISTERED =
@@ -68,12 +69,13 @@ export function unauthorized(c: Context, resolver: Pick<Resolver, "publicUrl">, 
 export function requireAgent(resolver: Resolver): MiddlewareHandler<AgentEnv> {
   return async (c, next) => {
     const authorization = c.req.header("authorization");
-    const agent = resolver.agent(authorization, c.req.header("x-portico-session"));
-    if (!agent) {
+    const found = resolver.principal(authorization, c.req.header("x-portico-session"));
+    if (found?.type !== "agent") {
       const computerToken = resolver.principal(authorization)?.type === "computer";
       return unauthorized(c, resolver, computerToken ? NOT_REGISTERED : undefined);
     }
-    c.set("agent", agent);
+    c.set("agent", found.agent);
+    c.set("runId", found.runId);
     await next();
   };
 }

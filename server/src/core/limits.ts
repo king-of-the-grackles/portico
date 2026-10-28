@@ -8,10 +8,8 @@ export const LIMITS = {
   /** A held or pending message is delivered or decided within this, or expires. */
   messageExpiryHours: 24,
   historyDays: 30,
-  /** Offline sessions leave the agent list after this. */
+  /** Offline sessions leave the agents' list_agents after this; they stay on Portico. */
   sessionListHours: 24,
-  /** Offline sessions' rows are deleted after this. */
-  sessionRetentionDays: 7,
   joinLineHours: 24,
   signInRequestMinutes: 10,
   inviteDays: 7,

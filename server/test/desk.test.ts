@@ -9,9 +9,10 @@ function setup() {
   let n = 0;
   const desk = new Desk({ streams, now: clock.now, newNonce: () => `nonce-${++n}` });
   streams.onChange((change) => desk.streamChanged(change));
-  const connect = (agentId: string, computerId: string, ownerId: string, popup = true) => {
+  // Each run is its own pop-up target; two runs of one agent count separately.
+  const connect = (runId: string, computerId: string, ownerId: string, popup = true, agentId = `agent-${runId}`) => {
     const fake = fakeConnection();
-    const disconnect = streams.connect(agentId, fake.conn, "quiet", { computerId, ownerId, popup });
+    const disconnect = streams.connect(agentId, runId, fake.conn, "quiet", { computerId, ownerId, popup });
     return { ...fake, disconnect };
   };
   const held = (messageId: string, ownerId = "chris") => ({
@@ -27,6 +28,19 @@ function setup() {
 }
 
 describe("pop-up requests for held messages", () => {
+  test("two runs of one agent are elected one at a time, by run", () => {
+    const { desk, connect, held } = setup();
+    const first = connect("run-1", "macbook", "chris", true, "portico-claude");
+    const second = connect("run-2", "macbook", "chris", true, "portico-claude");
+    desk.open(held("msg-1"));
+    expect(first.sent.map((s) => s.event)).toEqual(["approval_request"]);
+    expect(second.sent).toEqual([]);
+    expect(desk.check("msg-1", "run-2", "nonce-1")).toBe("unknown");
+    first.disconnect();
+    expect(second.sent.map((s) => s.event)).toEqual(["approval_request"]);
+    expect(desk.check("msg-1", "run-2", "nonce-2")).toBe("open");
+  });
+
   test("go to the oldest pop-up session on each of the owner's computers, and nobody else's", () => {
     const { desk, connect, held } = setup();
     const a1 = connect("a1", "macbook", "chris");

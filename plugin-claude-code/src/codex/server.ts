@@ -1,5 +1,5 @@
-// The MCP server Codex starts for each conversation: the conversation joins Portico as its own session,
-// <repo>-codex@<computer>. Portico can't push into Codex, so the session checks its inbox (with wait for replies), and
+// The MCP server Codex starts for each conversation: the conversation joins Portico as a run of the folder's Codex
+// agent, <repo>-codex@<computer>. Portico can't push into Codex, so the session checks its inbox (with wait for replies), and
 // Codex's Stop hook hands it new messages at the end of each turn.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";

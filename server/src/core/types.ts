@@ -38,11 +38,12 @@ export interface Agent {
   /** Sessions only: the computer, and its name joined in on read. */
   computerId: string | null;
   computer: string | null;
-  /** Sessions only: the random ID the plugin made when it started. An identifier, not a secret. */
-  sessionKey: string | null;
   /** Sessions only: the repo basename. */
   folder: string | null;
-  /** Sessions only: HMAC of the full folder path, keyed with the computer token. */
+  /**
+   * Sessions only: HMAC of the full folder path, keyed with the computer token. With the kind, it names the agent: every
+   * session of one coding agent in one folder is the same agent. Null for an agent that left its folder.
+   */
   folderId: string | null;
   approvalRequired: boolean;
   createdAt: string;

@@ -160,8 +160,8 @@ async function join(args: string[], io: CodexCliIo, deps: CodexCliDeps): Promise
   if (hook) io.out(hook);
   io.out("Next: in Codex, open /hooks and approve the Portico Stop hook. Codex skips a new hook until a person approves the hook.");
   io.out(
-    "Then start a new Codex conversation (or restart Codex). Each conversation joins Portico as <repo>-codex@<computer>; " +
-      "conversations already open don't.",
+    "Then start a new Codex conversation (or restart Codex). Conversations join Portico as <repo>-codex@<computer>, one " +
+      "agent per folder; conversations already open don't.",
   );
   return 0;
 }

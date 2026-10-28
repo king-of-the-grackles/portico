@@ -86,6 +86,8 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
     const waitMs = inboxWaitMs(c.req.query("wait"));
     if (waitMs > 0) {
       const outcome = await messages.waitForInbox(agent, waitMs, {
+        // Each terminal or Codex conversation in a folder gets its own allowance of waiting calls.
+        slot: c.get("runId") ?? undefined,
         signal: c.req.raw.signal,
         valid: () => deps.resolver.agent(c.req.header("authorization"), c.req.header("x-portico-session"))?.id === agent.id,
       });
@@ -118,15 +120,19 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
     requireSession(agent, "report status");
     const report = parseStatusReport(await readJson(c));
     const before = presence.get(agent.id);
-    presence.report(agent.id, report, deps.now().toISOString());
-    agents.touch(agent);
-    // The plugin repeats an unchanged report as a heartbeat; only a change is worth every open page's refetch.
+    const runId = c.get("runId");
+    presence.report(agent.id, runId ?? agent.id, report, deps.now().toISOString());
+    agents.touch(agent, runId);
+    // The plugin repeats an unchanged report as a heartbeat; only a change in what the agent shows (the busiest run's
+    // report) is worth every open page's refetch.
+    const after = presence.get(agent.id);
     const changed =
       !before ||
-      before.status !== report.status ||
-      before.doing !== report.doing ||
-      before.repo !== report.repo ||
-      before.branch !== report.branch;
+      !after ||
+      before.status !== after.status ||
+      before.doing !== after.doing ||
+      before.repo !== after.repo ||
+      before.branch !== after.branch;
     if (changed) deps.changes.emit("agents");
     return c.json({ ok: true });
   });

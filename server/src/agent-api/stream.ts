@@ -36,6 +36,7 @@ export interface StreamInfo {
 }
 
 interface OpenStream extends StreamInfo {
+  agentId: string;
   conn: StreamConnection;
   /** Grows with every connect, so a lower number is an older connection. */
   order: number;
@@ -43,17 +44,31 @@ interface OpenStream extends StreamInfo {
 
 const NO_INFO: StreamInfo = { computerId: null, ownerId: null, popup: false };
 
-/** Each agent's live stream, by agent ID. One per agent: a new stream replaces the old one. */
+/**
+ * The live streams, one per run: each process of a session agent (a terminal, a Codex conversation) has its own. A
+ * run that reconnects replaces its older stream. Events for the agent go to its newest run, so two terminals in one
+ * folder never both take the same delivery.
+ */
 export class AgentStreams {
   private readonly open = new Map<string, OpenStream>();
+  private readonly byAgent = new Map<string, Set<string>>();
   private readonly listeners: ((change: StreamChange) => void)[] = [];
   private connections = 0;
 
-  /** Registers the agent's stream, closing any older one. Returns a function to call when this stream ends. */
-  connect(agentId: string, conn: StreamConnection, mode: ReplaceMode = "notify", info: StreamInfo = NO_INFO): () => void {
-    const entry: OpenStream = { conn, ...info, order: ++this.connections };
-    const old = this.open.get(agentId);
-    this.open.set(agentId, entry);
+  /** Registers the run's stream, closing any older one of the same run. Returns a function to call when this stream ends. */
+  connect(
+    agentId: string,
+    runId: string,
+    conn: StreamConnection,
+    mode: ReplaceMode = "notify",
+    info: StreamInfo = NO_INFO,
+  ): () => void {
+    const entry: OpenStream = { agentId, conn, ...info, order: ++this.connections };
+    const old = this.open.get(runId);
+    this.open.set(runId, entry);
+    const runs = this.byAgent.get(agentId) ?? new Set<string>();
+    runs.add(runId);
+    this.byAgent.set(agentId, runs);
     if (old) {
       if (mode === "notify") {
         try {
@@ -64,31 +79,41 @@ export class AgentStreams {
       }
       old.conn.close();
     }
-    this.emit({ kind: "opened", agentId, ...info });
+    this.emit({ kind: "opened", agentId, runId, ...info });
     return () => {
-      if (this.open.get(agentId) !== entry) return;
-      this.open.delete(agentId);
-      this.emit({ kind: "closed", agentId, computerId: entry.computerId, ownerId: entry.ownerId, popup: entry.popup });
+      if (this.open.get(runId) !== entry) return;
+      this.drop(runId, entry);
     };
   }
 
+  /** Whether any of the agent's runs has a stream open. */
   isConnected(agentId: string): boolean {
-    return this.open.has(agentId);
+    return (this.byAgent.get(agentId)?.size ?? 0) > 0;
   }
 
-  /** Closes and forgets every named stream, then reports each closed: no listener sees one of them still open. */
+  isRunConnected(runId: string): boolean {
+    return this.open.has(runId);
+  }
+
+  /** How many of the agent's runs are open. */
+  liveRuns(agentId: string): number {
+    return this.byAgent.get(agentId)?.size ?? 0;
+  }
+
+  /** Closes and forgets every stream of the named agents, then reports each closed: no listener sees one still open. */
   closeAll(agentIds: string[]): void {
     const removed: [string, OpenStream][] = [];
     for (const agentId of agentIds) {
-      const entry = this.open.get(agentId);
-      if (!entry) continue;
-      this.open.delete(agentId);
-      entry.conn.close();
-      removed.push([agentId, entry]);
+      for (const runId of this.byAgent.get(agentId) ?? []) {
+        const entry = this.open.get(runId);
+        if (!entry) continue;
+        this.open.delete(runId);
+        entry.conn.close();
+        removed.push([runId, entry]);
+      }
+      this.byAgent.delete(agentId);
     }
-    for (const [agentId, entry] of removed) {
-      this.emit({ kind: "closed", agentId, computerId: entry.computerId, ownerId: entry.ownerId, popup: entry.popup });
-    }
+    for (const [runId, entry] of removed) this.emitClosed(runId, entry);
   }
 
   /** "The inbox has something." Returns false if the agent has no open stream. */
@@ -96,31 +121,41 @@ export class AgentStreams {
     return this.send(agentId, "nudge", {});
   }
 
-  /** Sends one event. Returns false when the agent has no open stream, or the send failed and dropped it. */
+  /** Sends one event to the agent's newest run, or the next newest if that send fails. False when none took it. */
   send(agentId: string, event: AgentStreamEvent, data: Record<string, unknown>): boolean {
-    const entry = this.open.get(agentId);
+    for (const runId of this.newestFirst(agentId)) {
+      if (this.sendRun(runId, event, data)) return true;
+    }
+    return false;
+  }
+
+  /** Sends one event to every open run of the agent, e.g. its new name. Returns how many took it. */
+  sendAll(agentId: string, event: AgentStreamEvent, data: Record<string, unknown>): number {
+    return this.newestFirst(agentId).filter((runId) => this.sendRun(runId, event, data)).length;
+  }
+
+  /** Sends one event to one run. Returns false when it has no open stream, or the send failed and dropped it. */
+  sendRun(runId: string, event: AgentStreamEvent, data: Record<string, unknown>): boolean {
+    const entry = this.open.get(runId);
     if (!entry) return false;
     try {
       entry.conn.send(event, data);
       return true;
     } catch {
-      if (this.open.get(agentId) === entry) {
-        this.open.delete(agentId);
-        this.emit({ kind: "closed", agentId, computerId: entry.computerId, ownerId: entry.ownerId, popup: entry.popup });
-      }
+      if (this.open.get(runId) === entry) this.drop(runId, entry);
       return false;
     }
   }
 
-  /** The computer's pop-up sessions, oldest connection first. */
+  /** The computer's pop-up runs, oldest connection first. */
   popupSessions(computerId: string): string[] {
     return [...this.open]
       .filter(([, entry]) => entry.popup && entry.computerId === computerId)
       .sort(([, a], [, b]) => a.order - b.order)
-      .map(([agentId]) => agentId);
+      .map(([runId]) => runId);
   }
 
-  /** The person's computers with at least one pop-up session, sorted. */
+  /** The person's computers with at least one pop-up run, sorted. */
   popupComputers(ownerId: string): string[] {
     const computers = new Set<string>();
     for (const entry of this.open.values()) {
@@ -132,6 +167,25 @@ export class AgentStreams {
   /** Listeners run in order, synchronously. One that throws is logged and never breaks the others. */
   onChange(listener: (change: StreamChange) => void): void {
     this.listeners.push(listener);
+  }
+
+  private newestFirst(agentId: string): string[] {
+    return [...(this.byAgent.get(agentId) ?? [])]
+      .map((runId) => [runId, this.open.get(runId)!.order] as const)
+      .sort((a, b) => b[1] - a[1])
+      .map(([runId]) => runId);
+  }
+
+  private drop(runId: string, entry: OpenStream): void {
+    this.open.delete(runId);
+    const runs = this.byAgent.get(entry.agentId);
+    runs?.delete(runId);
+    if (runs?.size === 0) this.byAgent.delete(entry.agentId);
+    this.emitClosed(runId, entry);
+  }
+
+  private emitClosed(runId: string, entry: OpenStream): void {
+    this.emit({ kind: "closed", agentId: entry.agentId, runId, computerId: entry.computerId, ownerId: entry.ownerId, popup: entry.popup });
   }
 
   private emit(change: StreamChange): void {
@@ -162,7 +216,8 @@ export interface StreamRouteDeps {
 
 /**
  * GET /api/agent/stream: a session's live stream, opened with its computer token and session key. The first open for
- * a new key registers the session. Apps and connectors check their inbox instead.
+ * a new key starts a run of the folder's agent (making the agent the first time). Apps and connectors check their
+ * inbox instead.
  */
 export function streamRoutes(deps: StreamRouteDeps): Hono {
   const { agents, messages, streams } = deps;
@@ -182,7 +237,7 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
       c.req.query("repo"),
       c.req.header("x-portico-client"),
     );
-    const { agent } = agents.registerSession(computer, reg);
+    const { agent, runId } = agents.registerSession(computer, reg);
     // Only a session can answer a pop-up, so only its stream may declare pop-ups.
     const info: StreamInfo = { computerId: computer.id, ownerId: computer.ownerId, popup: c.req.header("x-portico-popup") === "1" };
     return streamSSE(c, async (stream) => {
@@ -209,8 +264,8 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
       };
       stream.onAbort(() => end());
       // Connected in the same tick as the registration above, so no other registration can take this session as stale.
-      const disconnect = streams.connect(agent.id, conn, "quiet", info);
-      log("info", "stream_opened", { agent_id: agent.id });
+      const disconnect = streams.connect(agent.id, runId, conn, "quiet", info);
+      log("info", "stream_opened", { agent_id: agent.id, run_id: runId });
       try {
         // Flushes the response headers now; otherwise a client's fetch() waits for the first event or heartbeat.
         await stream.write(": connected\n\n");
@@ -231,9 +286,10 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
         log("error", "stream_failed", { agent_id: agent.id, error: errorName(err) });
       } finally {
         disconnect();
-        // The session shows offline now; its row remembers when it was last here.
-        agents.seen(agent.id);
-        log("info", "stream_closed", { agent_id: agent.id });
+        // The run has ended, unless it reconnected and a newer stream of it is open; the agent shows offline once
+        // none of its runs are open, and its row remembers when it was last here.
+        if (!streams.isRunConnected(runId)) agents.seen(agent.id, runId);
+        log("info", "stream_closed", { agent_id: agent.id, run_id: runId });
       }
     });
   });

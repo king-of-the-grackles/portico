@@ -71,7 +71,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       agentStreams.closeAll(ids);
       inboxWaits.wake(...ids);
     },
-    renamed: (agent) => agentStreams.send(agent.id, "renamed", { ...helloFor(agents, agent) }),
+    renamed: (agent) => agentStreams.sendAll(agent.id, "renamed", { ...helloFor(agents, agent) }),
   });
   const desk = new Desk({ streams: agentStreams, now, newNonce: opts.newNonce, log: logInfo });
   agentStreams.onChange((change) => desk.streamChanged(change));
@@ -187,7 +187,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     },
     sweepDaily() {
       sweep("history", () => messages.prune());
-      sweep("sessions", () => agents.sweep());
+      sweep("runs", () => agents.pruneRuns());
       sweep("web_sessions", () => accounts.sweep());
       sweep("people", () => people.sweep());
       sweep("computers", () => computers.sweep());

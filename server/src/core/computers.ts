@@ -353,16 +353,15 @@ export class Computers {
   }
 
   /**
-   * Sets each recent computer line's agent to the first session of the line's kind registered on its computer since the
-   * line was used, once one has. A session that took over an older row (same folder, same kind) counts by when it
-   * registered, which its last_seen_at records.
+   * Sets each recent computer line's agent to the agent of the first run of the line's kind started on its computer
+   * since the line was used, once one has.
    */
   linkFirstSessions(): number {
-    const first = `FROM agents a WHERE a.computer_id = join_lines.computer_id AND a.type = 'session'
-           AND a.kind = join_lines.kind AND COALESCE(a.last_seen_at, a.created_at) >= join_lines.used_at`;
+    const first = `FROM agent_runs r WHERE r.computer_id = join_lines.computer_id AND r.client = join_lines.kind
+           AND r.started_at >= join_lines.used_at`;
     const changed = this.db
       .query(
-        `UPDATE join_lines SET agent_id = (SELECT a.id ${first} ORDER BY COALESCE(a.last_seen_at, a.created_at), a.id LIMIT 1)
+        `UPDATE join_lines SET agent_id = (SELECT r.agent_id ${first} ORDER BY r.started_at, r.id LIMIT 1)
          WHERE agent_id IS NULL AND computer_id IS NOT NULL AND used_at >= $since AND EXISTS (SELECT 1 ${first})`,
       )
       .run({ since: this.iso(-LIMITS.joinLineHours * HOUR_MS) }).changes;

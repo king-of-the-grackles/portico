@@ -6,10 +6,10 @@ import { sameSecret } from "./core/tokens";
 export const PANEL_TEXT_MAX = 500;
 const HOUR_MS = 3_600_000;
 
-/** Sent on the elected session's stream. */
+/** Sent on the elected run's stream. */
 export interface ApprovalRequestEvent {
   messageId: string;
-  /** Random per message and session; the answer must carry it. Never logged. */
+  /** Random per message and run; the answer must carry it. Never logged. */
   nonce: string;
   /** The sender's and recipient's display names. */
   from: string;
@@ -20,7 +20,7 @@ export interface ApprovalRequestEvent {
   expiresAt: string;
 }
 
-/** Sent to every connected session that was sent the request, once the message is decided or expires. */
+/** Sent to every connected run that was sent the request, once the message is decided or expires. */
 export interface ApprovalClosedEvent {
   messageId: string;
   outcome: "allowed" | "declined" | "expired";
@@ -41,28 +41,30 @@ export interface HeldRequest {
 interface OpenRequest {
   ownerId: string;
   view: Omit<ApprovalRequestEvent, "nonce">;
-  /** Every session ever sent this request, with the nonce it got. */
+  /** Every run ever sent this request, with the nonce it got. */
   nonces: Map<string, string>;
-  /** Computer ID → the session elected there. */
+  /** Computer ID → the run elected there. */
   holders: Map<string, string>;
   closed: ApprovalClosedEvent["outcome"] | null;
 }
 
-/** `opened` for every connection, reconnects included; `closed` only when the agent loses its stream. */
+/** `opened` for every connection, reconnects included; `closed` only when the run loses its stream. */
 export interface StreamChange {
   kind: "opened" | "closed";
   agentId: string;
+  runId: string;
   computerId: string | null;
   ownerId: string | null;
   popup: boolean;
 }
 
+/** The desk talks to runs: each terminal or Codex conversation that can show pop-ups. */
 export interface DeskStreams {
-  send(agentId: string, event: "approval_request" | "approval_closed", data: Record<string, unknown>): boolean;
-  isConnected(agentId: string): boolean;
-  /** The computer's pop-up sessions, oldest connection first. */
+  sendRun(runId: string, event: "approval_request" | "approval_closed", data: Record<string, unknown>): boolean;
+  isRunConnected(runId: string): boolean;
+  /** The computer's pop-up runs, oldest connection first. */
   popupSessions(computerId: string): string[];
-  /** The person's computers with at least one pop-up session. */
+  /** The person's computers with at least one pop-up run. */
   popupComputers(ownerId: string): string[];
 }
 
@@ -81,9 +83,9 @@ export interface DeskDeps {
 }
 
 /**
- * Open pop-up requests for held messages, in memory. Each request goes to one pop-up session on each computer of the
- * person who decides: the one whose stream connected first. When that stream closes, the next session there is
- * elected. A decision closes the request everywhere it was sent.
+ * Open pop-up requests for held messages, in memory. Each request goes to one pop-up run on each computer of the
+ * person who decides: the one whose stream connected first. When that stream closes, the next run there is elected.
+ * A decision closes the request everywhere it was sent.
  */
 export class Desk {
   private readonly requests = new Map<string, OpenRequest>();
@@ -99,7 +101,7 @@ export class Desk {
     this.log = deps.log ?? (() => {});
   }
 
-  /** Opens a request for a held message and sends it to the oldest pop-up session on each of the owner's computers. */
+  /** Opens a request for a held message and sends it to the oldest pop-up run on each of the owner's computers. */
   open(held: HeldRequest): void {
     if (this.requests.has(held.messageId)) return;
     const request: OpenRequest = {
@@ -123,15 +125,15 @@ export class Desk {
     }
   }
 
-  /** Tells every connected session that was sent the request. The request is kept, closed, so a late answer gets 409. */
+  /** Tells every connected run that was sent the request. The request is kept, closed, so a late answer gets 409. */
   close(messageId: string, outcome: ApprovalClosedEvent["outcome"]): void {
     const request = this.requests.get(messageId);
     if (!request || request.closed) return;
     request.closed = outcome;
     request.holders.clear();
     const event: ApprovalClosedEvent = { messageId, outcome };
-    for (const agentId of request.nonces.keys()) {
-      if (this.streams.isConnected(agentId)) this.streams.send(agentId, "approval_closed", { ...event });
+    for (const runId of request.nonces.keys()) {
+      if (this.streams.isRunConnected(runId)) this.streams.sendRun(runId, "approval_closed", { ...event });
     }
   }
 
@@ -139,26 +141,26 @@ export class Desk {
   streamChanged(change: StreamChange): void {
     if (change.computerId === null || change.ownerId === null) return;
     if (change.kind === "closed") {
-      this.release(change.agentId, change.computerId);
+      this.release(change.runId, change.computerId);
       return;
     }
     if (!change.popup) {
-      // A holder that reopened without pop-ups (its panel failed to show) can't show the request: the next session takes it.
-      this.release(change.agentId, change.computerId);
+      // A holder that reopened without pop-ups (its panel failed to show) can't show the request: the next run takes it.
+      this.release(change.runId, change.computerId);
       return;
     }
     for (const request of this.requests.values()) {
       if (request.closed || request.ownerId !== change.ownerId) continue;
       const holder = request.holders.get(change.computerId);
       // No holder there yet, or the holder itself reconnecting: send it (again, with the same nonce).
-      if (holder === undefined || holder === change.agentId) this.send(request, change.computerId, change.agentId);
+      if (holder === undefined || holder === change.runId) this.send(request, change.computerId, change.runId);
     }
   }
 
-  /** "open" only for the nonce this session was sent. Unknown message, wrong nonce and another session's nonce look alike. */
-  check(messageId: string, agentId: string, nonce: string): "open" | "closed" | "unknown" {
+  /** "open" only for the nonce this run was sent. Unknown message, wrong nonce and another run's nonce look alike. */
+  check(messageId: string, runId: string, nonce: string): "open" | "closed" | "unknown" {
     const request = this.requests.get(messageId);
-    const sent = request?.nonces.get(agentId);
+    const sent = request?.nonces.get(runId);
     if (!request || sent === undefined || !sameSecret(sent, nonce)) return "unknown";
     return request.closed ? "closed" : "open";
   }
@@ -177,12 +179,12 @@ export class Desk {
     return removed;
   }
 
-  /** The session holds nothing on the computer now: each request it held goes to the next session there. */
-  private release(agentId: string, computerId: string): void {
+  /** The run holds nothing on the computer now: each request it held goes to the next run there. */
+  private release(runId: string, computerId: string): void {
     for (const request of this.requests.values()) {
-      if (request.closed || request.holders.get(computerId) !== agentId) continue;
+      if (request.closed || request.holders.get(computerId) !== runId) continue;
       request.holders.delete(computerId);
-      this.electNext(request, computerId, agentId);
+      this.electNext(request, computerId, runId);
     }
   }
 
@@ -192,21 +194,21 @@ export class Desk {
   }
 
   /**
-   * Elects the session on the computer and sends it the request. The holder is set before sending: a failed send drops
-   * the stream, the streams report the close synchronously, and streamChanged elects the next session.
+   * Elects the run on the computer and sends it the request. The holder is set before sending: a failed send drops
+   * the stream, the streams report the close synchronously, and streamChanged elects the next run.
    */
-  private send(request: OpenRequest, computerId: string, agentId: string): void {
-    const nonce = request.nonces.get(agentId) ?? this.newNonce();
-    request.nonces.set(agentId, nonce);
-    request.holders.set(computerId, agentId);
-    if (this.streams.send(agentId, "approval_request", { ...request.view, nonce })) {
-      this.log("approval_request_sent", { message_id: request.view.messageId, agent_id: agentId });
+  private send(request: OpenRequest, computerId: string, runId: string): void {
+    const nonce = request.nonces.get(runId) ?? this.newNonce();
+    request.nonces.set(runId, nonce);
+    request.holders.set(computerId, runId);
+    if (this.streams.sendRun(runId, "approval_request", { ...request.view, nonce })) {
+      this.log("approval_request_sent", { message_id: request.view.messageId, run_id: runId });
       return;
     }
     // A stream already gone (dropped earlier in the same round) reports no close, so nothing else moves the request on.
-    if (request.holders.get(computerId) === agentId && !this.streams.isConnected(agentId)) {
+    if (request.holders.get(computerId) === runId && !this.streams.isRunConnected(runId)) {
       request.holders.delete(computerId);
-      this.electNext(request, computerId, agentId);
+      this.electNext(request, computerId, runId);
     }
   }
 }

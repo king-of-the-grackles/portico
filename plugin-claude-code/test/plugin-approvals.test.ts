@@ -30,8 +30,8 @@ async function session(key: string, repo: string, folderId: string, runner: Dial
   return s;
 }
 
-/** The computer's pop-up sessions, by address. */
-const popups = () => p.agentStreams.popupSessions(computerId).map((id) => p.agents.address(p.agents.get(id)!));
+/** The computer's pop-up runs, by their agent's address. */
+const popups = () => p.agentStreams.popupSessions(computerId).map((runId) => p.agents.address(p.agents.byRun(runId)!));
 const hold = (subject = "Read the inbox", text = "Summarize the inbox") =>
   p.messages.send(grok, { to: "muse", subject, text }).message;
 const status = (id: string) => p.messages.get(id)?.status;

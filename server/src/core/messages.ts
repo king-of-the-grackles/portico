@@ -125,6 +125,8 @@ export class Messages {
   private readonly newId: () => string;
   private readonly notify: (notice: Notice) => void;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
+  /** check_inbox calls waiting now, by slot (a session's run, or the agent). */
+  private readonly waitingSlots = new Map<string, number>();
 
   constructor(deps: MessagesDeps) {
     this.db = deps.db;
@@ -284,24 +286,34 @@ export class Messages {
   async waitForInbox(
     caller: Agent,
     ms: number,
-    opts: { signal?: AbortSignal; valid?: () => boolean } = {},
+    opts: { signal?: AbortSignal; valid?: () => boolean; slot?: string } = {},
   ): Promise<"ready" | "timeout" | "gone" | "aborted"> {
     const valid = opts.valid ?? (() => this.agents.get(caller.id) !== null);
-    if (this.waits.count(caller.id) >= LIMITS.maxInboxWaitsPerAgent) {
+    // Counted per slot: a session's run, so the conversations sharing a folder's agent each get the allowance.
+    const slot = opts.slot ?? caller.id;
+    const waiting = this.waitingSlots.get(slot) ?? 0;
+    if (waiting >= LIMITS.maxInboxWaitsPerAgent) {
       throw new PorticoError(
         "rate_limited",
         `${LIMITS.maxInboxWaitsPerAgent} check_inbox calls are already waiting for this agent. Let one finish first.`,
       );
     }
-    this.agents.checkedIn(caller);
-    const deadline = Date.now() + ms;
-    for (;;) {
-      if (opts.signal?.aborted) return "aborted";
-      if (!valid()) return "gone";
-      if (this.hasWaiting(caller.id)) return "ready";
-      const left = deadline - Date.now();
-      if (left <= 0) return "timeout";
-      await this.waits.sleep(caller.id, left, opts.signal);
+    this.waitingSlots.set(slot, waiting + 1);
+    try {
+      this.agents.checkedIn(caller);
+      const deadline = Date.now() + ms;
+      for (;;) {
+        if (opts.signal?.aborted) return "aborted";
+        if (!valid()) return "gone";
+        if (this.hasWaiting(caller.id)) return "ready";
+        const left = deadline - Date.now();
+        if (left <= 0) return "timeout";
+        await this.waits.sleep(caller.id, left, opts.signal);
+      }
+    } finally {
+      const left = (this.waitingSlots.get(slot) ?? 1) - 1;
+      if (left <= 0) this.waitingSlots.delete(slot);
+      else this.waitingSlots.set(slot, left);
     }
   }
 

@@ -72,7 +72,7 @@ describe("PorticoClient", () => {
     cancel.abort();
     expect(await apiError(waiting)).toMatchObject({ code: "unreachable" });
     await Bun.sleep(50);
-    const sessionId = p.agents.sessionByKey(p.computers.byName("macbook")!.id, key)!.id;
+    const sessionId = p.agents.sessionByKey(p.computers.byName("macbook")!.id, key)!.agent.id;
     expect(p.inboxWaits.count(sessionId)).toBe(0);
     await new PorticoClient({ url: p.url, token: grok.token }).sendMessage({ to: "api-claude", subject: "Later", text: "t" });
     expect(p.messages.unreadCount(sessionId)).toBe(1);

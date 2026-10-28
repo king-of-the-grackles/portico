@@ -34,6 +34,75 @@ describe("a session's live stream", () => {
     await events.cancel();
   });
 
+  test("two terminals in one folder are one agent: the newest gets nudges, both get renames, it stays online until both close", async () => {
+    const { p, chris, token, grok } = await setup();
+    const older = await openSessionStream(p, token, { key: "key-000001", repo: "api" });
+    const newer = await openSessionStream(p, token, { key: "key-000002", repo: "api" });
+    expect(newer.hello).toEqual(older.hello);
+    const agent = p.agents.resolve("api-claude", "x");
+    expect(p.agents.all().filter((a) => a.type === "session")).toHaveLength(1);
+    expect(p.agentStreams.liveRuns(agent.id)).toBe(2);
+    await callAs(p, { token: grok.token }, "POST", "/api/agent/messages", { to: "api-claude", subject: "s", text: "t" });
+    expect((await newer.events.next()).event).toBe("nudge");
+    p.agents.update(chris.id, agent.id, { name: "billing-claude" });
+    expect((await older.events.next()).event).toBe("renamed");
+    expect((await newer.events.next()).event).toBe("renamed");
+    await newer.events.cancel();
+    await flush();
+    expect(p.agents.entry(p.agents.require(agent.id)).status).toBe("idle");
+    // The older terminal takes deliveries now.
+    await callAs(p, { token: grok.token }, "POST", "/api/agent/messages", { to: "billing-claude", subject: "s2", text: "t" });
+    expect((await older.events.next()).event).toBe("nudge");
+    await older.events.cancel();
+    await flush();
+    expect(p.agents.entry(p.agents.require(agent.id)).status).toBe("offline");
+    expect(p.agents.runs(agent.id).every((run) => run.endedAt !== null)).toBe(true);
+  });
+
+  test("each terminal reports its own status; the agent shows the busiest", async () => {
+    const { p, token } = await setup();
+    const one = await openSessionStream(p, token, { key: "key-000001", repo: "api" });
+    const two = await openSessionStream(p, token, { key: "key-000002", repo: "api" });
+    await callAs(p, { token, key: "key-000001" }, "POST", "/api/agent/status", { status: "busy", doing: "Running tests" });
+    await callAs(p, { token, key: "key-000002" }, "POST", "/api/agent/status", { status: "idle" });
+    const agent = p.agents.resolve("api-claude", "x");
+    expect(p.agents.entry(agent)).toMatchObject({ status: "busy", doing: "Running tests" });
+    await one.events.cancel();
+    await flush();
+    expect(p.agents.entry(agent)).toMatchObject({ status: "idle", doing: null });
+    await two.events.cancel();
+  });
+
+  test("a heartbeat that changes nothing shown refetches nothing, and a report after a terminal closed is ignored", async () => {
+    const { p, token } = await setup();
+    const one = await openSessionStream(p, token, { key: "key-000001", repo: "api" });
+    const two = await openSessionStream(p, token, { key: "key-000002", repo: "api" });
+    await callAs(p, { token, key: "key-000001" }, "POST", "/api/agent/status", { status: "busy", doing: "Tests" });
+    await callAs(p, { token, key: "key-000002" }, "POST", "/api/agent/status", { status: "idle" });
+    await flush();
+    const changes: string[][] = [];
+    p.changes.on((topics) => changes.push(topics));
+    // The idle terminal's heartbeat: the agent still shows the busy one's report.
+    await callAs(p, { token, key: "key-000002" }, "POST", "/api/agent/status", { status: "idle" });
+    await flush();
+    expect(changes.filter((t) => t.includes("agents"))).toEqual([]);
+    await one.events.cancel();
+    await flush();
+    // The closed terminal's last heartbeat arrives late: it doesn't bring Working back.
+    await callAs(p, { token, key: "key-000001" }, "POST", "/api/agent/status", { status: "busy", doing: "Tests" });
+    expect(p.agents.entry(p.agents.resolve("api-claude", "x")).status).toBe("idle");
+    await two.events.cancel();
+  });
+
+  test("each terminal in a folder gets its own allowance of waiting check_inbox calls", async () => {
+    const { p, token } = await setup();
+    const streams = [];
+    for (let i = 1; i <= 4; i++) streams.push(await openSessionStream(p, token, { key: `key-00000${i}`, repo: "api" }));
+    const waits = [1, 2, 3, 4].map((i) => callAs(p, { token, key: `key-00000${i}` }, "GET", "/api/agent/inbox?wait=0.2"));
+    expect((await Promise.all(waits)).map((r) => r.status)).toEqual([200, 200, 200, 200]);
+    for (const s of streams) await s.events.cancel();
+  });
+
   test("a rename reaches the open stream", async () => {
     const { p, chris, token } = await setup();
     const { events } = await openSessionStream(p, token, { key: "key-000001", repo: "api" });

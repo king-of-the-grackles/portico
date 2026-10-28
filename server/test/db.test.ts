@@ -149,6 +149,92 @@ describe("database", () => {
     expect(readdirSync(join(path, "..")).filter((file) => file.endsWith(".bak"))).toEqual([]);
   });
 
+  test("101: sessions that split one folder merge into one agent, keeping their messages, threads and allow entries", () => {
+    const path = tempPath("portico.db");
+    const old = new Database(path, { create: true, strict: true });
+    old.run("PRAGMA foreign_keys = ON");
+    prepare(old, { migrations: [] });
+    const F = "f".repeat(64);
+    const t = (minute: number) => `2026-10-20T10:${String(minute).padStart(2, "0")}:00.000Z`;
+    old.run(
+      `INSERT INTO people (id, name, role, status, password_hash, created_at) VALUES ('p1', 'Chris', 'owner', 'active', 'h', 't')`,
+    );
+    old.run("INSERT INTO computers (id, owner_id, name, token_hash, created_at) VALUES ('c1', 'p1', 'macbook', 'th', 't')");
+    const agent = old.query(
+      `INSERT INTO agents (id, owner_id, name, kind, type, description, computer_id, session_key, folder, folder_id, created_at, last_seen_at)
+       VALUES ($id, 'p1', $name, $kind, $type, '', $computer, $key, $folder, $folderId, $at, $at)`,
+    );
+    agent.run({ id: "a-grok", name: "grok", kind: "grok-bot", type: "app", computer: null, key: null, folder: null, folderId: null, at: t(0) });
+    agent.run({ id: "m-muse", name: "muse", kind: "muse", type: "app", computer: null, key: null, folder: null, folderId: null, at: t(0) });
+    agent.run({ id: "s1", name: "api-claude", kind: "claude-code", type: "session", computer: "c1", key: "k1", folder: "api", folderId: F, at: t(1) });
+    agent.run({ id: "s2", name: "api-claude-2", kind: "claude-code", type: "session", computer: "c1", key: "k2", folder: "api", folderId: F, at: t(5) });
+    old.run("UPDATE agents SET approval_required = 1 WHERE id = 's2'");
+    agent.run({ id: "s3", name: "api-claude-3", kind: "claude-code", type: "session", computer: "c1", key: "k3", folder: "api", folderId: F, at: t(6) });
+    agent.run({ id: "s4", name: "api-codex", kind: "codex", type: "session", computer: "c1", key: "k4", folder: "api", folderId: F, at: t(7) });
+    const thread = old.query(
+      "INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at) VALUES ($id, $a, $b, $by, $created, $last)",
+    );
+    thread.run({ id: "t1", a: "a-grok", b: "s1", by: "a-grok", created: t(2), last: t(2) });
+    thread.run({ id: "t2", a: "a-grok", b: "s2", by: "s2", created: t(1), last: t(8) });
+    thread.run({ id: "t3", a: "m-muse", b: "s2", by: "s2", created: t(3), last: t(3) });
+    thread.run({ id: "t4", a: "s1", b: "s3", by: "s1", created: t(4), last: t(4) });
+    const message = old.query(
+      `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, status, created_at, expires_at)
+       VALUES ($id, $thread, $from, $to, 's', 't', 'delivered', $at, $at)`,
+    );
+    message.run({ id: "m1", thread: "t1", from: "a-grok", to: "s1", at: t(2) });
+    message.run({ id: "m2", thread: "t2", from: "s2", to: "a-grok", at: t(8) });
+    message.run({ id: "m3", thread: "t3", from: "s2", to: "m-muse", at: t(3) });
+    message.run({ id: "m4", thread: "t4", from: "s1", to: "s3", at: t(4) });
+    const allow = old.query("INSERT INTO always_allow (agent_id, sender_id, added_by, created_at) VALUES ($agent, $sender, 'p1', 't')");
+    allow.run({ agent: "s1", sender: "a-grok" });
+    allow.run({ agent: "s2", sender: "a-grok" });
+    allow.run({ agent: "m-muse", sender: "s2" });
+    old.close();
+
+    const db = openDb(path);
+    expect(versionOf(db)).toBe(SCHEMA_VERSION);
+    const rows = <T>(sql: string) => db.query(sql).all() as T[];
+    expect(rows<{ id: string; folder_id: string | null }>("SELECT id, folder_id FROM agents WHERE type = 'session' ORDER BY id")).toEqual([
+      { id: "s1", folder_id: F },
+      // s3 talked with s1, so it keeps its history but leaves the folder.
+      { id: "s3", folder_id: null },
+      { id: "s4", folder_id: F },
+    ]);
+    expect(rows<{ agent_id: string; session_key: string }>("SELECT agent_id, session_key FROM agent_runs ORDER BY session_key")).toEqual([
+      { agent_id: "s1", session_key: "k1" },
+      { agent_id: "s1", session_key: "k2" },
+      { agent_id: "s3", session_key: "k3" },
+      { agent_id: "s4", session_key: "k4" },
+    ]);
+    expect(rows("SELECT id, a_id, b_id, started_by, created_at, last_message_at FROM threads ORDER BY id")).toEqual([
+      { id: "t1", a_id: "a-grok", b_id: "s1", started_by: "s1", created_at: t(1), last_message_at: t(8) },
+      { id: "t3", a_id: "m-muse", b_id: "s1", started_by: "s1", created_at: t(3), last_message_at: t(3) },
+      { id: "t4", a_id: "s1", b_id: "s3", started_by: "s1", created_at: t(4), last_message_at: t(4) },
+    ]);
+    expect(rows("SELECT id, thread_id, from_id, to_id FROM messages ORDER BY id")).toEqual([
+      { id: "m1", thread_id: "t1", from_id: "a-grok", to_id: "s1" },
+      { id: "m2", thread_id: "t1", from_id: "s1", to_id: "a-grok" },
+      { id: "m3", thread_id: "t3", from_id: "s1", to_id: "m-muse" },
+      { id: "m4", thread_id: "t4", from_id: "s1", to_id: "s3" },
+    ]);
+    expect(rows("SELECT agent_id, sender_id FROM always_allow ORDER BY agent_id")).toEqual([
+      { agent_id: "m-muse", sender_id: "s1" },
+      { agent_id: "s1", sender_id: "a-grok" },
+    ]);
+    expect(rows("SELECT COUNT(*) AS n FROM agents WHERE session_key IS NOT NULL")).toEqual([{ n: 0 }]);
+    // s2 required approval, so the merged agent does too.
+    expect(rows("SELECT approval_required FROM agents WHERE id = 's1'")).toEqual([{ approval_required: 1 }]);
+    // One agent per folder and coding agent from now on.
+    expect(() =>
+      db.run(
+        `INSERT INTO agents (id, owner_id, name, kind, type, description, computer_id, folder, folder_id, created_at)
+         VALUES ('s5', 'p1', 'api-claude-5', 'claude-code', 'session', '', 'c1', 'api', '${F}', 't')`,
+      ),
+    ).toThrow();
+    db.close();
+  });
+
   test("removing a person removes what depends on them", () => {
     const db = openDb(":memory:");
     db.run(

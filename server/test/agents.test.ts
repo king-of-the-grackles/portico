@@ -49,7 +49,7 @@ describe("addresses and the agent list", () => {
     const { computer } = addComputer(p, chris);
     const { agent: old } = addSession(p, computer, { repo: "old" });
     const { agent: live } = addSession(p, computer, { repo: "live" });
-    p.agentStreams.connect(live.id, { send() {}, close() {} });
+    p.agentStreams.connect(live.id, live.id, { send() {}, close() {} });
     p.clock.advance(25 * HOUR);
     const names = p.agents.entries().map((e) => e.display);
     expect(names).toEqual(["live-claude"]);
@@ -64,8 +64,8 @@ describe("addresses and the agent list", () => {
     const idle = addSession(p, computer, { repo: "idle" }).agent;
     addSession(p, computer, { repo: "gone" });
     addAppAgent(p, chris, "muse");
-    for (const a of [busy, idle]) p.agentStreams.connect(a.id, { send() {}, close() {} });
-    p.presence.report(busy.id, { status: "busy", doing: "Fixing", repo: "busy", branch: "main" }, p.now().toISOString());
+    for (const a of [busy, idle]) p.agentStreams.connect(a.id, a.id, { send() {}, close() {} });
+    p.presence.report(busy.id, busy.id, { status: "busy", doing: "Fixing", repo: "busy", branch: "main" }, p.now().toISOString());
     const entries = p.agents.entries();
     expect(entries.map((e) => [e.display, e.status])).toEqual([
       ["busy-claude", "busy"],
@@ -89,31 +89,66 @@ describe("addresses and the agent list", () => {
 });
 
 describe("session registration", () => {
-  test("the same key keeps its row, a stale session in the folder is inherited, and names count up", async () => {
+  test("every session of a coding agent in one folder is one agent; each start is a run", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     const { computer } = addComputer(p, chris);
     const folderId = "b".repeat(64);
-    const first = p.agents.registerSession(computer, { key: "key-00001", repo: "api", folderId, client: "claude-code" });
+    const reg = (key: string) => p.agents.registerSession(computer, { key, repo: "api", folderId, client: "claude-code" });
+    const first = reg("key-00001");
+    expect(first).toMatchObject({ created: true });
     expect(first.agent.name).toBe("api-claude");
     expect(first.agent.ownerId).toBe(chris.id);
-    expect(p.agents.registerSession(computer, { key: "key-00001", repo: "api", folderId, client: "claude-code" }).agent.id).toBe(first.agent.id);
-    p.agentStreams.connect(first.agent.id, { send() {}, close() {} });
-    const second = p.agents.registerSession(computer, { key: "key-00002", repo: "api", folderId, client: "claude-code" });
-    expect(second.agent.name).toBe("api-claude-2");
+    // The same key reconnecting keeps its run.
+    expect(reg("key-00001")).toMatchObject({ runId: first.runId, created: false });
+    p.agentStreams.connect(first.agent.id, first.runId, { send() {}, close() {} });
+    // A second terminal in the folder, while the first is open, is a second run of the same agent.
+    const second = reg("key-00002");
+    expect(second).toMatchObject({ created: false });
+    expect(second.agent.id).toBe(first.agent.id);
+    expect(second.runId).not.toBe(first.runId);
+    // A restart right after the first closed is the same agent too: no waiting period, no -2.
     p.agentStreams.closeAll([first.agent.id]);
-    // Just disconnected: the session may be between reconnect attempts, so its row isn't up for grabs yet.
-    const fourth = p.agents.registerSession(computer, { key: "key-00004", repo: "api", folderId, client: "claude-code" });
-    expect(fourth).toMatchObject({ inherited: false });
-    expect(fourth.agent.name).toBe("api-claude-3");
-    p.clock.advance(3 * 60_000);
-    const third = p.agents.registerSession(computer, { key: "key-00003", repo: "api", folderId, client: "claude-code" });
-    expect(third).toMatchObject({ inherited: true });
+    const third = reg("key-00003");
     expect(third.agent.id).toBe(first.agent.id);
+    expect(p.agents.all().map((a) => a.name)).toEqual(["api-claude"]);
+    expect(p.agents.runCount(first.agent.id)).toBe(3);
+    expect(p.agents.runs(first.agent.id).map((r) => r.id)).toContain(third.runId);
+    expect(p.agents.sessionByKey(computer.id, "key-00002")).toMatchObject({ runId: second.runId, agent: { id: first.agent.id } });
     expect(sessionBaseName("My Repo!")).toBe("my-repo-claude");
     const long = sessionBaseName("a-very-long-repository-name-that-goes-on-and-on");
     expect(`${long}-99`.length).toBeLessThanOrEqual(40);
     expect(long).toBe("a-very-long-repository-name-th-claude");
+  });
+
+  test("another folder with the same name on the computer gets the next free name", async () => {
+    const p = makePortico();
+    const chris = await addOwner(p);
+    const { computer } = addComputer(p, chris);
+    const one = p.agents.registerSession(computer, { key: "key-00001", repo: "api", folderId: "1".repeat(64) });
+    const two = p.agents.registerSession(computer, { key: "key-00002", repo: "api", folderId: "2".repeat(64) });
+    expect([one.agent.name, two.agent.name]).toEqual(["api-claude", "api-claude-2"]);
+    expect(p.agents.registerSession(computer, { key: "key-00003", repo: "api", folderId: "2".repeat(64) }).agent.id).toBe(two.agent.id);
+  });
+
+  test("a run that ends leaves the agent; the agent is offline only once every run has ended", async () => {
+    const p = makePortico();
+    const chris = await addOwner(p);
+    const { computer } = addComputer(p, chris);
+    const folderId = "9".repeat(64);
+    const a = p.agents.registerSession(computer, { key: "key-00001", repo: "api", folderId });
+    const b = p.agents.registerSession(computer, { key: "key-00002", repo: "api", folderId });
+    const closeA = p.agentStreams.connect(a.agent.id, a.runId, { send() {}, close() {} });
+    p.agentStreams.connect(b.agent.id, b.runId, { send() {}, close() {} });
+    p.presence.report(a.agent.id, a.runId, { status: "busy", doing: "Tests", repo: "api", branch: "main" }, p.now().toISOString());
+    p.presence.report(b.agent.id, b.runId, { status: "idle", doing: null, repo: "api", branch: "main" }, p.now().toISOString());
+    expect(p.agents.entry(a.agent).status).toBe("busy");
+    closeA();
+    p.agents.seen(a.agent.id, a.runId);
+    expect(p.agents.entry(a.agent).status).toBe("idle");
+    expect(p.agents.runs(a.agent.id).find((r) => r.id === a.runId)?.endedAt).not.toBeNull();
+    p.agentStreams.closeAll([a.agent.id]);
+    expect(p.agents.entry(a.agent).status).toBe("offline");
   });
 
   test("a new session in a folder switched off is refused with folder_off; the running one keeps its row", async () => {
@@ -130,21 +165,18 @@ describe("session registration", () => {
     expect(errorCode(() => p.agents.registerSession(computer, { key: "key-new-one", repo: "api", folderId, client: "claude-code" }))).toBeNull();
   });
 
-  test("a Codex session gets a -codex name, its own kind, and never takes over a Claude Code session", async () => {
+  test("Codex in a folder is its own agent, apart from Claude Code there; its conversations share it", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     const { computer } = addComputer(p, chris);
     const folderId = "d".repeat(64);
     const claude = p.agents.registerSession(computer, { key: "key-claude1", repo: "api", folderId, client: "claude-code" });
-    p.clock.advance(3 * 60_000);
     const codex = p.agents.registerSession(computer, { key: "key-codex01", repo: "api", folderId, client: "codex" });
-    expect(codex).toMatchObject({ inherited: false });
+    expect(codex).toMatchObject({ created: true });
     expect(codex.agent).toMatchObject({ name: "api-codex", kind: "codex", type: "session", description: "Codex in api on macbook" });
     expect(codex.agent.id).not.toBe(claude.agent.id);
-    // A later Codex session in the folder inherits the Codex row, as Claude Code sessions do theirs.
-    p.clock.advance(3 * 60_000);
     const next = p.agents.registerSession(computer, { key: "key-codex02", repo: "api", folderId, client: "codex" });
-    expect(next).toMatchObject({ inherited: true });
+    expect(next).toMatchObject({ created: false });
     expect(next.agent.id).toBe(codex.agent.id);
     expect(sessionBaseName("My Repo!", "codex")).toBe("my-repo-codex");
     expect(`${sessionBaseName("a-very-long-repository-name-that-goes-on-and-on", "codex")}-99`.length).toBeLessThanOrEqual(40);
@@ -159,8 +191,8 @@ describe("session registration", () => {
     expect(p.agents.isPush(codex)).toBe(false);
     expect(p.agents.isPush(claude)).toBe(true);
     expect(p.agents.tier(codex)).toBe("offline");
-    p.agentStreams.connect(codex.id, { send() {}, close() {} });
-    p.agentStreams.connect(claude.id, { send() {}, close() {} });
+    p.agentStreams.connect(codex.id, codex.id, { send() {}, close() {} });
+    p.agentStreams.connect(claude.id, claude.id, { send() {}, close() {} });
     expect(p.agents.tier(codex)).toBe("queued");
     expect(p.agents.tier(claude)).toBe("pushed");
   });
@@ -173,16 +205,18 @@ describe("session registration", () => {
     expect(errorCode(() => parseRegistration(key, folderId, "api", "cursor"))).toBe("bad_request");
   });
 
-  test("sessions offline for a week are deleted; connected ones are kept", async () => {
+  test("agents are kept however long they're away; only runs older than the history window are pruned", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     const { computer } = addComputer(p, chris);
-    addSession(p, computer, { repo: "old" });
+    const { agent: old } = addSession(p, computer, { repo: "old" });
     const { agent: live } = addSession(p, computer, { repo: "live" });
-    p.agentStreams.connect(live.id, { send() {}, close() {} });
-    p.clock.advance(8 * DAY);
-    expect(p.agents.sweep()).toBe(1);
-    expect(p.agents.all().map((a) => a.name)).toEqual(["live-claude"]);
+    p.clock.advance(31 * DAY);
+    const { runId } = p.agents.registerSession(computer, { key: "key-live-again", repo: "live", folderId: live.folderId! });
+    expect(p.agents.pruneRuns()).toBe(2);
+    expect(p.agents.all().map((a) => a.name)).toEqual(["live-claude", "old-claude"]);
+    expect(p.agents.runs(live.id).map((r) => r.id)).toEqual([runId]);
+    expect(p.agents.runs(old.id)).toEqual([]);
   });
 });
 
@@ -233,7 +267,7 @@ describe("what an agent's manager can change", () => {
     const chris = await addOwner(p);
     const { agent, token } = addAppAgent(p, chris, "muse");
     let closed = false;
-    p.agentStreams.connect(agent.id, { send() {}, close: () => (closed = true) });
+    p.agentStreams.connect(agent.id, agent.id, { send() {}, close: () => (closed = true) });
     p.agents.remove(chris.id, agent.id);
     expect(p.agents.byToken(token)).toBeNull();
     expect(closed).toBe(true);
