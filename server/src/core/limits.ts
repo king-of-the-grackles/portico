@@ -18,6 +18,13 @@ export const LIMITS = {
   setupLinkHours: 1,
   webSessionDays: 30,
   minPasswordChars: 12,
+  /**
+   * The longest one check_inbox waits: below the 60-second timeouts of Portico's server, proxies and MCP clients, and
+   * the 45-second timeout of GPT actions.
+   */
+  maxInboxWaitSeconds: 40,
+  /** check_inbox calls that may wait at once for one agent. */
+  maxInboxWaitsPerAgent: 3,
 } as const;
 
 export const MINUTE_MS = 60_000;

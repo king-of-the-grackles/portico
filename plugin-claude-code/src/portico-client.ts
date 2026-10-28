@@ -52,6 +52,9 @@ export interface UpdateDelivery {
 /** How a sent message will arrive. */
 export type DeliveryTier = "pushed" | "queued" | "offline" | "held";
 
+/** The longest Portico holds a check_inbox that waits. */
+export const MAX_INBOX_WAIT_SECONDS = 40;
+
 /** What `GET /api/agent/inbox` and `GET /api/agent/deliveries` return. */
 export interface Inbox {
   messages: MessageDelivery[];
@@ -129,9 +132,17 @@ export class PorticoClient {
     return this.call("POST", "/api/agent/messages", body);
   }
 
-  /** Picks up new messages and outcomes, marking them delivered and reported. */
-  checkInbox(): Promise<Inbox> {
-    return this.call("GET", "/api/agent/inbox");
+  /**
+   * Picks up new messages and outcomes, marking them delivered and reported. With `wait` (seconds), Portico answers as
+   * soon as something arrives, or after the wait (capped by Portico) with nothing; Portico checks the value.
+   */
+  checkInbox(wait?: number | string, signal?: AbortSignal): Promise<Inbox> {
+    if (wait === undefined || wait === "") return this.call("GET", "/api/agent/inbox", undefined, { signal });
+    const seconds = Math.min(Math.max(Number(wait) || 0, 0), MAX_INBOX_WAIT_SECONDS);
+    return this.call("GET", `/api/agent/inbox?wait=${encodeURIComponent(String(wait))}`, undefined, {
+      timeoutMs: this.timeoutMs + seconds * 1000,
+      signal,
+    });
   }
 
   /** Peeks at what is waiting for this session, changing nothing. */
@@ -175,7 +186,14 @@ export class PorticoClient {
     return headers;
   }
 
-  private async call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  /** With `signal`, the request also ends when the signal aborts, e.g. a cancelled tool call. */
+  private async call<T>(
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    opts: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<T> {
+    const timeout = AbortSignal.timeout(opts.timeoutMs ?? this.timeoutMs);
     const headers = this.headers("application/json");
     if (body !== undefined) headers["content-type"] = "application/json";
     let res: Response;
@@ -184,7 +202,7 @@ export class PorticoClient {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout,
       });
     } catch (err) {
       const name = err instanceof Error ? err.name : "error";

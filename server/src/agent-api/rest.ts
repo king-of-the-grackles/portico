@@ -5,10 +5,11 @@ import { z } from "zod";
 import type { Agents } from "../core/agents";
 import type { Changes } from "../core/changes";
 import { HTTP_STATUS, PorticoError } from "../core/errors";
+import { inboxWaitMs } from "../core/inbox-waits";
 import { DELIVERY_BATCH_MAX, type Messages } from "../core/messages";
 import { parseStatusReport, type Presence } from "../core/presence";
 import { errorName, log } from "../log";
-import { type AgentEnv, requireAgent, requireSession, type Resolver } from "./auth";
+import { type AgentEnv, requireAgent, requireSession, type Resolver, unauthorized } from "./auth";
 import { jsonBodyLimit } from "./limits";
 import type { AgentViews } from "./views";
 
@@ -79,8 +80,20 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
     return c.json({ message: views.message(message), delivery, ...(note ? { note } : {}) }, 201);
   });
 
-  api.get("/inbox", (c) => {
-    const { messages: picked, updates } = messages.inbox(c.get("agent"));
+  // With ?wait=N, answers as soon as something arrives, or after N seconds (capped) with nothing.
+  api.get("/inbox", async (c) => {
+    const agent = c.get("agent");
+    const waitMs = inboxWaitMs(c.req.query("wait"));
+    if (waitMs > 0) {
+      const outcome = await messages.waitForInbox(agent, waitMs, {
+        signal: c.req.raw.signal,
+        valid: () => deps.resolver.agent(c.req.header("authorization"), c.req.header("x-portico-session"))?.id === agent.id,
+      });
+      // The caller went away: what it would pick up stays waiting for its next check.
+      if (outcome === "aborted") return c.body(null, 204);
+      if (outcome === "gone") return unauthorized(c, deps.resolver);
+    }
+    const { messages: picked, updates } = messages.inbox(agent);
     return c.json({ messages: picked.map(views.delivery), updates: updates.map(views.update) });
   });
 

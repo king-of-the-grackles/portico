@@ -1,5 +1,5 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ApiError, type Inbox, type PorticoClient } from "./portico-client";
+import { ApiError, type Inbox, MAX_INBOX_WAIT_SECONDS, type PorticoClient } from "./portico-client";
 
 /** Portico's built-in limits, as its /mcp tools name them. */
 const MAX_SUBJECT_CHARS = 120;
@@ -42,8 +42,22 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "check_inbox",
-    description: "Pick up new messages for this agent, and the outcome of sent messages that were held for approval.",
-    inputSchema: noArgs,
+    description:
+      "Pick up new messages for this agent, and the outcome of sent messages that were held for approval. Apps and " +
+      "connectors, which Portico can't push messages to, wait for a reply with wait: Portico holds the call until " +
+      "something arrives or the time is up. Call check_inbox again to keep waiting.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        wait: {
+          type: "number",
+          description:
+            `Optional. Seconds to wait when nothing has arrived yet, up to ${MAX_INBOX_WAIT_SECONDS}. Portico answers as soon as a ` +
+            "message or outcome arrives. Leave out to check without waiting.",
+        },
+      },
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -56,8 +70,11 @@ const json = (value: unknown): CallToolResult => ({ content: [{ type: "text", te
 const failure = (text: string): CallToolResult => ({ content: [{ type: "text", text }], isError: true });
 
 /** The human-readable part of a check_inbox result, as Portico's /mcp writes it. */
-export function inboxText(inbox: Inbox): string {
+export function inboxText(inbox: Inbox, waited = false): string {
   const lines: string[] = [inbox.messages.length ? `Messages (${inbox.messages.length}):` : "No new messages."];
+  if (waited && !inbox.messages.length && !inbox.updates.length) {
+    lines.push("Nothing arrived during the wait. To keep waiting, call check_inbox with wait again.");
+  }
   for (const message of inbox.messages) lines.push("---", message.framed_message);
   if (inbox.updates.length) {
     lines.push("", `Held messages with an outcome (${inbox.updates.length}):`);
@@ -67,7 +84,7 @@ export function inboxText(inbox: Inbox): string {
 }
 
 /** Runs one of the three tools against Portico. Portico's errors become tool errors, as on its /mcp. */
-export async function runTool(client: PorticoClient, name: string, args: Args): Promise<CallToolResult> {
+export async function runTool(client: PorticoClient, name: string, args: Args, signal?: AbortSignal): Promise<CallToolResult> {
   try {
     switch (name) {
       case "list_agents":
@@ -88,10 +105,14 @@ export async function runTool(client: PorticoClient, name: string, args: Args): 
         return result;
       }
       case "check_inbox": {
-        const inbox = await client.checkInbox();
+        // Any wait goes to Portico as given, so Portico checks the value, as on its /mcp.
+        const wait = args.wait === undefined || args.wait === null ? undefined : String(args.wait);
+        const inbox = await client.checkInbox(wait, signal);
+        // Waited as Portico counts it: whole milliseconds, capped.
+        const waited = Math.round(Math.min(Number(wait), MAX_INBOX_WAIT_SECONDS) * 1000) > 0;
         return {
           content: [
-            { type: "text", text: inboxText(inbox) },
+            { type: "text", text: inboxText(inbox, waited) },
             { type: "text", text: JSON.stringify(inbox, null, 2) },
           ],
         };

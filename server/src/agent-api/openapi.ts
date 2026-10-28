@@ -121,7 +121,8 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
           summary: "Send a message to another agent.",
           description:
             "A message to an agent that requires approval may be held until a person allows the message; checkInbox " +
-            "reports the outcome. delivery says how the message will arrive: pushed, queued, offline or held.",
+            "reports the outcome. delivery says how the message will arrive: pushed, queued, offline or held. To wait " +
+            `for a reply, call checkInbox with wait=${LIMITS.maxInboxWaitSeconds}.`,
           requestBody: jsonBody({
             type: "object",
             required: ["subject", "text"],
@@ -157,6 +158,21 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
         get: {
           operationId: "checkInbox",
           summary: "Pick up new messages and the outcomes of held messages.",
+          description:
+            "Portico can't start a turn for an agent, so a conversation continues only while the agent checks the inbox. " +
+            "With wait, Portico holds the request until a message or outcome arrives, or the time is up; call again to " +
+            "keep waiting.",
+          parameters: [
+            {
+              name: "wait",
+              in: "query",
+              required: false,
+              description:
+                `Seconds to wait when nothing has arrived yet, up to ${LIMITS.maxInboxWaitSeconds}. Portico answers as ` +
+                "soon as a message or outcome arrives. Leave out to check without waiting.",
+              schema: { type: "number", minimum: 0 },
+            },
+          ],
           responses: {
             "200": jsonResponse("New messages, each with framed_message, and updates.", {
               type: "object",

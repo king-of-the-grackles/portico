@@ -8,6 +8,7 @@ import { Agents } from "./core/agents";
 import { AllowList, Approvals } from "./core/approvals";
 import { Changes } from "./core/changes";
 import { Computers } from "./core/computers";
+import { InboxWaits } from "./core/inbox-waits";
 import type { Core } from "./core/core";
 import { Messages } from "./core/messages";
 import { People } from "./core/people";
@@ -31,6 +32,8 @@ export interface PorticoOptions {
 
 export interface Portico extends Core {
   app: Hono;
+  /** check_inbox calls waiting for something to pick up. */
+  inboxWaits: InboxWaits;
   /** Run every minute: expiries. */
   sweepMinute(): void;
   /** Run every day: history, stale sessions, expired sign-ins and links. */
@@ -48,6 +51,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const settings = new Settings(db, config);
   const presence = new Presence();
   const agentStreams = new AgentStreams();
+  const inboxWaits = new InboxWaits();
   const personStreams = new PersonStreams();
   changes.on((topics) => personStreams.broadcast(topics));
 
@@ -63,7 +67,10 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     newId,
     log: logInfo,
     isConnected: (id) => agentStreams.isConnected(id),
-    disconnect: (ids) => agentStreams.closeAll(ids),
+    disconnect: (ids) => {
+      agentStreams.closeAll(ids);
+      inboxWaits.wake(...ids);
+    },
     renamed: (agent) => agentStreams.send(agent.id, "renamed", { ...helloFor(agents, agent) }),
   });
   const desk = new Desk({ streams: agentStreams, now, newNonce: opts.newNonce, log: logInfo });
@@ -80,15 +87,18 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       }
     });
   };
-  const nudgeIfPush = (agentId: string) => {
+  // "The inbox has something": a session's stream gets a nudge, and an app's or connector's waiting check_inbox wakes.
+  const wake = (agentId: string) => {
     const agent = agents.get(agentId);
-    if (agent && agents.isPush(agent)) agentStreams.nudge(agent.id);
+    if (!agent) return;
+    if (agents.isPush(agent)) agentStreams.nudge(agent.id);
+    inboxWaits.wake(agent.id);
   };
   const handleNotice = (notice: Notice) => {
     const m = notice.message;
     switch (notice.kind) {
       case "message_sent": {
-        if (m.status === "pending") nudgeIfPush(m.toId);
+        if (m.status === "pending") wake(m.toId);
         if (m.status !== "held") return;
         const sender = agents.get(m.fromId);
         const receiver = agents.get(m.toId);
@@ -106,16 +116,16 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       }
       case "message_decided":
         desk.close(m.id, m.status === "declined" ? "declined" : "allowed");
-        if (m.status === "pending") nudgeIfPush(m.toId);
-        if (m.status === "declined") nudgeIfPush(m.fromId);
+        if (m.status === "pending") wake(m.toId);
+        if (m.status === "declined") wake(m.fromId);
         return;
       case "message_expired":
         if (m.heldAt === null) return;
         desk.close(m.id, "expired");
-        nudgeIfPush(m.fromId);
+        wake(m.fromId);
         return;
       case "message_delivered":
-        if (m.heldAt !== null) nudgeIfPush(m.fromId);
+        if (m.heldAt !== null) wake(m.fromId);
         return;
     }
   };
@@ -126,6 +136,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     agents,
     alwaysAllows: (agentId, senderId) => allowList.has(agentId, senderId),
     changes,
+    waits: inboxWaits,
     now,
     newId,
     notify,
@@ -168,6 +179,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   return {
     ...core,
     app,
+    inboxWaits,
     sweepMinute() {
       sweep("messages_expired", () => messages.expireDue().length);
       sweep("desk", () => desk.sweep());

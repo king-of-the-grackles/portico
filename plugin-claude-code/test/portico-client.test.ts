@@ -56,6 +56,28 @@ describe("PorticoClient", () => {
     expect((await client.pendingDeliveries()).messages).toEqual([]);
   });
 
+  test("checkInbox with wait holds until a message arrives, past the ordinary timeout", async () => {
+    const grok = appAgent(p, "grok", { kind: "grok-bot" });
+    const waiting = new PorticoClient({ url: p.url, token, sessionKey: key, timeoutMs: 200 }).checkInbox(3);
+    await Bun.sleep(400);
+    await new PorticoClient({ url: p.url, token: grok.token }).sendMessage({ to: "api-claude", subject: "Late", text: "t" });
+    expect((await waiting).messages.map((m) => m.subject)).toEqual(["Late"]);
+  });
+
+  test("a cancelled checkInbox wait ends its request, so the next message waits for the next check", async () => {
+    const grok = appAgent(p, "grok", { kind: "grok-bot" });
+    const cancel = new AbortController();
+    const waiting = session().checkInbox(3, cancel.signal);
+    await Bun.sleep(100);
+    cancel.abort();
+    expect(await apiError(waiting)).toMatchObject({ code: "unreachable" });
+    await Bun.sleep(50);
+    const sessionId = p.agents.sessionByKey(p.computers.byName("macbook")!.id, key)!.id;
+    expect(p.inboxWaits.count(sessionId)).toBe(0);
+    await new PorticoClient({ url: p.url, token: grok.token }).sendMessage({ to: "api-claude", subject: "Later", text: "t" });
+    expect(p.messages.unreadCount(sessionId)).toBe(1);
+  });
+
   test("reports the session's status", async () => {
     expect(await session().reportStatus({ status: "busy", doing: "Tests", repo: "api", branch: "main" })).toEqual({ ok: true });
   });

@@ -95,9 +95,10 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: { tools: { listChanged: true } }, instructions: INSTRUCTIONS });
   // These replace a waiting server's handlers.
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: quiet === null ? TOOLS : [] }));
-  server.setRequestHandler(CallToolRequestSchema, (request): Promise<CallToolResult> | CallToolResult => {
+  server.setRequestHandler(CallToolRequestSchema, (request, extra): Promise<CallToolResult> | CallToolResult => {
     if (quiet !== null) return { content: [{ type: "text", text: quiet }], isError: true };
-    return runTool(client, request.params.name, (request.params.arguments ?? {}) as Record<string, unknown>);
+    // A cancelled call (Esc in Claude Code) ends its request, so a waiting check_inbox picks up nothing.
+    return runTool(client, request.params.name, (request.params.arguments ?? {}) as Record<string, unknown>, extra.signal);
   });
 
   /** Offers the tools (null) or takes them away with a note, and tells Claude Code when the list changed. */

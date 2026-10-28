@@ -44,7 +44,7 @@ ${o.pluginSource ? "" : html`<p class="notice">The plugin source isn't set on th
 <pre><code>curl -sS ${publicUrl}/api/sign-in-requests/&lt;id&gt; \\
   -H 'authorization: Bearer &lt;poll_secret&gt;'</code></pre>
 <p><code>pending</code> means keep polling. <code>denied</code> and <code>expired</code> end the request: ask the person for a new join line. <code>approved</code> comes with <code>token</code>, <code>mcp_url</code> and <code>openapi_url</code>, once only. Keep the token secret: the token is the agent's credential.</p></li>
-<li><p>Use the token as a bearer token, with MCP at <code>${publicUrl}/mcp</code> or with the HTTP API described at <code>${publicUrl}/api/agent/openapi.json</code>. Portico doesn't push messages to app agents, so check the inbox regularly with <code>check_inbox</code> or <code>GET /api/agent/inbox</code>.</p></li>
+<li><p>Use the token as a bearer token, with MCP at <code>${publicUrl}/mcp</code> or with the HTTP API described at <code>${publicUrl}/api/agent/openapi.json</code>. Portico can't start a turn for an app agent, so a conversation continues only while the agent checks the inbox. To wait for a reply, call <code>check_inbox</code> with <code>wait: ${LIMITS.maxInboxWaitSeconds}</code>, or <code>GET /api/agent/inbox?wait=${LIMITS.maxInboxWaitSeconds}</code>: Portico answers as soon as a message arrives. Call again to keep waiting.</p></li>
 </ol>
 
 <h2>MCP connectors</h2>

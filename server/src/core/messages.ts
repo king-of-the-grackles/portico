@@ -3,6 +3,7 @@ import type { Agents } from "./agents";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
 import { LOOP_LIMIT, LOOP_WINDOW_MS, loopGuardRetryAt } from "./guards";
+import type { InboxWaits } from "./inbox-waits";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
 import type { Agent, Decision, DeliveryTier, Message, MessageStatus, Notice, Thread } from "./types";
 
@@ -105,6 +106,8 @@ export interface MessagesDeps {
   /** Whether the receiver always allows messages from the sender. */
   alwaysAllows: (agentId: string, senderId: string) => boolean;
   changes: Changes;
+  /** Where check_inbox calls wait; Portico wakes them as it nudges sessions. */
+  waits: InboxWaits;
   now?: () => Date;
   newId?: () => string;
   notify?: (notice: Notice) => void;
@@ -117,6 +120,7 @@ export class Messages {
   private readonly agents: Agents;
   private readonly alwaysAllows: (agentId: string, senderId: string) => boolean;
   private readonly changes: Changes;
+  private readonly waits: InboxWaits;
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly notify: (notice: Notice) => void;
@@ -127,6 +131,7 @@ export class Messages {
     this.agents = deps.agents;
     this.alwaysAllows = deps.alwaysAllows;
     this.changes = deps.changes;
+    this.waits = deps.waits;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.notify = deps.notify ?? (() => {});
@@ -268,6 +273,36 @@ export class Messages {
 
   hasWaiting(agentId: string): boolean {
     return this.unreadCount(agentId) > 0;
+  }
+
+  /**
+   * Waits up to `ms` until the caller has something to pick up, and marks it checked in as the wait starts. Ends early
+   * when the caller's credential stops working (`valid`, checked on every wake; by default, while the agent exists) or
+   * when the signal aborts because the caller went away or cancelled; then nothing should be picked up. Times out by
+   * the real clock: a wait is real time.
+   */
+  async waitForInbox(
+    caller: Agent,
+    ms: number,
+    opts: { signal?: AbortSignal; valid?: () => boolean } = {},
+  ): Promise<"ready" | "timeout" | "gone" | "aborted"> {
+    const valid = opts.valid ?? (() => this.agents.get(caller.id) !== null);
+    if (this.waits.count(caller.id) >= LIMITS.maxInboxWaitsPerAgent) {
+      throw new PorticoError(
+        "rate_limited",
+        `${LIMITS.maxInboxWaitsPerAgent} check_inbox calls are already waiting for this agent. Let one finish first.`,
+      );
+    }
+    this.agents.checkedIn(caller);
+    const deadline = Date.now() + ms;
+    for (;;) {
+      if (opts.signal?.aborted) return "aborted";
+      if (!valid()) return "gone";
+      if (this.hasWaiting(caller.id)) return "ready";
+      const left = deadline - Date.now();
+      if (left <= 0) return "timeout";
+      await this.waits.sleep(caller.id, left, opts.signal);
+    }
   }
 
   get(id: string): Message | null {
