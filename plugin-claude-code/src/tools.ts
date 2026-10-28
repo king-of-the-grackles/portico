@@ -87,19 +87,30 @@ export function inboxText(inbox: Inbox, waited = false): string {
   return lines.join("\n");
 }
 
-/** After a send from a session Portico can't push to (Codex), as Portico's /mcp says it to apps and connectors. */
-export const WAIT_HINT = `If a reply is expected, call check_inbox with wait: ${MAX_INBOX_WAIT_SECONDS} to wait for the reply.`;
+/** After a send from a Codex conversation Portico can't start turns in, as Portico's /mcp says it to apps and connectors. */
+export const WAIT_HINT =
+  "Portico can't start a turn in this conversation, so if a reply is expected, call check_inbox with " +
+  `wait: ${MAX_INBOX_WAIT_SECONDS} to wait for the reply.`;
+
+/** After a send from a Codex conversation Portico can start turns in: the reply comes without waiting. */
+export const WAKE_HINT =
+  "Portico starts a new turn in this conversation when the reply arrives, so finish the turn instead of waiting.";
+
+/** A check_inbox that asked to wait, in a conversation Portico can start turns in: it answers right away instead. */
+export const NO_WAIT_NOTE =
+  "No need to wait: Portico starts a new turn in this conversation when something arrives, so finish the turn.";
 
 /**
- * Runs one of the three tools against Portico. Portico's errors become tool errors, as on its /mcp. With `pull`, the
- * session isn't pushed to, so a send that reaches the receiver ends with how to wait for the reply.
+ * Runs one of the three tools against Portico. Portico's errors become tool errors, as on its /mcp. A send that reaches
+ * the receiver ends with `replyHint`, how the reply will come, when there is one. With `noWait`, check_inbox never
+ * waits: the session gets what arrives without asking.
  */
 export async function runTool(
   client: PorticoClient,
   name: string,
   args: Args,
   signal?: AbortSignal,
-  opts: { pull?: boolean } = {},
+  opts: { replyHint?: string | null; noWait?: boolean } = {},
 ): Promise<CallToolResult> {
   try {
     switch (name) {
@@ -120,21 +131,23 @@ export async function runTool(
         const result = json({ message, delivery });
         // A held message's note, as its own line, as on Portico's /mcp.
         if (note) result.content.push({ type: "text", text: note });
-        if (opts.pull && (delivery === "pushed" || delivery === "queued")) result.content.push({ type: "text", text: WAIT_HINT });
+        if (opts.replyHint && (delivery === "pushed" || delivery === "queued")) result.content.push({ type: "text", text: opts.replyHint });
         return result;
       }
       case "check_inbox": {
         // Any wait goes to Portico as given, so Portico checks the value, as on its /mcp.
-        const wait = args.wait === undefined || args.wait === null ? undefined : String(args.wait);
+        const asked = args.wait === undefined || args.wait === null ? undefined : String(args.wait);
+        const wait = opts.noWait ? undefined : asked;
         const inbox = await client.checkInbox(wait, signal);
         // Waited as Portico counts it: whole milliseconds, capped.
         const waited = Math.round(Math.min(Number(wait), MAX_INBOX_WAIT_SECONDS) * 1000) > 0;
-        return {
-          content: [
-            { type: "text", text: inboxText(inbox, waited) },
-            { type: "text", text: JSON.stringify(inbox, null, 2) },
-          ],
-        };
+        const content: CallToolResult["content"] = [
+          { type: "text", text: inboxText(inbox, waited) },
+          { type: "text", text: JSON.stringify(inbox, null, 2) },
+        ];
+        const empty = inbox.messages.length === 0 && inbox.updates.length === 0;
+        if (opts.noWait && asked !== undefined && Number(asked) > 0 && empty) content.push({ type: "text", text: NO_WAIT_NOTE });
+        return { content };
       }
       default:
         return failure(`bad_request: Unknown tool ${name}.`);

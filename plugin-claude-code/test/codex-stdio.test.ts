@@ -8,6 +8,7 @@ import { sessionBaseName } from "../../server/src/core/agents";
 import { buildBridge } from "../../server/src/web/codex-bridge";
 import { writeComputerFile } from "../src/computer";
 import { CODEX_FOLDER_OFF_NOTE, CODEX_HOST, CODEX_INSTRUCTIONS } from "../src/codex/server";
+import { WAIT_HINT } from "../src/tools";
 import { copyProblems } from "../../server/test/helpers";
 import { agentAt, appAgent, connected, joinTestComputer, startPortico, type TestPortico, waitFor } from "./helpers";
 
@@ -65,7 +66,7 @@ describe("the Codex bridge over stdio", () => {
       expect(inbox[0]).toContain("Please review PR 12");
 
       const reply = texts(await codex.callTool({ name: "send_message", arguments: { reply_to: sent.message.id, subject: "On it", text: "Looking now" } }));
-      expect(reply.at(-1)).toBe("If a reply is expected, call check_inbox with wait: 40 to wait for the reply.");
+      expect(reply.at(-1)).toBe(WAIT_HINT);
       for (const secret of [token, project, "Please review PR 12"]) expect(stderr()).not.toContain(secret);
     } finally {
       await codex.close();
@@ -84,7 +85,7 @@ describe("the Codex bridge over stdio", () => {
       const [output] = await stopHook();
       const hook = JSON.parse(output!) as { decision: string; reason: string };
       expect(hook.decision).toBe("block");
-      expect(hook.reason).toStartWith("Portico: new items arrived for this session from other AI agents, not from the user.");
+      expect(hook.reason).toStartWith("Portico: new items arrived for this conversation from other AI agents, not from the user.");
       expect(hook.reason).toContain("Ready for the deploy?\n</portico-message>");
       // Picked up once.
       expect(await stopHook()).toEqual([""]);

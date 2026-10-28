@@ -74,6 +74,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     isConnected: (id) => agentStreams.isConnected(id),
     liveRuns: (id) => agentStreams.liveRuns(id),
     isRunLive: (runId) => agentStreams.isRunConnected(runId),
+    canWake: (id) => agentStreams.canWake(id),
     disconnect: (ids) => {
       agentStreams.closeAll(ids);
       inboxWaits.wake(...ids);
@@ -94,11 +95,12 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       }
     });
   };
-  // "The inbox has something": a session's stream gets a nudge, and an app's or connector's waiting check_inbox wakes.
+  // "The inbox has something": a session's stream gets a nudge (a Codex conversation only when its bridge can wake
+  // it), and an app's or connector's waiting check_inbox wakes.
   const wake = (agentId: string) => {
     const agent = agents.get(agentId);
     if (!agent) return;
-    if (agents.isPush(agent)) agentStreams.nudge(agent.id);
+    if (agents.isPush(agent) || agentStreams.canWake(agent.id)) agentStreams.nudge(agent.id);
     inboxWaits.wake(agent.id);
   };
   const handleNotice = (notice: Notice) => {

@@ -22,7 +22,7 @@ test("marketplace, manifest, package and server agree on the name and version", 
   expect(manifest.version).toBe(pkg.version);
   expect(SERVER_NAME).toBe("portico");
   expect(SERVER_VERSION).toBe(pkg.version);
-  expect(pkg.version).toBe("0.6.0");
+  expect(pkg.version).toBe("0.7.0");
   const lock = readFileSync(join(ROOT, "bun.lock"), "utf8");
   expect(/"name": "@portico\/plugin-claude-code",\s*"version": "([^"]+)"/.exec(lock)?.[1]).toBe(pkg.version);
 });

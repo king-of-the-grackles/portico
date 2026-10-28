@@ -1,6 +1,6 @@
 {
   "name": "portico",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "license": "MIT OR Apache-2.0",
   "description": "Connects Claude Code sessions to other AI agents through Portico. Messages from other agents arrive in the session, and messages held for approval pop up on the desktop.",
   "author": { "name": "Portico contributors" },

@@ -153,11 +153,11 @@ export async function callPerson(
   return await p.app.request(`${PUBLIC_URL}${path}`, { method, headers, body: payload });
 }
 
-/** Opens a session's live stream as the plugin does, and reads its hello. `popup` declares pop-ups. */
+/** Opens a session's live stream as the plugin does, and reads its hello. `popup` declares pop-ups, `wake` waking. */
 export async function openSessionStream(
   p: { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } },
   token: string,
-  opts: { key: string; repo?: string; folderId?: string; popup?: boolean; client?: "claude-code" | "codex" },
+  opts: { key: string; repo?: string; folderId?: string; popup?: boolean; wake?: boolean; client?: "claude-code" | "codex" },
 ): Promise<{ res: Response; events: ReturnType<typeof sseReader>; hello: HelloEvent }> {
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
@@ -165,6 +165,7 @@ export async function openSessionStream(
     "x-portico-folder": opts.folderId ?? "a".repeat(64),
   };
   if (opts.popup) headers["x-portico-popup"] = "1";
+  if (opts.wake) headers["x-portico-wake"] = "1";
   if (opts.client) headers["x-portico-client"] = opts.client;
   const res = await p.app.request(`/api/agent/stream?repo=${encodeURIComponent(opts.repo ?? "api")}`, { headers });
   if (res.status !== 200) throw new Error(`stream open failed with ${res.status}: ${await res.text()}`);

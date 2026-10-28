@@ -169,10 +169,10 @@ export class PorticoClient {
 
   /**
    * Opens `GET /api/agent/stream`, registering the session with the registration, and declaring that this session can
-   * show pop-ups when `popup` is set. Doesn't throw for HTTP errors: the caller checks `status`, reads the body, and
-   * aborts with `signal`.
+   * show pop-ups when `popup` is set, and start a turn when a message arrives when `wake` is set. Doesn't throw for
+   * HTTP errors: the caller checks `status`, reads the body, and aborts with `signal`.
    */
-  openStream(signal: AbortSignal, registration?: StreamRegistration, opts: { popup?: boolean } = {}): Promise<Response> {
+  openStream(signal: AbortSignal, registration?: StreamRegistration, opts: { popup?: boolean; wake?: boolean } = {}): Promise<Response> {
     const headers = this.headers("text/event-stream");
     let path = "/api/agent/stream";
     if (registration) {
@@ -181,6 +181,7 @@ export class PorticoClient {
       if (registration.client) headers["x-portico-client"] = registration.client;
     }
     if (opts.popup) headers["x-portico-popup"] = "1";
+    if (opts.wake) headers["x-portico-wake"] = "1";
     return this.doFetch(`${this.opts.url}${path}`, { headers, signal });
   }
 

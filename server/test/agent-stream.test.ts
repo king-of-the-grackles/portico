@@ -59,6 +59,33 @@ describe("a session's live stream", () => {
     expect(p.agents.runs(agent.id).every((run) => run.endedAt !== null)).toBe(true);
   });
 
+  test("a Codex conversation is nudged only when its bridge can wake it, and a message to it then counts as pushed", async () => {
+    const { p, token, grok } = await setup();
+    const send = async (subject: string) => {
+      const res = await callAs(p, { token: grok.token }, "POST", "/api/agent/messages", { to: "api-codex", subject, text: "t" });
+      return ((await res.json()) as { delivery: string }).delivery;
+    };
+    const plain = await openSessionStream(p, token, { key: "key-000001", repo: "api", client: "codex" });
+    const agent = p.agents.resolve("api-codex", "x");
+    expect(await send("first")).toBe("queued");
+    expect(p.agentStreams.canWake(agent.id)).toBe(false);
+    // The first message still waits, so each new stream starts with a nudge.
+    const waking = await openSessionStream(p, token, { key: "key-000002", repo: "api", client: "codex", wake: true });
+    expect((await waking.events.next()).event).toBe("nudge");
+    const newest = await openSessionStream(p, token, { key: "key-000003", repo: "api", client: "codex" });
+    expect((await newest.events.next()).event).toBe("nudge");
+    expect(p.agentStreams.canWake(agent.id)).toBe(true);
+    expect(await send("second")).toBe("pushed");
+    // The newest conversation can't wake, so the one that can gets the nudge.
+    expect((await waking.events.next()).event).toBe("nudge");
+    await waking.events.cancel();
+    await flush();
+    expect(p.agentStreams.canWake(agent.id)).toBe(false);
+    expect(await send("third")).toBe("queued");
+    await plain.events.cancel();
+    await newest.events.cancel();
+  });
+
   test("each terminal reports its own status; the agent shows the busiest", async () => {
     const { p, token } = await setup();
     const one = await openSessionStream(p, token, { key: "key-000001", repo: "api" });

@@ -14,6 +14,7 @@ import type { ApprovalPrompt, DialogRunner, PanelOutcome } from "../src/popup";
 import { PorticoClient, type StreamRegistration } from "../src/portico-client";
 import { InboxSocket } from "../src/socket";
 import type { SessionWatcher } from "../src/status";
+import { type AppServer, AppServerError } from "../src/codex/app-server";
 
 /**
  * A real Portico (in-memory database, fake clock, 50 ms heartbeats) on a random local port, set up, with its owner.
@@ -315,4 +316,91 @@ export function fakePortico(answer: (req: { method: string; path: string; body: 
     },
   });
   return { url: `http://127.0.0.1:${server.port}`, requests, stop: () => server.stop(true) };
+}
+
+/** A conversation as a fake Codex app-server lists it. `listed: false` keeps it out of thread/loaded/list for now. */
+export interface FakeThread {
+  cwd: string;
+  status: { type: string; activeFlags?: string[] };
+  source?: unknown;
+  parentThreadId?: string | null;
+  listed?: boolean;
+}
+
+/**
+ * A stand-in for Codex's shared app-server: shared state, a connection per `connect()`, status changes sent to every
+ * connection, and portico_identify calls handed to `routeTools`.
+ */
+export function fakeCodex(threads: Record<string, FakeThread>) {
+  const requests: { method: string; params: Record<string, unknown> }[] = [];
+  const turns: { threadId: string; text: string }[] = [];
+  const connections: { notify: (method: string, params: unknown) => void; close: () => void }[] = [];
+  let toolCall: (threadId: string, tool: string, args: Record<string, unknown>) => Promise<unknown> = async () => ({ content: [] });
+  let failTurns = false;
+  const setStatus = (threadId: string, status: FakeThread["status"]) => {
+    threads[threadId]!.status = status;
+    for (const c of connections) c.notify("thread/status/changed", { threadId, status });
+  };
+  const handle = async (method: string, params: Record<string, unknown>): Promise<unknown> => {
+    requests.push({ method, params });
+    const threadId = params.threadId as string;
+    switch (method) {
+      case "thread/loaded/list":
+        return { data: Object.keys(threads).filter((id) => threads[id]!.listed !== false) };
+      case "thread/read":
+        if (!threads[threadId]) throw new AppServerError(-32600, "no such thread");
+        return { thread: { id: threadId, ...threads[threadId] } };
+      case "mcpServer/tool/call":
+        return toolCall(threadId, params.tool as string, params.arguments as Record<string, unknown>);
+      case "turn/start": {
+        if (failTurns) throw new AppServerError(-32603, "the turn didn't start");
+        turns.push({ threadId, text: (params.input as { text: string }[])[0]!.text });
+        setStatus(threadId, { type: "active", activeFlags: [] });
+        return { turn: { id: `turn-${turns.length}` } };
+      }
+      default:
+        throw new AppServerError(-32601, `unknown method ${method}`);
+    }
+  };
+  return {
+    threads,
+    requests,
+    turns,
+    setStatus,
+    routeTools: (fn: typeof toolCall) => {
+      toolCall = fn;
+    },
+    failTurns: (on: boolean) => {
+      failTurns = on;
+    },
+    /** Ends every connection, as when the app-server stops. */
+    closeAll: () => {
+      for (const c of connections.splice(0)) c.close();
+    },
+    connect: async (): Promise<AppServer> => {
+      const listeners: ((method: string, params: unknown) => void)[] = [];
+      const closers: (() => void)[] = [];
+      let closed = false;
+      const connection = {
+        notify: (method: string, params: unknown) => {
+          if (!closed) for (const listener of listeners) listener(method, params);
+        },
+        close: () => {
+          if (closed) return;
+          closed = true;
+          for (const closer of closers.splice(0)) closer();
+        },
+      };
+      connections.push(connection);
+      return {
+        request: <T>(method: string, params: unknown) => {
+          if (closed) return Promise.reject(new AppServerError("closed", "closed"));
+          return handle(method, (params ?? {}) as Record<string, unknown>) as Promise<T>;
+        },
+        onNotification: (listener) => void listeners.push(listener),
+        onClose: (listener) => void closers.push(listener),
+        close: connection.close,
+      };
+    },
+  };
 }

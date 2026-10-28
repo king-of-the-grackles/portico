@@ -223,6 +223,8 @@ export interface AgentsDeps {
   /** How many of the agent's runs have a stream open, and whether one run does. */
   liveRuns?: (agentId: string) => number;
   isRunLive?: (runId: string) => boolean;
+  /** Whether a run of the agent can start a turn when a message arrives: a Codex conversation Portico can wake. */
+  canWake?: (agentId: string) => boolean;
   /** Closes the agents' streams, once they're removed. */
   disconnect?: (agentIds: string[]) => void;
   /** Runs after a rename, so a connected session can learn its new address. */
@@ -245,6 +247,7 @@ export class Agents {
   private readonly isConnected: (agentId: string) => boolean;
   readonly liveRuns: (agentId: string) => number;
   readonly isRunLive: (runId: string) => boolean;
+  private readonly canWake: (agentId: string) => boolean;
   private readonly disconnect: (agentIds: string[]) => void;
   private readonly renamed: (agent: Agent) => void;
   private readonly now: () => Date;
@@ -260,6 +263,7 @@ export class Agents {
     this.isConnected = deps.isConnected ?? (() => false);
     this.liveRuns = deps.liveRuns ?? ((id) => (this.isConnected(id) ? 1 : 0));
     this.isRunLive = deps.isRunLive ?? (() => false);
+    this.canWake = deps.canWake ?? (() => false);
     this.disconnect = deps.disconnect ?? (() => {});
     this.renamed = deps.renamed ?? (() => {});
     this.now = deps.now ?? (() => new Date());
@@ -433,11 +437,14 @@ export class Agents {
     return agent.type === "session" && CLIENTS[sessionClient(agent)].push;
   }
 
-  /** How a message that isn't held reaches the agent right now. A session that isn't connected is offline. */
+  /**
+   * How a message that isn't held reaches the agent right now. A session that isn't connected is offline. A Codex
+   * conversation Portico can wake counts as pushed: a new turn starts with the message.
+   */
   tier(agent: Agent): Exclude<DeliveryTier, "held"> {
     if (agent.type !== "session") return "queued";
     if (!this.isConnected(agent.id)) return "offline";
-    return this.isPush(agent) ? "pushed" : "queued";
+    return this.isPush(agent) || this.canWake(agent.id) ? "pushed" : "queued";
   }
 
   // ---- sessions ----

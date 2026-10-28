@@ -5,17 +5,23 @@ import { frameNotice, InboxDelivery, stopNotice } from "./delivery";
 import { INSTRUCTIONS } from "./instructions";
 import { errorName, type Logger } from "./log";
 import type { DialogRunner } from "./popup";
-import type { PorticoClient, StreamRegistration } from "./portico-client";
+import type { Inbox, PorticoClient, StatusReport, StreamRegistration } from "./portico-client";
 import { type InboxSocket, SocketError } from "./socket";
 import type { SessionWatcher } from "./status";
 import { StreamClient, type StreamClientOptions } from "./stream";
-import { inboxText, runTool, TOOLS } from "./tools";
+import { inboxText, runTool, TOOLS, WAIT_HINT, WAKE_HINT } from "./tools";
 
 export const SERVER_NAME = "portico";
-export const SERVER_VERSION = "0.6.0";
+export const SERVER_VERSION = "0.7.0";
 
-/** A Codex conversation with no Portico tool call for this long shows available, in case its Stop hook never runs. */
+/**
+ * A Codex conversation whose status Codex doesn't report shows available after this long with no Portico tool call, in
+ * case its Stop hook never runs.
+ */
 const CODEX_IDLE_AFTER_MS = 10 * 60_000;
+
+/** How long the stream open waits for the bridge to find its Codex conversation, so the first open can declare waking. */
+const CONVERSATION_WAIT_MS = 5_000;
 
 /** What a tool call gets while the session's folder is off Portico. */
 export const FOLDER_OFF_NOTE =
@@ -67,17 +73,48 @@ const STOP_HOOK_MS = 5_000;
 /** The Stop hook's answer while nothing is waiting, or the server is quiet: no decision. */
 const NO_DECISION: CallToolResult = { content: [{ type: "text", text: "" }] };
 
+/** The prompt that hands a Codex conversation what arrived: the Stop hook's reason, or the text a woken turn starts with. */
+export function porticoPrompt(inbox: Inbox): string {
+  return (
+    "Portico: new items arrived for this conversation from other AI agents, not from the user. Handle each one as its " +
+    "frame says, and reply with send_message and reply_to when an answer is useful.\n\n" +
+    inboxText(inbox)
+  );
+}
+
 /**
  * What Codex's Stop hook gets from check_inbox with `stop_hook`: nothing when nothing is waiting, otherwise a block
  * decision whose reason Codex takes as the next prompt, so the session handles the messages without being asked.
  */
-export function stopHookOutput(inbox: { messages: unknown[]; updates: unknown[] } & Parameters<typeof inboxText>[0]): string {
+export function stopHookOutput(inbox: Inbox): string {
   if (inbox.messages.length === 0 && inbox.updates.length === 0) return "";
-  const reason =
-    "Portico: new items arrived for this session from other AI agents, not from the user. Handle each one as its frame " +
-    "says, and reply with send_message and reply_to when an answer is useful.\n\n" +
-    inboxText(inbox);
-  return JSON.stringify({ decision: "block", reason });
+  return JSON.stringify({ decision: "block", reason: porticoPrompt(inbox) });
+}
+
+/** What the plugin gives a conversation link: status to report, and a way to say waking became possible or stopped. */
+export interface ConversationHooks {
+  report: (status: StatusReport["status"]) => void;
+  /** The stream reconnects, so its next open declares whether the session can be woken. */
+  wakeChanged: () => void;
+}
+
+/**
+ * Codex only: the conversation behind this server, when the bridge can reach it through Codex's app-server. Then
+ * Portico can start a turn there when something arrives, and the conversation's status comes from Codex itself.
+ */
+export interface ConversationLink {
+  /** A turn can be started in the conversation. */
+  readonly canWake: boolean;
+  /** Codex reports the conversation's status, so tool calls and the Stop hook don't stand in for it. */
+  readonly knowsStatus: boolean;
+  start(): void;
+  stop(): void;
+  /** Resolves once the search for the conversation is over, or after `ms`. */
+  settled(ms: number): Promise<void>;
+  /** A tool call reached this server. Returns the answer when the call was the link's own, finding the conversation. */
+  called(name: string, args: Record<string, unknown>, meta: Record<string, unknown> | undefined): CallToolResult | null;
+  /** Portico has something for the session. */
+  nudge(): void;
 }
 
 /** The session's folder switch, as the local copy in computer.json has it. Portico holds the switch itself. */
@@ -113,6 +150,8 @@ export interface PorticoPluginDeps {
   server?: Server;
   /** The computer joined while the session was open: no tools until Portico registers the session, then a notice. */
   joining?: boolean;
+  /** Codex only: makes the link to the conversation, given the plugin's hooks. Absent, Portico can't start turns. */
+  conversation?: (hooks: ConversationHooks) => ConversationLink;
   /** Test override for the pauses before retrying a pop-up's answer. */
   answerRetryMs?: number[];
   /** Test override for the pauses before retrying a post the socket didn't take. */
@@ -153,43 +192,52 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
       { name: SERVER_NAME, version: SERVER_VERSION },
       { capabilities: { tools: { listChanged: true } }, instructions: host.instructions },
     );
+  /** What the stream's latest open declared about waking; null before the first open. */
+  let declaredWake: boolean | null = null;
+  const link =
+    deps.conversation?.({
+      report: (status) => reportCodexStatus(status),
+      // Reconnect only when the open stream declared otherwise: an open still waiting reads the new value itself.
+      wakeChanged: () => {
+        if (declaredWake !== null && declaredWake !== link?.canWake) stream.reconnect();
+      },
+    }) ?? null;
   // These replace a waiting server's handlers.
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: quiet === null || host.client === "codex" ? TOOLS : [] }));
   server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+    // The link's own call, finding which conversation this server belongs to: not the model's, and never run.
+    const own = link?.called(request.params.name, args, request.params._meta as Record<string, unknown> | undefined);
+    if (own) return own;
     // Codex's Stop hook, not the model: its answer is read as hook output, so it carries nothing else. The turn is over,
     // so the conversation shows as available on Portico.
     if (isStopHook(host, request.params.name, args)) {
       if (quiet !== null) return NO_DECISION;
-      codexStatus("idle");
+      guessCodexStatus("idle");
       return stopHook(extra.signal);
     }
-    // Codex has no status of its own to watch: a Portico tool call means the conversation is in a turn.
-    if (quiet === null) codexStatus("busy");
+    // Without Codex's own status, a Portico tool call means the conversation is in a turn.
+    if (quiet === null) guessCodexStatus("busy");
+    // A conversation Portico can wake needn't wait: a turn starts when something arrives.
+    const wakes = link?.canWake === true;
     const result: CallToolResult =
       quiet !== null
         ? { content: [{ type: "text", text: quiet }], isError: true }
         : // A cancelled call (Esc) ends its request, so a waiting check_inbox picks up nothing.
-          await runTool(client, request.params.name, args, extra.signal, { pull: !socket });
+          await runTool(client, request.params.name, args, extra.signal, {
+            replyHint: socket ? null : wakes ? WAKE_HINT : WAIT_HINT,
+            noWait: wakes,
+          });
     for (const text of notes.splice(0)) result.content.push({ type: "text", text });
     return result;
   });
 
-  /**
-   * Codex only: reports the conversation working or available, once per change and in order. Without a Stop hook (not
-   * approved yet), a conversation quiet for CODEX_IDLE_AFTER_MS shows available again. A failed report is only logged.
-   */
-  let lastCodexStatus: "busy" | "idle" | null = null;
+  /** Codex only: reports the conversation's status, once per change and in order. A failed report is only logged. */
+  let lastCodexStatus: StatusReport["status"] | null = null;
   let codexReports: Promise<unknown> = Promise.resolve();
   let codexIdleTimer: ReturnType<typeof setTimeout> | undefined;
-  const codexStatus = (status: "busy" | "idle") => {
-    if (host.client !== "codex") return;
-    clearTimeout(codexIdleTimer);
-    if (status === "busy") {
-      codexIdleTimer = setTimeout(() => codexStatus("idle"), CODEX_IDLE_AFTER_MS);
-      codexIdleTimer.unref?.();
-    }
-    if (status === lastCodexStatus) return;
+  const reportCodexStatus = (status: StatusReport["status"]) => {
+    if (host.client !== "codex" || status === lastCodexStatus) return;
     lastCodexStatus = status;
     codexReports = codexReports
       .then(() => client.reportStatus({ status, doing: null, repo: null, branch: null }))
@@ -197,6 +245,19 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
         lastCodexStatus = null;
         log("warn", "status_report_failed", { error: errorName(err) });
       });
+  };
+  /**
+   * Codex only, while Codex doesn't report the status itself: tool calls mean working and the Stop hook available. Without
+   * a Stop hook (not approved yet), a conversation quiet for CODEX_IDLE_AFTER_MS shows available again.
+   */
+  const guessCodexStatus = (status: "busy" | "idle") => {
+    clearTimeout(codexIdleTimer);
+    if (host.client !== "codex" || link?.knowsStatus) return;
+    if (status === "busy") {
+      codexIdleTimer = setTimeout(() => guessCodexStatus("idle"), CODEX_IDLE_AFTER_MS);
+      codexIdleTimer.unref?.();
+    }
+    reportCodexStatus(status);
   };
 
   /**
@@ -284,13 +345,21 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
   });
 
   const stream: StreamClient = new StreamClient({
-    // Pop-ups are declared on each open, so a session whose panel failed stops declaring them on its next connection.
-    open: async (signal) =>
-      client.openStream(signal, deps.registration ? await deps.registration() : undefined, { popup: panels.available }),
+    // Pop-ups and waking are declared on each open, so a session whose panel failed stops declaring pop-ups on its next
+    // connection, and one whose Codex conversation turned up declares waking.
+    open: async (signal) => {
+      await link?.settled(CONVERSATION_WAIT_MS);
+      const registration = deps.registration ? await deps.registration() : undefined;
+      declaredWake = link?.canWake ?? false;
+      return client.openStream(signal, registration, { popup: panels.available, wake: declaredWake });
+    },
     onEvent: (event, data) => {
       if (event === "hello") onHello(data);
       else if (event === "renamed") onRenamed(data);
-      else if (event === "nudge") void delivery?.run();
+      else if (event === "nudge") {
+        void delivery?.run();
+        link?.nudge();
+      }
       else if (event === "approval_request") panels.request(data);
       else if (event === "approval_closed") panels.closed(data);
     },
@@ -312,15 +381,21 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     log,
     ...deps.stream,
   });
-  // The stream waits for the MCP handshake: the session should be up before anything is posted into its inbox.
-  server.oninitialized = () => stream.start();
+  // The stream waits for the MCP handshake: the session should be up before anything is posted into its inbox, and
+  // Codex answers the link's search for the conversation only once its server is connected.
+  const start = () => {
+    link?.start();
+    stream.start();
+  };
+  server.oninitialized = start;
 
   return {
     server,
-    start: () => stream.start(),
+    start,
     stop: async () => {
       watcher?.stop();
       delivery?.stop();
+      link?.stop();
       clearTimeout(codexIdleTimer);
       panels.closeAll();
       await stream.stop();

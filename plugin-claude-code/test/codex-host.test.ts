@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CodexConversation } from "../src/codex/conversation";
 import { CODEX_HOST } from "../src/codex/server";
-import { createPorticoPlugin, createWaitingServer, type PorticoPlugin } from "../src/plugin";
+import { createPorticoPlugin, createWaitingServer, type PorticoPlugin, porticoPrompt } from "../src/plugin";
 import { PorticoClient } from "../src/portico-client";
-import { appAgent, captureLog, fakeHost, joinTestComputer, startPortico, type TestPortico, waitFor } from "./helpers";
+import { NO_WAIT_NOTE, WAKE_HINT } from "../src/tools";
+import { appAgent, captureLog, fakeCodex, fakeHost, joinTestComputer, startPortico, type TestPortico, waitFor } from "./helpers";
 
 let p: TestPortico | null = null;
 const stops: (() => Promise<void>)[] = [];
@@ -15,8 +20,13 @@ afterEach(async () => {
 type Text = { content: { text: string }[]; isError?: boolean };
 const text = (result: unknown) => (result as Text).content.map((item) => item.text);
 
-/** A Codex conversation's server, as the bridge builds it, connected to a stand-in for Codex. */
-async function conversation(opts: { client?: (real: PorticoClient) => PorticoClient; off?: boolean } = {}) {
+/**
+ * A Codex conversation's server, as the bridge builds it, connected to a stand-in for Codex. With `codex`, a stand-in for
+ * Codex's app-server too, whose conversation in `folder` is this server's.
+ */
+async function conversation(
+  opts: { client?: (real: PorticoClient) => PorticoClient; off?: boolean; codex?: ReturnType<typeof fakeCodex>; folder?: string } = {},
+) {
   p = await startPortico();
   const { token } = joinTestComputer(p, "macbook");
   const key = "codex-conversation-1";
@@ -28,7 +38,21 @@ async function conversation(opts: { client?: (real: PorticoClient) => PorticoCli
     host: CODEX_HOST,
     folder: { off: opts.off ?? false, record: () => {} },
     registration: async () => ({ repo: "api", folderId: "c".repeat(64), client: "codex" }),
+    conversation: opts.codex
+      ? (hooks) =>
+          new CodexConversation({
+            ...hooks,
+            cwd: opts.folder!,
+            client: real,
+            log: captureLog().log,
+            prompt: porticoPrompt,
+            connect: opts.codex!.connect,
+            findRetryMs: [10, 10],
+          })
+      : undefined,
   });
+  // Codex calls portico_identify on the conversation's own server, with the conversation's ID.
+  opts.codex?.routeTools((threadId, name, args) => host.host.callTool({ name, arguments: args, _meta: { threadId } }));
   const host = await fakeHost(plugin);
   stops.push(async () => {
     await plugin.stop();
@@ -66,6 +90,30 @@ describe("a Codex conversation's server", () => {
     await waitFor(() => codex().status === "busy");
     await host.callTool({ name: "check_inbox", arguments: { stop_hook: true } });
     await waitFor(() => codex().status === "idle");
+  });
+
+  test("with Codex's app-server, a message to the idle conversation starts a turn there, and replies needn't be waited for", async () => {
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), "portico-codex-folder-")));
+    stops.push(async () => rmSync(folder, { recursive: true, force: true }));
+    const codex = fakeCodex({ "thread-1": { cwd: folder, status: { type: "idle" } } });
+    const { p, host } = await conversation({ codex, folder });
+    const agent = () => p.agents.byAddress("api-codex@macbook");
+    await waitFor(() => agent() !== null && p.agentStreams.canWake(agent()!.id), 5000);
+    const grok = appAgent(p, "grok", { kind: "grok-bot" }).agent;
+    expect(p.messages.send(grok, { to: "api-codex", subject: "Ready?", text: "Ready for the deploy?" }).delivery).toBe("pushed");
+    await waitFor(() => codex.turns.length === 1, 5000);
+    expect(codex.turns[0]!.text).toStartWith("Portico: new items arrived for this conversation from other AI agents");
+    expect(codex.turns[0]!.text).toContain("Ready for the deploy?");
+    await waitFor(() => p.messages.unreadCount(agent()!.id) === 0);
+    // Codex says the conversation is working, and a tool call no longer stands in for that.
+    await waitFor(() => p.agents.entry(agent()!).status === "busy");
+    expect(text(await host.callTool({ name: "check_inbox", arguments: { wait: 40 } })).at(-1)).toBe(NO_WAIT_NOTE);
+    expect(text(await host.callTool({ name: "send_message", arguments: { to: "grok", subject: "Yes", text: "Ready." } })).at(-1)).toBe(WAKE_HINT);
+    codex.setStatus("thread-1", { type: "idle" });
+    await waitFor(() => p.agents.entry(agent()!).status === "idle");
+    await host.callTool({ name: "list_agents", arguments: {} });
+    await Bun.sleep(50);
+    expect(p.agents.entry(agent()!).status).toBe("idle");
   });
 
   test("in a folder that's off, the tools stay listed so the Stop hook finds check_inbox, and the hook says nothing", async () => {

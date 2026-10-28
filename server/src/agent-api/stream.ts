@@ -28,11 +28,15 @@ export interface StreamConnection {
   close(): void;
 }
 
-/** What Portico knows about a stream: the session's computer and owner, and whether its plugin can show pop-ups. */
+/**
+ * What Portico knows about a stream: the session's computer and owner, whether its plugin can show pop-ups, and whether
+ * it can start a turn when a message arrives (a Codex conversation its bridge can wake).
+ */
 export interface StreamInfo {
   computerId: string | null;
   ownerId: string | null;
   popup: boolean;
+  wake: boolean;
 }
 
 interface OpenStream extends StreamInfo {
@@ -42,7 +46,7 @@ interface OpenStream extends StreamInfo {
   order: number;
 }
 
-const NO_INFO: StreamInfo = { computerId: null, ownerId: null, popup: false };
+const NO_INFO: StreamInfo = { computerId: null, ownerId: null, popup: false, wake: false };
 
 /**
  * The live streams, one per run: each process of a session agent (a terminal, a Codex conversation) has its own. A
@@ -116,9 +120,22 @@ export class AgentStreams {
     for (const [runId, entry] of removed) this.emitClosed(runId, entry);
   }
 
-  /** "The inbox has something." Returns false if the agent has no open stream. */
+  /** Whether one of the agent's open runs can start a turn when a message arrives. */
+  canWake(agentId: string): boolean {
+    return this.newestFirst(agentId).some((runId) => this.open.get(runId)?.wake);
+  }
+
+  /**
+   * "The inbox has something." Goes to the newest run that can wake, so a Codex conversation starts a turn with it;
+   * otherwise to the newest run. Returns false if the agent has no open stream.
+   */
   nudge(agentId: string): boolean {
-    return this.send(agentId, "nudge", {});
+    const runs = this.newestFirst(agentId);
+    const waking = runs.filter((runId) => this.open.get(runId)?.wake);
+    for (const runId of [...waking, ...runs.filter((runId) => !waking.includes(runId))]) {
+      if (this.sendRun(runId, "nudge", {})) return true;
+    }
+    return false;
   }
 
   /** Sends one event to the agent's newest run, or the next newest if that send fails. False when none took it. */
@@ -238,8 +255,13 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
       c.req.header("x-portico-client"),
     );
     const { agent, runId } = agents.registerSession(computer, reg);
-    // Only a session can answer a pop-up, so only its stream may declare pop-ups.
-    const info: StreamInfo = { computerId: computer.id, ownerId: computer.ownerId, popup: c.req.header("x-portico-popup") === "1" };
+    // Only a session can answer a pop-up, so only its stream may declare pop-ups, or that it can be woken.
+    const info: StreamInfo = {
+      computerId: computer.id,
+      ownerId: computer.ownerId,
+      popup: c.req.header("x-portico-popup") === "1",
+      wake: c.req.header("x-portico-wake") === "1",
+    };
     return streamSSE(c, async (stream) => {
       let open = true;
       let end!: () => void;

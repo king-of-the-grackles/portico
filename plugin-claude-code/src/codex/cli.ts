@@ -155,7 +155,7 @@ async function join(args: string[], io: CodexCliIo, deps: CodexCliDeps): Promise
   const hook = outcomeLine(
     setStopHook(home, true),
     "Added a Stop hook that hands Codex new Portico messages at the end of each turn",
-    "Without the Stop hook, Codex sees messages only through check_inbox.",
+    "Without the Stop hook, a message that arrives during a turn waits until Codex checks its inbox.",
   );
   if (hook) io.out(hook);
   io.out("Next: in Codex, open /hooks and approve the Portico Stop hook. Codex skips a new hook until a person approves the hook.");

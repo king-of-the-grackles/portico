@@ -12,7 +12,7 @@ function setup() {
   // Each run is its own pop-up target; two runs of one agent count separately.
   const connect = (runId: string, computerId: string, ownerId: string, popup = true, agentId = `agent-${runId}`) => {
     const fake = fakeConnection();
-    const disconnect = streams.connect(agentId, runId, fake.conn, "quiet", { computerId, ownerId, popup });
+    const disconnect = streams.connect(agentId, runId, fake.conn, "quiet", { computerId, ownerId, popup, wake: false });
     return { ...fake, disconnect };
   };
   const held = (messageId: string, ownerId = "chris") => ({
