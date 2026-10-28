@@ -7,3 +7,10 @@ node_modules/
 !.env.example
 signing.key
 dist/
+
+# Kept on each person's own computer, never in the repo: notes, specs and plans, scratch work, and tool state.
+docs/
+.local/
+logs/
+.claude/
+.superpowers/

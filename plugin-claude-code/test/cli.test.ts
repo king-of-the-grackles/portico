@@ -43,7 +43,12 @@ async function cli(argv: string[], opts: { path: string; cwd: string; deps?: Cli
   const err: string[] = [];
   const lines: string[] = [];
   const io: CliIo = {
-    env: { PORTICO_COMPUTER_CONFIG: opts.path, PORTICO_CLAUDE_HOME: join(dirname(dirname(opts.path)), ".claude"), PATH: "" },
+    env: {
+      PORTICO_COMPUTER_CONFIG: opts.path,
+      PORTICO_CLAUDE_HOME: join(dirname(dirname(opts.path)), ".claude"),
+      CODEX_HOME: join(dirname(dirname(opts.path)), ".codex"),
+      PATH: "",
+    },
     cwd: opts.cwd,
     out: (line) => {
       out.push(line);
@@ -321,7 +326,7 @@ describe("leave", () => {
     chmodSync(join(bin, "claude"), 0o755);
     const out: string[] = [];
     const io: CliIo = {
-      env: { PORTICO_COMPUTER_CONFIG: path, PORTICO_CLAUDE_HOME: join(dir, ".claude"), PATH: `/nowhere:${bin}` },
+      env: { PORTICO_COMPUTER_CONFIG: path, PORTICO_CLAUDE_HOME: join(dir, ".claude"), CODEX_HOME: join(dir, ".codex"), PATH: `/nowhere:${bin}` },
       cwd: dir,
       out: (line) => out.push(line),
       err: (line) => out.push(line),
