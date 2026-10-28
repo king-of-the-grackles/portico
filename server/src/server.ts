@@ -14,7 +14,7 @@ const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
 export function startServer(config: PorticoConfig, opts: { port?: number } = {}): RunningServer {
-  const db = openDb(config.dbPath);
+  const db = openDb(config.dbPath, (msg, fields) => log("info", msg, fields));
   const portico = createPortico(config, { db });
   let server: ReturnType<typeof Bun.serve>;
   try {

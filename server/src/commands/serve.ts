@@ -23,6 +23,9 @@ export function localSetupLink(core: Pick<Core, "config" | "settings" | "account
 /** A plain explanation for startup failures that aren't bugs, or null for anything else. */
 export function startupProblem(err: unknown, config: Pick<PorticoConfig, "port" | "dbPath">): string | null {
   if (err instanceof SchemaMismatchError) {
+    if (err.newer) {
+      return `The database at ${config.dbPath} was written by a newer Portico version. Run that version, or restore the copy saved beside the database before it was upgraded.`;
+    }
     return `The database at ${config.dbPath} was written by a different Portico version. Move it aside to start fresh, or run that version.`;
   }
   const code = (err as { code?: unknown } | null)?.code;

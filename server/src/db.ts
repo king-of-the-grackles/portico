@@ -1,8 +1,10 @@
 import { Database } from "bun:sqlite";
+import { MIGRATIONS, type Migration } from "./migrations";
 
 /**
- * The open network's schema. Written fresh, with no migration from earlier versions: nobody runs those in production.
- * Each module owns the queries for its own tables; this file only creates them.
+ * The open network's first schema, version 100. Later changes are migrations (migrations.ts), which every database
+ * runs in order, a new one included, so there is one path to the current schema. Each module owns the queries for its
+ * own tables; this file only creates them.
  */
 const SCHEMA = [
   `CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
@@ -204,29 +206,75 @@ const SCHEMA = [
   )`,
 ];
 
-/** The open network's schema version. Earlier Portico versions used 1 and 2. */
-export const SCHEMA_VERSION = 100;
+/** The first schema's version. Earlier Portico versions used 1 and 2, which can't be upgraded. */
+export const BASE_VERSION = 100;
 
-/** The database was written by another Portico version, whose schema this one can't use. */
+/** The current schema version: the first schema plus every migration. */
+export const SCHEMA_VERSION = BASE_VERSION + MIGRATIONS.length;
+
+/** The database was written by a Portico version this one can't upgrade from: before 100, or newer than this one. */
 export class SchemaMismatchError extends Error {
   constructor(readonly found: number) {
-    super(`database schema version ${found} is not this Portico's version ${SCHEMA_VERSION}`);
+    super(`database schema version ${found} is not one this Portico (version ${SCHEMA_VERSION}) can use or upgrade`);
     this.name = "SchemaMismatchError";
+  }
+
+  /** Written by a newer Portico, e.g. before a rollback. */
+  get newer(): boolean {
+    return this.found > SCHEMA_VERSION;
   }
 }
 
-function prepare(db: Database): void {
-  const version = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
-  if (version === SCHEMA_VERSION) return;
-  const tables = (db.query("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'").get() as { n: number }).n;
-  if (version !== 0 || tables > 0) throw new SchemaMismatchError(version);
-  db.transaction(() => {
-    for (const statement of SCHEMA) db.run(statement);
-    db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-  })();
+const userVersion = (db: Database) => (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+
+/** Where the copy made before upgrading a database file goes: beside it, named for the old version and the time. */
+export function backupPath(path: string, version: number, at: Date): string {
+  return `${path}.v${version}-${at.toISOString().replace(/[:.]/g, "-")}.bak`;
 }
 
-export function openDb(path: string): Database {
+/**
+ * Creates a new database or upgrades an older one to the current version. A database file is copied beside itself
+ * before an upgrade. Each migration runs in its own transaction with a foreign key check, so a failed one leaves the
+ * database at the last version that worked.
+ */
+export function prepare(
+  db: Database,
+  opts: { path?: string; migrations?: readonly Migration[]; now?: () => Date; log?: (msg: string, fields: Record<string, unknown>) => void } = {},
+): void {
+  const migrations = opts.migrations ?? MIGRATIONS;
+  const latest = BASE_VERSION + migrations.length;
+  let version = userVersion(db);
+  if (version === latest) return;
+  const tables = (db.query("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'").get() as { n: number }).n;
+  if (version === 0 && tables === 0) {
+    db.transaction(() => {
+      for (const statement of SCHEMA) db.run(statement);
+      db.run(`PRAGMA user_version = ${BASE_VERSION}`);
+    })();
+    version = BASE_VERSION;
+  } else {
+    if (version < BASE_VERSION || version > latest) throw new SchemaMismatchError(version);
+    if (opts.path && opts.path !== ":memory:") {
+      const to = backupPath(opts.path, version, opts.now?.() ?? new Date());
+      db.query("VACUUM INTO $to").run({ to });
+      opts.log?.("db_backed_up", { from_version: version, to_version: latest });
+    }
+  }
+  // A row that already broke a foreign key (written with the checks off) isn't the migration's doing: only new ones fail it.
+  const brokenBefore = (db.query("PRAGMA foreign_key_check").all() as unknown[]).length;
+  for (let next = version + 1; next <= latest; next++) {
+    const migration = migrations[next - BASE_VERSION - 1]!;
+    db.transaction(() => {
+      migration(db);
+      const broken = (db.query("PRAGMA foreign_key_check").all() as unknown[]).length;
+      if (broken > brokenBefore) throw new Error(`migration to version ${next} broke ${broken - brokenBefore} foreign keys`);
+      db.run(`PRAGMA user_version = ${next}`);
+    })();
+    opts.log?.("db_migrated", { version: next });
+  }
+}
+
+export function openDb(path: string, log?: (msg: string, fields: Record<string, unknown>) => void): Database {
   // strict: true binds { id } to $id without writing the "$" prefix in JS.
   const db = new Database(path, { create: true, strict: true });
   try {
@@ -234,7 +282,7 @@ export function openDb(path: string): Database {
     db.run("PRAGMA busy_timeout = 5000");
     // Off by default in SQLite: removing a person or computer cascades to what depends on it.
     db.run("PRAGMA foreign_keys = ON");
-    prepare(db);
+    prepare(db, { path, log });
   } catch (err) {
     db.close();
     throw err;
