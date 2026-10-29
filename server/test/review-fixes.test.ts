@@ -44,11 +44,14 @@ describe("fixes from the code review", () => {
   });
 
   test("a held message allowed but never picked up is reported as approved, then expired", () => {
-    expect(frameUpdate({ messageId: "m", to: "muse", subject: "s", status: "expired", decision: "allow_once" })).toContain(
-      "was approved, but expired before the recipient picked it up",
+    expect(frameUpdate({ messageId: "m", to: "muse", subject: "s", status: "expired", decision: "allow_once", held: true })).toContain(
+      "was approved, but expired before the recipient picked the message up",
     );
-    expect(frameUpdate({ messageId: "m", to: "muse", subject: "s", status: "expired", decision: null })).toContain(
-      "expired before anyone approved it",
+    expect(frameUpdate({ messageId: "m", to: "muse", subject: "s", status: "expired", decision: null, held: true })).toContain(
+      "expired before anyone approved the message",
+    );
+    expect(frameUpdate({ messageId: "m", to: "muse", subject: "s", status: "expired", decision: null, held: false })).toContain(
+      "expired before `muse` picked the message up",
     );
   });
 

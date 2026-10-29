@@ -7,11 +7,13 @@ import type { Changes } from "../core/changes";
 import { HTTP_STATUS, PorticoError } from "../core/errors";
 import { inboxWaitMs } from "../core/inbox-waits";
 import { DELIVERY_BATCH_MAX, type Messages } from "../core/messages";
+import type { Tasks } from "../core/tasks";
 import { parseStatusReport, type Presence } from "../core/presence";
 import { errorName, log } from "../log";
 import { type AgentEnv, requireAgent, requireSession, type Resolver, unauthorized } from "./auth";
 import { jsonBodyLimit } from "./limits";
-import type { AgentViews } from "./views";
+import { getAgentTask, listAgentTasks } from "./tasks";
+import { type AgentViews, UNTRUSTED_PROFILES } from "./views";
 
 const SendBody = z.object({
   to: z.string().optional(),
@@ -19,7 +21,10 @@ const SendBody = z.object({
   text: z.string(),
   reply_to: z.string().optional(),
   summary: z.string().optional(),
+  done: z.boolean().nullish(),
+  key: z.string().nullish(),
 });
+const ProfileBody = z.object({ description: z.string().nullish(), doing: z.string().nullish() });
 const AckIds = z.array(z.string()).max(DELIVERY_BATCH_MAX).default([]);
 const AckBody = z.object({ messages: AckIds, updates: AckIds });
 
@@ -47,6 +52,7 @@ export function handleError(err: unknown, c: Context): Response {
 export interface AgentRestDeps {
   agents: Agents;
   messages: Messages;
+  tasks: Tasks;
   presence: Presence;
   views: AgentViews;
   resolver: Resolver;
@@ -54,7 +60,10 @@ export interface AgentRestDeps {
   now: () => Date;
 }
 
-/** The agent API under /api/agent: the agent list, messages, the inbox, and sessions' deliveries and status. */
+/**
+ * The agent API under /api/agent: the agent list, messages, the inbox, the agent's tasks and its own profile, and
+ * sessions' deliveries and status.
+ */
 export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
   const { agents, messages, presence, views } = deps;
   const api = new Hono<AgentEnv>();
@@ -65,7 +74,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
   api.get("/agents", (c) => {
     const agent = c.get("agent");
     agents.checkedIn(agent);
-    return c.json({ agents: agents.entries(agent.id).map(views.entry) });
+    return c.json({ agents: agents.entries(agent.id).map(views.entry), note: UNTRUSTED_PROFILES });
   });
 
   api.post("/messages", async (c) => {
@@ -77,9 +86,29 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       text: body.text,
       replyTo: body.reply_to,
       summary: body.summary,
+      done: body.done,
+      key: body.key,
     });
     agents.checkedIn(agent);
     return c.json({ message: views.message(message), delivery, ...(note ? { note } : {}) }, 201);
+  });
+
+  api.get("/tasks", (c) => {
+    const agent = c.get("agent");
+    const q = (name: string) => c.req.query(name);
+    return c.json(
+      listAgentTasks(deps, agent, { outcome: q("outcome"), with: q("with"), since: q("since"), before: q("before"), limit: q("limit") }),
+    );
+  });
+
+  api.get("/tasks/:id", (c) => c.json(getAgentTask(deps, c.get("agent"), c.req.param("id"))));
+
+  // The agent's own description and doing line; the person who manages it can still change the description.
+  api.patch("/profile", async (c) => {
+    const body = ProfileBody.parse(await readJson(c));
+    const agent = agents.updateOwn(c.get("agent"), body);
+    agents.checkedIn(agent);
+    return c.json({ agent: views.entry(agents.entry(agent)) });
   });
 
   // With ?wait=N, answers as soon as something arrives, or after N seconds (capped) with nothing.

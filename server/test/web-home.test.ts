@@ -4,6 +4,7 @@ import type { TaskListData, TodayData } from "../src/api/tasks";
 import type { ActivityView, AgentView, HeldCard, MessageView, PersonView, SignInView, TaskView } from "../src/api/views";
 import { agentState, clock, dayHeading, duration, esc, expiresIn, longDate } from "../src/web/client/render/common";
 import { homeState, renderHome } from "../src/web/client/render/home";
+import { eventText } from "../src/web/client/render/activity";
 import { taskLine } from "../src/web/client/render/tasks";
 import type { HomeState } from "../src/web/client/render/types";
 import {
@@ -116,18 +117,20 @@ const SIGN_IN: SignInView = { id: "s1", kind: "muse", name: "muse-work", code: "
 function task(o: Partial<TaskView> & { id: string; from: AgentView; to: AgentView }): TaskView {
   return {
     subject: "A task",
-    state: "delivered",
     outcome: "in_progress",
+    reason: null,
     startedAt: at(10, 0),
     updatedAt: at(10, 5),
     endedAt: null,
+    heldAt: null,
+    pickedUpAt: at(10, 1),
     answer: null,
     heldMessageId: null,
     messageCount: 1,
     project: null,
     steps: [
       { kind: "asked", at: at(10, 0), by: null, decision: null },
-      { kind: "seen", at: at(10, 1), by: null, decision: null },
+      { kind: "picked_up", at: at(10, 1), by: null, decision: null },
     ],
     ...o,
     from: ref(o.from),
@@ -140,17 +143,16 @@ const REVIEW = task({
   from: grok,
   to: codex,
   subject: "Review request: Wingman Event Bot",
-  state: "answered",
   outcome: "done",
   startedAt: at(9, 9),
   endedAt: at(9, 17),
-  answer: { id: "m-answer", subject: "Review done", summary: "Two bugs found, both fixed", createdAt: at(9, 17) },
+  pickedUpAt: at(9, 9),
+  answer: { id: "m-answer", subject: "Review done", summary: "Two bugs found, both fixed", final: true, createdAt: at(9, 17) },
   messageCount: 2,
   steps: [
     { kind: "asked", at: at(9, 9), by: null, decision: null },
-    { kind: "seen", at: at(9, 9), by: null, decision: null },
+    { kind: "picked_up", at: at(9, 9), by: null, decision: null },
     { kind: "answered", at: at(9, 17), by: null, decision: null },
-    { kind: "answer_seen", at: at(9, 21), by: null, decision: null },
   ],
 });
 const OPEN = task({ id: "t-open", from: asking, to: claude, subject: "Schema migration plan", startedAt: at(11, 25), project: "portico" });
@@ -159,13 +161,14 @@ const DENIED = task({
   from: claude,
   to: codex,
   subject: "Clean up old worktrees",
-  state: "denied",
   outcome: "failed",
+  reason: "not_allowed",
   startedAt: at(11, 15, 1),
   endedAt: at(11, 20, 1),
+  heldAt: at(11, 15, 1),
+  pickedUpAt: null,
   steps: [
     { kind: "asked", at: at(11, 15, 1), by: null, decision: null },
-    { kind: "held", at: at(11, 15, 1), by: null, decision: null },
     { kind: "denied", at: at(11, 20, 1), by: CHRIS, decision: "deny" },
   ],
 });
@@ -174,15 +177,13 @@ const HELD_TASK = task({
   from: grok,
   to: claude,
   subject: HELD.subject,
-  state: "needs_approval",
-  outcome: "decide",
+  outcome: "needs_approval",
   startedAt: at(11, 58),
+  heldAt: at(11, 58),
+  pickedUpAt: null,
   heldMessageId: "m-held",
   project: "portico",
-  steps: [
-    { kind: "asked", at: at(11, 58), by: null, decision: null },
-    { kind: "held", at: at(11, 58), by: null, decision: null },
-  ],
+  steps: [{ kind: "asked", at: at(11, 58), by: null, decision: null }],
 });
 
 const TODAY: TodayData = {
@@ -196,7 +197,7 @@ const TODAY: TodayData = {
 
 const TASKS: TaskListData = {
   tasks: [HELD_TASK, OPEN, REVIEW, DENIED],
-  counts: { decide: 1, in_progress: 1, done: 1, failed: 1 },
+  counts: { needs_approval: 1, in_progress: 1, done: 1, failed: 1 },
   more: false,
   projects: ["portico"],
 };
@@ -276,7 +277,7 @@ describe("Today", () => {
 
   test("task rows read status, task, who, when; a done task shows the answer's summary and how long it took", () => {
     const t = text(render(state()));
-    expect(t).toContain("In progress Schema migration plan Seen at 10:01 AM, no answer yet. Codex (portico) → Claude Code (portico) 11:25 AM");
+    expect(t).toContain("In progress Schema migration plan Picked up at 10:01 AM, no answer yet. Codex (portico) → Claude Code (portico) 11:25 AM");
     expect(t).toContain("Done Review request: Wingman Event Bot Two bugs found, both fixed Grok Bot → Codex 9:09 AM, 8 min");
   });
 
@@ -329,7 +330,7 @@ describe("Activity", () => {
       message({ id: "m2", from: codex, to: grok, subject: "Review done", text: "Two bugs, both fixed.", createdAt: at(9, 17) }),
     ];
     const t = text(render(activity({ openTasks: { "t-review": { task: REVIEW, messages }, "m-held": null } })));
-    expect(t).toContain("Asked 9:09 AM Seen by Codex 9:09 AM Answered 9:17 AM Answer seen by Grok Bot 9:21 AM");
+    expect(t).toContain("Asked 9:09 AM Picked up by Codex 9:09 AM Answered 9:17 AM");
     inOrder(t, "Please review the bots.", "Two bugs, both fixed.");
     expect(t).toContain("Loading the messages.");
     inOrder(t, "Deploy the People export", "Don't allow", "Always allow Grok Bot", "Allow once");
@@ -351,7 +352,7 @@ describe("Activity", () => {
   });
 
   test("filters that match nothing say so; more tasks show a button", () => {
-    const none = { ...TASKS, tasks: [], counts: { decide: 0, in_progress: 0, done: 0, failed: 0 } };
+    const none = { ...TASKS, tasks: [], counts: { needs_approval: 0, in_progress: 0, done: 0, failed: 0 } };
     expect(text(render(activity({ tasks: none, filter: { outcome: "done", agent: null, project: null } })))).toContain(
       "No tasks match these filters.",
     );
@@ -367,7 +368,7 @@ describe("an agent's page", () => {
       agentPage: {
         agent: a,
         allowList: a.mine ? [] : null,
-        taskCounts: { decide: 1, in_progress: 1, done: 1, failed: 0 },
+        taskCounts: { needs_approval: 1, in_progress: 1, done: 1, failed: 0 },
         worksWith: [{ agent: ref(codex), tasks: 3, lastAt: at(9, 17) }],
         runs: [],
         runCount: 0,
@@ -468,7 +469,7 @@ describe("rendering rules", () => {
       state({
         route: { page: "agent", id: bad.id },
         agents: [bad],
-        agentPage: { agent: bad, allowList: [], taskCounts: { decide: 0, in_progress: 0, done: 1, failed: 0 }, worksWith: [], runs: [], runCount: 0 },
+        agentPage: { agent: bad, allowList: [], taskCounts: { needs_approval: 0, in_progress: 0, done: 1, failed: 0 }, worksWith: [], runs: [], runCount: 0 },
         tasks: { ...TASKS, tasks: [evilTask] },
       }),
     ]) {
@@ -506,12 +507,24 @@ describe("rendering rules", () => {
     expect(agentState({ ...grok, lastSeen: null }, NOW).label).toBe("Waiting to join");
   });
 
-  test("each task state's line", () => {
-    expect(taskLine({ ...OPEN, state: "queued" })).toBe("Queued until Claude Code (portico) checks for messages.");
-    expect(taskLine({ ...OPEN, state: "no_answer" })).toBe("No answer within 24 hours.");
-    expect(taskLine({ ...OPEN, state: "expired", steps: [] })).toBe("Expired before Claude Code (portico) checked for messages.");
-    expect(taskLine({ ...HELD_TASK, state: "expired" })).toBe("Expired: no decision within 24 hours.");
+  test("each task's line, from the outcome, the reason and what happened", () => {
+    expect(taskLine({ ...OPEN, pickedUpAt: null })).toBe("Queued until Claude Code (portico) checks for messages.");
+    expect(taskLine(OPEN)).toBe("Picked up at 10:01 AM, no answer yet.");
+    const update = { id: "m-u", subject: "On it", summary: null, final: false, createdAt: at(10, 3) };
+    expect(taskLine({ ...OPEN, answer: update })).toBe("Update from Claude Code (portico): On it");
+    expect(taskLine({ ...OPEN, outcome: "failed", reason: "no_answer" })).toBe("No answer within 3 days.");
+    expect(taskLine({ ...OPEN, outcome: "failed", reason: "expired", pickedUpAt: null })).toBe(
+      "Expired before Claude Code (portico) checked for messages.",
+    );
+    expect(taskLine({ ...HELD_TASK, outcome: "failed", reason: "expired" })).toBe("Expired: no decision within 3 days.");
+    expect(taskLine(DENIED)).toBe("Not allowed by Chris.");
     expect(taskLine({ ...REVIEW, answer: { ...REVIEW.answer!, summary: null } })).toBe("Review done");
+  });
+
+  test("a description change names who made it: the agent itself, or the person", () => {
+    const base = { id: "e1", at: at(9, 0), kind: "description_changed" as const, agent: ref(grok), other: null, person: CHRIS };
+    expect(eventText({ ...base, detail: { by: "agent" } })).toEqual({ tag: "Setting", line: "Description of Grok Bot changed", who: "Grok Bot" });
+    expect(eventText({ ...base, detail: { by: "person" } }).who).toBe("Chris");
   });
 });
 

@@ -48,6 +48,9 @@ export interface Agent {
   approvalRequired: boolean;
   createdAt: string;
   lastSeenAt: string | null;
+  /** What the agent said it's doing, with update_profile, and when. One line, defanged. */
+  doing: string | null;
+  doingAt: string | null;
 }
 
 /** What a session reports about itself: Claude Code's own status. */
@@ -119,6 +122,10 @@ export interface Message {
   rootId: string;
   /** Optional, one line, at most 120 characters: the sender's own summary of a long answer, shown on the task. */
   summary: string | null;
+  /** False for a reply that says more is coming (done: false): the task stays in progress. */
+  final: boolean;
+  /** The sender's own key for the message: sending again with the same key returns this message. */
+  sendKey: string | null;
   status: MessageStatus;
   /** Set when the message was held for approval; it stays set after the decision. */
   heldAt: string | null;

@@ -268,6 +268,38 @@ describe("database", () => {
     db.close();
   });
 
+  test("103: old messages are final, unread ones that already expired aren't reported again, and keys are unique per sender", () => {
+    const path = tempPath("portico.db");
+    const old = new Database(path, { create: true, strict: true });
+    prepare(old, { migrations: MIGRATIONS.slice(0, 2) });
+    old.run(`INSERT INTO people (id, name, role, status, password_hash, created_at) VALUES ('p1', 'Chris', 'owner', 'active', 'h', 't')`);
+    for (const [id, name] of [["a1", "grok"], ["a2", "muse"]]) {
+      old.run(
+        `INSERT INTO agents (id, owner_id, name, kind, type, description, created_at) VALUES ('${id}', 'p1', '${name}', 'muse', 'app', '', 't')`,
+      );
+    }
+    old.run("INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at) VALUES ('t1', 'a1', 'a2', 'a1', 't', 't')");
+    const message = old.query(
+      `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, root_id, status, held_at, created_at, expires_at)
+       VALUES ($id, 't1', 'a1', 'a2', 's', 't', $id, $status, $heldAt, 't', 'x')`,
+    );
+    message.run({ id: "m1", status: "delivered", heldAt: null });
+    message.run({ id: "m2", status: "expired", heldAt: null });
+    message.run({ id: "m3", status: "expired", heldAt: "t" });
+    old.close();
+    const db = openDb(path);
+    expect(db.query("SELECT id, final, send_key, sender_notified_at FROM messages ORDER BY id").all()).toEqual([
+      { id: "m1", final: 1, send_key: null, sender_notified_at: null },
+      { id: "m2", final: 1, send_key: null, sender_notified_at: "x" },
+      // A held message's outcome was already reported the old way, when the sender checked.
+      { id: "m3", final: 1, send_key: null, sender_notified_at: null },
+    ]);
+    expect(db.query("SELECT doing, doing_at FROM agents WHERE id = 'a1'").get()).toEqual({ doing: null, doing_at: null });
+    db.run("UPDATE messages SET send_key = 'k' WHERE id = 'm1'");
+    expect(() => db.run("UPDATE messages SET send_key = 'k' WHERE id = 'm2'")).toThrow();
+    db.close();
+  });
+
   test("removing a person removes what depends on them", () => {
     const db = openDb(":memory:");
     db.run(

@@ -94,10 +94,10 @@ describe("the plugin's MCP server", () => {
     }
   });
 
-  test("lists the three Portico tools", async () => {
+  test("lists the six Portico tools", async () => {
     const { host } = await session();
     const { tools } = await host.listTools();
-    expect(tools.map((t) => t.name)).toEqual(["list_agents", "send_message", "check_inbox"]);
+    expect(tools.map((t) => t.name)).toEqual(["list_agents", "send_message", "check_inbox", "list_tasks", "get_task", "update_profile"]);
   });
 
   test("list_agents shows the other agents", async () => {
@@ -181,6 +181,61 @@ describe("the plugin's MCP server", () => {
     expect(text(inbox)).toContain("Messages (1):");
     expect(text(inbox)).toContain("Write the changelog");
   });
+
+  test("send_message passes done and key; list_tasks and get_task show the session's tasks", async () => {
+    const grok = appAgent(p, "grok", { kind: "grok-bot" });
+    const { host, sock } = await registered();
+    const ask = p.messages.send(grok.agent, { to: "api-claude", subject: "Fix the export", text: "Please fix." }).message;
+    await waitFor(() => p.messages.get(ask.id)?.status === "delivered");
+    const update = await host.callTool({
+      name: "send_message",
+      arguments: { reply_to: ask.id, subject: "On it", text: "Looking", done: false, key: "fix-export-1" },
+    });
+    expect(update.isError).toBeFalsy();
+    const again = await host.callTool({
+      name: "send_message",
+      arguments: { reply_to: ask.id, subject: "On it", text: "Looking", done: false, key: "fix-export-1" },
+    });
+    // The repeat comes back with the first message, and a note that nothing new was sent.
+    const firstBlock = (result: unknown) => (result as { content: { text: string }[] }).content[0]!.text;
+    expect((JSON.parse(firstBlock(again)) as { message: { id: string } }).message.id).toBe(
+      (JSON.parse(firstBlock(update)) as { message: { id: string } }).message.id,
+    );
+    expect(text(again)).toContain("Already sent with this key");
+
+    const listed = JSON.parse(text(await host.callTool({ name: "list_tasks", arguments: {} }))) as {
+      tasks: { id: string; direction: string; with: string; outcome: string; answer: { done: boolean } }[];
+    };
+    expect(listed.tasks).toEqual([expect.objectContaining({ id: ask.id, direction: "received", with: "grok", outcome: "in_progress" })]);
+    expect(listed.tasks[0]!.answer.done).toBe(false);
+    const done = await host.callTool({ name: "list_tasks", arguments: { outcome: "done" } });
+    expect(JSON.parse(text(done))).toEqual({ tasks: [], more: false });
+    const bad = await host.callTool({ name: "list_tasks", arguments: { outcome: "maybe" } });
+    expect(bad.isError).toBe(true);
+
+    const detail = JSON.parse(text(await host.callTool({ name: "get_task", arguments: { task: ask.id } }))) as {
+      messages: { from: string; text?: string; framed_message?: string }[];
+    };
+    expect(detail.messages[0]!.framed_message).toContain("Please fix.");
+    expect(detail.messages[1]!.text).toBe("Looking");
+    expect((await host.callTool({ name: "get_task", arguments: {} })).isError).toBe(true);
+    await waitFor(() => sock.posts.length === 1);
+  });
+
+  test("update_profile sets the session's own description and doing line", async () => {
+    const { host } = await registered();
+    const result = await host.callTool({ name: "update_profile", arguments: { description: "Owns the export", doing: "Fixing the CSV" } });
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(text(result))).toMatchObject({ agent: { description: "Owns the export", doing: "Fixing the CSV" } });
+    expect(p.agents.byAddress(ADDRESS)?.description).toBe("Owns the export");
+    const empty = await host.callTool({ name: "update_profile", arguments: {} });
+    expect(empty.isError).toBe(true);
+    // null is "not given", as on Portico's /mcp.
+    const withNull = await host.callTool({ name: "update_profile", arguments: { description: "Owns exports", doing: null } });
+    expect(withNull.isError).toBeFalsy();
+    const sent = await host.callTool({ name: "send_message", arguments: { to: "nobody-here", subject: "s", text: "t", done: null } });
+    expect(text(sent)).toStartWith("unknown_agent:");
+  });
 });
 
 describe("a folder that is off Portico", () => {
@@ -229,7 +284,7 @@ describe("a folder that is off Portico", () => {
     await waitFor(() => recorded.length === 1);
     expect(recorded).toEqual([false]);
     await waitFor(() => s.toolListChanges() === 1);
-    expect((await s.host.listTools()).tools).toHaveLength(3);
+    expect((await s.host.listTools()).tools).toHaveLength(6);
   });
 
   test("while quiet, a tool call gets the note", async () => {
@@ -294,7 +349,7 @@ describe("a computer that hasn't joined", () => {
     plugin.start(); // the handshake happened before the takeover, so the session starts the stream itself
     await waitFor(() => connected(p, ADDRESS));
     await waitFor(() => host.toolListChanges() === 1);
-    expect((await host.host.listTools()).tools).toHaveLength(3);
+    expect((await host.host.listTools()).tools).toHaveLength(6);
     await waitFor(() => sock.posts.length === 1);
     expect(sock.posts[0]!.content).toBe(`<portico-notice>\n${joinedNotice("api-claude")}\n</portico-notice>`);
     expect(copyProblems(joinedNotice("api-claude"))).toEqual([]);

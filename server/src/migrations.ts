@@ -145,5 +145,19 @@ const tasksAndActivity: Migration = (db) => {
   db.run("CREATE INDEX activity_agent ON activity (agent_id, at)");
 };
 
+/**
+ * 103: tasks for agents. A reply can say more is coming (final = 0), so the task stays in progress. A sender can give a
+ * message a key: sending again with the same key returns the first message. An agent can set its own doing line.
+ */
+const agentTasks: Migration = (db) => {
+  db.run("ALTER TABLE messages ADD COLUMN final INTEGER NOT NULL DEFAULT 1");
+  db.run("ALTER TABLE messages ADD COLUMN send_key TEXT");
+  db.run("CREATE UNIQUE INDEX messages_send_key ON messages (from_id, send_key) WHERE send_key IS NOT NULL");
+  // Senders now hear when a message expires unread. Ones that expired before this are old news.
+  db.run("UPDATE messages SET sender_notified_at = expires_at WHERE held_at IS NULL AND status = 'expired' AND sender_notified_at IS NULL");
+  db.run("ALTER TABLE agents ADD COLUMN doing TEXT");
+  db.run("ALTER TABLE agents ADD COLUMN doing_at TEXT");
+};
+
 /** Every change since the first schema (version 100), oldest first: the first is version 101. Never edit a shipped one. */
-export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity];
+export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks];

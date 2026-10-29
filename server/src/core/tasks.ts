@@ -3,29 +3,20 @@ import { HOUR_MS, LIMITS } from "./limits";
 import type { Decision, Message, MessageStatus } from "./types";
 
 /**
- * Where a task stands, in detail. A task is one conversation between two agents: a message that isn't a reply, and
- * every reply in its chain. Worked out from the messages, never stored.
+ * Where a task stands: the four outcomes the pages show (Needs a decision, In progress, Done, Didn't go through) and
+ * agents read from list_tasks. A task is one conversation between two agents: a message that isn't a reply, and every
+ * reply in its chain. Worked out from the messages, never stored.
  */
-export type TaskState = "needs_approval" | "queued" | "delivered" | "answered" | "no_answer" | "expired" | "denied";
+export type TaskOutcome = "needs_approval" | "in_progress" | "done" | "failed";
+export const TASK_OUTCOMES: readonly TaskOutcome[] = ["needs_approval", "in_progress", "done", "failed"];
 
-/** The four outcomes the pages show: Needs a decision, In progress, Done, Didn't go through. */
-export type TaskOutcome = "decide" | "in_progress" | "done" | "failed";
-export const TASK_OUTCOMES: readonly TaskOutcome[] = ["decide", "in_progress", "done", "failed"];
+/** Why a task didn't go through: a person didn't allow it, it expired unread or undecided, or no answer came. */
+export type TaskReason = "not_allowed" | "expired" | "no_answer";
 
-const OUTCOMES: Record<TaskState, TaskOutcome> = {
-  needs_approval: "decide",
-  queued: "in_progress",
-  delivered: "in_progress",
-  answered: "done",
-  no_answer: "failed",
-  expired: "failed",
-  denied: "failed",
-};
-
-/** A delivered question with no answer for this long didn't go through: the same window a held message gets. */
+/** A task where nothing happens for this long after pickup, or after the latest update, didn't go through. */
 export const NO_ANSWER_AFTER_MS = LIMITS.messageExpiryHours * HOUR_MS;
 
-export type TaskStepKind = "asked" | "held" | "allowed" | "denied" | "seen" | "expired" | "answered" | "answer_seen";
+export type TaskStepKind = "asked" | "allowed" | "denied" | "picked_up" | "answered" | "expired";
 
 export interface TaskStep {
   kind: TaskStepKind;
@@ -43,23 +34,36 @@ export interface Task {
   /** Who asked, and who was asked. Every message in a task is between these two. */
   fromId: string;
   toId: string;
-  state: TaskState;
   outcome: TaskOutcome;
+  /** For failed: why. */
+  reason: TaskReason | null;
   startedAt: string;
-  /** The latest thing that happened: a message, a decision, a delivery. */
+  /** The latest thing that happened: a message, a decision, a pickup. */
   updatedAt: string;
   /** When the outcome was reached: answered, denied, expired or given up on. Null while it's open. */
   endedAt: string | null;
-  /** The latest answer from the agent that was asked. */
-  answer: { id: string; subject: string; summary: string | null; createdAt: string } | null;
+  /** When the first message was held for a person's decision; it stays set after the decision. */
+  heldAt: string | null;
+  /** When the agent asked picked the first message up. */
+  pickedUpAt: string | null;
+  /** The latest answer from the agent that was asked. Not final when that agent said more is coming. */
+  answer: { id: string; subject: string; summary: string | null; final: boolean; createdAt: string } | null;
   /** A held message in the task, for the decision buttons. */
   heldMessageId: string | null;
   messageCount: number;
   steps: TaskStep[];
 }
 
-/** A message as a task needs it: everything but the text. */
-type TaskMessage = Omit<Message, "text">;
+/** A message as a task needs it: everything but the text and the key. */
+type TaskMessage = Omit<Message, "text" | "sendKey">;
+
+/**
+ * Whether a message's receiver may read the message: it was never held, or a person allowed it. Until then the message
+ * is the person's to decide on, not the receiver's to see.
+ */
+export function letThrough(m: Pick<Message, "heldAt" | "decision">): boolean {
+  return m.heldAt === null || m.decision === "allow_once" || m.decision === "always_allow";
+}
 
 function latest(...times: (string | null)[]): string {
   return times.filter((t): t is string => t !== null).sort().at(-1)!;
@@ -68,37 +72,45 @@ function latest(...times: (string | null)[]): string {
 /**
  * The task one conversation's messages make, oldest first, under its first message's ID. The first message is the root,
  * or the oldest left when an earlier Portico pruned the root alone.
+ *
+ * Done means the agent asked gave a final answer: its latest answer that went through (not held, declined or expired)
+ * isn't an update with more to come. The task ended with the first of the final answers after the last update.
  */
 export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
   const root = chain.find((m) => m.id === rootId) ?? chain[0]!;
-  const answers = chain.filter((m) => m.fromId === root.toId);
-  const firstAnswer = answers[0] ?? null;
+  const answers = chain.filter((m) => m.fromId === root.toId && (m.status === "pending" || m.status === "delivered"));
   const lastAnswer = answers.at(-1) ?? null;
   const held = chain.find((m) => m.status === "held") ?? null;
 
-  let state: TaskState;
+  let outcome: TaskOutcome;
+  let reason: TaskReason | null = null;
   let endedAt: string | null = null;
-  if (held) state = "needs_approval";
-  else if (lastAnswer) {
-    state = "answered";
-    endedAt = firstAnswer!.createdAt;
+  if (held) outcome = "needs_approval";
+  else if (lastAnswer?.final) {
+    outcome = "done";
+    let first = answers.length - 1;
+    while (first > 0 && answers[first - 1]!.final) first--;
+    endedAt = answers[first]!.createdAt;
   } else if (root.status === "declined") {
-    state = "denied";
+    outcome = "failed";
+    reason = "not_allowed";
     endedAt = root.decidedAt;
   } else if (root.status === "expired") {
-    state = "expired";
+    outcome = "failed";
+    reason = "expired";
     endedAt = root.expiresAt;
-  } else if (root.status === "pending") state = "queued";
+  } else if (root.status === "pending") outcome = "in_progress";
   else {
-    const givenUp = Date.parse(root.deliveredAt ?? root.createdAt) + NO_ANSWER_AFTER_MS;
+    // Picked up: the clock runs from pickup, and starts again with each update.
+    const givenUp = Date.parse(latest(root.deliveredAt ?? root.createdAt, lastAnswer?.createdAt ?? null)) + NO_ANSWER_AFTER_MS;
     if (givenUp <= now.getTime()) {
-      state = "no_answer";
+      outcome = "failed";
+      reason = "no_answer";
       endedAt = new Date(givenUp).toISOString();
-    } else state = "delivered";
+    } else outcome = "in_progress";
   }
 
   const steps: TaskStep[] = [{ kind: "asked", at: root.createdAt, personId: null, decision: null }];
-  if (root.heldAt) steps.push({ kind: "held", at: root.heldAt, personId: null, decision: null });
   if (root.decision && root.decidedAt) {
     steps.push({
       kind: root.decision === "deny" ? "denied" : "allowed",
@@ -107,25 +119,30 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
       decision: root.decision,
     });
   }
-  if (root.deliveredAt) steps.push({ kind: "seen", at: root.deliveredAt, personId: null, decision: null });
+  if (root.deliveredAt) steps.push({ kind: "picked_up", at: root.deliveredAt, personId: null, decision: null });
   if (root.status === "expired") steps.push({ kind: "expired", at: root.expiresAt, personId: null, decision: null });
-  if (firstAnswer) {
-    steps.push({ kind: "answered", at: firstAnswer.createdAt, personId: null, decision: null });
-    if (firstAnswer.deliveredAt) steps.push({ kind: "answer_seen", at: firstAnswer.deliveredAt, personId: null, decision: null });
-  }
+  if (outcome === "done") steps.push({ kind: "answered", at: endedAt!, personId: null, decision: null });
 
   return {
     id: rootId,
     subject: root.subject,
     fromId: root.fromId,
     toId: root.toId,
-    state,
-    outcome: OUTCOMES[state],
+    outcome,
+    reason,
     startedAt: root.createdAt,
     updatedAt: latest(...chain.flatMap((m) => [m.createdAt, m.decidedAt, m.deliveredAt]), endedAt),
     endedAt,
+    heldAt: root.heldAt,
+    pickedUpAt: root.deliveredAt,
     answer: lastAnswer
-      ? { id: lastAnswer.id, subject: lastAnswer.subject, summary: lastAnswer.summary, createdAt: lastAnswer.createdAt }
+      ? {
+          id: lastAnswer.id,
+          subject: lastAnswer.subject,
+          summary: lastAnswer.summary,
+          final: lastAnswer.final,
+          createdAt: lastAnswer.createdAt,
+        }
       : null,
     heldMessageId: held?.id ?? null,
     messageCount: chain.length,
@@ -142,6 +159,7 @@ interface TaskRow {
   reply_to: string | null;
   root_id: string | null;
   summary: string | null;
+  final: number;
   status: string;
   held_at: string | null;
   decision: string | null;
@@ -153,8 +171,8 @@ interface TaskRow {
   sender_notified_at: string | null;
 }
 
-const COLUMNS = `id, thread_id, from_id, to_id, subject, reply_to, root_id, summary, status, held_at, decision, decided_by,
-  decided_at, created_at, expires_at, delivered_at, sender_notified_at`;
+const COLUMNS = `id, thread_id, from_id, to_id, subject, reply_to, root_id, summary, final, status, held_at, decision,
+  decided_by, decided_at, created_at, expires_at, delivered_at, sender_notified_at`;
 
 function toTaskMessage(row: TaskRow): TaskMessage {
   return {
@@ -166,6 +184,7 @@ function toTaskMessage(row: TaskRow): TaskMessage {
     replyTo: row.reply_to,
     rootId: row.root_id ?? row.id,
     summary: row.summary,
+    final: row.final !== 0,
     status: row.status as MessageStatus,
     heldAt: row.held_at,
     decision: row.decision as Decision | null,
@@ -185,9 +204,12 @@ export interface TaskFilter {
   agentId?: string;
   /** Only tasks with one of these agents: a project's agents. */
   anyOf?: string[];
-  outcome?: TaskOutcome;
+  /** Only tasks with this outcome, or one of these. */
+  outcome?: TaskOutcome | readonly TaskOutcome[];
   /** Only tasks started before this time: the next page. */
   before?: string;
+  /** Only tasks with something new since this time. */
+  since?: string;
   limit?: number;
 }
 
@@ -212,17 +234,21 @@ export class Tasks {
    */
   list(filter: TaskFilter): { tasks: Task[]; counts: Record<TaskOutcome, number>; more: boolean } {
     const all = this.build(filter);
-    const counts: Record<TaskOutcome, number> = { decide: 0, in_progress: 0, done: 0, failed: 0 };
+    const counts: Record<TaskOutcome, number> = { needs_approval: 0, in_progress: 0, done: 0, failed: 0 };
     for (const task of all) counts[task.outcome]++;
     const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
+    const outcomes = filter.outcome === undefined ? null : typeof filter.outcome === "string" ? [filter.outcome] : filter.outcome;
     const matching = all.filter(
-      (task) => (!filter.outcome || task.outcome === filter.outcome) && (!filter.before || task.startedAt < filter.before),
+      (task) =>
+        (!outcomes || outcomes.includes(task.outcome)) &&
+        (!filter.before || task.startedAt < filter.before) &&
+        (!filter.since || task.updatedAt >= filter.since),
     );
     return { tasks: matching.slice(0, limit), counts, more: matching.length > limit };
   }
 
   /** Every matching task, newest started first. */
-  all(filter: Omit<TaskFilter, "outcome" | "before" | "limit">): Task[] {
+  all(filter: Omit<TaskFilter, "outcome" | "before" | "since" | "limit">): Task[] {
     return this.build(filter);
   }
 
@@ -245,7 +271,7 @@ export class Tasks {
     return row?.root ?? null;
   }
 
-  private build(filter: Omit<TaskFilter, "outcome" | "before" | "limit">): Task[] {
+  private build(filter: Omit<TaskFilter, "outcome" | "before" | "since" | "limit">): Task[] {
     const clauses: string[] = [];
     const bindings: Record<string, string> = {};
     const among = (ids: string[], prefix: string) => {

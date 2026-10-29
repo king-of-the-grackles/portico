@@ -3,7 +3,7 @@ import type { Agents, Run } from "../core/agents";
 import type { Approvals } from "../core/approvals";
 import type { Messages } from "../core/messages";
 import type { People } from "../core/people";
-import type { Task, TaskOutcome, TaskState, TaskStepKind } from "../core/tasks";
+import type { Task, TaskOutcome, TaskReason, TaskStepKind } from "../core/tasks";
 import type {
   Agent,
   AgentKind,
@@ -120,13 +120,17 @@ export interface TaskView {
   subject: string;
   from: AgentRef;
   to: AgentRef;
-  state: TaskState;
   outcome: TaskOutcome;
+  /** For failed: why. */
+  reason: TaskReason | null;
   startedAt: string;
   updatedAt: string;
   endedAt: string | null;
-  /** The latest answer: its subject, and the one-line summary its sender wrote, if any. */
-  answer: { id: string; subject: string; summary: string | null; createdAt: string } | null;
+  /** When the first message was held for a decision, and when the agent asked picked it up. */
+  heldAt: string | null;
+  pickedUpAt: string | null;
+  /** The latest answer: its subject, the one-line summary its sender wrote, and whether more is coming. */
+  answer: { id: string; subject: string; summary: string | null; final: boolean; createdAt: string } | null;
   heldMessageId: string | null;
   messageCount: number;
   /** A session's folder on either side, for the Project filter. */
@@ -375,11 +379,13 @@ export function personViews(deps: ViewDeps, me: Person) {
     subject: t.subject,
     from: agentRef(t.fromId),
     to: agentRef(t.toId),
-    state: t.state,
     outcome: t.outcome,
+    reason: t.reason,
     startedAt: t.startedAt,
     updatedAt: t.updatedAt,
     endedAt: t.endedAt,
+    heldAt: t.heldAt,
+    pickedUpAt: t.pickedUpAt,
     answer: t.answer,
     heldMessageId: t.heldMessageId,
     messageCount: t.messageCount,

@@ -129,8 +129,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         if (m.status === "declined") wake(m.fromId);
         return;
       case "message_expired":
-        if (m.heldAt === null) return;
-        desk.close(m.id, "expired");
+        // The sender hears about it on the next check, held or not.
+        if (m.heldAt !== null) desk.close(m.id, "expired");
         wake(m.fromId);
         return;
       case "message_delivered":

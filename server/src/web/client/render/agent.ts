@@ -130,7 +130,8 @@ function renderSettingsFold(s: HomeState, data: AgentPageData): string {
 }
 
 function jobLine(s: HomeState, a: AgentView): string {
-  if (a.type === "session" && a.status === "busy" && a.doing) return `<p class="job">${esc(a.doing)}</p>`;
+  // A session reports what it's doing while busy; any agent can also say so itself with update_profile.
+  if (a.doing) return `<p class="job">${esc(a.doing)}</p>`;
   if (a.description) return `<p class="job">${esc(a.description)}</p>`;
   if (a.mine && a.type !== "session") {
     return `<p class="job job-empty">No job description yet. <button type="button" class="inline-link" data-action="edit-start">Add a job description</button> so other agents know what ${esc(a.label)} handles.</p>`;
@@ -146,7 +147,7 @@ export function renderAgent(s: HomeState, id: string): string {
   const st = agentState(a, s.now);
   const held = s.held.filter((m) => m.to.id === a.id || m.from.id === a.id);
   const waiting = a.mine && st.label === "Has a question";
-  const counts = data?.taskCounts ?? { decide: 0, in_progress: 0, done: 0, failed: 0 };
+  const counts = data?.taskCounts ?? { needs_approval: 0, in_progress: 0, done: 0, failed: 0 };
   const total = OUTCOME_ORDER.reduce((n, o) => n + counts[o], 0);
   const chip = (outcome: (typeof OUTCOME_ORDER)[number] | null, label: string, n: number) => {
     const on = s.filter.outcome === outcome;

@@ -29,6 +29,9 @@ export function eventText(e: ActivityView): { tag: string; line: string; who: st
       return { tag: "Decision", line: `Not allowed to join: ${String(e.detail.name ?? "")}`, who: person };
     case "renamed":
       return { tag: "Setting", line: `Renamed ${String(e.detail.from ?? "")} to ${String(e.detail.to ?? "")}`, who: person };
+    case "description_changed":
+      // An agent can write its own description with update_profile; then the agent is the one who changed it.
+      return { tag: "Setting", line: `Description of ${agent} changed`, who: e.detail.by === "agent" ? agent : person };
     case "approval_switched":
       return { tag: "Setting", line: `New contacts need approval for ${agent}: ${onOff(e.detail.on)}`, who: person };
     case "folder_switched":
@@ -73,7 +76,7 @@ function filterSelect(id: string, label: string, all: string, value: string | nu
 
 export function renderActivity(s: HomeState): string {
   const list = s.tasks;
-  const counts = list?.counts ?? { decide: 0, in_progress: 0, done: 0, failed: 0 };
+  const counts = list?.counts ?? { needs_approval: 0, in_progress: 0, done: 0, failed: 0 };
   const total = OUTCOME_ORDER.reduce((n, o) => n + counts[o], 0);
   const chip = (outcome: (typeof OUTCOME_ORDER)[number] | null, label: string, n: number) => {
     const on = s.filter.outcome === outcome;

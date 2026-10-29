@@ -5,6 +5,7 @@ import { PorticoError } from "./errors";
 import { LOOP_LIMIT, LOOP_WINDOW_MS, loopGuardRetryAt } from "./guards";
 import type { InboxWaits } from "./inbox-waits";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
+import { letThrough } from "./tasks";
 import type { Agent, Decision, DeliveryTier, Message, MessageStatus, Notice, Thread } from "./types";
 
 interface MessageRow {
@@ -17,6 +18,8 @@ interface MessageRow {
   reply_to: string | null;
   root_id: string | null;
   summary: string | null;
+  final: number;
+  send_key: string | null;
   status: string;
   held_at: string | null;
   decision: string | null;
@@ -48,6 +51,8 @@ function toMessage(row: MessageRow): Message {
     replyTo: row.reply_to,
     rootId: row.root_id ?? row.id,
     summary: row.summary,
+    final: row.final !== 0,
+    sendKey: row.send_key,
     status: row.status as MessageStatus,
     heldAt: row.held_at,
     decision: row.decision as Decision | null,
@@ -78,8 +83,10 @@ export const DELIVERY_BATCH_MAX = 500;
 export const THREAD_PAGE = 200;
 export const THREAD_PAGE_MAX = 2000;
 
-/** A held message that ended: the sender hears about it once. */
-const UPDATE = "from_id = $agent AND held_at IS NOT NULL AND status IN ('delivered', 'declined', 'expired') AND sender_notified_at IS NULL";
+/** What the sender hears about once: a held message that ended, and a message that expired before it was picked up. */
+const UPDATE =
+  "from_id = $agent AND sender_notified_at IS NULL AND " +
+  "((held_at IS NOT NULL AND status IN ('delivered', 'declined', 'expired')) OR (held_at IS NULL AND status = 'expired'))";
 /** A message the agent can pick up now. */
 const PENDING = "to_id = $agent AND status = 'pending' AND expires_at > $now";
 
@@ -107,6 +114,20 @@ export function checkSummary(value: unknown): string | null {
     throw new PorticoError("bad_request", `summary can be at most ${LIMITS.maxSubjectChars} characters.`);
   }
   return summary;
+}
+
+/** The longest key a sender can give a message. */
+const MAX_SEND_KEY = 200;
+
+/** An optional key: trimmed, one line, at most 200 characters; empty or absent is none. */
+function checkSendKey(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw new PorticoError("bad_request", "key must be a string.");
+  const key = value.trim();
+  if (key === "") return null;
+  if (/[\r\n]/.test(key)) throw new PorticoError("bad_request", "key must be one line.");
+  if (Array.from(key).length > MAX_SEND_KEY) throw new PorticoError("bad_request", `key can be at most ${MAX_SEND_KEY} characters.`);
+  return key;
 }
 
 function checkText(value: unknown): string {
@@ -160,15 +181,43 @@ export class Messages {
   /**
    * Sends a message. It's held for the receiver's owner when the receiver requires approval, doesn't always allow the
    * sender, and hasn't itself written in the message's conversation in the last 24 hours. Every message obeys the size
-   * limit, the hourly limit and the loop guard.
+   * limit, the hourly limit and the loop guard. A reply with done: false says more is coming. A message with a key the
+   * sender used before isn't sent again: the first one comes back.
    */
   send(
     caller: Agent,
-    input: { to?: unknown; subject: unknown; text: unknown; replyTo?: unknown; summary?: unknown },
+    input: { to?: unknown; subject: unknown; text: unknown; replyTo?: unknown; summary?: unknown; done?: unknown; key?: unknown },
   ): { message: Message; delivery: DeliveryTier; note: string | null } {
     const subject = checkSubject(input.subject);
     const text = checkText(input.text);
     const summary = checkSummary(input.summary);
+    const sendKey = checkSendKey(input.key);
+    if (input.done !== undefined && input.done !== null && typeof input.done !== "boolean") {
+      throw new PorticoError("bad_request", "done must be true or false.");
+    }
+    const final = input.done !== false;
+    if (sendKey !== null) {
+      const first = this.sentWithKey(caller.id, sendKey);
+      if (first) {
+        // A retry repeats the message. Anything else under the same key is a different message, and coming back with
+        // the first one would drop it silently, so say so instead.
+        const replyTo = typeof input.replyTo === "string" && input.replyTo !== "" ? input.replyTo : null;
+        const to = typeof input.to === "string" && input.to.trim() !== "" ? this.agents.resolve(input.to, caller.id).id : first.toId;
+        if (first.subject !== subject || first.text !== text || first.final !== final || first.replyTo !== replyTo || first.toId !== to) {
+          throw new PorticoError(
+            "conflict",
+            `The key ${sendKey} already sent message ${first.id} (${first.subject}), which differs from this one. A retry ` +
+              "already went through; for a new message, use a new key.",
+          );
+        }
+        const receiver = this.agents.get(first.toId);
+        return {
+          message: first,
+          delivery: first.status === "held" || !receiver ? "held" : this.agents.tier(receiver),
+          note: "Already sent with this key, so nothing new was sent. This is the first message.",
+        };
+      }
+    }
     let receiver: Agent | null =
       typeof input.to === "string" && input.to.trim() !== "" ? this.agents.resolve(input.to, caller.id) : null;
     let replyTo: string | null = null;
@@ -176,6 +225,10 @@ export class Messages {
     if (input.replyTo !== undefined && input.replyTo !== null && input.replyTo !== "") {
       const original = typeof input.replyTo === "string" ? this.get(input.replyTo) : null;
       if (!original || (original.toId !== caller.id && original.fromId !== caller.id)) {
+        throw new PorticoError("bad_request", "reply_to must be the ID of a message sent to or by this agent.");
+      }
+      // A message a person hasn't let through isn't the receiver's to answer: answering would open the conversation.
+      if (original.toId === caller.id && !letThrough(original)) {
         throw new PorticoError("bad_request", "reply_to must be the ID of a message sent to or by this agent.");
       }
       const other = original.toId === caller.id ? original.fromId : original.toId;
@@ -187,6 +240,9 @@ export class Messages {
       rootId = original.rootId;
     }
     if (!receiver) throw new PorticoError("bad_request", "to is required unless reply_to is given.");
+    if (!final && replyTo === null) {
+      throw new PorticoError("bad_request", "done: false marks a reply as an update with more to come, so reply_to is required.");
+    }
     if (receiver.id === caller.id) throw new PorticoError("bad_request", "An agent can't send a message to itself.");
     this.requireBudget(caller, receiver);
 
@@ -208,6 +264,8 @@ export class Messages {
         replyTo,
         rootId: rootId ?? id,
         summary,
+        final,
+        sendKey,
         status: held ? "held" : "pending",
         heldAt: held ? at : null,
         decision: null,
@@ -230,8 +288,9 @@ export class Messages {
     const note =
       delivery === "held"
         ? `Held: ${this.agents.display(receiver)} requires approval for new conversations. Replies (reply_to) in a ` +
-          `conversation ${this.agents.display(receiver)} wrote in during the last 24 hours aren't held. A person decides ` +
-          "within 24 hours; check_inbox reports whether the message was delivered, declined or expired."
+          `conversation ${this.agents.display(receiver)} wrote in during the last ${LIMITS.replyWindowHours} hours aren't ` +
+          `held. A person decides within ${LIMITS.messageExpiryHours / 24} days; check_inbox reports whether the message ` +
+          "was delivered, declined or expired."
         : null;
     return { message, delivery, note };
   }
@@ -454,8 +513,16 @@ export class Messages {
          )
          SELECT 1 AS ok FROM chain WHERE from_id = $receiver AND created_at > $since LIMIT 1`,
       )
-      .get({ id: messageId, receiver: receiverId, since: this.iso(-LIMITS.messageExpiryHours * HOUR_MS) }) as { ok: number } | null;
+      .get({ id: messageId, receiver: receiverId, since: this.iso(-LIMITS.replyWindowHours * HOUR_MS) }) as { ok: number } | null;
     return row !== null;
+  }
+
+  /** The message the sender already sent with this key, if any. */
+  private sentWithKey(fromId: string, sendKey: string): Message | null {
+    const row = this.db
+      .query("SELECT * FROM messages WHERE from_id = $fromId AND send_key = $sendKey")
+      .get({ fromId, sendKey }) as MessageRow | null;
+    return row ? toMessage(row) : null;
   }
 
   /** Held messages to agents the person manages, oldest first. */
@@ -592,12 +659,12 @@ export class Messages {
   private insert(m: Message): void {
     this.db
       .query(
-        `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, reply_to, root_id, summary, status, held_at,
-           decision, decided_by, decided_at, created_at, expires_at, delivered_at, sender_notified_at)
-         VALUES ($id, $threadId, $fromId, $toId, $subject, $text, $replyTo, $rootId, $summary, $status, $heldAt,
-           $decision, $decidedBy, $decidedAt, $createdAt, $expiresAt, $deliveredAt, $senderNotifiedAt)`,
+        `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, reply_to, root_id, summary, final, send_key,
+           status, held_at, decision, decided_by, decided_at, created_at, expires_at, delivered_at, sender_notified_at)
+         VALUES ($id, $threadId, $fromId, $toId, $subject, $text, $replyTo, $rootId, $summary, $final, $sendKey,
+           $status, $heldAt, $decision, $decidedBy, $decidedAt, $createdAt, $expiresAt, $deliveredAt, $senderNotifiedAt)`,
       )
-      .run({ ...m });
+      .run({ ...m, final: m.final ? 1 : 0 });
   }
 
   private pendingFor(agentId: string, now: string, limit: number): Message[] {

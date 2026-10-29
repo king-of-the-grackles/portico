@@ -5,13 +5,16 @@ import type { AgentRef, AgentView, HeldCard, HomeState, MessageView, SignInView,
 
 /** The four outcomes, in plain words. */
 export const OUTCOME_LABEL: Record<TaskOutcome, string> = {
-  decide: "Needs a decision",
+  needs_approval: "Needs a decision",
   in_progress: "In progress",
   done: "Done",
   failed: "Didn't go through",
 };
 
-export const OUTCOME_ORDER: TaskOutcome[] = ["decide", "in_progress", "done", "failed"];
+export const OUTCOME_ORDER: TaskOutcome[] = ["needs_approval", "in_progress", "done", "failed"];
+
+/** A task's window, as Portico's limits set it: held, unread and unanswered tasks end after this. */
+const TASK_WINDOW = "3 days";
 
 export function statusPill(outcome: TaskOutcome): string {
   return `<span class="pill pill-${outcome}">${OUTCOME_LABEL[outcome]}</span>`;
@@ -19,27 +22,26 @@ export function statusPill(outcome: TaskOutcome): string {
 
 /** The task's second line: the answer's summary when done, otherwise where it stands. */
 export function taskLine(t: TaskView): string {
-  switch (t.state) {
+  switch (t.outcome) {
     case "needs_approval":
       return "New contact, waiting for approval.";
-    case "queued":
+    case "in_progress":
+      if (t.answer) return `Update from ${t.to.label}: ${t.answer.summary ?? t.answer.subject}`;
+      if (t.pickedUpAt) return `Picked up at ${clock(t.pickedUpAt)}, no answer yet.`;
       return `Queued until ${t.to.label} checks for messages.`;
-    case "delivered": {
-      const seen = t.steps.find((s) => s.kind === "seen");
-      return seen ? `Seen at ${clock(seen.at)}, no answer yet.` : "Delivered, no answer yet.";
-    }
-    case "answered":
+    case "done":
       return t.answer?.summary ?? t.answer?.subject ?? "Answered.";
-    case "no_answer":
-      return "No answer within 24 hours.";
-    case "expired":
-      return t.steps.some((s) => s.kind === "held")
-        ? "Expired: no decision within 24 hours."
-        : `Expired before ${t.to.label} checked for messages.`;
-    case "denied": {
-      const by = t.steps.find((s) => s.kind === "denied")?.by;
-      return by ? `Not allowed by ${by.name}.` : "Not allowed.";
-    }
+    case "failed":
+      if (t.reason === "not_allowed") {
+        const by = t.steps.find((s) => s.kind === "denied")?.by;
+        return by ? `Not allowed by ${by.name}.` : "Not allowed.";
+      }
+      if (t.reason === "expired") {
+        return t.heldAt && !t.steps.some((s) => s.kind === "allowed")
+          ? `Expired: no decision within ${TASK_WINDOW}.`
+          : `Expired before ${t.to.label} checked for messages.`;
+      }
+      return `No answer within ${TASK_WINDOW}.`;
   }
 }
 
@@ -58,13 +60,11 @@ function who(t: TaskView, from: AgentRef, to: AgentRef, perspective: string | nu
 
 const STEP_LABEL = {
   asked: () => "Asked",
-  held: () => "Held for approval",
-  allowed: (t: TaskView, by: string | null, always: boolean) => `${always ? "Always allowed" : "Allowed once"}${by ? ` by ${by}` : ""}`,
+  allowed: (_t: TaskView, by: string | null, always: boolean) => `${always ? "Always allowed" : "Allowed once"}${by ? ` by ${by}` : ""}`,
   denied: (_t: TaskView, by: string | null) => `Not allowed${by ? ` by ${by}` : ""}`,
-  seen: (t: TaskView) => `Seen by ${t.to.label}`,
+  picked_up: (t: TaskView) => `Picked up by ${t.to.label}`,
   expired: () => "Expired",
   answered: () => "Answered",
-  answer_seen: (t: TaskView) => `Answer seen by ${t.from.label}`,
 } as const;
 
 function renderSteps(t: TaskView): string {

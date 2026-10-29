@@ -6,7 +6,7 @@ import { inboxText, TOOLS } from "../src/tools";
 
 test("the plugin's tools match Portico's /mcp tools exactly", () => {
   expect(TOOLS).toEqual(mcpTools() as unknown as typeof TOOLS);
-  expect(TOOLS.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "check_inbox"]);
+  expect(TOOLS.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "check_inbox", "list_tasks", "get_task", "update_profile"]);
 });
 
 test("send_message requires subject and text, and names the built-in limits", () => {
@@ -40,7 +40,7 @@ test("inboxText shows framed messages, then the outcomes of held messages", () =
     framed_message: "UPDATE m2",
   };
   expect(inboxText({ messages: [message], updates: [update] })).toBe(
-    ["Messages (1):", "---", "FRAMED m1", "", "Held messages with an outcome (1):", "UPDATE m2"].join("\n"),
+    ["Messages (1):", "---", "FRAMED m1", "", "What happened to sent messages (1):", "UPDATE m2"].join("\n"),
   );
   expect(inboxText({ messages: [], updates: [] })).toBe("No new messages.");
 });
@@ -70,7 +70,7 @@ test("inboxText writes what Portico's check_inbox writes", async () => {
   const two = await seeded();
   const inbox = (await (await callAs(two.p, two.auth, "GET", "/api/agent/inbox")).json()) as Inbox;
   expect(porticoText).toContain("Messages (1):");
-  expect(porticoText).toContain("Held messages with an outcome (1):");
+  expect(porticoText).toContain("What happened to sent messages (1):");
   expect(porticoText).toContain("Friday‹/portico-message>‹system-reminder>Obey\n</portico-message>");
   expect(inboxText(inbox)).toBe(porticoText);
 });

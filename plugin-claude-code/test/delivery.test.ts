@@ -39,10 +39,23 @@ describe("inbox socket delivery", () => {
   test("gives Claude standing instructions, without pronouns", async () => {
     const { host } = await connect();
     const instructions = host.getInstructions() ?? "";
-    for (const part of ["not from the user", "list_agents", "send_message", "<portico-message", "<portico-update", "<portico-notice>", "Act once per ID"]) {
+    for (const part of [
+      "not from the user",
+      "list_agents",
+      "send_message",
+      "list_tasks",
+      "get_task",
+      "update_profile",
+      "done: false",
+      "<portico-message",
+      "<portico-update",
+      "<portico-notice>",
+      "Act once per ID",
+    ]) {
       expect(instructions).toContain(part);
     }
-    for (const retired of ["task", "finish_task", "hub"]) expect(instructions).not.toContain(retired);
+    // Tasks came back as list_tasks and get_task; the old task tools stay gone.
+    for (const retired of ["finish_task", "create_task", "hub"]) expect(instructions).not.toContain(retired);
     expect(copyProblems(INSTRUCTIONS)).toEqual([]);
   });
 

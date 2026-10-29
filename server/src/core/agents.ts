@@ -27,6 +27,8 @@ interface AgentRow {
   approval_required: number;
   created_at: string;
   last_seen_at: string | null;
+  doing: string | null;
+  doing_at: string | null;
 }
 
 function toAgent(row: AgentRow): Agent {
@@ -44,6 +46,8 @@ function toAgent(row: AgentRow): Agent {
     approvalRequired: row.approval_required === 1,
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
+    doing: row.doing,
+    doingAt: row.doing_at,
   };
 }
 
@@ -105,6 +109,8 @@ const KEY = /^[A-Za-z0-9_-]{8,100}$/;
 const FOLDER_ID = /^[a-f0-9]{64}$/;
 const MAX_REPO = 200;
 const MAX_DEDUPE = 99;
+/** The longest doing line, as status reports clip theirs. */
+const MAX_DOING = 120;
 /** A session's last_seen_at is written by its status reports at most this often. */
 const TOUCH_INTERVAL_MS = 60_000;
 
@@ -382,7 +388,7 @@ export class Agents {
       return {
         ...base,
         status: null,
-        doing: null,
+        doing: this.ownDoing(agent),
         repo: null,
         branch: null,
         lastSeen,
@@ -394,7 +400,7 @@ export class Agents {
     return {
       ...base,
       status: connected ? (report?.status ?? "idle") : "offline",
-      doing: connected ? (report?.doing ?? null) : null,
+      doing: connected ? (report?.doing ?? this.ownDoing(agent)) : null,
       repo: report?.repo ?? agent.folder,
       branch: report?.branch ?? null,
       lastSeen: later(report?.at ?? null, agent.lastSeenAt),
@@ -695,9 +701,11 @@ export class Agents {
         renamed = true;
       }
     }
+    let described = false;
     if (changes.description !== undefined) {
-      sets.push("description = $description");
       bindings.description = checkDescription(changes.description);
+      described = bindings.description !== agent.description;
+      sets.push("description = $description");
     }
     if (changes.approvalRequired !== undefined) {
       if (typeof changes.approvalRequired !== "boolean") {
@@ -717,9 +725,12 @@ export class Agents {
     }
     if (sets.length > 0) this.db.query(`UPDATE agents SET ${sets.join(", ")} WHERE id = $id`).run(bindings);
     const updated = this.require(agent.id);
-    const record = (kind: "renamed" | "approval_switched" | "folder_switched", detail: Record<string, string | boolean>) =>
-      this.activity?.record(kind, { agentId: agent.id, personId, detail });
+    const record = (
+      kind: "renamed" | "description_changed" | "approval_switched" | "folder_switched",
+      detail: Record<string, string | boolean>,
+    ) => this.activity?.record(kind, { agentId: agent.id, personId, detail });
     if (renamed) record("renamed", { from: agent.name, to: updated.name });
+    if (described) record("description_changed", { by: "person" });
     if (typeof changes.approvalRequired === "boolean" && changes.approvalRequired !== agent.approvalRequired) {
       record("approval_switched", { on: changes.approvalRequired });
     }
@@ -732,6 +743,43 @@ export class Agents {
     }
     this.changes.emit("agents", "threads", "approvals");
     return updated;
+  }
+
+  /**
+   * An agent's own edits, from update_profile: its description, which the person who manages it can still change, and a
+   * one-line doing ("" clears it). Both get the cleaning status text gets, and other agents are told they're untrusted.
+   */
+  updateOwn(agent: Agent, changes: { description?: unknown; doing?: unknown }): Agent {
+    const sets: string[] = [];
+    const bindings: Bindings = { id: agent.id };
+    let described = false;
+    if (changes.description !== undefined && changes.description !== null) {
+      bindings.description = checkDescription(changes.description);
+      described = bindings.description !== agent.description;
+      sets.push("description = $description");
+    }
+    if (changes.doing !== undefined && changes.doing !== null) {
+      if (typeof changes.doing !== "string") throw new PorticoError("bad_request", "doing must be a string.");
+      const doing = defang(changes.doing).replace(/\s+/g, " ").trim();
+      if (Array.from(doing).length > MAX_DOING) {
+        throw new PorticoError("bad_request", `doing can be at most ${MAX_DOING} characters.`);
+      }
+      bindings.doing = doing === "" ? null : doing;
+      bindings.doingAt = doing === "" ? null : this.iso();
+      sets.push("doing = $doing", "doing_at = $doingAt");
+    }
+    if (sets.length === 0) throw new PorticoError("bad_request", "Give a description, a doing line, or both.");
+    this.db.query(`UPDATE agents SET ${sets.join(", ")} WHERE id = $id`).run(bindings);
+    if (described) this.activity?.record("description_changed", { agentId: agent.id, detail: { by: "agent" } });
+    this.log("agent_profile_updated", { agent_id: agent.id, description: described, doing: changes.doing !== undefined });
+    this.changes.emit("agents");
+    return this.require(agent.id);
+  }
+
+  /** The agent's own doing line, while it's recent. */
+  private ownDoing(agent: Agent): string | null {
+    if (!agent.doing || !agent.doingAt) return null;
+    return Date.parse(agent.doingAt) + LIMITS.doingHours * HOUR_MS > this.now().getTime() ? agent.doing : null;
   }
 
   /** The folder switch of a session's folder: true on (also when never set). Null for agents without a folder. */
@@ -792,7 +840,7 @@ export class Agents {
     );
   }
 
-  private insert(a: Omit<Agent, "computer" | "approvalRequired">): void {
+  private insert(a: Omit<Agent, "computer" | "approvalRequired" | "doing" | "doingAt">): void {
     this.db
       .query(
         `INSERT INTO agents (id, owner_id, name, kind, type, description, computer_id, folder, folder_id,

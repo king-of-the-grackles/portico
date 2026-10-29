@@ -263,7 +263,7 @@ textarea.field { resize: vertical; }
 /* Count chips and status pills share the four outcome colors. */
 .cchips { display: flex; flex-wrap: wrap; gap: 8px; }
 .cchip { display: inline-flex; align-items: center; min-height: 36px; padding: 6px 14px; border-radius: 999px; font-size: 14px; line-height: 20px; font-weight: 600; text-decoration: none; }
-.cchip-decide, .pill-decide { background: var(--ochre-wash); color: #7a3a0e; }
+.cchip-decide, .pill-needs_approval { background: var(--ochre-wash); color: #7a3a0e; }
 .cchip-progress, .pill-in_progress { background: #e7eef7; color: #23466e; }
 .cchip-done, .pill-done { background: #e1ece6; color: #1f4d3e; }
 .cchip-failed, .pill-failed { background: #ecebe8; color: #4f4a45; }

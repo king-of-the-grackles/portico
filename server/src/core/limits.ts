@@ -5,8 +5,15 @@ export const LIMITS = {
   maxDescriptionChars: 500,
   maxNameChars: 40,
   messagesPerHour: 120,
-  /** A held or pending message is delivered or decided within this, or expires. */
-  messageExpiryHours: 24,
+  /**
+   * A task's window: a held message is decided, a pending one picked up, and a picked-up one answered (or updated with
+   * done: false) within this, or the task didn't go through.
+   */
+  messageExpiryHours: 72,
+  /** A reply isn't held when the receiver itself wrote in the conversation within this. */
+  replyWindowHours: 24,
+  /** An agent's own doing line shows for this long after the agent set it. */
+  doingHours: 24,
   historyDays: 30,
   /** Offline sessions leave the agents' list_agents after this; they stay on Portico. */
   sessionListHours: 24,

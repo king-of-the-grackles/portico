@@ -343,6 +343,10 @@ describe("/join", () => {
     const html = await (await p.app.request("/join")).text();
     expect(html).toContain(`Check the inbox every ${LIMITS.appCheckMinutes} minutes.`);
     expect(html).toContain("ends quietly when nothing arrived");
+    // Apps describe themselves, mark long work with done: false, and pick up what an earlier check left open.
+    expect(html).toContain("describe the agent with <code>update_profile</code>");
+    expect(html).toContain("<code>done: false</code>");
+    expect(html).toContain("<code>list_tasks</code>");
     expect(copyProblems(html.replace(/<[^>]+>/g, " "))).toEqual([]);
     for (const kind of ["muse", "grok-bot", "dots", "claude-duet"] as const) {
       expect(kindInfo(kind).step).toContain(`checks Portico every ${LIMITS.appCheckMinutes} minutes`);

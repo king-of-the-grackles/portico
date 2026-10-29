@@ -52,7 +52,7 @@ describe("the Codex bridge over stdio", () => {
   test("each conversation joins as <repo>-codex@<computer>, checks its inbox, and says how to wait for replies", async () => {
     const { p, codex, token, project, name, address, stderr } = await launch();
     try {
-      expect((await codex.listTools()).tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "check_inbox"]);
+      expect((await codex.listTools()).tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "check_inbox", "list_tasks", "get_task", "update_profile"]);
       expect(codex.getInstructions()).toBe(CODEX_INSTRUCTIONS);
       await waitFor(() => connected(p, address), 5000);
       expect(agentAt(p, address)).toMatchObject({ kind: "codex", type: "session", folder: basename(project) });

@@ -32,14 +32,14 @@ async function setup() {
 const json = async <T>(res: Response | Promise<Response>) => (await (await res).json()) as T;
 
 describe("a task's outcome", () => {
-  test("a new question is queued, then delivered; both are in progress", async () => {
+  test("a new question is in progress while queued and once picked up", async () => {
     const { p, grok, claude } = await setup();
     const { message } = p.messages.send(grok, { to: claude.name, subject: "Review the export", text: "Please review." });
-    expect(p.tasks.get(message.id)!.task).toMatchObject({ state: "queued", outcome: "in_progress", subject: "Review the export" });
+    expect(p.tasks.get(message.id)!.task).toMatchObject({ outcome: "in_progress", pickedUpAt: null, subject: "Review the export" });
     p.messages.inbox(claude);
     const { task } = p.tasks.get(message.id)!;
-    expect(task).toMatchObject({ state: "delivered", outcome: "in_progress", endedAt: null });
-    expect(task.steps.map((s) => s.kind)).toEqual(["asked", "seen"]);
+    expect(task).toMatchObject({ outcome: "in_progress", reason: null, endedAt: null, pickedUpAt: task.startedAt });
+    expect(task.steps.map((s) => s.kind)).toEqual(["asked", "picked_up"]);
   });
 
   test("an answer from the agent asked makes it done, with the answer's summary", async () => {
@@ -57,13 +57,12 @@ describe("a task's outcome", () => {
     p.messages.inbox(grok);
     const { task, messageIds } = p.tasks.get(ask.id)!;
     expect(task).toMatchObject({
-      state: "answered",
       outcome: "done",
       endedAt: reply.createdAt,
-      answer: { id: reply.id, subject: "Review done", summary: "Two bugs found, both fixed" },
+      answer: { id: reply.id, subject: "Review done", summary: "Two bugs found, both fixed", final: true },
       messageCount: 2,
     });
-    expect(task.steps.map((s) => s.kind)).toEqual(["asked", "seen", "answered", "answer_seen"]);
+    expect(task.steps.map((s) => s.kind)).toEqual(["asked", "picked_up", "answered"]);
     expect(messageIds).toEqual([ask.id, reply.id]);
     // A reply to the reply stays in the same task.
     const thanks = p.messages.send(grok, { replyTo: reply.id, subject: "Thanks", text: "!" }).message;
@@ -71,29 +70,80 @@ describe("a task's outcome", () => {
     expect(p.tasks.get(ask.id)!.task.messageCount).toBe(3);
   });
 
+  test("an update with done: false keeps the task in progress until a final answer", async () => {
+    const { p, grok, claude } = await setup();
+    const ask = p.messages.send(grok, { to: claude.name, subject: "Fix the export", text: "Please fix." }).message;
+    p.messages.inbox(claude);
+    const update = p.messages.send(claude, { replyTo: ask.id, subject: "On it", text: "Looking.", done: false }).message;
+    expect(p.tasks.get(ask.id)!.task).toMatchObject({
+      outcome: "in_progress",
+      endedAt: null,
+      answer: { id: update.id, subject: "On it", final: false },
+    });
+    expect(p.tasks.get(ask.id)!.task.steps.map((s) => s.kind)).toEqual(["asked", "picked_up"]);
+    p.clock.advance(HOUR);
+    const final = p.messages.send(claude, { replyTo: ask.id, subject: "Fixed", text: "PR 15", summary: "Fixed in PR 15" }).message;
+    expect(p.tasks.get(ask.id)!.task).toMatchObject({ outcome: "done", endedAt: final.createdAt, answer: { summary: "Fixed in PR 15" } });
+    // Another update after the final answer opens the task again, and the next final answer ends it then.
+    p.clock.advance(HOUR);
+    p.messages.send(claude, { replyTo: ask.id, subject: "One more thing", text: "Also the CSV", done: false });
+    expect(p.tasks.get(ask.id)!.task.outcome).toBe("in_progress");
+    p.clock.advance(HOUR);
+    const last = p.messages.send(claude, { replyTo: ask.id, subject: "CSV fixed", text: "PR 16" }).message;
+    expect(p.tasks.get(ask.id)!.task).toMatchObject({ outcome: "done", endedAt: last.createdAt });
+  });
+
+  test("a final answer a person didn't allow, or one that expired unread, doesn't make the task done", async () => {
+    const { p, chris, muse, claude } = await setup();
+    // muse requires approval: past the 24-hour reply window, claude's answers to muse are held.
+    const ask = p.messages.send(muse, { to: claude.name, subject: "Draft the post", text: "?" }).message;
+    p.messages.inbox(claude);
+    const update = p.messages.send(claude, { replyTo: ask.id, subject: "Drafting", text: "…", done: false });
+    expect(update.delivery).toBe("queued");
+    p.clock.advance(30 * HOUR);
+    const final = p.messages.send(claude, { replyTo: ask.id, subject: "Draft ready", text: "Here", summary: "Draft ready" });
+    expect(final.delivery).toBe("held");
+    expect(p.tasks.get(ask.id)!.task).toMatchObject({ outcome: "needs_approval" });
+    p.approvals.decide(chris.id, final.message.id, "deny");
+    expect(p.tasks.get(ask.id)!.task).toMatchObject({ outcome: "in_progress", answer: { subject: "Drafting", final: false } });
+    // A final answer that expires before the asker picks it up doesn't count either.
+    const second = p.messages.send(claude, { replyTo: ask.id, subject: "Draft, again", text: "Here" }).message;
+    p.approvals.decide(chris.id, second.id, "allow_once");
+    p.clock.advance(3 * DAY + MINUTE);
+    p.messages.expireDue();
+    expect(p.tasks.get(ask.id)!.task.outcome).not.toBe("done");
+  });
+
   test("a held message needs a decision; Don't allow makes it not go through; Allow once moves it on", async () => {
     const { p, chris, grok, muse } = await setup();
     const denied = p.messages.send(grok, { to: "muse", subject: "Post this", text: "Now" }).message;
-    expect(p.tasks.get(denied.id)!.task).toMatchObject({ state: "needs_approval", outcome: "decide", heldMessageId: denied.id });
+    expect(p.tasks.get(denied.id)!.task).toMatchObject({ outcome: "needs_approval", heldMessageId: denied.id, heldAt: denied.createdAt });
     p.approvals.decide(chris.id, denied.id, "deny");
-    expect(p.tasks.get(denied.id)!.task).toMatchObject({ state: "denied", outcome: "failed", heldMessageId: null });
+    expect(p.tasks.get(denied.id)!.task).toMatchObject({ outcome: "failed", reason: "not_allowed", heldMessageId: null });
     const allowed = p.messages.send(grok, { to: "muse", subject: "Find a time", text: "With Sam" }).message;
     p.approvals.decide(chris.id, allowed.id, "allow_once");
     const { task } = p.tasks.get(allowed.id)!;
-    expect(task.state).toBe("queued");
+    expect(task).toMatchObject({ outcome: "in_progress", pickedUpAt: null });
     expect(task.steps.find((s) => s.kind === "allowed")).toMatchObject({ personId: chris.id, decision: "allow_once" });
     expect(muse.id).toBeDefined();
   });
 
-  test("an unanswered question goes through as no answer a day after delivery; an unread one expires", async () => {
+  test("with no answer 3 days after pickup, or after the latest update, a task didn't go through; an unread one expires", async () => {
     const { p, grok, claude, dot } = await setup();
     const unanswered = p.messages.send(grok, { to: claude.name, subject: "Status?", text: "?" }).message;
+    const updated = p.messages.send(grok, { to: claude.name, subject: "Migrate", text: "?" }).message;
     p.messages.inbox(claude);
     const unread = p.messages.send(grok, { to: "maya-dot", subject: "Churn?", text: "?" }).message;
+    p.clock.advance(2 * DAY);
+    p.messages.send(claude, { replyTo: updated.id, subject: "Halfway", text: "…", done: false });
     p.clock.advance(DAY + MINUTE);
     p.messages.expireDue();
-    expect(p.tasks.get(unanswered.id)!.task).toMatchObject({ state: "no_answer", outcome: "failed" });
-    expect(p.tasks.get(unread.id)!.task).toMatchObject({ state: "expired", outcome: "failed", endedAt: unread.expiresAt });
+    expect(p.tasks.get(unanswered.id)!.task).toMatchObject({ outcome: "failed", reason: "no_answer" });
+    // The update started the clock again.
+    expect(p.tasks.get(updated.id)!.task).toMatchObject({ outcome: "in_progress" });
+    expect(p.tasks.get(unread.id)!.task).toMatchObject({ outcome: "failed", reason: "expired", endedAt: unread.expiresAt });
+    p.clock.advance(2 * DAY);
+    expect(p.tasks.get(updated.id)!.task).toMatchObject({ outcome: "failed", reason: "no_answer" });
     expect(dot.id).toBeDefined();
   });
 
@@ -108,8 +158,10 @@ describe("a task's outcome", () => {
     p.messages.send(grok, { to: "muse", subject: "Held", text: "t" });
     const all = p.tasks.list({ visible: null });
     expect(all.tasks.map((t) => t.subject)).toEqual(["Held", "Other", "Three", "Two", "One"]);
-    expect(all.counts).toEqual({ decide: 1, in_progress: 4, done: 0, failed: 0 });
-    expect(p.tasks.list({ visible: null, outcome: "decide" }).tasks.map((t) => t.subject)).toEqual(["Held"]);
+    expect(all.counts).toEqual({ needs_approval: 1, in_progress: 4, done: 0, failed: 0 });
+    expect(p.tasks.list({ visible: null, outcome: "needs_approval" }).tasks.map((t) => t.subject)).toEqual(["Held"]);
+    expect(p.tasks.list({ visible: null, outcome: ["needs_approval", "done"] }).tasks.map((t) => t.subject)).toEqual(["Held"]);
+    expect(p.tasks.list({ visible: null, since: all.tasks[0]!.updatedAt }).tasks.map((t) => t.subject)).toEqual(["Held", "Other"]);
     expect(p.tasks.list({ visible: null, agentId: claude.id }).tasks).toHaveLength(3);
     expect(p.tasks.list({ visible: null, anyOf: [claude.id] }).tasks).toHaveLength(3);
     const first = p.tasks.list({ visible: null, agentId: claude.id, limit: 2 });
@@ -181,8 +233,19 @@ describe("the activity record", () => {
     p.approvals.removeAllowed(chris.id, muse.id, grok.id);
     p.agents.update(chris.id, muse.id, { approvalRequired: false, name: "muse-work" });
     p.agents.update(chris.id, claude.id, { joinFromFolder: false });
+    // A description change is recorded, by whoever made it, without the text; an unchanged one isn't.
+    p.agents.update(chris.id, grok.id, { description: "Research" });
+    p.agents.update(chris.id, grok.id, { description: "Research" });
+    p.agents.updateOwn(grok, { description: "Research and summaries" });
     const kinds = p.activity.list().map((e) => e.kind);
+    expect(p.activity.list().slice(0, 2).map((e) => [e.kind, e.detail.by, e.personId])).toEqual([
+      ["description_changed", "agent", null],
+      ["description_changed", "person", chris.id],
+    ]);
+    expect(JSON.stringify(p.activity.list())).not.toContain("summaries");
     expect(kinds).toEqual([
+      "description_changed",
+      "description_changed",
       "folder_switched",
       "approval_switched",
       "renamed",
@@ -298,7 +361,7 @@ describe("the control plane's person API", () => {
       runCount: number;
       agent: { label: string; liveRuns: number };
     }>(callPerson(p, owner, "GET", `/api/agents/${claude.id}`));
-    expect(page.taskCounts).toEqual({ decide: 0, in_progress: 2, done: 0, failed: 0 });
+    expect(page.taskCounts).toEqual({ needs_approval: 0, in_progress: 2, done: 0, failed: 0 });
     expect(page.worksWith).toEqual([expect.objectContaining({ agent: expect.objectContaining({ label: "Grok Bot" }), tasks: 2 })]);
     expect(page.runCount).toBe(2);
     expect(page.agent).toMatchObject({ label: "Claude Code (portico)", liveRuns: 0 });

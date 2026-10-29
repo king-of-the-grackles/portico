@@ -13,6 +13,7 @@ export const ACTIVITY_KINDS = [
   "decision",
   "sign_in_denied",
   "renamed",
+  "description_changed",
   "approval_switched",
   "folder_switched",
   "allow_removed",

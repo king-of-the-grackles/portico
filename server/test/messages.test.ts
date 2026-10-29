@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { agentViews } from "../src/agent-api/views";
 import { checkSubject } from "../src/core/messages";
 import { addAppAgent, addComputer, addOwner, addSession, DAY, errorCode, flush, HOUR, makePortico, MINUTE } from "./helpers";
 
@@ -60,6 +61,39 @@ describe("sending", () => {
     expect(() => p.messages.send(grok, { to: "muse", subject: "s", text: "t" })).toThrow(/^Loop guard: 12 messages between grok and muse/);
     p.clock.advance(10 * MINUTE + 1);
     expect(errorCode(() => p.messages.send(grok, { to: "muse", subject: "s", text: "t" }))).toBeNull();
+  });
+
+  test("a reply with done: false is an update with more to come, framed so; it needs reply_to", async () => {
+    const { p, grok, muse } = await setup();
+    const ask = p.messages.send(grok, { to: "muse", subject: "Book flights", text: "Denver, Friday" }).message;
+    expect(errorCode(() => p.messages.send(muse, { to: "grok", subject: "On it", text: "x", done: false }))).toBe("bad_request");
+    expect(errorCode(() => p.messages.send(muse, { replyTo: ask.id, subject: "On it", text: "x", done: "no" }))).toBe("bad_request");
+    const update = p.messages.send(muse, { replyTo: ask.id, subject: "On it", text: "Checking fares.", done: false }).message;
+    expect(update.final).toBe(false);
+    const framed = agentViews(p.agents, p.people).delivery(p.messages.inbox(grok).messages[0]!).framed_message;
+    expect(framed).toContain('done="false"');
+    expect(framed).toContain("still working, and the final answer comes later");
+    expect(p.messages.send(muse, { replyTo: ask.id, subject: "Booked", text: "UA 1234" }).message.final).toBe(true);
+  });
+
+  test("a key makes sending again safe: the same key returns the first message and sends nothing", async () => {
+    const { p, grok, muse } = await setup();
+    const first = p.messages.send(grok, { to: "muse", subject: "Job 7", text: "Run it", key: "job-7" });
+    const again = p.messages.send(grok, { to: "muse", subject: "Job 7", text: "Run it", key: " job-7 " });
+    expect(again.message.id).toBe(first.message.id);
+    expect(again.note).toContain("Already sent with this key");
+    expect(p.messages.inbox(muse).messages.map((m) => m.subject)).toEqual(["Job 7"]);
+    // A different message under the same key is refused, not dropped: an update and its final answer need two keys.
+    expect(errorCode(() => p.messages.send(grok, { to: "muse", subject: "Job 7 (retry)", text: "Run it", key: "job-7" }))).toBe("conflict");
+    const update = p.messages.send(muse, { replyTo: first.message.id, subject: "Running", text: "…", done: false, key: "r-7" });
+    expect(
+      errorCode(() => p.messages.send(muse, { replyTo: first.message.id, subject: "Running", text: "…", key: "r-7" })),
+    ).toBe("conflict");
+    expect(update.message.final).toBe(false);
+    // Keys are per sender, and a new key sends.
+    expect(p.messages.send(muse, { to: "grok", subject: "Mine", text: "x", key: "job-7" }).message.id).not.toBe(first.message.id);
+    expect(p.messages.send(grok, { to: "muse", subject: "Job 8", text: "Run it", key: "job-8" }).message.id).not.toBe(first.message.id);
+    expect(errorCode(() => p.messages.send(grok, { to: "muse", subject: "s", text: "t", key: "x".repeat(201) }))).toBe("bad_request");
   });
 
   test("a session gets a nudge; deliveries peek and an ack marks them delivered", async () => {
@@ -161,7 +195,7 @@ describe("holds", () => {
     p.approvals.decide(chris.id, b.id, "deny");
     expect(p.messages.inbox(grok).updates.map((m) => [m.subject, m.status])).toEqual([["B", "declined"]]);
     p.messages.inbox(p.agents.require(muse.id));
-    p.clock.advance(25 * HOUR);
+    p.clock.advance(3 * DAY + HOUR);
     p.messages.expireDue();
     expect(p.messages.inbox(grok).updates.map((m) => [m.subject, m.status])).toEqual([
       ["A", "delivered"],
@@ -171,12 +205,18 @@ describe("holds", () => {
     expect(c.id).toBeDefined();
   });
 
-  test("pending messages expire after 24 hours too", async () => {
+  test("unread messages expire after 3 days too, and the sender hears so once", async () => {
     const { p, grok, muse } = await setup();
     p.messages.send(grok, { to: "muse", subject: "s", text: "t" });
-    p.clock.advance(24 * HOUR);
+    p.clock.advance(3 * DAY - MINUTE);
+    expect(p.messages.expireDue()).toEqual([]);
+    p.clock.advance(MINUTE);
     expect(p.messages.expireDue().map((m) => m.status)).toEqual(["expired"]);
     expect(p.messages.inbox(muse).messages).toEqual([]);
+    const { updates } = p.messages.inbox(grok);
+    expect(updates.map((m) => [m.subject, m.status])).toEqual([["s", "expired"]]);
+    expect(agentViews(p.agents, p.people).update(updates[0]!).framed_message).toContain("expired before `muse` picked the message up");
+    expect(p.messages.inbox(grok).updates).toEqual([]);
   });
 });
 

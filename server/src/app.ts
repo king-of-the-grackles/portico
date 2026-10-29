@@ -31,11 +31,11 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
   app.route("/api/agent/approvals", popupAnswerRoutes({ approvals: core.approvals, desk: core.desk, views, resolver }));
   app.route(
     "/api/agent",
-    agentRestRoutes({ agents, messages, presence: core.presence, views, resolver, changes: core.changes, now: core.now }),
+    agentRestRoutes({ agents, messages, tasks: core.tasks, presence: core.presence, views, resolver, changes: core.changes, now: core.now }),
   );
   app.route("/api/computer", computerApi(core));
   app.route("/api/sign-in-requests", signInRequestApi(core));
-  app.route("/mcp", mcpRoutes({ agents, messages, views, resolver }));
+  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, views, resolver }));
   app.route("/", oauthRoutes(core));
   app.route("/api", personApi(core, opts));
   app.route("/", webRoutes(core));

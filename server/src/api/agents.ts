@@ -29,7 +29,7 @@ export function agentPageData(core: Core, me: Person, id: string): AgentPageData
   const allowList = agent.ownerId === me.id ? approvals.allowListFor(me.id, agent.id).map(views.allowEntry) : null;
   const visible = visibleAgents(core, me);
   const tasks = core.tasks.all({ visible, agentId: agent.id });
-  const counts: Record<TaskOutcome, number> = { decide: 0, in_progress: 0, done: 0, failed: 0 };
+  const counts: Record<TaskOutcome, number> = { needs_approval: 0, in_progress: 0, done: 0, failed: 0 };
   const partners = new Map<string, { tasks: number; lastAt: string }>();
   for (const task of tasks) {
     counts[task.outcome]++;

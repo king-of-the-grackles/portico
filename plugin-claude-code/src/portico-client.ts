@@ -52,6 +52,42 @@ export interface UpdateDelivery {
 /** How a sent message will arrive. */
 export type DeliveryTier = "pushed" | "queued" | "offline" | "held";
 
+/** Where a task stands, as `GET /api/agent/tasks` reports it. */
+export type TaskOutcome = "needs_approval" | "in_progress" | "done" | "failed";
+
+/** One of this agent's tasks: a conversation with another agent, sent or received. */
+export interface AgentTask {
+  id: string;
+  subject: string;
+  direction: "sent" | "received";
+  with: string;
+  outcome: TaskOutcome;
+  reason: "not_allowed" | "expired" | "no_answer" | null;
+  started_at: string;
+  updated_at: string;
+  ended_at: string | null;
+  picked_up_at: string | null;
+  answer: { message_id: string; subject: string; summary: string | null; done: boolean; at: string } | null;
+  messages: number;
+}
+
+/** A message in `GET /api/agent/tasks/:id`: this agent's own as text, the other agent's framed. */
+export interface AgentTaskMessage {
+  id: string;
+  from: string;
+  to: string;
+  reply_to: string | null;
+  status: MessageStatus;
+  created_at: string;
+  done: boolean;
+  /** Absent when withheld. */
+  subject?: string;
+  text?: string;
+  framed_message?: string;
+  /** A message to this agent that a person hasn't allowed yet. */
+  withheld?: true;
+}
+
 /** The longest Portico holds a check_inbox that waits. */
 export const MAX_INBOX_WAIT_SECONDS = 40;
 
@@ -131,8 +167,31 @@ export class PorticoClient {
     text: string;
     reply_to?: string;
     summary?: string;
+    /** false for an update with more to come. Sent as given: Portico checks the value. */
+    done?: unknown;
+    key?: string;
   }): Promise<{ message: MessageView; delivery: DeliveryTier; note?: string }> {
     return this.call("POST", "/api/agent/messages", body);
+  }
+
+  /** This agent's tasks, newest first; open ones unless `outcome` says otherwise. Portico checks every value. */
+  listTasks(
+    filter: { outcome?: string; with?: string; since?: string; before?: string; limit?: string } = {},
+  ): Promise<{ tasks: AgentTask[]; more: boolean }> {
+    const query = new URLSearchParams();
+    for (const [name, value] of Object.entries(filter)) if (value !== undefined) query.set(name, value);
+    const qs = query.toString();
+    return this.call("GET", `/api/agent/tasks${qs ? `?${qs}` : ""}`);
+  }
+
+  /** One of this agent's tasks, by its ID or any of its messages' IDs, with every message. */
+  getTask(id: string): Promise<{ task: AgentTask; messages: AgentTaskMessage[] }> {
+    return this.call("GET", `/api/agent/tasks/${encodeURIComponent(id)}`);
+  }
+
+  /** This agent's own description and doing line. Values go as given: Portico checks them. */
+  updateProfile(body: { description?: unknown; doing?: unknown }): Promise<{ agent: AgentEntry }> {
+    return this.call("PATCH", "/api/agent/profile", body);
   }
 
   /**
@@ -193,7 +252,7 @@ export class PorticoClient {
 
   /** With `signal`, the request also ends when the signal aborts, e.g. a cancelled tool call. */
   private async call<T>(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PATCH",
     path: string,
     body?: unknown,
     opts: { timeoutMs?: number; signal?: AbortSignal } = {},
