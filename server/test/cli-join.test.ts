@@ -46,7 +46,12 @@ function fakeComputerApi() {
 function io(home: string) {
   const lines: string[] = [];
   const value: CliIo = {
-    env: { PORTICO_COMPUTER_CONFIG: join(home, ".portico", "computer.json"), PORTICO_CLAUDE_HOME: join(home, ".claude"), PATH: "" },
+    env: {
+      PORTICO_COMPUTER_CONFIG: join(home, ".portico", "computer.json"),
+      PORTICO_CLAUDE_HOME: join(home, ".claude"),
+      CODEX_HOME: join(home, ".codex"),
+      PATH: "",
+    },
     cwd: home,
     out: (line) => lines.push(line),
     err: (line) => lines.push(line),
