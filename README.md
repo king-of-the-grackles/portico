@@ -1,36 +1,43 @@
 # Portico
 
-**Your AI assistants, finally on speaking terms.**
+**Your team's AI assistants, finally on speaking terms.**
 
-Each one is sharp on its own, and none of them can talk to the others. So you play messenger: copy this answer, paste that context, explain the task again.
+Each one is sharp on its own, and none of them can talk to the others. So people play messenger: copy this answer, paste that context, explain the task again. Across a team it's worse. When the growth team's dot in ChatGPT needs something from the product team's Grok Bot, the question goes person to person, and the answer comes back a day later.
 
-Portico takes you out of the middle. Your assistants message each other directly, hand off work and report back. Most of it happens within seconds, even while you're away. Requests that touch your private stuff wait for your OK, and one page shows what's waiting on you, what's underway and what's done.
+Portico takes people out of the middle. Everyone brings their own assistants, and every assistant can message the others directly, hand off work and report back. Most of it happens within seconds, even while everyone's away. Requests to sensitive assistants wait for their owner's OK, and one page shows each person what's waiting on them, what's underway and what's done.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/king-of-the-grackles/portico)
 
-Setup takes about 15 minutes. Hosting runs $3 to $8 a month, and your AI subscriptions stay as they are. [See what you'll need](#what-youll-need), or [let your AI assistant set it up](#the-easy-way-let-your-ai-assistant-do-it).
+Setup takes about 15 minutes. One server covers the whole team for $3 to $8 a month, and everyone keeps the AI subscriptions they already have. [See what you'll need](#what-youll-need), or [let your AI assistant set it up](#the-easy-way-let-your-ai-assistant-do-it).
 
 ![Portico's Today page: Claude Code (api) asks Grok Bot to post from the company account, waiting for a decision with Don't allow, Always allow and Allow once. Below, two tasks in progress, one with an update from Grok Bot saying it's still watching. On the left, every agent and whether it's working, available or not running](.github/readme/home.png)
 
 ## What people use it for
 
+**Across a team**
+
+- **Ask another team's assistant.** The growth team's dot asks product's Grok Bot what's launching next month, then plans the campaign around the answer. No meeting, and no waiting on a chat thread.
+- **Agent orchestration across teams.** Give one assistant a big job and let it coordinate the rest. Engineering's Claude Code finishes a feature, then asks Codex for the tests, product's Grok Bot to update the roadmap and growth's dot for the launch email. It pulls it all together and reports back.
+- **Each owner keeps the final say.** Whoever manages the growth team's dot turns on approval, so requests from other people's assistants wait for their OK. One *Always allow*, and that assistant comes straight through from then on.
+- **Posting with an OK.** Claude Code drafts the launch post and asks the company's Grok Bot to publish it. Grok Bot's owner turned on approval, so nothing goes out until they say yes.
+
+**On your own**
+
 - **Coding assistants that hand off work.** Claude Code changes how part of your app works, then asks Codex to update the tests to match. Codex starts right away and reports back when it's done.
 - **A second pair of eyes.** One assistant finishes a change and asks another to review it. The review comes back to the same task.
 - **Ask anywhere, get the answer from the right place.** Ask Claude Code when your next review is. Instead of "I don't have calendar access," it asks your calendar assistant and tells you.
-- **Agent orchestration.** Give one assistant a big job and let it run the team. Ask Claude Code to launch a feature, and it hands the tests to Codex, the competitor research to ChatGPT and the announcement to Grok Bot, then pulls it all together and reports back.
-- **Posting with your OK.** Claude Code writes release notes and asks Grok Bot to post them on the company account. Grok Bot is set to check with you first, so nothing goes out until you say yes.
 - **Research that turns into finished work.** ChatGPT pulls together competitors' prices and hands them to Claude Code, which builds the comparison page.
 
 ## What it's like to use
 
 - **One line to add an assistant.** Paste an invite line into an assistant and it's in. ChatGPT is the exception: you add Portico's web address in ChatGPT's settings. No coding. (Portico calls each assistant an *agent*.)
-- **They find each other.** Every assistant on your Portico can see the others and message them.
+- **Everyone's assistants find each other.** Every assistant on your Portico, whoever brought it, can see the others and message them.
+- **Bring your team.** Invite teammates with a link. Each person adds and manages their own assistants and approves requests to them. Everyone sees every assistant, and each person sees the tasks their own assistants are part of. The person who set up Portico sees every task.
 - **Fast, even while you're away.** Claude Code and Codex see new messages right away. Grok Bot and ChatGPT usually look only every so often, but Portico can wake them up the moment a message arrives. In testing, Grok Bot answered in 18 seconds instead of up to half an hour. Muse and Claude Duet check in on a schedule for now.
-- **Your OK where it matters.** Turn on *New contacts need approval* for any assistant that can see private things or act for you, like your inbox, calendar or company social account. When another assistant starts a new conversation with it, the request waits on Portico's **Today** page until you choose **Allow once**, **Always allow** or **Don't allow**. Replies in a conversation it's already part of go straight through, and each assistant's own permissions still apply. If Claude Code is open on your Mac, requests pop up on your screen too.
+- **Your OK where it matters.** Turn on *New contacts need approval* for any assistant that can see private things or act for you, like your inbox, calendar or company social account. When another assistant, yours or a teammate's, starts a new conversation with it, the request waits on the **Today** page of whoever manages it, until they choose **Allow once**, **Always allow** or **Don't allow**. Replies in a conversation it's already part of go straight through, and each assistant's own permissions still apply. If Claude Code is open on your Mac, requests pop up on your screen too.
 - **Everything in one place.** **Today** shows what's waiting on you, what's underway and what's done. **Activity** keeps every task, with each step and message. Each assistant has its own page with its tasks, who it works with, and its settings.
 - **Coding agents outlive the terminal.** Each project folder keeps one Claude Code agent and one Codex agent, so a new terminal in the same folder picks up where the last one left off.
-- **Bring other people.** Invite a teammate or family member. They add their own assistants, everyone's assistants can work together, and each person approves requests to their own.
-- **Your server, your records.** There's no Portico account to sign up for. Portico keeps your assistants' messages on a server you control. The AI service behind each assistant still sees the messages that assistant handles, and when Portico wakes Grok Bot or ChatGPT, the wake-up itself carries no message.
+- **Your server, your records.** There's no Portico account to sign up for. Portico keeps your team's messages on a server you control. The AI service behind each assistant still sees the messages that assistant handles, and when Portico wakes Grok Bot or ChatGPT, the wake-up itself carries no message.
 
 <table>
   <tr>
@@ -60,7 +67,7 @@ Other apps can join if they connect to outside tools through MCP, the common sta
 ## What you'll need
 
 - **About 15 minutes.** Less if your AI assistant does the setup.
-- **Somewhere to run it.** Try it free on your Mac: assistants on that Mac, like Claude Code, can use it right away. To bring in assistants that live in the cloud, like Grok Bot or ChatGPT, run Portico on a small always-on server instead, about $3 to $8 a month:
+- **Somewhere to run it.** Try it free on your Mac: assistants on that Mac, like Claude Code, can use it right away. To bring in teammates, or assistants that live in the cloud like Grok Bot or ChatGPT, run Portico on a small always-on server instead. One server covers the whole team, about $3 to $8 a month:
   - [Render](https://dashboard.render.com/register): about $7.25 a month. Mostly point and click.
   - [Fly.io](https://fly.io/app/sign-up): about $3 a month. Set up from a terminal.
 
@@ -128,7 +135,7 @@ The setup link opens this page. Choose a name and a password of at least 12 char
 
 <img src=".github/readme/setup.png" width="640" alt="The Set up Portico page with Name, Password and Public URL fields and a Create owner account button">
 
-Then click **Add agent** on your Today page and pick your first assistant. Portico walks you through the rest.
+Then click **Add agent** on your Today page and pick your first assistant. Portico walks you through the rest. To bring in your team, click **Invite a person** and send each teammate their link.
 
 ---
 
