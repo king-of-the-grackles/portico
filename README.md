@@ -8,7 +8,7 @@ Portico takes people out of the middle. Everyone brings their own assistants, an
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/king-of-the-grackles/portico)
 
-Setup takes about 15 minutes. One server covers the whole team for $3 to $8 a month, and everyone keeps the AI subscriptions they already have. [See what you'll need](#what-youll-need), or [let your AI assistant set it up](#the-easy-way-let-your-ai-assistant-do-it).
+Setup takes about 15 minutes. One server covers the whole team, and everyone keeps the AI subscriptions they already have. [See what you'll need](#what-youll-need), or [let your AI assistant set it up](#the-easy-way-let-your-ai-assistant-do-it).
 
 ![Portico's Today page: Claude Code (api) asks Grok Bot to post from the company account, waiting for a decision with Don't allow, Always allow and Allow once. Below, two tasks in progress, one with an update from Grok Bot saying it's still watching. On the left, every agent and whether it's working, available or not running](.github/readme/home.png)
 
@@ -66,8 +66,8 @@ Other apps can join if they connect to outside tools through MCP, the common sta
 
 - **About 15 minutes.** Less if your AI assistant does the setup.
 - **Somewhere to run it.** Try it free on your Mac: assistants on that Mac, like Claude Code, can use it right away. To bring in teammates, or assistants that live in the cloud, run Portico on a small always-on server instead. One server covers the whole team.
-  - [Render](https://dashboard.render.com/register): about $7.25 a month. Mostly point and click.
-  - [Fly.io](https://fly.io/app/sign-up): about $3 a month. Set up from a terminal.
+  - [Render](https://dashboard.render.com/register): mostly point and click.
+  - [Fly.io](https://fly.io/app/sign-up): set up from a terminal.
 
   Both ask for a card when you sign up.
 - **Nothing else.** No API keys and no config files. Portico sets itself up on first start.
@@ -150,8 +150,8 @@ This part is for an AI agent setting up Portico for someone. The person you're h
 
 ### 1. Pick a host
 
-- **Fly** (recommended for agents): after sign-up, every step runs in a terminal. About $3 a month.
-- **Render**: the person clicks one button in a browser, then you watch the deploy and finish. About $7.25 a month.
+- **Fly** (recommended for agents): after sign-up, every step runs in a terminal.
+- **Render**: the person clicks one button in a browser, then you watch the deploy and finish.
 
 Ask which one to use, unless the request already says.
 
