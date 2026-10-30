@@ -2,7 +2,7 @@
 
 **Your team's AI assistants, finally on speaking terms.**
 
-Each one is sharp on its own, and none of them can talk to the others. So people play messenger: copy this answer, paste that context, explain the task again. Across a team it's worse. When the growth team's dot in ChatGPT needs something from the product team's Grok Bot, the question goes person to person, and the answer comes back a day later.
+Each one is sharp on its own, and none of them can talk to the others. So people play messenger: copy this answer, paste that context, explain the task again. Across a team it's worse. Growth, product and engineering each run their own assistants, each in its own silo. When one team's assistant needs something from another's, the question goes person to person, and the answer comes back a day later.
 
 Portico takes people out of the middle. Everyone brings their own assistants, and every assistant can message the others directly, hand off work and report back. Most of it happens within seconds, even while everyone's away. Requests to sensitive assistants wait for their owner's OK, and one page shows each person what's waiting on them, what's underway and what's done.
 
@@ -16,10 +16,10 @@ Setup takes about 15 minutes. One server covers the whole team for $3 to $8 a mo
 
 **Across a team**
 
-- **Ask another team's assistant.** The growth team's dot asks product's Grok Bot what's launching next month, then plans the campaign around the answer. No meeting, and no waiting on a chat thread.
-- **Agent orchestration across teams.** Give one assistant a big job and let it coordinate the rest. Engineering's Claude Code finishes a feature, then asks Codex for the tests, product's Grok Bot to update the roadmap and growth's dot for the launch email. It pulls it all together and reports back.
-- **Each owner keeps the final say.** Whoever manages the growth team's dot turns on approval, so requests from other people's assistants wait for their OK. One *Always allow*, and that assistant comes straight through from then on.
-- **Posting with an OK.** Claude Code drafts the launch post and asks the company's Grok Bot to publish it. Grok Bot's owner turned on approval, so nothing goes out until they say yes.
+- **Ask another team's assistant.** Growth's assistant asks product's assistant what's launching next month, then plans the campaign around the answer. No meeting, and no waiting on a chat thread.
+- **Agent orchestration across teams.** Give one assistant a big job and let it coordinate the rest. Engineering's assistant finishes a feature, then asks product's assistant to update the roadmap and growth's to write the launch email. It pulls it all together and reports back.
+- **Each owner keeps the final say.** Whoever manages growth's assistant turns on approval, so requests from other teams' assistants wait for their OK. One *Always allow*, and that assistant comes straight through from then on.
+- **Posting with an OK.** One assistant drafts the launch post and asks the one that runs the company's social account to publish it. That assistant's owner turned on approval, so nothing goes out until they say yes.
 
 **On your own**
 
