@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,9 +7,29 @@ import { setupCommand } from "../src/commands/setup";
 import { localSetupLink } from "../src/commands/serve";
 import type { CliIo } from "../src/commands/io";
 import { hostUrl, platformUrl } from "../src/config";
+import type { Topic } from "../src/core/changes";
 import { openDb } from "../src/db";
+import { s256 } from "../src/oauth/store";
 import { createPortico } from "../src/portico";
-import { addOwner, copyProblems, HOUR, makePortico, PASSWORD, PUBLIC_URL, signIn, testConfig, visibleCopy } from "./helpers";
+import {
+  addAppAgent,
+  addComputer,
+  addMember,
+  addOwner,
+  callAs,
+  callPerson,
+  copyProblems,
+  flush,
+  HOUR,
+  makePortico,
+  openSessionStream,
+  PASSWORD,
+  PUBLIC_URL,
+  signIn,
+  sseReader,
+  testConfig,
+  visibleCopy,
+} from "./helpers";
 
 const json = async <T = Record<string, unknown>>(res: Response | Promise<Response>) => (await (await res).json()) as T;
 
@@ -89,6 +110,176 @@ describe("POST /api/setup", () => {
   });
 });
 
+describe("owner recovery", () => {
+  type P = ReturnType<typeof makePortico>;
+  const REDIRECT = "http://localhost:4567/callback";
+  const FOLDER = `/api/computer/folders/${"a".repeat(64)}`;
+
+  function post(p: P, path: string, body: unknown, headers: Record<string, string> = {}) {
+    return p.app.request(`${PUBLIC_URL}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function joinLine(p: P, cookie: string, kind: string): Promise<string> {
+    return (await json<{ joinLine: { line: string } }>(callPerson(p, cookie, "POST", "/api/join-lines", { kind }))).joinLine.line;
+  }
+
+  async function askToJoin(p: P, cookie: string, name: string) {
+    const token = await joinLine(p, cookie, "other");
+    return await json<{ id: string; poll_secret: string }>(post(p, "/api/sign-in-requests", { token, name }));
+  }
+
+  function poll(p: P, asked: { id: string; poll_secret: string }) {
+    return json<{ status: string; agent?: { name: string }; token?: string }>(
+      p.app.request(`/api/sign-in-requests/${asked.id}`, { headers: { authorization: `Bearer ${asked.poll_secret}` } }),
+    );
+  }
+
+  /** A connector's consent, given with the cookie: a new connector agent and a code for it, not yet exchanged. */
+  async function consent(p: P, cookie: string, clientId: string, name: string) {
+    const verifier = randomBytes(32).toString("base64url");
+    const fields = {
+      client_id: clientId,
+      redirect_uri: REDIRECT,
+      state: "state-123",
+      code_challenge: s256(verifier),
+      code_challenge_method: "S256",
+      resource: `${PUBLIC_URL}/mcp`,
+      name,
+      kind: "claude-duet",
+    };
+    const headers = { cookie, origin: PUBLIC_URL, host: "portico.example.com" };
+    const { next } = await json<{ next: string }>(post(p, "/oauth/authorize", fields, headers));
+    return { code: new URL(next).searchParams.get("code")!, verifier };
+  }
+
+  function oauthToken(p: P, fields: Record<string, string>) {
+    return p.app.request(`${PUBLIC_URL}/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(fields).toString(),
+    });
+  }
+
+  /** A page's next event other than change topics: rejects with "stream ended" once the stream closes. */
+  async function besidesChanges(page: ReturnType<typeof sseReader>) {
+    for (;;) {
+      const event = await page.next(500);
+      if (event.event !== "changed") return event;
+    }
+  }
+
+  async function recover(p: P) {
+    const { token } = p.accounts.createSetupLink({ reset: true });
+    expect((await postSetup(p, { token, password: "a-new-owner-password" })).status).toBe(200);
+  }
+
+  test("nothing the owner's session made before the recovery works after it: computer, app and OAuth tokens, codes, lines, sign-ins", async () => {
+    const p = makePortico();
+    const chris = await addOwner(p);
+    const maya = await addMember(p);
+    const stolen = signIn(p, chris);
+    const computerLine = await joinLine(p, stolen, "claude-code");
+    const joined = await json<{ token: string }>(post(p, "/api/computer/join", { token: computerLine, computer: "chris-macbook" }));
+    const unusedLine = await joinLine(p, stolen, "claude-code");
+    const issued = await askToJoin(p, stolen, "helper");
+    await callPerson(p, stolen, "POST", `/api/approvals/sign-ins/${issued.id}`, { decision: "approve" });
+    const appToken = (await poll(p, issued)).token!;
+    const approved = await askToJoin(p, stolen, "helper-two");
+    await callPerson(p, stolen, "POST", `/api/approvals/sign-ins/${approved.id}`, { decision: "approve" });
+    const pending = await askToJoin(p, stolen, "helper-three");
+    const { client_id: clientId } = await json<{ client_id: string }>(
+      post(p, "/oauth/register", { client_name: "Claude Duet", redirect_uris: [REDIRECT], token_endpoint_auth_method: "none" }),
+    );
+    const exchanged = await consent(p, stolen, clientId, "duet");
+    const exchange = ({ code, verifier }: { code: string; verifier: string }) =>
+      oauthToken(p, { grant_type: "authorization_code", client_id: clientId, code, code_verifier: verifier, redirect_uri: REDIRECT });
+    const oauth = await json<{ access_token: string; refresh_token: string }>(exchange(exchanged));
+    const unexchanged = await consent(p, stolen, clientId, "duet-two");
+    // A member's own computer and agent, which the owner's recovery leaves alone.
+    const mayaComputer = addComputer(p, maya, "maya-linux");
+    const mayaBot = addAppAgent(p, maya, "maya-bot");
+    expect((await callAs(p, { token: joined.token }, "PUT", FOLDER, { joins: true })).status).toBe(200);
+    expect((await callAs(p, { token: appToken }, "GET", "/api/agent/agents")).status).toBe(200);
+    expect((await callAs(p, { token: oauth.access_token }, "GET", "/api/agent/agents")).status).toBe(200);
+
+    await recover(p);
+
+    expect((await callAs(p, { token: joined.token }, "PUT", FOLDER, { joins: true })).status).toBe(401);
+    expect((await callAs(p, { token: appToken }, "GET", "/api/agent/agents")).status).toBe(401);
+    expect((await callAs(p, { token: oauth.access_token }, "GET", "/api/agent/agents")).status).toBe(401);
+    expect(await json(oauthToken(p, { grant_type: "refresh_token", client_id: clientId, refresh_token: oauth.refresh_token }))).toMatchObject({
+      error: "invalid_grant",
+    });
+    expect(await json(exchange(unexchanged))).toMatchObject({ error: "invalid_grant" });
+    const lateJoin = await post(p, "/api/computer/join", { token: unusedLine, computer: "chris-macbook" });
+    expect(lateJoin.status).toBe(404);
+    expect(p.computers.list(chris.id).map((c) => c.name)).toEqual(["chris-macbook"]);
+    // An approval made before the recovery never hands over its token; a request still waiting expires.
+    expect(await poll(p, approved)).toEqual({ status: "approved", agent: { name: "helper-two" } });
+    expect(await poll(p, pending)).toEqual({ status: "expired" });
+    expect(p.computers.pendingSignIns(chris.id)).toEqual([]);
+    // The member's credentials still work.
+    expect((await callAs(p, { token: mayaComputer.token }, "PUT", FOLDER, { joins: true })).status).toBe(200);
+    expect((await callAs(p, { token: mayaBot.token }, "GET", "/api/agent/agents")).status).toBe(200);
+  });
+
+  test("the owner's open streams, waiting check_inbox calls and pages close, so a pop-up can't decide as the owner", async () => {
+    const p = makePortico({ newNonce: () => "nonce-1" });
+    const chris = await addOwner(p);
+    const maya = await addMember(p);
+    const stolen = signIn(p, chris);
+    const pc = addComputer(p, chris, "chris-macbook").token;
+    const notes = addAppAgent(p, chris, "notes", { approvalRequired: true });
+    const mayaBot = addAppAgent(p, maya, "maya-bot");
+    const mayaComputer = addComputer(p, maya, "maya-linux");
+    const popup = await openSessionStream(p, pc, { key: "attacker-run-0001", repo: "api", popup: true });
+    const mayaSession = await openSessionStream(p, mayaComputer.token, { key: "maya-run-0001", repo: "web" });
+    const page = sseReader(await callPerson(p, stolen, "GET", "/api/events"));
+    expect((await page.next()).event).toBe("hello");
+    const sent = await json<{ message: { id: string } }>(
+      callAs(p, { token: mayaBot.token }, "POST", "/api/agent/messages", { to: "notes", subject: "Held subject", text: "Held text." }),
+    );
+    expect(await popup.events.next()).toMatchObject({ event: "approval_request", data: { messageId: sent.message.id, nonce: "nonce-1" } });
+    const waiting = callAs(p, { token: notes.token }, "GET", "/api/agent/inbox?wait=5");
+    await flush();
+    const topics: Topic[][] = [];
+    p.changes.on((batch) => topics.push(batch));
+
+    await recover(p);
+
+    await expect(popup.events.next(500)).rejects.toThrow("stream ended");
+    await expect(besidesChanges(page)).rejects.toThrow("stream ended");
+    const woken = await Promise.race([waiting, Bun.sleep(1000).then(() => null)]);
+    expect(woken?.status).toBe(401);
+    const answer = await callAs(p, { token: pc, key: "attacker-run-0001" }, "POST", `/api/agent/approvals/${sent.message.id}`, {
+      nonce: "nonce-1",
+      decision: "always_allow",
+    });
+    expect(answer.status).toBe(401);
+    expect(p.messages.get(sent.message.id)?.status).toBe("held");
+    expect(p.approvals.allowListFor(chris.id, notes.agent.id)).toEqual([]);
+    const reopened = await p.app.request("/api/agent/stream?repo=api", {
+      headers: {
+        authorization: `Bearer ${pc}`,
+        "x-portico-session": "attacker-run-0002",
+        "x-portico-folder": "a".repeat(64),
+        "x-portico-popup": "1",
+      },
+    });
+    expect(reopened.status).toBe(401);
+    await flush();
+    expect(topics.flat()).toEqual(expect.arrayContaining(["agents", "computers", "join-lines", "approvals"]));
+    // The member's session stays open.
+    await callAs(p, { token: mayaBot.token }, "POST", "/api/agent/messages", { to: "web-claude", subject: "s", text: "t" });
+    expect((await mayaSession.events.next()).event).toBe("nudge");
+    await mayaSession.events.cancel();
+  });
+});
+
 describe("the setup gate", () => {
   test("before setup the API answers setup_required, pages say so, and /setup and /api/setup stay open", async () => {
     const p = makePortico({ setup: false });
@@ -150,6 +341,7 @@ describe("/setup", () => {
     await addOwner(p);
     const page = await (await p.app.request("/setup")).text();
     expect(page).toContain("<h1>Reset the owner password</h1>");
+    expect(page).toContain("the owner's computers and agents have to join again.");
     expect(page).toContain('data-api="POST /api/setup"');
     expect(page).not.toContain('name="publicUrl"');
     expect(page).not.toContain('name="name"');
@@ -220,7 +412,7 @@ describe("portico setup", () => {
     const reset = testIo(env);
     expect(await setupCommand(["--reset"], reset.io)).toBe(0);
     expect(reset.out[0]).toBe(
-      "Open this link in a browser to set a new owner password. Every browser signed in as the owner is signed out. The link works once and expires in 1 hour.",
+      "Open this link in a browser to set a new owner password. Every browser signed in as the owner is signed out, and the owner's computers and agents have to join again. The link works once and expires in 1 hour.",
     );
     expect((await post({ token: token(reset.out), password: "a-new-owner-password" })).status).toBe(200);
     p.db.close();

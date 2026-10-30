@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { parseLock, pluginLock } from "../../scripts/plugin-lock";
 import { copyProblems, HUB } from "../../server/test/helpers";
 import { JOIN_PREFIX, parseJoinLine } from "../src/join";
 import { SERVER_NAME, SERVER_VERSION } from "../src/plugin";
@@ -45,12 +46,31 @@ test(".mcp.json starts the server from the plugin folder, with no settings to pa
   });
 });
 
-test("the start script keeps stdout clean, and only runtime dependencies are installed, pinned exactly", () => {
+test("the start script keeps stdout clean, installs only from the plugin's lock, and only runtime dependencies, pinned exactly", () => {
   const pkg = json(join(PLUGIN, "package.json"));
-  expect(pkg.scripts.start).toBe("bun install --no-summary 1>&2 && bun src/main.ts");
+  // --frozen-lockfile alone still resolves from the registry when there's no lock, so `ls` (a bun shell builtin) stops first.
+  expect(pkg.scripts.start).toBe("ls bun.lock 1>&2 && bun install --frozen-lockfile --no-summary 1>&2 && bun src/main.ts");
   expect(pkg.devDependencies).toBeUndefined();
   expect(Object.keys(pkg.dependencies).sort()).toEqual(["@modelcontextprotocol/sdk", "zod"]);
   for (const version of Object.values(pkg.dependencies)) expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+});
+
+test("the plugin folder carries its own bun.lock, the root lock's entries for the plugin and nothing else (bun scripts/plugin-lock.ts)", () => {
+  const pkg = json(join(PLUGIN, "package.json"));
+  expect(existsSync(join(PLUGIN, "bun.lock"))).toBe(true);
+  const rootText = readFileSync(join(ROOT, "bun.lock"), "utf8");
+  const pluginText = readFileSync(join(PLUGIN, "bun.lock"), "utf8");
+  const root = parseLock(rootText);
+  const plugin = parseLock(pluginText);
+  expect(Object.keys(plugin.workspaces)).toEqual([""]);
+  expect(plugin.workspaces[""]!.dependencies).toEqual(pkg.dependencies);
+  expect(Object.keys(plugin.packages).length).toBeGreaterThan(0);
+  for (const [key, entry] of Object.entries(plugin.packages)) {
+    expect(entry[3]).toMatch(/^sha512-/);
+    expect([key, root.packages[key]?.[0], root.packages[key]?.[3]]).toEqual([key, entry[0], entry[3]]);
+  }
+  // The whole file is derived from the root lock, so a root lock change that leaves this one stale or incomplete fails here.
+  expect(pluginText).toBe(pluginLock(rootText));
 });
 
 test("plugin source imports nothing from outside the plugin folder, which is all Claude Code copies", () => {

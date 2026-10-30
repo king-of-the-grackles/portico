@@ -196,7 +196,7 @@ export interface SettingsState {
   nameForm: { name: string; error: string } | null;
   passwordForm: { current: string; next: string; error: string } | null;
   passwordChanged: boolean;
-  passkeyForm: { name: string; error: string } | null;
+  passkeyForm: { name: string; current: string; error: string } | null;
   /** This browser can make passkeys and Portico serves the passkey module: Add passkey shows. */
   passkeysSupported: boolean;
   accountError: string;

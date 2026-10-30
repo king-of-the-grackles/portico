@@ -6,6 +6,7 @@ import { checkAgentName } from "./agents";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
+import { releasedByOther, releaseNames } from "./released-names";
 import { hashSecret, LINK_SECRET, newLinkSecret, newToken, sameSecret } from "./tokens";
 import { AGENT_KINDS } from "./types";
 import type { Agent, AgentKind, Computer } from "./types";
@@ -114,8 +115,8 @@ const MAX_DEDUPE = 99;
 const TOUCH_INTERVAL_MS = 60_000;
 /** Join lines are deleted a day after they expire; their sign-in requests go with them. */
 const JOIN_LINE_KEEP_MS = DAY_MS;
-/** Registered OAuth clients with no tokens and no codes are deleted after this. */
-const IDLE_CLIENT_MS = 7 * DAY_MS;
+/** Registered OAuth clients with no tokens and no codes are deleted after this: registration is open to anyone. */
+const UNUSED_CLIENT_MS = HOUR_MS;
 const AGAIN = "Make a new one with Add agent on Portico.";
 
 /** A joining computer's proposed name (usually its hostname) as a computer name: slugged, without `.local`. */
@@ -179,7 +180,7 @@ export class Computers {
     const computer: Computer = {
       id: this.newId(),
       ownerId,
-      name: this.freeName(computerSlug(proposedName)),
+      name: this.freeName(computerSlug(proposedName), ownerId),
       createdAt: this.iso(),
       lastSeenAt: null,
     };
@@ -229,20 +230,27 @@ export class Computers {
   }
 
   /**
-   * Deletes the computer and, by cascade, its sessions and folders, so its token fails at once. Returns the IDs of the
-   * sessions it had, so their streams can be closed.
+   * Deletes the computer and, by cascade, its sessions and folders, so its token fails at once. The computer's name and
+   * its sessions' names are released. Returns the IDs of the sessions it had, so their streams can be closed.
    */
   remove(id: string): string[] {
     return this.db.transaction(() => {
-      const sessions = (this.db.query("SELECT id FROM agents WHERE computer_id = $id").all({ id }) as { id: string }[]).map(
-        (row) => row.id,
-      );
+      const sessions = this.db.query("SELECT id, name FROM agents WHERE computer_id = $id").all({ id }) as { id: string; name: string }[];
+      const computer = this.get(id);
+      if (computer) {
+        releaseNames(
+          this.db,
+          computer.ownerId,
+          [{ scope: "computer", name: computer.name }, ...sessions.map((session) => ({ scope: "agent" as const, name: session.name }))],
+          this.now(),
+        );
+      }
       const removed = this.db.query("DELETE FROM computers WHERE id = $id").run({ id }).changes;
       if (removed > 0) {
         this.log("computer_removed", { computer_id: id, sessions: sessions.length });
         this.changes.emit("computers", "agents", "threads", "approvals");
       }
-      return sessions;
+      return sessions.map((session) => session.id);
     })();
   }
 
@@ -540,11 +548,22 @@ export class Computers {
     return expired;
   }
 
+  /** Minute cleanup: registered OAuth clients that got no code or token within the hour. Returns how many. */
+  sweepUnusedClients(): number {
+    return this.db
+      .query(
+        `DELETE FROM oauth_clients WHERE created_at < $cutoff
+           AND client_id NOT IN (SELECT client_id FROM agent_tokens WHERE client_id IS NOT NULL)
+           AND client_id NOT IN (SELECT client_id FROM oauth_codes)`,
+      )
+      .run({ cutoff: this.iso(-UNUSED_CLIENT_MS) }).changes;
+  }
+
   /**
-   * Daily cleanup: join lines a day past expiry (with their sign-in requests), expired OAuth codes and connector
-   * tokens, and registered OAuth clients that never got a token.
+   * Daily cleanup: join lines a day past expiry (with their sign-in requests), and expired OAuth codes and connector
+   * tokens.
    */
-  sweep(): { joinLines: number; oauthCodes: number; tokens: number; oauthClients: number } {
+  sweep(): { joinLines: number; oauthCodes: number; tokens: number } {
     const now = this.iso();
     return this.db.transaction(() => {
       const joinLines = this.db
@@ -554,14 +573,7 @@ export class Computers {
       const tokens = this.db
         .query("DELETE FROM agent_tokens WHERE expires_at IS NOT NULL AND expires_at < $now")
         .run({ now }).changes;
-      const oauthClients = this.db
-        .query(
-          `DELETE FROM oauth_clients WHERE created_at < $cutoff
-             AND client_id NOT IN (SELECT client_id FROM agent_tokens WHERE client_id IS NOT NULL)
-             AND client_id NOT IN (SELECT client_id FROM oauth_codes)`,
-        )
-        .run({ cutoff: this.iso(-IDLE_CLIENT_MS) }).changes;
-      return { joinLines, oauthCodes, tokens, oauthClients };
+      return { joinLines, oauthCodes, tokens };
     })();
   }
 
@@ -604,10 +616,14 @@ export class Computers {
     return new Date(this.now().getTime() + offsetMs).toISOString();
   }
 
-  /** The base name, or the first free `<base>-2` … `<base>-99`. */
-  private freeName(base: string): string {
+  /**
+   * The base name, or the first free `<base>-2` … `<base>-99`. A name another person's computer had within the history
+   * window isn't free, so addresses on that computer can't start reaching this one.
+   */
+  private freeName(base: string, ownerId: string): string {
+    const taken = (name: string) => this.byName(name) !== null || releasedByOther(this.db, "computer", name, ownerId, this.now());
     let name = base;
-    for (let n = 2; this.byName(name); n++) {
+    for (let n = 2; taken(name); n++) {
       if (n > MAX_DEDUPE) throw new PorticoError("rate_limited", `Too many computers named ${base}. Remove some first.`);
       name = `${base}-${n}`;
     }

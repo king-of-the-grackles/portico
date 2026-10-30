@@ -320,13 +320,15 @@ Every setting is optional. There's no config file and no secret to generate: Por
 
 **The data folder** holds everything Portico keeps: the database (`portico.db`, plus `portico.db-wal` and `portico.db-shm`) and `signing.key`. Back up the whole folder. In the Docker image it's `/data`.
 
+Before an upgrade changes the database, Portico saves a copy beside the database (`portico.db.v<version>-<time>.bak`). Restoring a copy, or any older backup, brings back everything removed since: people, computers, agents, tokens, passkeys and old passwords. After a restore, remove those again, and rerun `portico setup --reset` if the owner password was reset. Delete `portico.db-wal` and `portico.db-shm` before restoring.
+
 ### Commands
 
 | Command | What it does |
 |---|---|
 | `portico serve` | Runs Portico. When run locally, prints the setup link at first start. |
 | `portico setup` | Prints a one-time setup link. Run it on the server, against the same database as `serve`. |
-| `portico setup --reset` | Prints a new link. Before setup, a fresh setup link. After setup, a link that sets a new owner password and removes the owner's passkeys. |
+| `portico setup --reset` | Prints a new link. Before setup, a fresh setup link. After setup, a link that sets a new owner password, removes the owner's passkeys and signs out the owner's computers and agents. |
 | `portico doctor` | Checks that Portico answers at its public address and that setup is done. |
 | `portico join '<line>'` | Joins this computer to Portico with an invite line, like `/portico:join` in Claude Code. |
 | `portico leave` | Takes this computer off Portico and undoes the join. |

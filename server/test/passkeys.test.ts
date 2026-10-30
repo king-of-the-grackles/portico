@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, randomBytes, sign as signBytes } from "node:crypto";
 import { isoCBOR } from "@simplewebauthn/server/helpers";
-import { addMember, addOwner, copyProblems, makePortico, MINUTE, PUBLIC_URL, signIn } from "./helpers";
+import { addMember, addOwner, copyProblems, makePortico, MINUTE, PASSWORD, PUBLIC_URL, signIn } from "./helpers";
 
 const RP_ID = "portico.example.com";
 
@@ -116,7 +116,7 @@ async function withPasskey() {
   const chris = await addOwner(p);
   const owner = browser(p, signIn(p, chris));
   const key = softAuthenticator();
-  const { options } = (await (await owner.call("POST", "/api/passkeys/options")).json()) as { options: Options };
+  const { options } = (await (await owner.call("POST", "/api/passkeys/options", { current: PASSWORD })).json()) as { options: Options };
   const added = await owner.call("POST", "/api/passkeys", { credential: key.register(options), name: "MacBook Touch ID" });
   expect(added.status).toBe(201);
   const { passkey } = (await added.json()) as { passkey: { id: string } };
@@ -127,7 +127,7 @@ describe("adding a passkey", () => {
   test("options name Portico's host, the person, and ask for a discoverable, verified passkey", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
-    const res = await browser(p, signIn(p, chris)).call("POST", "/api/passkeys/options");
+    const res = await browser(p, signIn(p, chris)).call("POST", "/api/passkeys/options", { current: PASSWORD });
     expect(res.status).toBe(200);
     const set = res.headers.getSetCookie().find((c) => c.startsWith("portico_passkey="))!;
     expect(set).toContain("HttpOnly");
@@ -141,24 +141,49 @@ describe("adding a passkey", () => {
     expect(options.attestation).toBe("none");
   });
 
+  test("options need the current password; a wrong one counts toward the limit on changing the password", async () => {
+    const p = makePortico();
+    const chris = await addOwner(p);
+    const owner = browser(p, signIn(p, chris));
+    expect((await owner.call("POST", "/api/passkeys/options")).status).toBe(400);
+    const none = await owner.call("POST", "/api/passkeys/options", {});
+    expect(none.status).toBe(400);
+    expect(await none.json()).toEqual({ error: "bad_request", message: "The current password is wrong." });
+    const wrong = await owner.call("POST", "/api/passkeys/options", { current: "not-the-password" });
+    expect(wrong.status).toBe(400);
+    expect(await wrong.json()).toEqual({ error: "bad_request", message: "The current password is wrong." });
+    // No challenge was issued, so there is nothing to answer.
+    expect(owner.jar.has("portico_passkey")).toBe(false);
+
+    // The empty answer and the wrong one each counted: 8 more make 10.
+    for (let i = 0; i < 8; i++) expect((await owner.call("POST", "/api/passkeys/options", { current: "guess-guess-guess" })).status).toBe(400);
+    const limited = await owner.call("POST", "/api/passkeys/options", { current: PASSWORD });
+    expect(limited.status).toBe(429);
+    expect(owner.jar.has("portico_passkey")).toBe(false);
+    expect((await owner.call("POST", "/api/me/password", { current: PASSWORD, next: "a-brand-new-password" })).status).toBe(429);
+    p.clock.advance(15 * MINUTE);
+    expect((await owner.call("POST", "/api/passkeys/options", { current: PASSWORD })).status).toBe(200);
+    expect(p.accounts.passkeys.list(chris.id)).toEqual([]);
+  });
+
   test("the browser's answer stores the passkey; the list shows it; it's excluded next time", async () => {
     const { owner, key } = await withPasskey();
     const { passkeys } = (await (await owner.call("GET", "/api/passkeys")).json()) as { passkeys: unknown[] };
     expect(passkeys).toEqual([{ id: expect.any(String), name: "MacBook Touch ID", createdAt: "2026-10-27T12:00:00.000Z", lastUsedAt: null }]);
-    const { options } = (await (await owner.call("POST", "/api/passkeys/options")).json()) as { options: { excludeCredentials: { id: string }[] } };
+    const { options } = (await (await owner.call("POST", "/api/passkeys/options", { current: PASSWORD })).json()) as { options: { excludeCredentials: { id: string }[] } };
     expect(options.excludeCredentials.map((c) => c.id)).toEqual([key.id]);
   });
 
   test("the same passkey twice is 409; an answer without its options, or for another origin, is refused", async () => {
     const { p, chris, owner, key } = await withPasskey();
-    const { options } = (await (await owner.call("POST", "/api/passkeys/options")).json()) as { options: Options };
+    const { options } = (await (await owner.call("POST", "/api/passkeys/options", { current: PASSWORD })).json()) as { options: Options };
     const again = await owner.call("POST", "/api/passkeys", { credential: key.register(options), name: "Again" });
     expect(again.status).toBe(409);
     // The challenge cookie went with that answer.
     expect((await owner.call("POST", "/api/passkeys", { credential: key.register(options), name: "Again" })).status).toBe(400);
 
     const other = softAuthenticator({ origin: "https://evil.example" });
-    const fresh = (await (await owner.call("POST", "/api/passkeys/options")).json()) as { options: Options };
+    const fresh = (await (await owner.call("POST", "/api/passkeys/options", { current: PASSWORD })).json()) as { options: Options };
     const res = await owner.call("POST", "/api/passkeys", { credential: other.register(fresh.options), name: "Evil" });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { message: string };
@@ -168,18 +193,18 @@ describe("adding a passkey", () => {
 
   test("another person's challenge cookie, an expired one, or a pending person is refused", async () => {
     const { p, owner } = await withPasskey();
-    const { options } = (await (await owner.call("POST", "/api/passkeys/options")).json()) as { options: Options };
+    const { options } = (await (await owner.call("POST", "/api/passkeys/options", { current: PASSWORD })).json()) as { options: Options };
     const maya = browser(p, signIn(p, await addMember(p)));
     maya.jar.set("portico_passkey", owner.jar.get("portico_passkey")!);
     expect((await maya.call("POST", "/api/passkeys", { credential: softAuthenticator().register(options), name: "X" })).status).toBe(400);
 
-    const late = (await (await owner.call("POST", "/api/passkeys/options")).json()) as { options: Options };
+    const late = (await (await owner.call("POST", "/api/passkeys/options", { current: PASSWORD })).json()) as { options: Options };
     p.clock.advance(5 * MINUTE);
     const expired = await owner.call("POST", "/api/passkeys", { credential: softAuthenticator().register(late.options), name: "X" });
     expect(await expired.json()).toEqual({ error: "bad_request", message: "The passkey request expired. Try again." });
 
     const pending = browser(p, signIn(p, await addMember(p, "Priya", "pending")));
-    expect((await pending.call("POST", "/api/passkeys/options")).status).toBe(403);
+    expect((await pending.call("POST", "/api/passkeys/options", { current: PASSWORD })).status).toBe(403);
     expect((await pending.call("GET", "/api/passkeys")).status).toBe(403);
   });
 
@@ -192,6 +217,38 @@ describe("adding a passkey", () => {
     const { options } = (await (await visitor.call("POST", "/api/session/passkey/options")).json()) as { options: Options };
     const res = await visitor.call("POST", "/api/session/passkey", { credential: key.assert(options) });
     expect(res.status).toBe(401);
+  });
+});
+
+describe("changing the password", () => {
+  test("removes every passkey: one added before the change no longer signs in", async () => {
+    const { p, chris, owner, key } = await withPasskey();
+    const changed = await owner.call("POST", "/api/me/password", { current: PASSWORD, next: "a-brand-new-password" });
+    expect(changed.status).toBe(204);
+    expect(p.accounts.passkeys.list(chris.id)).toEqual([]);
+    expect(await (await owner.call("GET", "/api/passkeys")).json()).toEqual({ passkeys: [] });
+    const visitor = browser(p);
+    const { options } = (await (await visitor.call("POST", "/api/session/passkey/options")).json()) as { options: Options };
+    const res = await visitor.call("POST", "/api/session/passkey", { credential: key.assert(options) });
+    expect(res.status).toBe(401);
+    expect(visitor.jar.has("portico_session")).toBe(false);
+  });
+
+  test("ends every session, this browser's too, and signs this browser back in with a new cookie", async () => {
+    const { p, chris, owner } = await withPasskey();
+    const elsewhere = browser(p, signIn(p, chris));
+    const before = owner.jar.get("portico_session")!;
+    const changed = await owner.call("POST", "/api/me/password", { current: PASSWORD, next: "a-brand-new-password" });
+    expect(changed.status).toBe(204);
+    const set = changed.headers.getSetCookie().find((c) => c.startsWith("portico_session="))!;
+    expect(set).toContain("HttpOnly");
+    expect(set).toContain("SameSite=Lax");
+    expect(set).toContain("Secure");
+    const after = owner.jar.get("portico_session")!;
+    expect(after).not.toBe(before);
+    expect((await browser(p, `portico_session=${before}`).call("GET", "/api/me")).status).toBe(401);
+    expect((await elsewhere.call("GET", "/api/me")).status).toBe(401);
+    expect((await owner.call("GET", "/api/me")).status).toBe(200);
   });
 });
 

@@ -143,6 +143,8 @@ describe("database", () => {
     }
     expect(error).toBeInstanceOf(SchemaMismatchError);
     expect(startupProblem(error, { port: 3000, dbPath: path })).toContain("newer Portico version");
+    // Restoring the copy brings back removed access, so the message says to remove it again.
+    expect(startupProblem(error, { port: 3000, dbPath: path })).toContain("brings back everything removed since the upgrade");
     const again = new Database(path);
     expect(versionOf(again)).toBe(SCHEMA_VERSION + 1);
     again.close();
@@ -297,6 +299,29 @@ describe("database", () => {
     expect(db.query("SELECT doing, doing_at FROM agents WHERE id = 'a1'").get()).toEqual({ doing: null, doing_at: null });
     db.run("UPDATE messages SET send_key = 'k' WHERE id = 'm1'");
     expect(() => db.run("UPDATE messages SET send_key = 'k' WHERE id = 'm2'")).toThrow();
+    db.close();
+  });
+
+  test("105: a new database and an upgraded one both keep released names, one row per person and name", () => {
+    const columns = (db: Database) =>
+      (db.query("SELECT name FROM pragma_table_info('released_names') ORDER BY cid").all() as { name: string }[]).map((row) => row.name);
+    const fresh = openDb(":memory:");
+    expect(columns(fresh)).toEqual(["scope", "name", "owner_id", "released_at"]);
+
+    const path = tempPath("portico.db");
+    const old = new Database(path, { create: true, strict: true });
+    prepare(old, { migrations: MIGRATIONS.slice(0, 4) });
+    expect(columns(old)).toEqual([]);
+    old.close();
+    const db = openDb(path);
+    expect(versionOf(db)).toBe(SCHEMA_VERSION);
+    expect(columns(db)).toEqual(["scope", "name", "owner_id", "released_at"]);
+    const release = db.query("INSERT INTO released_names (scope, name, owner_id, released_at) VALUES ($scope, 'reports', $owner, 't')");
+    release.run({ scope: "agent", owner: "p1" });
+    release.run({ scope: "agent", owner: "p2" });
+    release.run({ scope: "computer", owner: "p1" });
+    expect(() => release.run({ scope: "agent", owner: "p1" })).toThrow();
+    expect(() => release.run({ scope: "folder", owner: "p3" })).toThrow();
     db.close();
   });
 

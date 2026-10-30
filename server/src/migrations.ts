@@ -192,5 +192,20 @@ const wakes: Migration = (db) => {
   db.run("CREATE INDEX event_subscriptions_agent ON event_subscriptions (agent_id)");
 };
 
+/**
+ * 105: names let go. A removed or renamed agent's bare name and a removed computer's name stay with the person who had
+ * them for the history window, so a name that reached one person's agent can't start reaching another person's. Each
+ * person's release of a name is its own row, so one person letting a name go never clears another's hold on it.
+ */
+const releasedNames: Migration = (db) => {
+  db.run(`CREATE TABLE released_names (
+    scope TEXT NOT NULL CHECK (scope IN ('agent', 'computer')),
+    name TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    released_at TEXT NOT NULL,
+    PRIMARY KEY (scope, name, owner_id)
+  )`);
+};
+
 /** Every change since the first schema (version 100), oldest first: the first is version 101. Never edit a shipped one. */
-export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks, wakes];
+export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks, wakes, releasedNames];

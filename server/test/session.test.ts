@@ -174,7 +174,7 @@ describe("account", () => {
     expect((await callPerson(p, cookie, "POST", "/api/me/password", { current: PASSWORD, next: "another-password" })).status).toBe(403);
   });
 
-  test("POST /api/me/password needs the current password and signs out other sessions", async () => {
+  test("POST /api/me/password needs the current password, ends every session and sets a new cookie", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     const here = signIn(p, chris);
@@ -186,8 +186,9 @@ describe("account", () => {
     expect(await short.json()).toEqual({ error: "bad_request", message: "A password needs 12 characters or more." });
     const ok = await callPerson(p, here, "POST", "/api/me/password", { current: PASSWORD, next: "another-password" });
     expect(ok.status).toBe(204);
-    expect((await callPerson(p, here, "GET", "/api/me")).status).toBe(200);
+    expect((await callPerson(p, here, "GET", "/api/me")).status).toBe(401);
     expect((await callPerson(p, there, "GET", "/api/me")).status).toBe(401);
+    expect((await callPerson(p, cookieFrom(ok), "GET", "/api/me")).status).toBe(200);
     expect((await postSession(p, { name: "Chris", password: "another-password" })).status).toBe(200);
   });
 });

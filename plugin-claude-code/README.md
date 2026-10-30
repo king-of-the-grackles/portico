@@ -8,7 +8,7 @@ Puts Claude Code sessions on Portico:
 
 ## Quick start
 
-Requires [Bun](https://bun.sh) on the `PATH`. The plugin installs its own dependencies the first time it starts.
+Requires [Bun](https://bun.sh) on the `PATH`. The plugin installs its own dependencies the first time it starts, only at the versions in the plugin's `bun.lock`.
 
 ```sh
 claude plugin marketplace add <path or GitHub owner/repo of portico>

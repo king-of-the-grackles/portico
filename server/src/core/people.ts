@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS } from "./limits";
+import { namesOwnedBy, releaseNames } from "./released-names";
 import { hashSecret, LINK_SECRET, newLinkSecret, seal, unseal } from "./tokens";
 import type { Person, PersonStatus, Role } from "./types";
 
@@ -67,7 +68,7 @@ function toPerson(row: PersonRow): Person {
   };
 }
 
-const MAX_PERSON_NAME = 60;
+export const MAX_PERSON_NAME = 60;
 
 /** A person's name as typed: trimmed, on one line, 1 to 60 characters. */
 export function cleanPersonName(value: unknown): string {
@@ -185,9 +186,15 @@ export class People {
     return this.require(id);
   }
 
-  /** Deletes the person and, by cascade, their sign-ins, computers and agents. */
+  /**
+   * Deletes the person and, by cascade, their sign-ins, computers and agents. The names of those agents and computers
+   * are released.
+   */
   remove(id: string): void {
-    this.db.query("DELETE FROM people WHERE id = $id").run({ id });
+    this.db.transaction(() => {
+      releaseNames(this.db, id, namesOwnedBy(this.db, id), this.now());
+      this.db.query("DELETE FROM people WHERE id = $id").run({ id });
+    })();
     this.changes.emit("people", "agents", "threads", "approvals", "computers");
   }
 

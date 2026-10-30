@@ -13,7 +13,7 @@ import { SETUP_LINK_LINE, startupProblem } from "./serve";
 const USAGE = "Usage: portico setup [--reset]";
 
 const RESET_LINK_LINE =
-  "Open this link in a browser to set a new owner password. Every browser signed in as the owner is signed out. The link works once and expires in 1 hour.";
+  "Open this link in a browser to set a new owner password. Every browser signed in as the owner is signed out, and the owner's computers and agents have to join again. The link works once and expires in 1 hour.";
 
 /**
  * `portico setup [--reset]`, run on the host with the same settings as `portico serve`: prints a one-time link (1 h,

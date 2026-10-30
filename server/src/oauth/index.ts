@@ -17,8 +17,13 @@ import { notSetUpPage } from "../web/layout";
 import { type AuthorizeRequest, badRequestPage, CONNECTOR_CHOICES, consentPage, waitingPage } from "./consent";
 import { OAuthProblem, type OAuthClient, OAuthStore, validChallenge } from "./store";
 
-/** Registrations are open to anyone, so they're capped: at most this many an hour. */
-const REGISTRATIONS_PER_HOUR = 100;
+/**
+ * Registrations are open to anyone, so they're capped: this many an hour per address, this many an hour from all
+ * addresses together, and no new ones while this many clients are still unused (no code and no token yet).
+ */
+const REGISTRATIONS_PER_HOUR = 20;
+const ALL_REGISTRATIONS_PER_HOUR = 500;
+const MAX_UNUSED_CLIENTS = 1000;
 const MAX_STATE = 1000;
 
 type Fields = Record<string, unknown>;
@@ -67,6 +72,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
   const route = new Hono<PersonEnv>();
   const store = opts.store ?? new OAuthStore({ db: core.db, agents: core.agents, now: core.now, newId: core.newId });
   const registrations = new WindowLimiter(core.now, REGISTRATIONS_PER_HOUR, HOUR_MS);
+  const allRegistrations = new WindowLimiter(core.now, ALL_REGISTRATIONS_PER_HOUR, HOUR_MS);
   const base = () => core.settings.publicUrl();
 
   // Discovery, registration and tokens carry no cookies, so browser-based MCP clients may call them from anywhere.
@@ -112,8 +118,6 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
   // RFC 7591. Clients are public: whatever authentication a client asks for, Portico answers "none" and relies on PKCE.
   route.post("/oauth/register", jsonBodyLimit(), async (c) => {
     if (!core.settings.setupDone()) throw setupRequired();
-    const address = clientIp(c);
-    if (registrations.blocked(address)) throw new OAuthProblem("temporarily_unavailable", "Too many client registrations. Try again later.", 429);
     let body: unknown;
     try {
       body = await c.req.json();
@@ -121,8 +125,14 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
       throw new OAuthProblem("invalid_client_metadata", "The registration must be a JSON object.");
     }
     if (typeof body !== "object" || body === null) throw new OAuthProblem("invalid_client_metadata", "The registration must be a JSON object.");
+    const address = clientIp(c);
+    // Nothing awaits from the checks to the counts (bun:sqlite is synchronous), so a burst can't all pass the checks first.
+    if (registrations.blocked(address) || allRegistrations.blocked("all") || store.unusedClients() >= MAX_UNUSED_CLIENTS) {
+      throw new OAuthProblem("temporarily_unavailable", "Too many client registrations. Try again later.", 429);
+    }
     const client = store.register(body as Fields);
     registrations.record(address);
+    allRegistrations.record("all");
     return c.json(
       {
         client_id: client.clientId,
@@ -188,7 +198,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
       person,
       client,
       request: { clientId: client.clientId, redirectUri, ...rest.request },
-      name: freeAgentName(core, defaultName(kind, client.name)),
+      name: freeAgentName(core, person.id, defaultName(kind, client.name)),
       kind,
       requestedAt: core.now(),
       cancelUrl: redirectWith(redirectUri, { error: "access_denied", state }),
@@ -290,11 +300,12 @@ function defaultName(kind: AgentKind, clientName: string): string {
   return slugify(clientName, "connector");
 }
 
-/** The first free form of a name: `<base>`, `<base>-2`, … */
-function freeAgentName(core: Core, wanted: string): string {
-  if (!core.agents.byAddress(wanted)) return wanted;
+/** The first form of a name the person can take: `<base>`, `<base>-2`, … */
+function freeAgentName(core: Core, ownerId: string, wanted: string): string {
+  const free = (name: string) => core.agents.nameFree(name, ownerId);
+  if (free(wanted)) return wanted;
   const base = wanted.slice(0, LIMITS.maxNameChars - 3).replace(/-+$/, "") || "connector";
-  if (!core.agents.byAddress(base)) return base;
-  for (let n = 2; n < 100; n++) if (!core.agents.byAddress(`${base}-${n}`)) return `${base}-${n}`;
+  if (free(base)) return base;
+  for (let n = 2; n < 100; n++) if (free(`${base}-${n}`)) return `${base}-${n}`;
   return base;
 }

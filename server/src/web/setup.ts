@@ -29,7 +29,7 @@ export function setupPage(core: Core): Hono<PersonEnv> {
         scripts: ["forms.js"],
         main: html`<div>
   <h1>Reset the owner password</h1>
-  <p class="lead">Set a new password for the owner account. Every browser signed in as the owner is signed out.</p>
+  <p class="lead">Set a new password for the owner account. Every browser signed in as the owner is signed out, and the owner's computers and agents have to join again.</p>
 </div>
 <form class="form-card" data-api="POST /api/setup">
   <label for="reset-pw" class="lbl">New password</label>

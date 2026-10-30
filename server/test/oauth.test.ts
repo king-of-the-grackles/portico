@@ -13,6 +13,7 @@ import {
   addOwner,
   copyProblems,
   DAY,
+  flush,
   HOUR,
   makePortico,
   MINUTE,
@@ -30,13 +31,15 @@ function pkce() {
   return { verifier, challenge: s256(verifier) };
 }
 
-async function register(p: P, body: unknown) {
+async function register(p: P, body: unknown, from?: string) {
   return p.app.request(`${PUBLIC_URL}/oauth/register`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...(from ? { "x-forwarded-for": from } : {}) },
     body: JSON.stringify(body),
   });
 }
+
+const clientCount = (p: P) => (p.db.query("SELECT COUNT(*) AS n FROM oauth_clients").get() as { n: number }).n;
 
 async function client(p: P, name = "Claude Duet", redirectUris = [REDIRECT]) {
   const res = await register(p, { client_name: name, redirect_uris: redirectUris, token_endpoint_auth_method: "none" });
@@ -183,6 +186,87 @@ describe("registration", () => {
   test("closed until setup is done", async () => {
     const p = makePortico({ setup: false });
     expect((await register(p, { redirect_uris: [REDIRECT] })).status).toBe(503);
+  });
+
+  test("parallel registrations from one address can't slip past the 20 an hour while the bodies arrive", async () => {
+    const p = makePortico();
+    const body = new TextEncoder().encode(JSON.stringify({ client_name: "Burst", redirect_uris: [REDIRECT] }));
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const answers = Array.from({ length: 120 }, () =>
+      p.app.request(`${PUBLIC_URL}/oauth/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": String(body.length), "x-forwarded-for": "192.0.2.12" },
+        body: new ReadableStream({
+          async start(controller) {
+            await held;
+            controller.enqueue(body);
+            controller.close();
+          },
+        }),
+      }),
+    );
+    await flush();
+    expect(clientCount(p)).toBe(0);
+    release();
+    const statuses = (await Promise.all(answers)).map((res) => res.status);
+    expect(statuses.filter((status) => status === 201)).toHaveLength(20);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(100);
+    expect(clientCount(p)).toBe(20);
+    const refused = await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.12");
+    expect(refused.status).toBe(429);
+    const problem = await json<{ error: string; error_description: string }>(refused);
+    expect(problem.error).toBe("temporarily_unavailable");
+    expect(copyProblems(problem.error_description)).toEqual([]);
+    expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.13")).status).toBe(201);
+  });
+
+  test("at most 500 an hour from all addresses together", async () => {
+    const p = makePortico();
+    for (let i = 0; i < 500; i++) {
+      expect((await register(p, { redirect_uris: [REDIRECT] }, `10.0.${i >> 8}.${i & 255}`)).status).toBe(201);
+    }
+    expect((await register(p, { redirect_uris: [REDIRECT] }, "10.9.9.9")).status).toBe(429);
+    p.clock.advance(HOUR + MINUTE);
+    expect((await register(p, { redirect_uris: [REDIRECT] }, "10.9.9.9")).status).toBe(201);
+  });
+
+  test("no new registrations while 1000 clients are unused; clients holding a code or token don't count", async () => {
+    const { p, clientId, code, verifier } = await authorized();
+    await exchange(p, clientId, code, verifier);
+    // As after a restart: unused clients already stored, the in-memory limits empty.
+    const insert = p.db.query(
+      "INSERT INTO oauth_clients (id, client_id, name, redirect_uris, created_at) VALUES ($id, $id, 'Flood', '[]', $at)",
+    );
+    for (let i = 0; i < 999; i++) insert.run({ id: `flood-${i}`, at: p.now().toISOString() });
+    expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.1")).status).toBe(201);
+    const refused = await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.2");
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toMatchObject({ error: "temporarily_unavailable" });
+    expect(clientCount(p)).toBe(1001);
+    // An hour on, the minute sweep clears the unused ones and registration opens again.
+    p.clock.advance(HOUR + MINUTE);
+    p.sweepMinute();
+    expect(clientCount(p)).toBe(1);
+    expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.2")).status).toBe(201);
+  });
+
+  test("redirect URIs are bounded by the bytes stored, so escaped control characters can't pad a client", async () => {
+    const p = makePortico();
+    // 750 characters, well under the 2000 a URI may have, but each U+0001 is stored as the 6-byte escape \u0001.
+    const padded = `https://client.example.com/cb/${"\u0001".repeat(700)}/end`;
+    expect(padded.length).toBeLessThan(2000);
+    const res = await register(p, { redirect_uris: [padded] });
+    expect(res.status).toBe(400);
+    const problem = await json<{ error: string; error_description: string }>(res);
+    expect(problem.error).toBe("invalid_redirect_uri");
+    expect(copyProblems(problem.error_description)).toEqual([]);
+    expect(clientCount(p)).toBe(0);
+    // The same length in plain characters fits, as does one URI of the full 2000.
+    expect((await register(p, { redirect_uris: [padded.replaceAll("\u0001", "a")] })).status).toBe(201);
+    expect((await register(p, { redirect_uris: [`https://client.example.com/cb/${"a".repeat(1970)}`] })).status).toBe(201);
+    const stored = p.db.query("SELECT MAX(length(CAST(redirect_uris AS BLOB))) AS n FROM oauth_clients").get() as { n: number };
+    expect(stored.n).toBeLessThanOrEqual(4000);
   });
 });
 
@@ -409,14 +493,33 @@ describe("tokens", () => {
     });
   });
 
-  test("the daily sweep drops expired codes and tokens, and clients that never got a token", async () => {
+  test("the daily sweep drops expired codes and tokens, and the minute sweep clients that never got a token", async () => {
     const { p, clientId, code, verifier } = await authorized();
     await client(p, "Never used");
     await exchange(p, clientId, code, verifier);
     p.clock.advance(8 * DAY);
-    const swept = p.computers.sweep();
-    expect(swept).toMatchObject({ oauthCodes: 1, tokens: 1, oauthClients: 1 });
-    expect((p.db.query("SELECT COUNT(*) AS n FROM oauth_clients").get() as { n: number }).n).toBe(1);
+    expect(p.computers.sweep()).toEqual({ joinLines: 0, oauthCodes: 1, tokens: 1 });
+    expect(p.computers.sweepUnusedClients()).toBe(1);
+    expect(clientCount(p)).toBe(1);
+  });
+
+  test("the minute sweep deletes clients with no code or token after an hour; clients holding either stay", async () => {
+    const { p, cookie, clientId, code, verifier } = await authorized();
+    const tokens = await json<Tokens>(exchange(p, clientId, code, verifier));
+    // A second client holding a code not yet exchanged, and a third that never got either.
+    const pending = await client(p, "Pending");
+    const consent = await postConsent(p, cookie, consentFields(pending, pkce().challenge, { name: "pending", kind: "other" }));
+    expect(consent.status).toBe(200);
+    const unused = await client(p, "Never used");
+    p.clock.advance(59 * MINUTE);
+    p.sweepMinute();
+    expect(clientCount(p)).toBe(3);
+    p.clock.advance(2 * MINUTE);
+    p.sweepMinute();
+    expect(clientCount(p)).toBe(2);
+    expect(p.db.query("SELECT 1 FROM oauth_clients WHERE client_id = $unused").get({ unused })).toBeNull();
+    const refreshed = await token(p, { grant_type: "refresh_token", client_id: clientId, refresh_token: tokens.refresh_token });
+    expect(refreshed.status).toBe(200);
   });
 });
 

@@ -11,7 +11,7 @@ import {
 } from "@simplewebauthn/server";
 import { PorticoError } from "./errors";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
-import { cleanPersonName, type People } from "./people";
+import { cleanPersonName, MAX_PERSON_NAME, type People } from "./people";
 import { cleanPublicUrl, type Settings } from "./settings";
 import { hashSecret, LINK_SECRET, newLinkSecret, newToken } from "./tokens";
 import type { Person } from "./types";
@@ -46,9 +46,17 @@ const TOUCH_INTERVAL_MS = 60_000;
 
 /** Sign in allows this many failures per address and name within the window, */
 const SIGN_IN_FAILURES = 10;
-/** and this many per name from all addresses together, since a client can choose the address it reports. */
+/** and this many per name from all addresses together, since a client can choose the address it reports, */
 const SIGN_IN_FAILURES_PER_NAME = 30;
+/** and this many attempts per address whatever the names, successes included. */
+const SIGN_IN_ATTEMPTS_PER_ADDRESS = 30;
 const SIGN_IN_WINDOW_MS = 15 * MINUTE_MS;
+/** Longer than any IP address written out. Where no proxy adds the address the client chooses it, so keys cut it here. */
+const MAX_SIGN_IN_ADDRESS_CHARS = 64;
+/** At most this many argon2 password checks (64 MiB each) run at once, */
+const MAX_PASSWORD_CHECKS = 2;
+/** and this many wait; an attempt beyond that is refused at once. */
+const MAX_PASSWORD_CHECKS_WAITING = 8;
 
 interface WebSessionRow {
   id: string;
@@ -115,6 +123,39 @@ class FailureLimiter {
   }
 }
 
+/** At most `max` password checks run at once and `queue` more wait their turn; beyond that a check is refused. */
+class PasswordChecks {
+  private running = 0;
+  private readonly waiting: (() => void)[] = [];
+
+  constructor(
+    private readonly max: number,
+    private readonly queue: number,
+  ) {}
+
+  /**
+   * Runs `check` once a place comes up. Not async: the place is taken, or rate_limited thrown, before this returns, so
+   * a caller can count an attempt only once it has a place.
+   */
+  run<T>(check: () => Promise<T>): Promise<T> {
+    let turn: Promise<void>;
+    if (this.running < this.max) {
+      this.running++;
+      turn = Promise.resolve();
+    } else if (this.waiting.length < this.queue) {
+      turn = new Promise((resolve) => this.waiting.push(resolve));
+    } else {
+      throw new PorticoError("rate_limited", "Too many sign in attempts right now. Try again in a minute.");
+    }
+    return turn.then(check).finally(() => {
+      // A finished check hands its place straight to the next one waiting.
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.running--;
+    });
+  }
+}
+
 export interface AccountsDeps {
   db: Database;
   people: People;
@@ -133,6 +174,9 @@ export class Accounts {
   private readonly newId: () => string;
   private readonly signInFailures: FailureLimiter;
   private readonly nameFailures: FailureLimiter;
+  private readonly addressAttempts: FailureLimiter;
+  /** Every sign-in password check, server-wide. */
+  private readonly passwordChecks: PasswordChecks;
   /** A hash to verify against when the name is unknown, so a wrong name takes as long as a wrong password. */
   private decoyHash: Promise<string> | null = null;
   readonly passkeys: Passkeys;
@@ -144,6 +188,8 @@ export class Accounts {
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.signInFailures = new FailureLimiter(SIGN_IN_FAILURES, SIGN_IN_WINDOW_MS, this.now);
     this.nameFailures = new FailureLimiter(SIGN_IN_FAILURES_PER_NAME, SIGN_IN_WINDOW_MS, this.now);
+    this.addressAttempts = new FailureLimiter(SIGN_IN_ATTEMPTS_PER_ADDRESS, SIGN_IN_WINDOW_MS, this.now);
+    this.passwordChecks = new PasswordChecks(MAX_PASSWORD_CHECKS, MAX_PASSWORD_CHECKS_WAITING);
     this.passkeys = new Passkeys({ db: this.db, people: this.people, now: this.now, newId: this.newId });
   }
 
@@ -192,45 +238,78 @@ export class Accounts {
   // ---- sign in and passwords ----
 
   /**
-   * The person with this name and password. A wrong name and a wrong password get the same answer. 10 failures in 15
-   * minutes from one address for one name, or 30 for one name from anywhere, stop further attempts until the oldest
-   * leaves the window. Each attempt counts as a failure before the slow check, so parallel attempts can't all slip
-   * past the limit; a success clears the count.
+   * The person with this name and password. A wrong name and a wrong password get the same answer, and so does a name
+   * or password longer than any person's, without being counted or checked. 10 failures in 15 minutes from one address
+   * for one name, 30 for one name from anywhere, or 30 attempts of any kind from one address stop further attempts
+   * until the oldest leaves the window. Each attempt counts before the slow check, so parallel attempts can't all slip
+   * past the limits; a success clears the counts per name, not the one per address. "local" (no proxy reported an
+   * address) is every client at once, so it gets no per-address cap: one client could lock out everyone. While every
+   * place for a password check is taken, an attempt is refused at once and not counted.
    */
   async signIn(input: { name: unknown; password: unknown; ip: string }): Promise<Person> {
     const name = typeof input.name === "string" ? input.name.replace(/\s+/g, " ").trim() : "";
     const password = typeof input.password === "string" ? input.password : "";
     if (name === "" || password === "") throw new PorticoError("bad_request", "Enter a name and password.");
-    const key = `sign-in\n${input.ip}\n${name.toLowerCase()}`;
+    if (Array.from(name).length > MAX_PERSON_NAME || Array.from(password).length > MAX_PASSWORD_CHARS) {
+      throw new PorticoError("unauthorized", "Wrong name or password.");
+    }
+    const address = input.ip.slice(0, MAX_SIGN_IN_ADDRESS_CHARS);
+    const addressKey = `sign-in-address\n${address}`;
+    const key = `sign-in\n${address}\n${name.toLowerCase()}`;
     const nameKey = `sign-in\n${name.toLowerCase()}`;
+    const perAddress = address !== "local";
+    if (perAddress) this.addressAttempts.check(addressKey, "sign in");
     this.signInFailures.check(key, "sign in");
     this.nameFailures.check(nameKey, "sign in");
+    // A place first, so an attempt refused while every place is taken stores nothing.
+    const check = this.passwordChecks.run(async () => {
+      const person = this.people.byName(name);
+      const hash = person ? this.people.passwordHash(person.id) : null;
+      const ok = await verifyPassword(password, hash ?? (await this.decoy()));
+      return person && hash && ok ? person : null;
+    });
+    if (perAddress) this.addressAttempts.fail(addressKey);
     this.signInFailures.fail(key);
     this.nameFailures.fail(nameKey);
-    const person = this.people.byName(name);
-    const hash = person ? this.people.passwordHash(person.id) : null;
-    const ok = await verifyPassword(password, hash ?? (await this.decoy()));
-    if (!person || !hash || !ok) throw new PorticoError("unauthorized", "Wrong name or password.");
+    const person = await check;
+    if (!person) throw new PorticoError("unauthorized", "Wrong name or password.");
     this.signInFailures.clear(key);
     this.nameFailures.clear(nameKey);
     return person;
   }
 
-  /** Sets a new password after checking the current one, and signs the person out everywhere but `keepToken`. */
-  async changePassword(personId: string, input: { current: unknown; next: unknown; keepToken?: string }): Promise<void> {
+  /**
+   * Fresh proof for a change to how the person signs in (a new password, a new passkey): the current password. 10
+   * wrong answers in 15 minutes per person stop further attempts, across every change that asks.
+   */
+  async confirmPassword(personId: string, current: unknown): Promise<void> {
     const key = `password\n${personId}`;
     this.signInFailures.check(key, "password");
-    const next = checkNewPassword(input.next);
     const hash = this.people.passwordHash(personId);
     if (!hash) throw new PorticoError("not_found", "No such person.");
     // Counted before the slow check, as in signIn, so parallel attempts can't all slip past the limit.
     this.signInFailures.fail(key);
-    if (typeof input.current !== "string" || !(await verifyPassword(input.current, hash))) {
+    if (typeof current !== "string" || !(await verifyPassword(current, hash))) {
       throw new PorticoError("bad_request", "The current password is wrong.");
     }
     this.signInFailures.clear(key);
-    this.people.setPasswordHash(personId, await hashPassword(next));
-    this.endSessionsFor(personId, input.keepToken);
+  }
+
+  /**
+   * Sets a new password after checking the current one. A change answers a suspected break-in, so in one go it also
+   * removes the person's passkeys and ends every browser session, this one included; the caller signs this browser
+   * back in with the session returned.
+   */
+  async changePassword(personId: string, input: { current: unknown; next: unknown }): Promise<{ token: string; expiresAt: string }> {
+    const next = checkNewPassword(input.next);
+    await this.confirmPassword(personId, input.current);
+    const hash = await hashPassword(next);
+    return this.db.transaction(() => {
+      this.people.setPasswordHash(personId, hash);
+      this.db.query("DELETE FROM passkeys WHERE person_id = $personId").run({ personId });
+      this.endSessionsFor(personId);
+      return this.startSession(personId);
+    })();
   }
 
   private decoy(): Promise<string> {
@@ -259,9 +338,9 @@ export class Accounts {
 
   /**
    * Uses a setup link. Before setup: creates the owner with the name and password, and confirms the public URL. After
-   * setup (a link from `portico setup --reset`): sets a new owner password, removes the owner's passkeys and signs the
-   * owner out everywhere, so whoever forced the recovery keeps no way back in. Everything is checked before the link is
-   * used up.
+   * setup (a link from `portico setup --reset`): sets a new owner password, removes the owner's passkeys, signs the
+   * owner out everywhere and revokes what the owner account made (revokeOwnerCredentials), so whoever forced the
+   * recovery keeps no way back in. Everything is checked before the link is used up.
    */
   async setUp(settings: Settings, input: SetupInput): Promise<{ person: Person; recovered: boolean }> {
     const token = typeof input.token === "string" ? input.token : "";
@@ -276,6 +355,7 @@ export class Accounts {
         this.people.setPasswordHash(owner.id, hash);
         this.db.query("DELETE FROM passkeys WHERE person_id = $personId").run({ personId: owner.id });
         this.endSessionsFor(owner.id);
+        this.revokeOwnerCredentials(owner.id);
       })();
       return { person: owner, recovered: true };
     }
@@ -296,6 +376,32 @@ export class Accounts {
       return owner;
     })();
     return { person, recovered: false };
+  }
+
+  /**
+   * Recovery's revocations beyond the browser: whatever the owner account made can carry the evicted party's access
+   * too. The owner's computers keep their rows but their tokens fail, so each joins again with a new line. Agents the
+   * owner manages lose their app, access and refresh tokens. Unused join lines and unexchanged OAuth codes go. Sign-in
+   * requests from the owner's lines never hand over a token: pending ones expire, and approved ones count as issued.
+   * Call inside the recovery's transaction; the caller closes the agents' open streams once it commits.
+   */
+  private revokeOwnerCredentials(ownerId: string): void {
+    const owner = { personId: ownerId };
+    const ownerAgents = "SELECT id FROM agents WHERE owner_id = $personId";
+    const ownerLines = "SELECT id FROM join_lines WHERE created_by = $personId";
+    this.db.query("UPDATE computers SET token_hash = 'revoked:' || id WHERE owner_id = $personId").run(owner);
+    this.db.query(`DELETE FROM agent_tokens WHERE agent_id IN (${ownerAgents})`).run(owner);
+    this.db.query(`DELETE FROM oauth_codes WHERE used_at IS NULL AND agent_id IN (${ownerAgents})`).run(owner);
+    this.db
+      .query(`UPDATE sign_in_requests SET status = 'expired' WHERE status = 'pending' AND join_line_id IN (${ownerLines})`)
+      .run(owner);
+    this.db
+      .query(
+        `UPDATE sign_in_requests SET issued_at = $at
+         WHERE status = 'approved' AND issued_at IS NULL AND join_line_id IN (${ownerLines})`,
+      )
+      .run({ ...owner, at: this.now().toISOString() });
+    this.db.query("DELETE FROM join_lines WHERE created_by = $personId AND used_at IS NULL").run(owner);
   }
 
   /** The usable link with this secret. Throws not_found for an unknown one, wrong_status for one used or expired. */
@@ -321,6 +427,13 @@ export class Accounts {
   private useSetupLink(token: string): void {
     const row = this.setupLink(token);
     this.db.query("UPDATE setup_links SET used_at = $at WHERE id = $id").run({ id: row.id, at: this.now().toISOString() });
+  }
+
+  /** Every minute: forgets sign-in limiter keys with nothing left in the window. */
+  sweepLimiters(): void {
+    this.addressAttempts.sweep();
+    this.signInFailures.sweep();
+    this.nameFailures.sweep();
   }
 
   /** Daily: deletes expired browser sessions and setup links, and forgets old sign-in failures. */

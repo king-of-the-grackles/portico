@@ -14,6 +14,8 @@ export const CODE_MS = 10 * MINUTE_MS;
 
 const MAX_REDIRECT_URIS = 10;
 const MAX_URI_CHARS = 2000;
+/** The most bytes a client's redirect URIs take as stored: the UTF-8 JSON, where a control character escapes to 6 bytes. */
+const MAX_REDIRECT_URI_BYTES = 4000;
 const MAX_CLIENT_NAME = 60;
 /** Schemes a redirect URI may never use. Private-use schemes of native apps (e.g. `cursor://`) are allowed. */
 const FORBIDDEN_SCHEMES = new Set(["javascript:", "data:", "file:", "vbscript:", "about:", "blob:", "filesystem:"]);
@@ -122,6 +124,10 @@ export class OAuthStore {
       redirectUris: [...new Set(uris.map(checkRedirectUri))],
       createdAt: this.iso(),
     };
+    const stored = JSON.stringify(client.redirectUris);
+    if (Buffer.byteLength(stored, "utf8") > MAX_REDIRECT_URI_BYTES) {
+      throw new OAuthProblem("invalid_redirect_uri", `The redirect URIs must take at most ${MAX_REDIRECT_URI_BYTES} bytes in all.`);
+    }
     this.deps.db
       .query(
         `INSERT INTO oauth_clients (id, client_id, name, redirect_uris, created_at)
@@ -131,11 +137,23 @@ export class OAuthStore {
         id: this.deps.newId(),
         clientId: client.clientId,
         name: client.name,
-        uris: JSON.stringify(client.redirectUris),
+        uris: stored,
         createdAt: client.createdAt,
       });
     log("info", "oauth_client_registered", { client_id: client.clientId });
     return client;
+  }
+
+  /** Registered clients with no code and no token yet. */
+  unusedClients(): number {
+    const row = this.deps.db
+      .query(
+        `SELECT COUNT(*) AS n FROM oauth_clients
+         WHERE client_id NOT IN (SELECT client_id FROM agent_tokens WHERE client_id IS NOT NULL)
+           AND client_id NOT IN (SELECT client_id FROM oauth_codes)`,
+      )
+      .get() as { n: number };
+    return row.n;
   }
 
   client(clientId: unknown): OAuthClient | null {

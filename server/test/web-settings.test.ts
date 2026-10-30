@@ -106,7 +106,7 @@ describe("Settings renders every board state", () => {
     expect(t).toContain("macbook 3 sessions. Seen just now.");
     expect(t).toContain("studio 2 sessions, 1 offline. Seen yesterday at 6:04 PM.");
     expect(t).toContain("Name Chris");
-    expect(t).toContain("Changing the password signs out other browsers.");
+    expect(t).toContain("Changing the password removes passkeys and signs out other browsers.");
     expect(t).toContain("Passkeys Sign in without a password.");
     expect(t).toContain("MacBook Touch ID Added Oct 19. Used today.");
     expect(t).toContain("Sign out Ends the Portico session in this browser.");
@@ -198,16 +198,17 @@ describe("Settings renders every board state", () => {
     const t = text(html);
     expect(t).toContain("Current password");
     expect(t).toContain("New password");
-    expect(t).toContain("At least 12 characters. Every other browser signs out.");
+    expect(t).toContain("At least 12 characters. Passkeys are removed and every other browser signs out.");
     expect(html).toContain('autocomplete="current-password"');
     expect(html).toContain('autocomplete="new-password"');
     expect(text(render(settings({ passwordChanged: true })))).toContain("Changed just now.");
   });
 
-  test("passkeys: add asks for a name; hidden when the browser can't make one", () => {
-    const html = render(settings({ passkeyForm: { name: "", error: "" } }));
+  test("passkeys: add asks for a name and the current password; hidden when the browser can't make one", () => {
+    const html = render(settings({ passkeyForm: { name: "", current: "", error: "" } }));
     expect(text(html)).toContain("Shown in this list, such as MacBook Touch ID.");
-    inOrder(html, 'data-form="passkey-add"', ">Cancel<", "Add passkey");
+    expect(text(html)).toContain("Current password Adding a passkey needs the current password.");
+    inOrder(html, 'data-form="passkey-add"', 'id="pk-name"', 'id="pk-current"', 'autocomplete="current-password"', ">Cancel<", "Add passkey");
     expect(render(settings({ passkeysSupported: false }))).not.toContain('data-action="passkey-open"');
     expect(render(settings({ passkeys: null }))).not.toContain("Passkeys");
   });

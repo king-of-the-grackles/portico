@@ -8,6 +8,7 @@ import { defang } from "./framing";
 import { isBroadcast } from "./guards";
 import { DAY_MS, HOUR_MS, LIMITS, NAME } from "./limits";
 import type { Presence } from "./presence";
+import { releasedByOther, releaseNames } from "./released-names";
 import { hashSecret, newToken } from "./tokens";
 import { AGENT_KINDS } from "./types";
 import type { Agent, AgentKind, AgentType, Computer, DeliveryTier, DirectoryEntry, LiveStatus } from "./types";
@@ -333,7 +334,7 @@ export class Agents {
         name: agent.name,
       }) as { n: number }
     ).n;
-    return n === 1 ? agent.name : addressOf(agent);
+    return n === 1 && !this.releasedByOther(agent.name, agent.ownerId) ? agent.name : addressOf(agent);
   }
 
   /**
@@ -409,8 +410,8 @@ export class Agents {
   }
 
   /**
-   * The agent a sender means by `to`: an exact address, or a session's short name when only one session has it.
-   * Patterns are refused, since a message goes to one agent.
+   * The agent a sender means by `to`: an exact address, or a session's short name when only one session has it and no
+   * other person let the name go within the history window. Patterns are refused, since a message goes to one agent.
    */
   resolve(to: unknown, callerId: string): Agent {
     if (typeof to !== "string" || to.trim() === "") throw new PorticoError("bad_request", "to must be an agent name.");
@@ -425,7 +426,14 @@ export class Agents {
           name: to,
         }) as AgentRow[]
       ).map(toAgent);
-      if (named.length === 1) return named[0]!;
+      if (named.length === 1) {
+        const only = named[0]!;
+        if (!this.releasedByOther(to, only.ownerId)) return only;
+        throw new PorticoError(
+          "unknown_agent",
+          `The name "${to}" moved to a different person's agent recently. Use the full address to send there: ${addressOf(only)}.`,
+        );
+      }
       if (named.length > 1) {
         const addresses = named.map(addressOf).join(", ");
         throw new PorticoError("unknown_agent", `"${to}" is on ${named.length} computers. Use one of: ${addresses}.`);
@@ -600,13 +608,17 @@ export class Agents {
 
   // ---- apps and connectors ----
 
-  /** An app or connector agent. Throws `conflict` when another app or connector has the name. */
+  /**
+   * An app or connector agent. Throws `conflict` when another agent has the name, or another person let the name go
+   * within the history window.
+   */
   create(input: { ownerId: string; name: unknown; kind: unknown; type: "app" | "connector"; description?: unknown }): Agent {
     const name = checkAgentName(input.name);
     if (!AGENT_KINDS.some((kind) => kind === input.kind)) {
       throw new PorticoError("bad_request", `kind must be one of: ${AGENT_KINDS.join(", ")}.`);
     }
     if (this.nameTaken(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
+    this.refuseReleased(name, input.ownerId);
     const id = this.newId();
     this.insert({
       id,
@@ -625,6 +637,11 @@ export class Agents {
     this.activity?.record("agent_joined", { agentId: id, personId: input.ownerId, detail: { via: input.type } });
     this.changes.emit("agents");
     return this.require(id);
+  }
+
+  /** Whether create would give the person's new app or connector this name. */
+  nameFree(name: string, ownerId: string): boolean {
+    return !this.nameTaken(name) && !this.releasedByOther(name, ownerId);
   }
 
   /** Mints a token for the agent, returned only here and stored only as a hash. */
@@ -680,7 +697,11 @@ export class Agents {
     return agent;
   }
 
-  /** Name and description edits go live at once. A name already in use answers `conflict`. */
+  /**
+   * Name and description edits go live at once. A name already in use answers `conflict`: for a session, a name on its
+   * computer or one another person's agent goes by; for an app or connector, any agent's name. So does a name another
+   * person let go within the history window. A rename releases the old name.
+   */
   update(personId: string, agentId: string, changes: AgentChanges): Agent {
     const agent = this.requireManaged(personId, agentId);
     const folderBefore = this.joinsFromFolder(agent);
@@ -693,9 +714,10 @@ export class Agents {
         const taken = agent.computerId
           ? this.db
               .query("SELECT 1 FROM agents WHERE computer_id = $computerId AND name = $name")
-              .get({ computerId: agent.computerId, name })
+              .get({ computerId: agent.computerId, name }) !== null || this.usedByOther(name, agent.ownerId)
           : this.nameTaken(name, agent.id);
         if (taken) throw new PorticoError("conflict", `The name ${name} is already in use.`);
+        this.refuseReleased(name, agent.ownerId);
         sets.push("name = $name");
         bindings.name = name;
         renamed = true;
@@ -724,6 +746,7 @@ export class Agents {
       this.computers.setFolder(agent.computerId, agent.folderId, agent.folder ?? "session", changes.joinFromFolder);
     }
     if (sets.length > 0) this.db.query(`UPDATE agents SET ${sets.join(", ")} WHERE id = $id`).run(bindings);
+    if (renamed) releaseNames(this.db, agent.ownerId, [{ scope: "agent", name: agent.name }], this.now());
     const updated = this.require(agent.id);
     const record = (
       kind: "renamed" | "description_changed" | "approval_switched" | "folder_switched",
@@ -788,10 +811,13 @@ export class Agents {
     return this.computers.folderJoins(agent.computerId, agent.folderId) !== false;
   }
 
-  /** Removes the agent, its credentials and its threads, and signs it out. */
+  /** Removes the agent, its credentials and its threads, and signs it out. The name is released. */
   remove(personId: string, agentId: string): Agent {
     const agent = this.requireManaged(personId, agentId);
-    this.db.query("DELETE FROM agents WHERE id = $id").run({ id: agent.id });
+    this.db.transaction(() => {
+      releaseNames(this.db, agent.ownerId, [{ scope: "agent", name: agent.name }], this.now());
+      this.db.query("DELETE FROM agents WHERE id = $id").run({ id: agent.id });
+    })();
     this.activity?.record("agent_removed", { personId, detail: { name: addressOf(agent), kind: agent.kind } });
     this.forget([agent.id]);
     this.log("agent_removed", { agent_id: agent.id });
@@ -832,6 +858,29 @@ export class Agents {
       .query("SELECT id FROM agents WHERE name = $name AND id != $exceptId LIMIT 1")
       .get({ name, exceptId: exceptId ?? "" });
     return row !== null;
+  }
+
+  /**
+   * Whether another person's agent goes by the name. A session taking it would be one rename or removal away from
+   * receiving that agent's messages.
+   */
+  private usedByOther(name: string, ownerId: string): boolean {
+    return this.db.query("SELECT 1 FROM agents WHERE name = $name AND owner_id != $ownerId LIMIT 1").get({ name, ownerId }) !== null;
+  }
+
+  /** Whether another person let the name go within the history window, so the name still stays with them. */
+  private releasedByOther(name: string, ownerId: string): boolean {
+    return releasedByOther(this.db, "agent", name, ownerId, this.now());
+  }
+
+  /** Throws `conflict` when another person let the name go within the history window. */
+  private refuseReleased(name: string, ownerId: string): void {
+    if (this.releasedByOther(name, ownerId)) {
+      throw new PorticoError(
+        "conflict",
+        `The name ${name} was in use until recently. A released name stays reserved for ${LIMITS.historyDays} days.`,
+      );
+    }
   }
 
   private sessionsOn(computerId: string): Agent[] {

@@ -1101,7 +1101,8 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
       "password",
       async () => {
         await api("POST", "/api/me/password", { current: form.current, next: form.next });
-        page.set({ passwordForm: null, passwordChanged: true });
+        // The change removed every passkey; the answer signed this browser back in.
+        page.set({ passwordForm: null, passwordChanged: true, passkeys: s().passkeys === null ? null : [] });
       },
       (message) => page.set({ passwordForm: { ...form, current: "", error: message } }),
     );
@@ -1112,18 +1113,19 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
     if (!form) return;
     const name = form.name.trim();
     if (!name) return page.set({ passkeyForm: { ...form, error: "Enter a name." } });
+    if (!form.current) return page.set({ passkeyForm: { ...form, error: "Enter the current password." } });
     if (!passkeys || s().busy) return;
     page.set({ busy: "passkey" });
     passkeys
-      .addPasskey(name)
+      .addPasskey(name, form.current)
       .then(async () => {
         page.set({ passkeyForm: null });
         await loadPasskeys();
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) return void failure(err);
-        const current = s().passkeyForm;
-        if (current) page.set({ passkeyForm: { ...current, error: passkeys!.passkeyProblem(err) } });
+        const latest = s().passkeyForm;
+        if (latest) page.set({ passkeyForm: { ...latest, current: "", error: passkeys!.passkeyProblem(err) } });
       })
       .finally(() => page.set({ busy: null }));
   };
@@ -1147,7 +1149,8 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
       else if (name === "name-field" && s().nameForm) page.set({ nameForm: { name: value, error: "" } });
       else if (name === "pw-current" && s().passwordForm) page.set({ passwordForm: { ...s().passwordForm!, current: value, error: "" } });
       else if (name === "pw-next" && s().passwordForm) page.set({ passwordForm: { ...s().passwordForm!, next: value, error: "" } });
-      else if (name === "pk-name" && s().passkeyForm) page.set({ passkeyForm: { name: value, error: "" } });
+      else if (name === "pk-name" && s().passkeyForm) page.set({ passkeyForm: { ...s().passkeyForm!, name: value, error: "" } });
+      else if (name === "pk-current" && s().passkeyForm) page.set({ passkeyForm: { ...s().passkeyForm!, current: value, error: "" } });
       else if (name === "add-req-name") add.setName(value);
     },
     form(name) {
@@ -1271,7 +1274,7 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
         case "password-cancel":
           return page.set({ passwordForm: null });
         case "passkey-open":
-          return page.set({ passkeyForm: { name: "", error: "" } });
+          return page.set({ passkeyForm: { name: "", current: "", error: "" } });
         case "passkey-cancel":
           return page.set({ passkeyForm: null });
         case "passkey-remove":
@@ -1303,7 +1306,7 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
 
 /** The Accounts track's browser module: the WebAuthn ceremony for adding a passkey. */
 interface PasskeyModule {
-  addPasskey(name: string): Promise<PasskeyView>;
+  addPasskey(name: string, current: string): Promise<PasskeyView>;
   passkeysSupported(): boolean;
   passkeyProblem(err: unknown): string;
 }

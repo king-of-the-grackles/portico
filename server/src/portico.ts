@@ -228,6 +228,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       sweep("event_subscriptions", () => events.sweep());
       sweep("desk", () => desk.sweep());
       sweep("computers_minute", () => computers.sweepMinute());
+      sweep("oauth_clients", () => computers.sweepUnusedClients());
+      sweep("sign_in_limits", () => accounts.sweepLimiters());
     },
     sweepDaily() {
       sweep("history", () => messages.prune());

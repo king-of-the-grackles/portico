@@ -69,9 +69,9 @@ export async function signInWithPasskey(next: string): Promise<string> {
   return answer.next;
 }
 
-/** Adds a passkey for the signed-in person, labeled with name (e.g. "MacBook Touch ID"). */
-export async function addPasskey(name: string): Promise<PasskeyView> {
-  const { options } = await api<{ options: Json }>("POST", "/api/passkeys/options");
+/** Adds a passkey for the signed-in person, labeled with name (e.g. "MacBook Touch ID"). Needs the current password. */
+export async function addPasskey(name: string, current: string): Promise<PasskeyView> {
+  const { options } = await api<{ options: Json }>("POST", "/api/passkeys/options", { current });
   const user = options.user as { id: string; name: string; displayName: string };
   const credential = (await navigator.credentials.create({
     publicKey: {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { checkNewPassword, verifyPassword } from "../src/core/accounts";
 import { PorticoError } from "../src/core/errors";
-import { addMember, addOwner, errorCode, HOUR, makePortico, MINUTE, PASSWORD, PUBLIC_URL } from "./helpers";
+import { addMember, addOwner, copyProblems, errorCode, HOUR, makePortico, MINUTE, PASSWORD, PUBLIC_URL } from "./helpers";
 
 async function rejects(promise: Promise<unknown>): Promise<{ code: string; message: string }> {
   try {
@@ -153,6 +153,101 @@ describe("sign in", () => {
   });
 });
 
+/** Every key the sign-in limiters hold. They're private, so this reads them the way a heap dump would. */
+function limiterKeys(p: ReturnType<typeof makePortico>): string[] {
+  type Limiter = { failures: Map<string, number[]> } | undefined;
+  const limiters = p.accounts as unknown as Record<"addressAttempts" | "signInFailures" | "nameFailures", Limiter>;
+  return [limiters.addressAttempts, limiters.signInFailures, limiters.nameFailures].flatMap((limiter) => [...(limiter?.failures.keys() ?? [])]);
+}
+
+describe("sign in limits that don't depend on the name", () => {
+  test("30 attempts in 15 minutes from one address, whatever the names, stop sign in; a success counts too", async () => {
+    const p = makePortico();
+    await addOwner(p);
+    expect((await p.accounts.signIn({ name: "Chris", password: PASSWORD, ip: "1.2.3.4" })).name).toBe("Chris");
+    // In batches of 10, all the password checks take at once, so both places that run them are kept busy.
+    for (let first = 1; first < 30; first += 10) {
+      const names = Array.from({ length: Math.min(10, 30 - first) }, (_, i) => `Nobody ${first + i}`);
+      const answers = await Promise.all(names.map((name) => rejects(p.accounts.signIn({ name, password: "wrong-password", ip: "1.2.3.4" }))));
+      for (const answer of answers) expect(answer.code).toBe("unauthorized");
+    }
+    const limited = await rejects(p.accounts.signIn({ name: "Nobody 30", password: "wrong-password", ip: "1.2.3.4" }));
+    expect(limited.code).toBe("rate_limited");
+    expect(copyProblems(limited.message)).toEqual([]);
+    expect((await rejects(p.accounts.signIn({ name: "Chris", password: PASSWORD, ip: "1.2.3.4" }))).code).toBe("rate_limited");
+    expect((await p.accounts.signIn({ name: "Chris", password: PASSWORD, ip: "5.6.7.8" })).name).toBe("Chris");
+    p.clock.advance(15 * MINUTE);
+    expect((await p.accounts.signIn({ name: "Chris", password: PASSWORD, ip: "1.2.3.4" })).name).toBe("Chris");
+  });
+
+  test("\"local\" (no proxy reported an address) has no per-address cap, so one client can't lock out everyone", async () => {
+    const p = makePortico();
+    await addOwner(p);
+    for (let first = 0; first < 40; first += 10) {
+      const names = Array.from({ length: 10 }, (_, i) => `Nobody ${first + i}`);
+      const answers = await Promise.all(names.map((name) => rejects(p.accounts.signIn({ name, password: "wrong-password", ip: "local" }))));
+      for (const answer of answers) expect(answer.code).toBe("unauthorized");
+    }
+    expect((await p.accounts.signIn({ name: "Chris", password: PASSWORD, ip: "local" })).name).toBe("Chris");
+  });
+
+  test("a name over 60 characters or a password over 1,000 gets the usual 401, uncounted and unchecked", async () => {
+    const p = makePortico();
+    await addOwner(p);
+    const usual = { code: "unauthorized", message: "Wrong name or password." };
+    expect(await rejects(p.accounts.signIn({ name: "x".repeat(61), password: "wrong-password", ip: "1.2.3.4" }))).toEqual(usual);
+    expect(await rejects(p.accounts.signIn({ name: "Chris", password: "x".repeat(1001), ip: "1.2.3.4" }))).toEqual(usual);
+    expect(limiterKeys(p)).toEqual([]);
+    // Refused before any password check: the decoy hash a check against an unknown name needs was never made.
+    expect((p.accounts as unknown as { decoyHash: unknown }).decoyHash).toBeNull();
+    // 60 characters is still a name.
+    expect(await rejects(p.accounts.signIn({ name: "x".repeat(60), password: "wrong-password", ip: "1.2.3.4" }))).toEqual(usual);
+    expect(limiterKeys(p)).toHaveLength(3);
+  });
+
+  test("2 password checks run and 8 wait; while they do, more attempts get 429 at once and aren't counted", async () => {
+    const p = makePortico();
+    await addOwner(p);
+    let settled = 0;
+    const waiting = Array.from({ length: 10 }, (_, i) =>
+      rejects(p.accounts.signIn({ name: `Nobody ${i}`, password: "wrong-password", ip: `10.0.0.${i}` })).finally(() => settled++),
+    );
+    const keys = limiterKeys(p);
+    const refused = await rejects(p.accounts.signIn({ name: "Chris", password: PASSWORD, ip: "10.0.1.1" }));
+    expect(refused.code).toBe("rate_limited");
+    expect(copyProblems(refused.message)).toEqual([]);
+    expect(settled).toBe(0);
+    expect(limiterKeys(p)).toEqual(keys);
+    for (const answer of await Promise.all(waiting)) expect(answer.code).toBe("unauthorized");
+    expect((await p.accounts.signIn({ name: "Chris", password: PASSWORD, ip: "10.0.1.1" })).name).toBe("Chris");
+  });
+
+  test("an address the client makes up is cut to 64 characters in limiter keys", async () => {
+    const p = makePortico();
+    await addOwner(p);
+    const res = await p.app.request(`${PUBLIC_URL}/api/session`, {
+      method: "POST",
+      headers: { host: "portico.example.com", "content-type": "application/json", "x-forwarded-for": "7".repeat(10_000) },
+      body: JSON.stringify({ name: "Chris", password: "wrong-password" }),
+    });
+    expect(res.status).toBe(401);
+    const keys = limiterKeys(p);
+    for (const key of keys) expect(key).not.toContain("7".repeat(65));
+    expect(keys.filter((key) => key.includes("7".repeat(64)))).toHaveLength(2);
+  });
+
+  test("the minute sweep forgets sign-in keys with nothing left in the window", async () => {
+    const p = makePortico();
+    await addOwner(p);
+    await rejects(p.accounts.signIn({ name: "Nobody", password: "wrong-password", ip: "1.2.3.4" }));
+    p.clock.advance(14 * MINUTE);
+    await rejects(p.accounts.signIn({ name: "Somebody", password: "wrong-password", ip: "5.6.7.8" }));
+    p.clock.advance(2 * MINUTE);
+    p.sweepMinute();
+    expect(limiterKeys(p).sort()).toEqual(["sign-in-address\n5.6.7.8", "sign-in\n5.6.7.8\nsomebody", "sign-in\nsomebody"].sort());
+  });
+});
+
 describe("passwords", () => {
   test("a new password needs 12 characters or more", () => {
     expect(errorCode(() => checkNewPassword("eleven-char"))).toBe("bad_request");
@@ -161,17 +256,18 @@ describe("passwords", () => {
     expect(checkNewPassword("twelve-chars")).toBe("twelve-chars");
   });
 
-  test("changing the password needs the current one and signs out every other session", async () => {
+  test("changing the password needs the current one, ends every session and starts a new one", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     const here = p.accounts.startSession(chris.id).token;
     const elsewhere = p.accounts.startSession(chris.id).token;
-    const wrong = await rejects(p.accounts.changePassword(chris.id, { current: "not-the-password", next: NEW_PASSWORD, keepToken: here }));
+    const wrong = await rejects(p.accounts.changePassword(chris.id, { current: "not-the-password", next: NEW_PASSWORD }));
     expect(wrong).toEqual({ code: "bad_request", message: "The current password is wrong." });
     expect(p.accounts.personForSession(elsewhere)?.id).toBe(chris.id);
-    await p.accounts.changePassword(chris.id, { current: PASSWORD, next: NEW_PASSWORD, keepToken: here });
-    expect(p.accounts.personForSession(here)?.id).toBe(chris.id);
+    const fresh = await p.accounts.changePassword(chris.id, { current: PASSWORD, next: NEW_PASSWORD });
+    expect(p.accounts.personForSession(here)).toBeNull();
     expect(p.accounts.personForSession(elsewhere)).toBeNull();
+    expect(p.accounts.personForSession(fresh.token)?.id).toBe(chris.id);
     expect((await p.accounts.signIn({ name: "Chris", password: NEW_PASSWORD, ip: "local" })).id).toBe(chris.id);
   });
 

@@ -146,12 +146,12 @@ export function renderAccount(s: SettingsState): string {
         <input id="pw-current" type="password" class="field field-narrow" value="${esc(pw.current)}" data-input="pw-current" autocomplete="current-password" data-autofocus>
         <label for="pw-next" class="lbl mt8">New password</label>
         <input id="pw-next" type="password" class="field field-narrow${when(pw.error, " is-invalid")}" value="${esc(pw.next)}" data-input="pw-next" autocomplete="new-password" aria-describedby="pw-help" aria-invalid="${Boolean(pw.error)}">
-        <span id="pw-help" class="help">At least 12 characters. Every other browser signs out.</span>
+        <span id="pw-help" class="help">At least 12 characters. Passkeys are removed and every other browser signs out.</span>
         ${when(pw.error, `<span role="alert" class="field-error">${esc(pw.error)}</span>`)}
         <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="password-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "password", " disabled")}>Change password</button></span>
       </form></li>`
     : `<li class="srow" data-key="acct-password"><span class="row-text"><strong>Password</strong><span class="row-help">${
-        s.passwordChanged ? "Changed just now." : "Changing the password signs out other browsers."
+        s.passwordChanged ? "Changed just now." : "Changing the password removes passkeys and signs out other browsers."
       }</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="password-open">Change password</button></span></li>`;
   const pk = s.passkeyForm;
   const passkeys =
@@ -168,6 +168,9 @@ export function renderAccount(s: SettingsState): string {
         <label for="pk-name" class="lbl">Passkey name</label>
         <input id="pk-name" class="field field-narrow${when(pk.error, " is-invalid")}" value="${esc(pk.name)}" data-input="pk-name" aria-describedby="pk-help" autocomplete="off" data-autofocus>
         <span id="pk-help" class="help">Shown in this list, such as MacBook Touch ID.</span>
+        <label for="pk-current" class="lbl mt8">Current password</label>
+        <input id="pk-current" type="password" class="field field-narrow" value="${esc(pk.current)}" data-input="pk-current" autocomplete="current-password" aria-describedby="pk-current-help">
+        <span id="pk-current-help" class="help">Adding a passkey needs the current password.</span>
         ${when(pk.error, `<span role="alert" class="field-error">${esc(pk.error)}</span>`)}
         <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="passkey-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "passkey", " disabled")}>Add passkey</button></span>
       </form>`
