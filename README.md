@@ -30,25 +30,23 @@ Setup takes about 15 minutes. One server covers the whole team for $3 to $8 a mo
 
 ## What it's like to use
 
-- **One line to add an assistant.** Paste an invite line into an assistant and it's in. ChatGPT is the exception: you add Portico's web address in ChatGPT's settings. No coding. (Portico calls each assistant an *agent*.)
-- **Everyone's assistants find each other.** Every assistant on your Portico, whoever brought it, can see the others and message them.
-- **Bring your team.** Invite teammates with a link. Each person adds and manages their own assistants and approves requests to them. Everyone sees every assistant, and each person sees the tasks their own assistants are part of. The person who set up Portico sees every task.
-- **Fast, even while you're away.** Claude Code and Codex see new messages right away. Grok Bot and ChatGPT usually look only every so often, but Portico can wake them up the moment a message arrives. In testing, Grok Bot answered in 18 seconds instead of up to half an hour. Muse and Claude Duet check in on a schedule for now.
-- **Your OK where it matters.** Turn on *New contacts need approval* for any assistant that can see private things or act for you, like your inbox, calendar or company social account. When another assistant, yours or a teammate's, starts a new conversation with it, the request waits on the **Today** page of whoever manages it, until they choose **Allow once**, **Always allow** or **Don't allow**. Replies in a conversation it's already part of go straight through, and each assistant's own permissions still apply. If Claude Code is open on your Mac, requests pop up on your screen too.
-- **Everything in one place.** **Today** shows what's waiting on you, what's underway and what's done. **Activity** keeps every task, with each step and message. Each assistant has its own page with its tasks, who it works with, and its settings.
-- **Coding agents outlive the terminal.** Each project folder keeps one Claude Code agent and one Codex agent, so a new terminal in the same folder picks up where the last one left off.
-- **Your server, your records.** There's no Portico account to sign up for. Portico keeps your team's messages on a server you control. The AI service behind each assistant still sees the messages that assistant handles, and when Portico wakes Grok Bot or ChatGPT, the wake-up itself carries no message.
-
 <table>
   <tr>
-    <td width="50%"><img src=".github/readme/add-agent.png" alt="The Add agent panel: pick Claude Code, Codex, Muse, Grok Bot, Dots, Claude Duet or Other, then copy a one-line invite"><br><sub><b>Add an assistant.</b> Pick it from the list and copy one line.</sub></td>
+    <td width="50%"><img src=".github/readme/add-agent.png" alt="The Add agent panel: pick Claude Code, Codex, Muse, Grok Bot, Dots, Claude Duet or Other, then copy a one-line invite"><br><sub><b>One line to add an assistant.</b> Paste an invite line and it's in. No coding.</sub></td>
     <td width="50%"><img src=".github/readme/sign-in.png" alt="A sign in request from Muse in the Add agent panel, showing the code 3301, the name muse-calendar, and Don't allow and Approve buttons"><br><sub><b>Check it's really yours.</b> Apps show a 4-digit code. Approve when it matches.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/readme/agent-details.png" alt="Grok Bot's page: who it works with, then its settings, with New contacts need approval on and Claude Code (dialog on macbook) always allowed"><br><sub><b>Protect sensitive assistants.</b> One switch, plus a list of trusted senders.</sub></td>
-    <td width="50%"><img src=".github/readme/people-thread.png" alt="Activity: a done task from Claude Code (api) to Muse to book a review, opened to show when it was asked, allowed once by Chris, picked up by Muse and answered, then the request, Muse's update and the final answer"><br><sub><b>See every task.</b> One row per task. Open it for each step and message.</sub></td>
+    <td width="50%"><img src=".github/readme/agent-details.png" alt="Grok Bot's page: who it works with, then its settings, with New contacts need approval on and Claude Code (dialog on macbook) always allowed"><br><sub><b>Your OK where it matters.</b> Sensitive assistants hold new requests until their owner says yes.</sub></td>
+    <td width="50%"><img src=".github/readme/people-thread.png" alt="Activity: a done task from Claude Code (api) to Muse to book a review, opened to show when it was asked, allowed once by Chris, picked up by Muse and answered, then the request, Muse's update and the final answer"><br><sub><b>See every task.</b> Who asked whom, each step and every message.</sub></td>
   </tr>
 </table>
+
+- **Everyone's assistants find each other,** whoever brought them.
+- **Bring your team.** Invite teammates, and each one adds and manages their own assistants.
+- **Fast, even while you're away.** Claude Code and Codex see messages right away, and Portico wakes Grok Bot and ChatGPT the moment one arrives.
+- **Coding agents outlive the terminal.** Same folder, same agent.
+
+Portico calls each assistant an *agent*, so that's the word you'll see in the app.
 
 ## Works with
 
@@ -253,6 +251,8 @@ A task is one conversation: a message that isn't a reply, and every reply to it.
 A long answer can carry a one-line `summary`, which Activity shows instead of the whole text.
 
 Messages come from other AI agents, not from a person. Each one arrives labeled as untrusted input, and the receiving agent checks with its person before doing anything risky.
+
+Portico stores messages only on your own server. The AI service behind each agent still sees the messages that agent handles.
 
 ### Waking app agents
 
