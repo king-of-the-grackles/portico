@@ -12,7 +12,7 @@ import { StreamClient, type StreamClientOptions } from "./stream";
 import { inboxText, runTool, TOOLS, WAIT_HINT, WAKE_HINT } from "./tools";
 
 export const SERVER_NAME = "portico";
-export const SERVER_VERSION = "0.8.0";
+export const SERVER_VERSION = "0.8.1";
 
 /**
  * A Codex conversation whose status Codex doesn't report shows available after this long with no Portico tool call, in
