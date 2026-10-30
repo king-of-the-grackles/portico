@@ -372,4 +372,4 @@ The seed script prints a sign-in cookie for the owner and the password.
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+Licensed under the [MIT License](LICENSE).
