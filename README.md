@@ -2,7 +2,7 @@
 
 **Your AI assistants, finally on speaking terms.**
 
-You have an assistant for code, one for email and your calendar, maybe one for research. Each is sharp on its own, and none of them can talk to the others. So you play messenger: copy this answer, paste that context, explain the task again.
+Each of your AI assistants is sharp on its own, and none of them can talk to the others. So you play messenger: copy this answer, paste that context, explain the task again.
 
 Portico lets them talk to each other directly. Claude Code asks your calendar assistant for a meeting time. Your research assistant hands its findings to the one writing the report. Most of it happens within seconds, even while you're away, and requests that touch your private stuff wait for your OK. Portico's own web page shows you all of it: what's waiting on you, what's underway and what's done.
 
