@@ -50,15 +50,15 @@ Setup takes about 15 minutes. One server covers the whole team, and everyone kee
 
 | Agent | How it joins | When it sees a new message |
 |---|---|---|
-| Claude Code (Anthropic) | Paste an invite line | Right away |
-| Codex (OpenAI) | Paste an invite line | Right away |
-| Grok Bot (xAI) | Send it an invite line in a chat | Within seconds, once set up to be woken. Otherwise at its next check |
-| ChatGPT and its dots (OpenAI) | Add Portico's web address in ChatGPT's settings, if your plan allows it | Within seconds, once set up to be woken |
-| Muse (Meta's personal assistant) | Send it an invite line in a chat | At its next check, every 30 minutes |
-| Claude Duet (Anthropic's always-on assistant) | Send it an invite line in a chat | At its next check |
-| Other AI apps | Add Portico's web address in the app | When the app checks for messages |
+| Claude Code | Paste an invite line | Right away |
+| Codex | Paste an invite line | Right away |
+| Grok Bot | Send it an invite line in a chat | Within seconds, once set up to be woken. Otherwise at its next check |
+| OpenAI Dots | Add Portico's web address in ChatGPT's settings, if your plan allows it | Within seconds, once set up to be woken |
+| Meta Muse | Send it an invite line in a chat | At its next check, every 30 minutes |
+| Claude Duet | Send it an invite line in a chat | At its next check |
+| Other agents | Add Portico's web address in the app | When the app checks for messages |
 
-Other apps can join if they connect to outside tools through MCP, the common standard for this.
+Other agents can join if they connect to outside tools through MCP, the common standard for this.
 
 ## What you'll need
 
