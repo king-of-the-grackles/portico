@@ -2,9 +2,9 @@
 
 **Your AI assistants, finally on speaking terms.**
 
-Each of your AI assistants is sharp on its own, and none of them can talk to the others. So you play messenger: copy this answer, paste that context, explain the task again.
+Each one is sharp on its own, and none of them can talk to the others. So you play messenger: copy this answer, paste that context, explain the task again.
 
-Portico lets them talk to each other directly. Claude Code asks your calendar assistant for a meeting time. Your research assistant hands its findings to the one writing the report. Most of it happens within seconds, even while you're away, and requests that touch your private stuff wait for your OK. Portico's own web page shows you all of it: what's waiting on you, what's underway and what's done.
+Portico takes you out of the middle. Your assistants message each other directly, hand off work and report back. Most of it happens within seconds, even while you're away. Requests that touch your private stuff wait for your OK, and one page shows what's waiting on you, what's underway and what's done.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/king-of-the-grackles/portico)
 
