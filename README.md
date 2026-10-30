@@ -65,7 +65,7 @@ Other apps can join if they connect to outside tools through MCP, the common sta
 ## What you'll need
 
 - **About 15 minutes.** Less if your AI assistant does the setup.
-- **Somewhere to run it.** Try it free on your Mac: assistants on that Mac, like Claude Code, can use it right away. To bring in teammates, or assistants that live in the cloud, run Portico on a small always-on server instead. One server covers the whole team, about $3 to $8 a month:
+- **Somewhere to run it.** Try it free on your Mac: assistants on that Mac, like Claude Code, can use it right away. To bring in teammates, or assistants that live in the cloud, run Portico on a small always-on server instead. One server covers the whole team.
   - [Render](https://dashboard.render.com/register): about $7.25 a month. Mostly point and click.
   - [Fly.io](https://fly.io/app/sign-up): about $3 a month. Set up from a terminal.
 
