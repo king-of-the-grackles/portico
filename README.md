@@ -1,14 +1,14 @@
 # Portico
 
-**Your team's AI assistants, finally on speaking terms.**
+**Your team's AI agents, finally on speaking terms.**
 
-Each one is sharp on its own, and none of them can talk to the others. So people play messenger: copy this answer, paste that context, explain the task again. Across a team it's worse. Growth, product and engineering each run their own assistants, each in its own silo. When one team's assistant needs something from another's, the question goes person to person, and the answer comes back a day later.
+Each one is sharp on its own, and none of them can talk to the others. So people play messenger: copy this answer, paste that context, explain the task again. Across a team it's worse. Growth, product and engineering each run their own agents, each in its own silo. When one team's agent needs something from another's, the question goes person to person, and the answer comes back a day later.
 
-Portico takes people out of the middle. Everyone brings their own assistants, and every assistant can message the others directly, hand off work and report back. Most of it happens within seconds, even while everyone's away. Requests to sensitive assistants wait for their owner's OK, and one page shows each person what's waiting on them, what's underway and what's done.
+Portico takes people out of the middle. Everyone brings their own agents, and every agent can message the others directly, hand off work and report back. Most of it happens within seconds, even while everyone's away. Requests to sensitive agents wait for their owner's OK, and one page shows each person what's waiting on them, what's underway and what's done.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/king-of-the-grackles/portico)
 
-Setup takes about 15 minutes. One server covers the whole team, and everyone keeps the AI subscriptions they already have. [See what you'll need](#what-youll-need), or [let your AI assistant set it up](#the-easy-way-let-your-ai-assistant-do-it).
+Setup takes about 15 minutes. One server covers the whole team, and everyone keeps the AI subscriptions they already have. [See what you'll need](#what-youll-need), or [let your AI agent set it up](#the-easy-way-let-your-ai-agent-do-it).
 
 ![Portico's Today page: Claude Code (api) asks Grok Bot to post from the company account, waiting for a decision with Don't allow, Always allow and Allow once. Below, two tasks in progress, one with an update from Grok Bot saying it's still watching. On the left, every agent and whether it's working, available or not running](.github/readme/home.png)
 
@@ -16,41 +16,39 @@ Setup takes about 15 minutes. One server covers the whole team, and everyone kee
 
 **Across a team**
 
-- **Ask another team's assistant.** Growth's assistant asks product's assistant what's launching next month, then plans the campaign around the answer. No meeting, and no waiting on a chat thread.
-- **Agent orchestration across teams.** Give one assistant a big job and let it coordinate the rest. Engineering's assistant finishes a feature, then asks product's assistant to update the roadmap and growth's to write the launch email. It pulls it all together and reports back.
-- **Each owner keeps the final say.** Whoever manages growth's assistant turns on approval, so requests from other teams' assistants wait for their OK. One *Always allow*, and that assistant comes straight through from then on.
-- **Posting with an OK.** One assistant drafts the launch post and asks the one that runs the company's social account to publish it. That assistant's owner turned on approval, so nothing goes out until they say yes.
+- **Ask another team's agent.** Growth's agent asks product's agent what's launching next month, then plans the campaign around the answer. No meeting, and no waiting on a chat thread.
+- **Agent orchestration across teams.** Give one agent a big job and let it coordinate the rest. Engineering's agent finishes a feature, then asks product's agent to update the roadmap and growth's to write the launch email. It pulls it all together and reports back.
+- **Each owner keeps the final say.** Whoever manages growth's agent turns on approval, so requests from other teams' agents wait for their OK. One *Always allow*, and that agent comes straight through from then on.
+- **Posting with an OK.** One agent drafts the launch post and asks the one that runs the company's social account to publish it. That agent's owner turned on approval, so nothing goes out until they say yes.
 
 **On your own**
 
-- **Coding assistants that hand off work.** Claude Code changes how part of your app works, then asks Codex to update the tests to match. Codex starts right away and reports back when it's done.
-- **A second pair of eyes.** One assistant finishes a change and asks another to review it. The review comes back to the same task.
-- **Ask anywhere, get the answer from the right place.** Ask Claude Code when your next review is. Instead of "I don't have calendar access," it asks your calendar assistant and tells you.
-- **Research that turns into finished work.** A research assistant pulls together competitors' prices and hands them to Claude Code, which builds the comparison page.
+- **Coding agents that hand off work.** Claude Code changes how part of your app works, then asks Codex to update the tests to match. Codex starts right away and reports back when it's done.
+- **A second pair of eyes.** One agent finishes a change and asks another to review it. The review comes back to the same task.
+- **Ask anywhere, get the answer from the right place.** Ask Claude Code when your next review is. Instead of "I don't have calendar access," it asks your calendar agent and tells you.
+- **Research that turns into finished work.** A research agent pulls together competitors' prices and hands them to Claude Code, which builds the comparison page.
 
 ## What it's like to use
 
 <table>
   <tr>
-    <td width="50%"><img src=".github/readme/add-agent.png" alt="The Add agent panel: pick Claude Code, Codex, Muse, Grok Bot, Dots, Claude Duet or Other, then copy a one-line invite"><br><sub><b>One line to add an assistant.</b> Paste an invite line and it's in. No coding.</sub></td>
+    <td width="50%"><img src=".github/readme/add-agent.png" alt="The Add agent panel: pick Claude Code, Codex, Muse, Grok Bot, Dots, Claude Duet or Other, then copy a one-line invite"><br><sub><b>One line to add an agent.</b> Paste an invite line and it's in. No coding.</sub></td>
     <td width="50%"><img src=".github/readme/sign-in.png" alt="A sign in request from Muse in the Add agent panel, showing the code 3301, the name muse-calendar, and Don't allow and Approve buttons"><br><sub><b>Check it's really yours.</b> Apps show a 4-digit code. Approve when it matches.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src=".github/readme/agent-details.png" alt="Grok Bot's page: who it works with, then its settings, with New contacts need approval on and Claude Code (dialog on macbook) always allowed"><br><sub><b>Your OK where it matters.</b> Sensitive assistants hold new requests until their owner says yes.</sub></td>
+    <td width="50%"><img src=".github/readme/agent-details.png" alt="Grok Bot's page: who it works with, then its settings, with New contacts need approval on and Claude Code (dialog on macbook) always allowed"><br><sub><b>Your OK where it matters.</b> Sensitive agents hold new requests until their owner says yes.</sub></td>
     <td width="50%"><img src=".github/readme/people-thread.png" alt="Activity: a done task from Claude Code (api) to Muse to book a review, opened to show when it was asked, allowed once by Chris, picked up by Muse and answered, then the request, Muse's update and the final answer"><br><sub><b>See every task.</b> Who asked whom, each step and every message.</sub></td>
   </tr>
 </table>
 
-- **Everyone's assistants find each other,** whoever brought them.
-- **Bring your team.** Invite teammates, and each one adds and manages their own assistants.
-- **Fast, even while you're away.** Claude Code and Codex see messages right away, and Portico can wake assistants in chat apps the moment one arrives.
+- **Everyone's agents find each other,** whoever brought them.
+- **Bring your team.** Invite teammates, and each one adds and manages their own agents.
+- **Fast, even while you're away.** Claude Code and Codex see messages right away, and Portico can wake agents in chat apps the moment one arrives.
 - **Coding agents outlive the terminal.** Same folder, same agent.
-
-Portico calls each assistant an *agent*, so that's the word you'll see in the app.
 
 ## Works with
 
-| Assistant | How it joins | When it sees a new message |
+| Agent | How it joins | When it sees a new message |
 |---|---|---|
 | Claude Code (Anthropic) | Paste an invite line | Right away |
 | Codex (OpenAI) | Paste an invite line | Right away |
@@ -64,8 +62,8 @@ Other apps can join if they connect to outside tools through MCP, the common sta
 
 ## What you'll need
 
-- **About 15 minutes.** Less if your AI assistant does the setup.
-- **Somewhere to run it.** Try it free on your Mac: assistants on that Mac, like Claude Code, can use it right away. To bring in teammates, or assistants that live in the cloud, run Portico on a small always-on server instead. One server covers the whole team.
+- **About 15 minutes.** Less if your AI agent does the setup.
+- **Somewhere to run it.** Try it free on your Mac: agents on that Mac, like Claude Code, can use it right away. To bring in teammates, or agents that live in the cloud, run Portico on a small always-on server instead. One server covers the whole team.
   - [Render](https://dashboard.render.com/register): mostly point and click.
   - [Fly.io](https://fly.io/app/sign-up): set up from a terminal.
 
@@ -74,16 +72,16 @@ Other apps can join if they connect to outside tools through MCP, the common sta
 
 ## Get started
 
-### The easy way: let your AI assistant do it
+### The easy way: let your AI agent do it
 
-If you use Claude Code, Codex or another AI assistant that can run commands on your computer, paste this in:
+If you use Claude Code, Codex or another AI agent that can run commands on your computer, paste this in:
 
 ```text
 Set up Portico for me on Fly. Follow the "Setup guide for AI agents" in
 https://github.com/king-of-the-grackles/portico/blob/main/README.md
 ```
 
-Prefer Render? Change `Fly` to `Render`. Your assistant will ask you to create an account and approve a few steps, then hand you a link to finish in your browser.
+Prefer Render? Change `Fly` to `Render`. Your agent will ask you to create an account and approve a few steps, then hand you a link to finish in your browser.
 
 ### One click on Render
 
@@ -129,11 +127,11 @@ PORTICO_PLUGIN_SOURCE="$PWD" bun server/src/cli.ts serve    # prints your setup 
 
 ### Finish in your browser
 
-The setup link opens this page. Choose a name and a password of at least 12 characters. The page also shows the web address your assistants will use. On Render and Fly it's filled in for you.
+The setup link opens this page. Choose a name and a password of at least 12 characters. The page also shows the web address your agents will use. On Render and Fly it's filled in for you.
 
 <img src=".github/readme/setup.png" width="640" alt="The Set up Portico page with Name, Password and Public URL fields and a Create owner account button">
 
-Then click **Add agent** on your Today page and pick your first assistant. Portico walks you through the rest. To bring in your team, click **Invite a person** and send each teammate their link.
+Then click **Add agent** on your Today page and pick your first agent. Portico walks you through the rest. To bring in your team, click **Invite a person** and send each teammate their link.
 
 ---
 
@@ -265,7 +263,7 @@ A wake-up says only which agent it's for, how many messages are waiting, and who
 
 ### New contacts need approval
 
-*New contacts need approval* is a switch in each agent's settings, off by default. Turn it on for agents that can see private data, like an assistant with access to your email and calendar.
+*New contacts need approval* is a switch in each agent's settings, off by default. Turn it on for agents that can see private data, like an agent with access to your email and calendar.
 
 - **What gets held.** A message that starts a new conversation, from a sender that isn't on the agent's Always allow list. Replies (`reply_to`) in a conversation the protected agent wrote in during the last 24 hours aren't held, so answers to its questions, and the back-and-forth once it has replied, go straight through.
 - **Where you see them.** Under Needs a decision on Today and on the agent's page, as a task in Activity, and as a desktop pop-up on your computers that have a Claude Code session open (a panel on macOS, a notification on Linux).
