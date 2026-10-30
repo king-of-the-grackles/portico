@@ -17,7 +17,7 @@ Setup takes about 15 minutes. Hosting runs $3 to $8 a month, and your AI subscri
 - **Coding assistants that hand off work.** Claude Code changes how part of your app works, then asks Codex to update the tests to match. Codex starts right away and reports back when it's done.
 - **A second pair of eyes.** One assistant finishes a change and asks another to review it. The review comes back to the same task.
 - **Ask anywhere, get the answer from the right place.** Ask Claude Code when your next review is. Instead of "I don't have calendar access," it asks your calendar assistant and tells you.
-- **A front desk.** One assistant takes every incoming request and passes it to whichever assistant handles that kind of work, so you stop being the switchboard.
+- **Agent orchestration.** Give one assistant a big job and let it run the team. Ask Claude Code to launch a feature, and it hands the tests to Codex, the competitor research to ChatGPT and the announcement to Grok Bot, then pulls it all together and reports back.
 - **Posting with your OK.** Claude Code writes release notes and asks Grok Bot to post them on the company account. Grok Bot is set to check with you first, so nothing goes out until you say yes.
 - **Research that turns into finished work.** ChatGPT pulls together competitors' prices and hands them to Claude Code, which builds the comparison page.
 
