@@ -23,6 +23,52 @@ function renderEditForm(s: HomeState, a: AgentView): string {
   </form>`;
 }
 
+/** How the last wake went, in a sentence: "Last woke Grok Bot at 5:09 PM." or why the last one failed. */
+export function wakeOutcome(label: string, lastAt: string | null, lastStatus: string | null, now: number): string {
+  if (!lastAt || !lastStatus) return "No wakes yet.";
+  const at = atWhen(lastAt, now);
+  if (lastStatus === "ok") return `Last woke ${label} ${at}.`;
+  const http = /^http_(\d{3})$/.exec(lastStatus);
+  const why = http
+    ? `the address answered ${http[1]}${http[1] === "401" || http[1] === "403" ? ", so check the key" : ""}`
+    : lastStatus === "timeout"
+      ? "no answer within 10 seconds"
+      : lastStatus === "blocked_address"
+        ? "the address points to a private network"
+        : "the address couldn't be reached";
+  return `Last wake failed ${at}: ${why}.`;
+}
+
+function renderWakeForm(s: HomeState, a: AgentView): string {
+  const w = s.wakeEdit!;
+  return `<form class="edit-form enter" data-form="wake-save" data-key="wake-form" novalidate>
+    <label for="wk-url" class="lbl">Wake URL</label>
+    <input id="wk-url" class="field${when(w.error, " is-invalid")}" value="${esc(w.url)}" data-input="wake-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="wk-url-help" aria-invalid="${Boolean(w.error)}" data-autofocus>
+    <span id="wk-url-help" class="help">Where the app's webhook trigger listens. For a Grok Bot routine, the POST to field.</span>
+    <label for="wk-key" class="lbl mt8">Key</label>
+    <input id="wk-key" type="password" class="field" value="${esc(w.key)}" data-input="wake-key" autocomplete="off" spellcheck="false" aria-describedby="wk-key-help">
+    <span id="wk-key-help" class="help">Sent as a bearer token with each wake. Portico doesn't show the key again.</span>
+    ${when(w.error, `<span role="alert" class="field-error">${esc(w.error)}</span>`)}
+    <span class="actions mt8"><button type="button" class="btn btn-link" data-action="wake-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === `wake:${a.id}`, " disabled")}>Save</button></span>
+  </form>`;
+}
+
+/** The wake URL row: off with Add, or the host and the last wake with Remove and Change. */
+function renderWakeRow(s: HomeState, data: AgentPageData): string {
+  const a = data.agent;
+  if (s.wakeEdit) return renderWakeForm(s, a);
+  const wake = data.wake;
+  const name = esc(a.label);
+  const help = wake
+    ? `On. When a message arrives, Portico posts to ${esc(wake.host)}. ${esc(wakeOutcome(a.label, wake.lastAt, wake.lastStatus, s.now))}`
+    : `Off. ${name} sees new messages on the next check. Add an app's webhook trigger, such as a Grok Bot routine's, and Portico wakes ${name} when a message arrives.`;
+  const busy = when(s.busy === `wake:${a.id}`, " disabled");
+  const actions = wake
+    ? `<button type="button" class="btn btn-text" data-action="wake-remove"${busy}>Remove</button><button type="button" class="btn btn-secondary" data-action="wake-start"${busy}>Change</button>`
+    : `<button type="button" class="btn btn-secondary" data-action="wake-start">Add</button>`;
+  return `<div class="srow-line" data-key="wake-row"><span class="row-text"><span class="row-title">Wake URL</span><span class="row-help">${help}</span></span><span class="actions">${actions}</span></div>`;
+}
+
 function fold(id: string, title: string, open: boolean, action: string, body: () => string): string {
   return `<section class="fold" aria-labelledby="${id}-h" data-key="${id}">
     <h2 id="${id}-h" class="fold-h"><button type="button" class="fold-btn" data-action="${action}" aria-expanded="${open}" aria-controls="${id}-body">${ICON.caret(open ? "is-open" : "")}${title}</button></h2>
@@ -52,8 +98,21 @@ function renderDetails(s: HomeState, data: AgentPageData): string {
     rows.push(["Connected as", a.type === "connector" ? "An MCP connector" : "An app with its own key"]);
     rows.push([
       "Checks for messages",
-      a.checkInMinutes !== null ? `About every ${a.checkInMinutes} min` : `When ${esc(a.label)} runs a task`,
+      data.woken
+        ? "When a message arrives"
+        : a.checkInMinutes !== null
+          ? `About every ${a.checkInMinutes} min`
+          : `When ${esc(a.label)} runs a task`,
     ]);
+    if (data.events) {
+      const subs = plural(data.events.count, "subscription");
+      const last = data.events.lastAt
+        ? data.events.lastStatus === "ok"
+          ? `, last event sent ${atWhen(data.events.lastAt, s.now)}`
+          : `, last event failed ${atWhen(data.events.lastAt, s.now)}`
+        : "";
+      rows.push(["Event subscriptions", `${subs} to message.received${last}`]);
+    }
   }
   rows.push(["Name on Portico", `<code>${esc(a.address)}</code>`]);
   rows.push(["Kind", esc(kindInfo(a.kind).label)]);
@@ -98,6 +157,7 @@ function renderSettingsFold(s: HomeState, data: AgentPageData): string {
       }
     </div>`);
   }
+  if (a.type !== "session") parts.push(renderWakeRow(s, data));
   if (a.type === "session") {
     const on = a.joinFromFolder !== false;
     const repo = esc(a.repo ?? a.folder ?? "");

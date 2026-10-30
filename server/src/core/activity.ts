@@ -17,6 +17,8 @@ export const ACTIVITY_KINDS = [
   "approval_switched",
   "folder_switched",
   "allow_removed",
+  "wake_set",
+  "wake_removed",
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 

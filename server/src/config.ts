@@ -19,8 +19,8 @@ const SIGNING_KEY_FILE = "signing.key";
 type Env = Record<string, string | undefined>;
 
 /**
- * Everything is optional: PORT, PORTICO_DB_PATH, PORTICO_PLUGIN_SOURCE and PORTICO_PUBLIC_URL. The signing key is
- * passed in, so this stays free of file access (see loadConfig).
+ * Everything is optional: PORT, PORTICO_DB_PATH, PORTICO_PLUGIN_SOURCE, PORTICO_PUBLIC_URL and
+ * PORTICO_WEBHOOKS_ALLOW_PRIVATE. The signing key is passed in, so this stays free of file access (see loadConfig).
  */
 export function parseEnv(env: Env, signingKey: string): PorticoConfig {
   const problems: string[] = [];
@@ -45,6 +45,7 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     pluginSource: env.PORTICO_PLUGIN_SOURCE?.trim() || null,
     publicUrl,
     signingKey,
+    webhooksAllowPrivate: env.PORTICO_WEBHOOKS_ALLOW_PRIVATE?.trim() === "1",
   };
 }
 

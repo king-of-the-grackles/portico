@@ -13,7 +13,13 @@ describe("config", () => {
       pluginSource: null,
       publicUrl: null,
       signingKey: "k",
+      webhooksAllowPrivate: false,
     });
+  });
+
+  test("private webhook addresses are allowed only with PORTICO_WEBHOOKS_ALLOW_PRIVATE=1", () => {
+    expect(parseEnv({ PORTICO_WEBHOOKS_ALLOW_PRIVATE: "1" }, "k").webhooksAllowPrivate).toBe(true);
+    expect(parseEnv({ PORTICO_WEBHOOKS_ALLOW_PRIVATE: "true" }, "k").webhooksAllowPrivate).toBe(false);
   });
 
   test("a public URL must be https, or http on localhost; a bad port is refused", () => {

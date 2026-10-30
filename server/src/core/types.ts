@@ -160,4 +160,9 @@ export interface PorticoConfig {
   publicUrl: string | null;
   /** HMAC key for short-lived signed values, generated into the data folder on first start. */
   signingKey: string;
+  /**
+   * PORTICO_WEBHOOKS_ALLOW_PRIVATE=1: wake URLs and event callbacks may use http:// and private addresses. For local
+   * development only; otherwise Portico posts only to public https:// addresses.
+   */
+  webhooksAllowPrivate: boolean;
 }

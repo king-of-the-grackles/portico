@@ -159,5 +159,38 @@ const agentTasks: Migration = (db) => {
   db.run("ALTER TABLE agents ADD COLUMN doing_at TEXT");
 };
 
+/**
+ * 104: waking app agents. A wake URL is an app's webhook trigger (a Grok Bot routine's, say) that the agent's manager
+ * gives Portico; an event subscription is an MCP client's (ChatGPT's) callback for the message.received event. Both
+ * keep the secret Portico sends or signs with, so neither can be hashed.
+ */
+const wakes: Migration = (db) => {
+  db.run(`CREATE TABLE wake_urls (
+    agent_id TEXT PRIMARY KEY REFERENCES agents (id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    key TEXT NOT NULL,
+    set_by TEXT REFERENCES people (id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    last_at TEXT,
+    last_status TEXT
+  )`);
+  db.run(`CREATE TABLE event_subscriptions (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    arguments TEXT NOT NULL,
+    url TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    previous_secret TEXT,
+    previous_until TEXT,
+    refresh_before TEXT NOT NULL,
+    verified_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_at TEXT,
+    last_status TEXT
+  )`);
+  db.run("CREATE INDEX event_subscriptions_agent ON event_subscriptions (agent_id)");
+};
+
 /** Every change since the first schema (version 100), oldest first: the first is version 101. Never edit a shipped one. */
-export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks];
+export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks, wakes];

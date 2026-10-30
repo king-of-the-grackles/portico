@@ -38,6 +38,10 @@ export function eventText(e: ActivityView): { tag: string; line: string; who: st
       return { tag: "Setting", line: `New sessions join from the folder for ${agent}: ${onOff(e.detail.on)}`, who: person };
     case "allow_removed":
       return { tag: "Setting", line: `${other} taken off Always allow for ${agent}`, who: person };
+    case "wake_set":
+      return { tag: "Setting", line: `Wake URL for ${agent} set to ${String(e.detail.host ?? "")}`, who: person };
+    case "wake_removed":
+      return { tag: "Setting", line: `Wake URL for ${agent} removed`, who: person };
   }
 }
 

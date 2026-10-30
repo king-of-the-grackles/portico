@@ -4,6 +4,7 @@ import { PorticoError } from "../src/core/errors";
 import type { Agent, AgentKind, Computer, Notice, Person, PorticoConfig } from "../src/core/types";
 import { openDb } from "../src/db";
 import { createPortico, type Portico } from "../src/portico";
+import type { WebhookRequest, WebhookResult } from "../src/core/webhooks";
 import type { HelloEvent, StreamConnection } from "../src/agent-api/stream";
 
 export const T0 = new Date("2026-10-27T12:00:00.000Z");
@@ -31,6 +32,7 @@ export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfi
     pluginSource: null,
     publicUrl: PUBLIC_URL,
     signingKey: "a".repeat(64),
+    webhooksAllowPrivate: false,
     ...overrides,
   };
 }
@@ -51,7 +53,9 @@ export interface TestPortico extends Portico {
  * Portico over an in-memory database, with a fake clock and counting IDs. With `setup` (the default), setup is marked
  * done, so Portico is open; the owner still has to be added with addOwner.
  */
-export function makePortico(opts: { config?: Partial<PorticoConfig>; setup?: boolean; newNonce?: () => string } = {}): TestPortico {
+export function makePortico(
+  opts: { config?: Partial<PorticoConfig>; setup?: boolean; newNonce?: () => string; webhooks?: FakeWebhooks } = {},
+): TestPortico {
   const clock = testClock();
   const notices: Notice[] = [];
   let counter = 0;
@@ -62,6 +66,8 @@ export function makePortico(opts: { config?: Partial<PorticoConfig>; setup?: boo
     newNonce: opts.newNonce,
     heartbeatMs: 50,
     onNotice: (notice) => notices.push(notice),
+    webhookPost: opts.webhooks?.post,
+    schedule: opts.webhooks?.schedule,
   });
   if (opts.setup !== false) portico.settings.set("setup_done_at", T0.toISOString());
   return Object.assign(portico, { clock, notices });
@@ -201,6 +207,32 @@ export function errorCode(fn: () => unknown): string | null {
   }
   return null;
 }
+
+/**
+ * Stands in for the network when Portico posts to wake URLs and event callbacks: records each post and answers with
+ * `answer`. Retries wait in `timers` until runTimers.
+ */
+export function fakeWebhooks(answer: (req: WebhookRequest) => WebhookResult = () => ({ status: 200, body: "" })) {
+  const hooks = {
+    sent: [] as WebhookRequest[],
+    timers: [] as { fn: () => void; ms: number }[],
+    /** Replace to change how later posts are answered. */
+    answer,
+    post: async (req: WebhookRequest): Promise<WebhookResult> => {
+      hooks.sent.push(req);
+      return hooks.answer(req);
+    },
+    schedule: (fn: () => void, ms: number) => {
+      hooks.timers.push({ fn, ms });
+    },
+    runTimers() {
+      for (const timer of hooks.timers.splice(0)) timer.fn();
+    },
+  };
+  return hooks;
+}
+
+export type FakeWebhooks = ReturnType<typeof fakeWebhooks>;
 
 /** Lets queued microtasks and zero-delay timers run, e.g. notices and change batches. */
 export function flush(): Promise<void> {

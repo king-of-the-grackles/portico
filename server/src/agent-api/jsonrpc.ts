@@ -21,6 +21,6 @@ export function rpcResult(id: JsonRpcId, result: unknown) {
   return { jsonrpc: "2.0" as const, id, result };
 }
 
-export function rpcError(id: JsonRpcId, code: number, message: string) {
-  return { jsonrpc: "2.0" as const, id, error: { code, message } };
+export function rpcError(id: JsonRpcId, code: number, message: string, data?: unknown) {
+  return { jsonrpc: "2.0" as const, id, error: data === undefined ? { code, message } : { code, message, data } };
 }

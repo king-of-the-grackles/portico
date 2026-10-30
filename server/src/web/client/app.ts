@@ -625,6 +625,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
       navOpen: false,
       acctOpen: false,
       edit: null,
+      wakeEdit: null,
       saved: false,
       confirmRemove: false,
       notice: same ? s().notice : null,
@@ -755,6 +756,41 @@ function startHome(root: HTMLElement, data: HomeData): void {
     }
   };
 
+  const saveWake = async () => {
+    const agent = pageAgent();
+    const w = s().wakeEdit;
+    if (!agent || !w || s().busy) return;
+    const url = w.url.trim();
+    const key = w.key.trim();
+    if (!/^https?:\/\//i.test(url)) return page.set({ wakeEdit: { ...w, error: "Paste the address, starting with https://." } });
+    if (!key) return page.set({ wakeEdit: { ...w, error: "Paste the key as well." } });
+    page.set({ busy: `wake:${agent.id}` });
+    try {
+      await api("PUT", `/api/agents/${encodeURIComponent(agent.id)}/wake`, { url, key });
+      page.set({ wakeEdit: null, saved: true });
+      await loadAgentPage();
+    } catch (err) {
+      const current = s().wakeEdit;
+      if (current) page.set({ wakeEdit: { ...current, error: failure(err) } });
+    } finally {
+      page.set({ busy: null });
+    }
+  };
+
+  const removeWake = async () => {
+    const agent = pageAgent();
+    if (!agent || s().busy) return;
+    page.set({ busy: `wake:${agent.id}` });
+    try {
+      await api("DELETE", `/api/agents/${encodeURIComponent(agent.id)}/wake`);
+      await loadAgentPage();
+    } catch (err) {
+      fail(err);
+    } finally {
+      page.set({ busy: null });
+    }
+  };
+
   const removeAgent = async (id: string) => {
     const agent = s().agents.find((a) => a.id === id) ?? pageAgent();
     if (!agent || s().busy) return;
@@ -796,17 +832,21 @@ function startHome(root: HTMLElement, data: HomeData): void {
       else if (s().add) add.close();
       else if (s().navOpen) page.set({ navOpen: false });
       else if (s().edit) page.set({ edit: null });
+      else if (s().wakeEdit) page.set({ wakeEdit: null });
     },
     input(name, value) {
       const edit = s().edit;
       if (name === "edit-name" && edit) page.set({ edit: { ...edit, name: value, error: "" } });
       else if (name === "edit-desc" && edit) page.set({ edit: { ...edit, description: value.slice(0, 500) } });
+      else if (name === "wake-url" && s().wakeEdit) page.set({ wakeEdit: { ...s().wakeEdit!, url: value, error: "" } });
+      else if (name === "wake-key" && s().wakeEdit) page.set({ wakeEdit: { ...s().wakeEdit!, key: value, error: "" } });
       else if (name === "add-req-name") add.setName(value);
       else if (name === "filter-agent") setFilter({ agent: value || null });
       else if (name === "filter-project") setFilter({ project: value || null });
     },
     form(name) {
       if (name === "agent-save") void saveEdit();
+      else if (name === "wake-save") void saveWake();
       else if (name === "add-approve") void add.decide("approve");
     },
     action(name, el, event) {
@@ -897,6 +937,12 @@ function startHome(root: HTMLElement, data: HomeData): void {
             .catch(fail);
           return;
         }
+        case "wake-start":
+          return page.set({ wakeEdit: { url: "", key: "", error: "" }, saved: false, settingsOpen: true });
+        case "wake-cancel":
+          return page.set({ wakeEdit: null });
+        case "wake-remove":
+          return void removeWake();
         case "remove-start":
           return page.set({ confirmRemove: true });
         case "remove-cancel":

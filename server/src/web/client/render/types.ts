@@ -124,6 +124,13 @@ export interface EditState {
   error: string;
 }
 
+/** The wake URL form in an agent's Settings. */
+export interface WakeEditState {
+  url: string;
+  key: string;
+  error: string;
+}
+
 /** What Today, Activity and the agent pages render. */
 export interface HomeState {
   now: number;
@@ -156,6 +163,7 @@ export interface HomeState {
   reconnecting: boolean;
   add: AddState | null;
   edit: EditState | null;
+  wakeEdit: WakeEditState | null;
   saved: boolean;
   confirmRemove: boolean;
   loadingMore: boolean;

@@ -35,7 +35,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
   );
   app.route("/api/computer", computerApi(core));
   app.route("/api/sign-in-requests", signInRequestApi(core));
-  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, views, resolver }));
+  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, events: core.events, views, resolver }));
   app.route("/", oauthRoutes(core));
   app.route("/api", personApi(core, opts));
   app.route("/", webRoutes(core));

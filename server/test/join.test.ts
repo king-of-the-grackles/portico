@@ -342,6 +342,10 @@ describe("/join", () => {
     const { p } = await setup();
     const html = await (await p.app.request("/join")).text();
     expect(html).toContain(`Check the inbox every ${LIMITS.appCheckMinutes} minutes.`);
+    // Apps that can have a webhook trigger let Portico wake them; ChatGPT watches message.received.
+    expect(html).toContain("Let Portico wake the agent");
+    expect(html).toContain("under Wake URL in the agent's Settings");
+    expect(html).toContain("<code>message.received</code>");
     expect(html).toContain("ends quietly when nothing arrived");
     // Apps describe themselves, mark long work with done: false, and pick up what an earlier check left open.
     expect(html).toContain("describe the agent with <code>update_profile</code>");

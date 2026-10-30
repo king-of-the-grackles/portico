@@ -52,7 +52,8 @@ export const KINDS: Record<AgentKind, KindInfo> = {
     label: "Grok Bot",
     where: "In an app",
     connector: false,
-    step: "Send this to Grok Bot in a chat, then approve the sign in request here. Grok Bot then checks Portico every 30 minutes.",
+    step:
+      "Send this to Grok Bot in a chat, then approve the sign in request here. Grok Bot then checks Portico every 30 minutes, or right away once a routine's webhook URL and key are under Wake URL in Grok Bot's Settings.",
     wait: "Waiting for the sign in request from Grok Bot",
   },
   dots: {

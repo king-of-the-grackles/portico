@@ -372,6 +372,9 @@ describe("an agent's page", () => {
         worksWith: [{ agent: ref(codex), tasks: 3, lastAt: at(9, 17) }],
         runs: [],
         runCount: 0,
+        woken: false,
+        wake: null,
+        events: null,
         ...o,
       },
       tasks: { ...TASKS, tasks: [HELD_TASK, REVIEW] },
@@ -416,6 +419,36 @@ describe("an agent's page", () => {
     expect(text(render(page(protectedGrok, { allowList }, { settingsOpen: true, confirmRemove: true })))).toContain(
       "Confirm: remove Grok Bot",
     );
+  });
+
+  test("an app's wake URL: off with Add, the form, then the host and how the last wake went", () => {
+    const off = text(render(page(grok, {}, { settingsOpen: true, detailsOpen: true })));
+    expect(off).toContain(
+      "Wake URL Off. Grok Bot sees new messages on the next check. Add an app's webhook trigger, such as a Grok Bot routine's, and Portico wakes Grok Bot when a message arrives. Add",
+    );
+    expect(off).not.toContain("When a message arrives");
+
+    const form = render(page(grok, {}, { settingsOpen: true, wakeEdit: { url: "", key: "", error: "Paste the key as well." } }));
+    expect(form).toContain('data-form="wake-save"');
+    expect(form).toContain('type="password"');
+    expect(text(form)).toContain("Paste the key as well. Cancel Save");
+
+    const wake = { host: "api.x.ai", createdAt: at(9, 0), lastAt: at(11, 5), lastStatus: "ok" };
+    const on = text(render(page(grok, { woken: true, wake }, { settingsOpen: true, detailsOpen: true })));
+    expect(on).toContain("Checks for messages When a message arrives");
+    expect(on).toContain("Wake URL On. When a message arrives, Portico posts to api.x.ai. Last woke Grok Bot at 11:05 AM. Remove Change");
+
+    const failed = text(render(page(grok, { woken: true, wake: { ...wake, lastStatus: "http_401" } }, { settingsOpen: true })));
+    expect(failed).toContain("Last wake failed at 11:05 AM: the address answered 401, so check the key.");
+    const slow = text(render(page(grok, { woken: true, wake: { ...wake, lastStatus: "timeout" } }, { settingsOpen: true })));
+    expect(slow).toContain("Last wake failed at 11:05 AM: no answer within 10 seconds.");
+  });
+
+  test("event subscriptions show in Details, and sessions have no wake URL", () => {
+    const events = { count: 1, lastAt: at(11, 5), lastStatus: "ok" };
+    const t = text(render(page(grok, { woken: true, events }, { detailsOpen: true })));
+    expect(t).toContain("Checks for messages When a message arrives Event subscriptions 1 subscription to message.received, last event sent at 11:05 AM");
+    expect(text(render(page(claude, {}, { settingsOpen: true })))).not.toContain("Wake URL");
   });
 
   test("a session agent can be removed once no terminal is open in the folder", () => {
@@ -469,7 +502,7 @@ describe("rendering rules", () => {
       state({
         route: { page: "agent", id: bad.id },
         agents: [bad],
-        agentPage: { agent: bad, allowList: [], taskCounts: { needs_approval: 0, in_progress: 0, done: 1, failed: 0 }, worksWith: [], runs: [], runCount: 0 },
+        agentPage: { agent: bad, allowList: [], taskCounts: { needs_approval: 0, in_progress: 0, done: 1, failed: 0 }, worksWith: [], runs: [], runCount: 0, woken: false, wake: null, events: null },
         tasks: { ...TASKS, tasks: [evilTask] },
       }),
     ]) {

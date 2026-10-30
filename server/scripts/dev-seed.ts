@@ -21,7 +21,7 @@ const PASSWORD = "portico-dev-password";
 captureLogs(() => {});
 
 const p = createPortico(
-  { port, dbPath, dataDir: ".", pluginSource: null, publicUrl, signingKey: "0".repeat(64) },
+  { port, dbPath, dataDir: ".", pluginSource: null, publicUrl, signingKey: "0".repeat(64), webhooksAllowPrivate: false },
   { db: openDb(dbPath) },
 );
 p.settings.set("public_url", publicUrl);

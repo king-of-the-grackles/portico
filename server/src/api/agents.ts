@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import type { Core } from "../core/core";
 import { readJson } from "../agent-api/rest";
 import { PorticoError } from "../core/errors";
+import type { EventsView } from "../core/events";
+import type { WakeUrlView } from "../core/wake-urls";
 import { type PersonEnv, currentPerson } from "./context";
 import type { TaskOutcome } from "../core/tasks";
 import { visibleAgents } from "./tasks";
@@ -16,6 +18,11 @@ export interface AgentPageData {
   worksWith: { agent: AgentRef; tasks: number; lastAt: string }[];
   runs: RunView[];
   runCount: number;
+  /** Whether Portico wakes the agent when a message arrives: a wake URL or event subscription whose last try didn't fail. */
+  woken: boolean;
+  /** The wake URL and event subscriptions, for the agent's manager only. */
+  wake: WakeUrlView | null;
+  events: EventsView | null;
 }
 
 /**
@@ -26,7 +33,10 @@ export function agentPageData(core: Core, me: Person, id: string): AgentPageData
   const { agents, approvals } = core;
   const agent = agents.require(id);
   const views = personViews(core, me);
-  const allowList = agent.ownerId === me.id ? approvals.allowListFor(me.id, agent.id).map(views.allowEntry) : null;
+  const mine = agent.ownerId === me.id;
+  const allowList = mine ? approvals.allowListFor(me.id, agent.id).map(views.allowEntry) : null;
+  const wake = core.wakeUrls.view(agent.id);
+  const events = core.events.view(agent.id);
   const visible = visibleAgents(core, me);
   const tasks = core.tasks.all({ visible, agentId: agent.id });
   const counts: Record<TaskOutcome, number> = { needs_approval: 0, in_progress: 0, done: 0, failed: 0 };
@@ -48,12 +58,15 @@ export function agentPageData(core: Core, me: Person, id: string): AgentPageData
     // Sessions, like tasks and activity, only for the person's own agents (everyone's for the owner).
     runs: visible === null || visible.includes(agent.id) ? agents.runs(agent.id, 10).map(views.run) : [],
     runCount: visible === null || visible.includes(agent.id) ? agents.runCount(agent.id) : 0,
+    woken: [wake, events].some((v) => v !== null && (v.lastStatus === null || v.lastStatus === "ok")),
+    wake: mine ? wake : null,
+    events: mine ? events : null,
   };
 }
 
 /**
  * /api/agents: every agent on Portico, and what the person who manages an agent can change: name, description,
- * Approval required, the folder switch, the Always allow list, and removal.
+ * Approval required, the folder switch, the Always allow list, the wake URL, and removal.
  */
 export function agentRoutes(core: Core): Hono<PersonEnv> {
   const { agents, approvals } = core;
@@ -85,6 +98,23 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
   route.delete("/:id", (c) => {
     const me = currentPerson(c);
     agents.remove(me.id, c.req.param("id"));
+    return c.body(null, 204);
+  });
+
+  // The key goes in once and never comes back out: the answer shows only the host and how the last wake went.
+  route.put("/:id/wake", async (c) => {
+    const me = currentPerson(c);
+    const body = (await readJson(c)) as Record<string, unknown> | null;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      throw new PorticoError("bad_request", "The body must be a JSON object.");
+    }
+    const agent = agents.requireManaged(me.id, c.req.param("id"));
+    return c.json({ wake: core.wakeUrls.set(agent, me.id, { url: body.url, key: body.key }) });
+  });
+
+  route.delete("/:id/wake", (c) => {
+    const me = currentPerson(c);
+    core.wakeUrls.clear(agents.requireManaged(me.id, c.req.param("id")), me.id);
     return c.body(null, 204);
   });
 

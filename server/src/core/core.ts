@@ -8,12 +8,14 @@ import type { Agents } from "./agents";
 import type { AllowList, Approvals } from "./approvals";
 import type { Changes } from "./changes";
 import type { Computers } from "./computers";
+import type { EventSubscriptions } from "./events";
 import type { Messages } from "./messages";
 import type { People } from "./people";
 import type { Presence } from "./presence";
 import type { Settings } from "./settings";
 import type { Tasks } from "./tasks";
 import type { PorticoConfig } from "./types";
+import type { WakeUrls } from "./wake-urls";
 
 /**
  * Everything a surface can use: the core modules, the live streams and the clock. Routers take this whole object, so a
@@ -37,6 +39,8 @@ export interface Core {
   agentStreams: AgentStreams;
   personStreams: PersonStreams;
   desk: Desk;
+  wakeUrls: WakeUrls;
+  events: EventSubscriptions;
   now: () => Date;
   newId: () => string;
 }

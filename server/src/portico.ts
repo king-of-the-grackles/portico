@@ -9,6 +9,7 @@ import { Agents } from "./core/agents";
 import { AllowList, Approvals } from "./core/approvals";
 import { Changes } from "./core/changes";
 import { Computers } from "./core/computers";
+import { EventSubscriptions } from "./core/events";
 import { InboxWaits } from "./core/inbox-waits";
 import type { Core } from "./core/core";
 import { Messages } from "./core/messages";
@@ -16,7 +17,9 @@ import { People } from "./core/people";
 import { Presence } from "./core/presence";
 import { Settings } from "./core/settings";
 import { Tasks } from "./core/tasks";
-import type { Notice, PorticoConfig } from "./core/types";
+import type { Message, Notice, PorticoConfig } from "./core/types";
+import { WakeUrls } from "./core/wake-urls";
+import { safePost, type WebhookPost } from "./core/webhooks";
 import { Desk } from "./desk";
 import { errorName, log } from "./log";
 
@@ -30,6 +33,10 @@ export interface PorticoOptions {
   newNonce?: () => string;
   /** Tests observe notices here. */
   onNotice?: (notice: Notice) => void;
+  /** Where wake URLs and event callbacks are posted; tests pass a fake. */
+  webhookPost?: WebhookPost;
+  /** When webhook retries run; tests run them by hand. */
+  schedule?: (fn: () => void, ms: number) => void;
 }
 
 export interface Portico extends Core {
@@ -82,6 +89,10 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     renamed: (agent) => agentStreams.sendAll(agent.id, "renamed", { ...helloFor(agents, agent) }),
   });
   const desk = new Desk({ streams: agentStreams, now, newNonce: opts.newNonce, log: logInfo });
+  const webhookPost = opts.webhookPost ?? safePost({ allowPrivate: config.webhooksAllowPrivate });
+  const hooks = { db, post: webhookPost, changes, allowPrivate: config.webhooksAllowPrivate, now, schedule: opts.schedule, log: logInfo };
+  const wakeUrls = new WakeUrls({ ...hooks, activity });
+  const events = new EventSubscriptions(hooks);
   agentStreams.onChange((change) => desk.streamChanged(change));
 
   // Notices are raised as writes commit; their effects (nudges, pop-ups) run in a microtask and never throw.
@@ -103,11 +114,26 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     if (agents.isPush(agent) || agentStreams.canWake(agent.id)) agentStreams.nudge(agent.id);
     inboxWaits.wake(agent.id);
   };
+  // A message is waiting for its receiver: an app agent with a wake URL or an event subscription is woken through it.
+  // Only messages: outcomes of sent messages wait for the next check.
+  const wakeApp = (m: Message) => {
+    if (!wakeUrls.has(m.toId) && !events.has(m.toId)) return;
+    const receiver = agents.get(m.toId);
+    const sender = agents.get(m.fromId);
+    if (!receiver || !sender) return;
+    const waiting = messages.unreadCount(receiver.id);
+    const info = { agentName: agents.display(receiver), messageId: m.id, from: agents.display(sender), waiting };
+    wakeUrls.kick(receiver.id, { ...info, lastCheckIn: presence.lastCheckIn(receiver.id) });
+    events.deliver(receiver.id, info);
+  };
   const handleNotice = (notice: Notice) => {
     const m = notice.message;
     switch (notice.kind) {
       case "message_sent": {
-        if (m.status === "pending") wake(m.toId);
+        if (m.status === "pending") {
+          wake(m.toId);
+          wakeApp(m);
+        }
         if (m.status !== "held") return;
         const sender = agents.get(m.fromId);
         const receiver = agents.get(m.toId);
@@ -125,7 +151,10 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       }
       case "message_decided":
         desk.close(m.id, m.status === "declined" ? "declined" : "allowed");
-        if (m.status === "pending") wake(m.toId);
+        if (m.status === "pending") {
+          wake(m.toId);
+          wakeApp(m);
+        }
         if (m.status === "declined") wake(m.fromId);
         return;
       case "message_expired":
@@ -172,6 +201,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     agentStreams,
     personStreams,
     desk,
+    wakeUrls,
+    events,
     now,
     newId,
   };
@@ -194,6 +225,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     inboxWaits,
     sweepMinute() {
       sweep("messages_expired", () => messages.expireDue().length);
+      sweep("event_subscriptions", () => events.sweep());
       sweep("desk", () => desk.sweep());
       sweep("computers_minute", () => computers.sweepMinute());
     },
