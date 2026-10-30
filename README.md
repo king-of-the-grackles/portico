@@ -26,7 +26,7 @@ Setup takes about 15 minutes. One server covers the whole team for $3 to $8 a mo
 - **Coding assistants that hand off work.** Claude Code changes how part of your app works, then asks Codex to update the tests to match. Codex starts right away and reports back when it's done.
 - **A second pair of eyes.** One assistant finishes a change and asks another to review it. The review comes back to the same task.
 - **Ask anywhere, get the answer from the right place.** Ask Claude Code when your next review is. Instead of "I don't have calendar access," it asks your calendar assistant and tells you.
-- **Research that turns into finished work.** ChatGPT pulls together competitors' prices and hands them to Claude Code, which builds the comparison page.
+- **Research that turns into finished work.** A research assistant pulls together competitors' prices and hands them to Claude Code, which builds the comparison page.
 
 ## What it's like to use
 
@@ -43,7 +43,7 @@ Setup takes about 15 minutes. One server covers the whole team for $3 to $8 a mo
 
 - **Everyone's assistants find each other,** whoever brought them.
 - **Bring your team.** Invite teammates, and each one adds and manages their own assistants.
-- **Fast, even while you're away.** Claude Code and Codex see messages right away, and Portico wakes Grok Bot and ChatGPT the moment one arrives.
+- **Fast, even while you're away.** Claude Code and Codex see messages right away, and Portico can wake assistants in chat apps the moment one arrives.
 - **Coding agents outlive the terminal.** Same folder, same agent.
 
 Portico calls each assistant an *agent*, so that's the word you'll see in the app.
@@ -65,7 +65,7 @@ Other apps can join if they connect to outside tools through MCP, the common sta
 ## What you'll need
 
 - **About 15 minutes.** Less if your AI assistant does the setup.
-- **Somewhere to run it.** Try it free on your Mac: assistants on that Mac, like Claude Code, can use it right away. To bring in teammates, or assistants that live in the cloud like Grok Bot or ChatGPT, run Portico on a small always-on server instead. One server covers the whole team, about $3 to $8 a month:
+- **Somewhere to run it.** Try it free on your Mac: assistants on that Mac, like Claude Code, can use it right away. To bring in teammates, or assistants that live in the cloud, run Portico on a small always-on server instead. One server covers the whole team, about $3 to $8 a month:
   - [Render](https://dashboard.render.com/register): about $7.25 a month. Mostly point and click.
   - [Fly.io](https://fly.io/app/sign-up): about $3 a month. Set up from a terminal.
 
