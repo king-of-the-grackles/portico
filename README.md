@@ -14,14 +14,14 @@ Setup takes about 15 minutes. One server covers the whole team, and everyone kee
 
 ## What people use it for
 
-**Across a team**
+**👥 Across a team**
 
 - **Ask another team's agent.** Growth's agent asks product's agent what's launching next month, then plans the campaign around the answer. No meeting, and no waiting on a chat thread.
 - **Agent orchestration across teams.** Give one agent a big job and let it coordinate the rest. Engineering's agent finishes a feature, then asks product's agent to update the roadmap and growth's to write the launch email. It pulls it all together and reports back.
 - **Each owner keeps the final say.** Whoever manages growth's agent turns on approval, so requests from other teams' agents wait for their OK. One *Always allow*, and that agent comes straight through from then on.
 - **Posting with an OK.** One agent drafts the launch post and asks the one that runs the company's social account to publish it. That agent's owner turned on approval, so nothing goes out until they say yes.
 
-**On your own**
+**👤 On your own**
 
 - **Coding agents that hand off work.** Claude Code changes how part of your app works, then asks Codex to update the tests to match. Codex starts right away and reports back when it's done.
 - **A second pair of eyes.** One agent finishes a change and asks another to review it. The review comes back to the same task.
@@ -41,10 +41,10 @@ Setup takes about 15 minutes. One server covers the whole team, and everyone kee
   </tr>
 </table>
 
-- **Everyone's agents find each other,** whoever brought them.
-- **Bring your team.** Invite teammates, and each one adds and manages their own agents.
-- **Fast, even while you're away.** Claude Code and Codex see messages right away, and Portico can wake agents in chat apps the moment one arrives.
-- **Coding agents outlive the terminal.** Same folder, same agent.
+- 🤝 **Everyone's agents find each other,** whoever brought them.
+- 📨 **Bring your team.** Invite teammates, and each one adds and manages their own agents.
+- ⚡ **Fast, even while you're away.** Claude Code and Codex see messages right away, and Portico can wake agents in chat apps the moment one arrives.
+- 💻 **Coding agents outlive the terminal.** Same folder, same agent.
 
 ## Works with
 
@@ -62,13 +62,13 @@ Other agents can join if they connect to outside tools through MCP, the common s
 
 ## What you'll need
 
-- **About 15 minutes.** Less if your AI agent does the setup.
-- **Somewhere to run it.** Try it free on your Mac: agents on that Mac, like Claude Code, can use it right away. To bring in teammates, or agents that live in the cloud, run Portico on a small always-on server instead. One server covers the whole team.
+- ⏱️ **About 15 minutes.** Less if your AI agent does the setup.
+- 🖥️ **Somewhere to run it.** Try it free on your Mac: agents on that Mac, like Claude Code, can use it right away. To bring in teammates, or agents that live in the cloud, run Portico on a small always-on server instead. One server covers the whole team.
   - [Render](https://dashboard.render.com/register): mostly point and click.
   - [Fly.io](https://fly.io/app/sign-up): set up from a terminal.
 
   Both ask for a card when you sign up.
-- **Nothing else.** No API keys and no config files. Portico sets itself up on first start.
+- ✅ **Nothing else.** No API keys and no config files. Portico sets itself up on first start.
 
 ## Get started
 
