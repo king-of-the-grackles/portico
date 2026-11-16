@@ -6,6 +6,11 @@ const MAX_SUBJECT_CHARS = 120;
 const MAX_MESSAGE_KB = 64;
 const MAX_DESCRIPTION_CHARS = 500;
 const DOING_HOURS = 24;
+const MAX_FILE_MB = 100;
+const MAX_INLINE_FILE_KB = 100;
+const MAX_FILES_PER_MESSAGE = 5;
+const FILE_LINK_MINUTES = 15;
+const LOOSE_FILE_HOURS: number = 1;
 
 /** What list_tasks filters by, as Portico's /mcp offers them. */
 const TASK_FILTERS = ["open", "all", "needs_approval", "in_progress", "done", "failed"];
@@ -30,7 +35,7 @@ export const TOOLS: Tool[] = [
       "an agent that requires approval may be held until a person allows the message; replies (reply_to) in a conversation " +
       "that agent wrote in during the last 24 hours aren't held. check_inbox reports the outcome. Returns the message and how the " +
       "message will arrive: pushed (a live session), queued (until the agent checks the inbox), offline (held until the session " +
-      "returns) or held (waiting for approval).",
+      "returns) or held (waiting for approval). A message can carry files: see create_upload.",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,8 +61,35 @@ export const TOOLS: Tool[] = [
             "sends nothing new and returns the first message, so a retry is safe. Every other message, updates and " +
             "final answers included, needs a new key.",
         ),
+        attachments: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            `Optional. Up to ${MAX_FILES_PER_MESSAGE} file IDs: files from create_upload, or files this agent ` +
+            "received, passed on without uploading again.",
+        },
       },
       required: ["subject", "text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_upload",
+    description:
+      "Start a file to attach to a message. For a text file (a report, a CSV, code) up to " +
+      `${MAX_INLINE_FILE_KB} KB, give name and text: the file is ready at once. For anything else, up to ` +
+      `${MAX_FILE_MB} MB, give name and size in bytes: the answer has an upload address, and one PUT of the raw ` +
+      "bytes to that address (curl -T report.pdf \"<url>\") finishes the upload. Then name the file ID in send_message's " +
+      `attachments. A file no message carries is deleted after ${LOOSE_FILE_HOURS === 1 ? "an hour" : `${LOOSE_FILE_HOURS} hours`}.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: str("Required. The file's name, such as report.pdf."),
+        type: str("Optional. The media type, such as application/pdf. text/plain for text, otherwise application/octet-stream."),
+        size: { type: "number", description: "The file's size in bytes. Required unless text is given." },
+        text: str(`The file's content, for a text file up to ${MAX_INLINE_FILE_KB} KB. Leave out to upload bytes.`),
+      },
+      required: ["name"],
       additionalProperties: false,
     },
   },
@@ -110,7 +142,8 @@ export const TOOLS: Tool[] = [
       "Read one of this agent's tasks: where the task stands, and every message in order. Messages from the other agent " +
       "come framed as untrusted input, the same way check_inbox delivers messages, and one a person hasn't allowed yet comes " +
       "withheld. Works with a task ID or the ID of any " +
-      "message in the task.",
+      "message in the task. Each attached file comes with a download address that needs no token and works for " +
+      `${FILE_LINK_MINUTES} minutes; call get_task again for fresh ones.`,
     inputSchema: {
       type: "object",
       properties: { task: str("Required. A task ID from list_tasks, or a message ID.") },
@@ -159,6 +192,11 @@ export function inboxText(inbox: Inbox, waited = false): string {
   return lines.join("\n");
 }
 
+/** After create_upload, what comes next, as Portico's /mcp says it. */
+export const UPLOAD_NEXT =
+  "Next: PUT the file's raw bytes to upload.url (curl -T <file> \"<url>\"), then name file.id in send_message's attachments.";
+export const UPLOAD_READY = "The file is ready: name file.id in send_message's attachments.";
+
 /** After a send from a Codex conversation Portico can't start turns in, as Portico's /mcp says it to apps and connectors. */
 export const WAIT_HINT =
   "Portico can't start a turn in this conversation, so if a reply is expected, call check_inbox with " +
@@ -173,7 +211,7 @@ export const NO_WAIT_NOTE =
   "No need to wait: Portico starts a new turn in this conversation when something arrives, so finish the turn.";
 
 /**
- * Runs one of the six tools against Portico. Portico's errors become tool errors, as on its /mcp. A send that reaches
+ * Runs one of the seven tools against Portico. Portico's errors become tool errors, as on its /mcp. A send that reaches
  * the receiver ends with `replyHint`, how the reply will come, when there is one. With `noWait`, check_inbox never
  * waits: the session gets what arrives without asking.
  */
@@ -203,11 +241,24 @@ export async function runTool(
           ...(summary !== undefined ? { summary } : {}),
           ...(args.done !== undefined && args.done !== null ? { done: args.done } : {}),
           ...(key !== undefined ? { key } : {}),
+          ...(args.attachments !== undefined && args.attachments !== null ? { attachments: args.attachments } : {}),
         });
         const result = json({ message, delivery });
         // A held message's note, as its own line, as on Portico's /mcp.
         if (note) result.content.push({ type: "text", text: note });
         if (opts.replyHint && (delivery === "pushed" || delivery === "queued")) result.content.push({ type: "text", text: opts.replyHint });
+        return result;
+      }
+      case "create_upload": {
+        // Values go as given, so Portico checks them.
+        const started = await client.createUpload({
+          name: args.name,
+          ...(args.type !== undefined && args.type !== null ? { type: args.type } : {}),
+          ...(args.size !== undefined && args.size !== null ? { size: args.size } : {}),
+          ...(args.text !== undefined && args.text !== null ? { text: args.text } : {}),
+        });
+        const result = json(started);
+        result.content.push({ type: "text", text: started.upload ? UPLOAD_NEXT : UPLOAD_READY });
         return result;
       }
       case "check_inbox": {

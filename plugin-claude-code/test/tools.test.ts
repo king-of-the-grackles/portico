@@ -6,7 +6,7 @@ import { inboxText, TOOLS } from "../src/tools";
 
 test("the plugin's tools match Portico's /mcp tools exactly", () => {
   expect(TOOLS).toEqual(mcpTools() as unknown as typeof TOOLS);
-  expect(TOOLS.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "check_inbox", "list_tasks", "get_task", "update_profile"]);
+  expect(TOOLS.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile"]);
 });
 
 test("send_message requires subject and text, and names the built-in limits", () => {

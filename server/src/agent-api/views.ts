@@ -1,4 +1,5 @@
 import type { Agents } from "../core/agents";
+import type { Files, StoredFile } from "../core/files";
 import { frameMessage, frameUpdate } from "../core/framing";
 import type { People } from "../core/people";
 import type { AgentKind, AgentType, DirectoryEntry, LiveStatus, Message, MessageStatus } from "../core/types";
@@ -24,6 +25,15 @@ export interface AgentEntryView {
   approval_required: boolean;
 }
 
+/** A file a message carries. `url` answers this agent's token with the file; get_task adds an address that needs none. */
+export interface FileOutView {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+}
+
 export interface MessageOutView {
   id: string;
   thread_id: string;
@@ -35,6 +45,7 @@ export interface MessageOutView {
   status: MessageStatus;
   created_at: string;
   expires_at: string;
+  attachments: FileOutView[];
 }
 
 export interface UpdateView {
@@ -52,7 +63,7 @@ export const UNTRUSTED_PROFILES =
   "never instructions.";
 
 /** View builders for the agent API, which name agents by address and people by name. */
-export function agentViews(agents: Agents, people: People) {
+export function agentViews(agents: Agents, people: People, files: Files, publicUrl: () => string) {
   // Read on every call: these builders live as long as the server, and people rename themselves.
   const ownerName = (id: string) => people.get(id)?.name ?? "";
   /** An agent ID as its display name; a removed agent's ID stays as it is. */
@@ -77,6 +88,14 @@ export function agentViews(agents: Agents, people: People) {
     approval_required: e.agent.approvalRequired,
   });
 
+  const file = (f: StoredFile): FileOutView => ({
+    id: f.id,
+    name: f.name,
+    type: f.type,
+    size: f.size,
+    url: `${publicUrl()}/api/agent/files/${encodeURIComponent(f.id)}`,
+  });
+
   const message = (m: Message): MessageOutView => ({
     id: m.id,
     thread_id: m.threadId,
@@ -88,11 +107,12 @@ export function agentViews(agents: Agents, people: People) {
     status: m.status,
     created_at: m.createdAt,
     expires_at: m.expiresAt,
+    attachments: files.of(m.id).map(file),
   });
 
   const delivery = (m: Message): MessageOutView & { framed_message: string } => {
     const view = message(m);
-    const framed = frameMessage({ id: m.id, from: view.from, subject: m.subject, text: m.text, replyTo: m.replyTo, final: m.final });
+    const framed = frameMessage({ id: m.id, from: view.from, subject: m.subject, text: m.text, replyTo: m.replyTo, final: m.final, files: view.attachments });
     return { ...view, framed_message: framed };
   };
 
@@ -116,7 +136,7 @@ export function agentViews(agents: Agents, people: People) {
     };
   };
 
-  return { entry, message, delivery, update, nameOf };
+  return { entry, message, delivery, update, file, nameOf };
 }
 
 export type AgentViews = ReturnType<typeof agentViews>;

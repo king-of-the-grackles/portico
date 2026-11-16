@@ -148,6 +148,15 @@ export type Notice =
   | { kind: "message_expired"; message: Message }
   | { kind: "message_delivered"; message: Message };
 
+/** An S3-compatible bucket for files (Tigris on Fly, say). */
+export interface BucketConfig {
+  bucket: string;
+  endpoint: string | null;
+  region: string | null;
+  accessKeyId: string;
+  secretAccessKey: string;
+}
+
 export interface PorticoConfig {
   port: number;
   /** ":memory:" in tests. */
@@ -165,4 +174,6 @@ export interface PorticoConfig {
    * development only; otherwise Portico posts only to public https:// addresses.
    */
   webhooksAllowPrivate: boolean;
+  /** Where files live: a bucket when one is configured, otherwise `files` in the data folder. */
+  files: BucketConfig | null;
 }

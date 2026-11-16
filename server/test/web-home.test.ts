@@ -91,6 +91,7 @@ const ref = (a: AgentView) => ({ id: a.id, display: a.display, label: a.label, k
 
 function message(o: Partial<MessageView> & { id: string; from: AgentView; to: AgentView }): MessageView {
   return {
+    files: [],
     threadId: "t1",
     subject: "A subject",
     text: "The text",

@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Agents } from "../core/agents";
 import type { Changes } from "../core/changes";
 import { HTTP_STATUS, PorticoError } from "../core/errors";
+import type { Files } from "../core/files";
 import { inboxWaitMs } from "../core/inbox-waits";
 import { DELIVERY_BATCH_MAX, type Messages } from "../core/messages";
 import type { Tasks } from "../core/tasks";
@@ -24,6 +25,13 @@ const SendBody = z.object({
   summary: z.string().optional(),
   done: z.boolean().nullish(),
   key: z.string().nullish(),
+  attachments: z.array(z.string()).nullish(),
+});
+const UploadBody = z.object({
+  name: z.string(),
+  type: z.string().nullish(),
+  size: z.number().nullish(),
+  text: z.string().nullish(),
 });
 const ProfileBody = z.object({ description: z.string().nullish(), doing: z.string().nullish() });
 const WakeBody = z.object({ url: z.string(), key: z.string() });
@@ -55,6 +63,7 @@ export interface AgentRestDeps {
   agents: Agents;
   messages: Messages;
   tasks: Tasks;
+  files: Files;
   presence: Presence;
   wakeUrls: WakeUrls;
   views: AgentViews;
@@ -83,6 +92,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
   api.post("/messages", async (c) => {
     const body = SendBody.parse(await readJson(c));
     const agent = c.get("agent");
+    await deps.files.settle(agent, body.attachments);
     const { message, delivery, note } = messages.send(agent, {
       to: body.to,
       subject: body.subject,
@@ -91,9 +101,28 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       summary: body.summary,
       done: body.done,
       key: body.key,
+      attachments: body.attachments,
     });
     agents.checkedIn(agent);
     return c.json({ message: views.message(message), delivery, ...(note ? { note } : {}) }, 201);
+  });
+
+  // Starts a file to attach. Small text comes in the call; anything else gets an address to PUT the bytes to.
+  api.post("/files", async (c) => {
+    const body = UploadBody.parse(await readJson(c));
+    const agent = c.get("agent");
+    const { file, upload } = await deps.files.createUpload(agent, body);
+    agents.checkedIn(agent);
+    return c.json({ file: { ...views.file(file), status: file.status }, ...(upload ? { upload } : {}) }, 201);
+  });
+
+  // A file's own address: checks the caller may have the file, then sends the caller on to a short-lived download.
+  api.get("/files/:id", async (c) => {
+    const agent = c.get("agent");
+    const file = deps.files.get(c.req.param("id"));
+    if (!file || !deps.files.agentMayDownload(agent, file)) throw new PorticoError("not_found", "No such file among this agent's files.");
+    const link = await deps.files.link(file);
+    return c.redirect(link.url, 302);
   });
 
   api.get("/tasks", (c) => {
@@ -104,7 +133,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
     );
   });
 
-  api.get("/tasks/:id", (c) => c.json(getAgentTask(deps, c.get("agent"), c.req.param("id"))));
+  api.get("/tasks/:id", async (c) => c.json(await getAgentTask(deps, c.get("agent"), c.req.param("id"))));
 
   // The agent's own description and doing line; the person who manages it can still change the description.
   api.patch("/profile", async (c) => {

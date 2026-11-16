@@ -8,12 +8,15 @@ import { streamRoutes } from "./agent-api/stream";
 import { agentViews } from "./agent-api/views";
 import { personApi } from "./api";
 import { computerApi } from "./computer-api";
+import { fileRoutes } from "./file-api";
 import type { Core } from "./core/core";
 import { oauthRoutes } from "./oauth";
 import { signInRequestApi } from "./sign-in-api";
 import { webRoutes } from "./web";
 import { narrowPage } from "./web/layout";
 import { html } from "hono/html";
+import { bodyLimit } from "hono/body-limit";
+import { MAX_BODY_BYTES } from "./core/limits";
 
 /**
  * Every surface over the core. Order matters: the agent, computer and sign-in-request routes answer before the person
@@ -22,8 +25,16 @@ import { html } from "hono/html";
 export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono {
   const app = new Hono();
   const resolver = makeResolver(core.agents, core.computers, () => core.settings.publicUrl());
-  const views = agentViews(core.agents, core.people);
-  const { agents, messages } = core;
+  const views = agentViews(core.agents, core.people, core.files, () => core.settings.publicUrl());
+  const { agents, messages, files } = core;
+
+  // The server's own backstop rises to the file limit when uploads come through Portico. Everything but the upload
+  // route keeps the backstop there was before.
+  const backstop = bodyLimit({
+    maxSize: MAX_BODY_BYTES * 2,
+    onError: (c) => c.json({ error: "too_large", message: "The request body is too large." }, 413),
+  });
+  app.use("*", (c, next) => (c.req.path.startsWith("/files/") ? next() : backstop(c, next)));
 
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/api/agent/openapi.json", (c) => c.json(openApiDocument(core.settings.publicUrl())));
@@ -31,11 +42,12 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
   app.route("/api/agent/approvals", popupAnswerRoutes({ approvals: core.approvals, desk: core.desk, views, resolver }));
   app.route(
     "/api/agent",
-    agentRestRoutes({ agents, messages, tasks: core.tasks, presence: core.presence, wakeUrls: core.wakeUrls, views, resolver, changes: core.changes, now: core.now }),
+    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, views, resolver, changes: core.changes, now: core.now }),
   );
+  app.route("/files", fileRoutes(core));
   app.route("/api/computer", computerApi(core));
   app.route("/api/sign-in-requests", signInRequestApi(core));
-  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, events: core.events, views, resolver }));
+  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, views, resolver }));
   app.route("/", oauthRoutes(core));
   app.route("/api", personApi(core, opts));
   app.route("/", webRoutes(core));

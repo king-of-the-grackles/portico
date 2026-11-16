@@ -96,9 +96,9 @@ describe("REST under /api/agent", () => {
 });
 
 describe("MCP", () => {
-  test("offers exactly six tools, with subject required", () => {
+  test("offers exactly seven tools, with subject required", () => {
     const tools = mcpTools();
-    expect(tools.map((t) => t.name)).toEqual(["list_agents", "send_message", "check_inbox", "list_tasks", "get_task", "update_profile"]);
+    expect(tools.map((t) => t.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile"]);
     expect(tools[1]!.inputSchema).toMatchObject({ required: ["subject", "text"] });
   });
 

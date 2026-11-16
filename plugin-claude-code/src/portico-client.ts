@@ -20,6 +20,15 @@ export interface AgentEntry {
 
 export type MessageStatus = "held" | "pending" | "delivered" | "declined" | "expired";
 
+/** A file a message carries. `url` answers this agent's token with the file. */
+export interface FileView {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+}
+
 export interface MessageView {
   id: string;
   thread_id: string;
@@ -31,6 +40,7 @@ export interface MessageView {
   status: MessageStatus;
   created_at: string;
   expires_at: string;
+  attachments?: FileView[];
 }
 
 export interface MessageDelivery extends MessageView {
@@ -86,6 +96,8 @@ export interface AgentTaskMessage {
   framed_message?: string;
   /** A message to this agent that a person hasn't allowed yet. */
   withheld?: true;
+  /** Each file with a download address that needs no token and works for a few minutes. */
+  attachments?: (FileView & { download_url?: string; download_expires_at?: string; unavailable?: string })[];
 }
 
 /** The longest Portico holds a check_inbox that waits. */
@@ -170,8 +182,18 @@ export class PorticoClient {
     /** false for an update with more to come. Sent as given: Portico checks the value. */
     done?: unknown;
     key?: string;
+    /** File IDs. Sent as given: Portico checks the value. */
+    attachments?: unknown;
   }): Promise<{ message: MessageView; delivery: DeliveryTier; note?: string }> {
     return this.call("POST", "/api/agent/messages", body);
+  }
+
+  /** Starts a file to attach: ready at once with `text`, otherwise with an address to PUT the bytes to. */
+  createUpload(body: { name: unknown; type?: unknown; size?: unknown; text?: unknown }): Promise<{
+    file: FileView & { status: "uploading" | "ready" };
+    upload?: { method: "PUT"; url: string; expires_at: string };
+  }> {
+    return this.call("POST", "/api/agent/files", body);
   }
 
   /** This agent's tasks, newest first; open ones unless `outcome` says otherwise. Portico checks every value. */

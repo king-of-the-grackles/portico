@@ -371,3 +371,10 @@ button.trow-main:hover { background: #f5f7f3; }
 }
 @media (prefers-reduced-motion: reduce) { .nav { transition: none; } }
 @media (max-width: 420px) { .nav-acct .acct-name { display: inline; } }
+
+/* Files a message carries: one row each, the name on the left and the size on the right. */
+.files { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.file { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.file a { overflow-wrap: anywhere; }
+.file-size { color: var(--muted); white-space: nowrap; }
+.dcard .files { margin: 0 0 12px; }

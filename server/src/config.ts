@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { cleanPublicUrl } from "./core/settings";
-import type { PorticoConfig } from "./core/types";
+import type { BucketConfig, PorticoConfig } from "./core/types";
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {
@@ -19,8 +19,9 @@ const SIGNING_KEY_FILE = "signing.key";
 type Env = Record<string, string | undefined>;
 
 /**
- * Everything is optional: PORT, PORTICO_DB_PATH, PORTICO_PLUGIN_SOURCE, PORTICO_PUBLIC_URL and
- * PORTICO_WEBHOOKS_ALLOW_PRIVATE. The signing key is passed in, so this stays free of file access (see loadConfig).
+ * Everything is optional: PORT, PORTICO_DB_PATH, PORTICO_PLUGIN_SOURCE, PORTICO_PUBLIC_URL,
+ * PORTICO_WEBHOOKS_ALLOW_PRIVATE and the bucket for files. The signing key is passed in, so this stays free of file
+ * access (see loadConfig).
  */
 export function parseEnv(env: Env, signingKey: string): PorticoConfig {
   const problems: string[] = [];
@@ -36,6 +37,7 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
       );
     }
   }
+  const files = bucketConfig(env, problems);
   if (problems.length > 0) throw new ConfigError(problems);
   const dbPath = env.PORTICO_DB_PATH?.trim() || DEFAULT_DB_PATH;
   return {
@@ -46,6 +48,33 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     publicUrl,
     signingKey,
     webhooksAllowPrivate: env.PORTICO_WEBHOOKS_ALLOW_PRIVATE?.trim() === "1",
+    files,
+  };
+}
+
+/**
+ * The bucket for files, only when PORTICO_FILES_BUCKET names one. The endpoint, region and key fall back to the names
+ * `fly storage create` and AWS set: AWS_ENDPOINT_URL_S3, AWS_REGION, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+ * Without a bucket, files live in the data folder.
+ */
+function bucketConfig(env: Env, problems: string[]): BucketConfig | null {
+  const pick = (...names: string[]) => names.map((name) => env[name]?.trim()).find((value) => value) ?? null;
+  const bucket = pick("PORTICO_FILES_BUCKET");
+  if (!bucket) return null;
+  const accessKeyId = pick("PORTICO_FILES_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID");
+  const secretAccessKey = pick("PORTICO_FILES_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY");
+  if (!accessKeyId || !secretAccessKey) {
+    problems.push(
+      `The bucket "${bucket}" needs a key: PORTICO_FILES_ACCESS_KEY_ID and PORTICO_FILES_SECRET_ACCESS_KEY (or the AWS_ names)`,
+    );
+    return null;
+  }
+  return {
+    bucket,
+    endpoint: pick("PORTICO_FILES_ENDPOINT", "AWS_ENDPOINT_URL_S3"),
+    region: pick("PORTICO_FILES_REGION", "AWS_REGION"),
+    accessKeyId,
+    secretAccessKey,
   };
 }
 

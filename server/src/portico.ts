@@ -10,6 +10,9 @@ import { AllowList, Approvals } from "./core/approvals";
 import { Changes } from "./core/changes";
 import { Computers } from "./core/computers";
 import { EventSubscriptions } from "./core/events";
+import { type FileStore, fileStoreFor } from "./core/file-store";
+import { Files, type StoredFile } from "./core/files";
+import { fileSize } from "./core/framing";
 import { InboxWaits } from "./core/inbox-waits";
 import type { Core } from "./core/core";
 import { Messages } from "./core/messages";
@@ -35,6 +38,8 @@ export interface PorticoOptions {
   onNotice?: (notice: Notice) => void;
   /** Where wake URLs and event callbacks are posted; tests pass a fake. */
   webhookPost?: WebhookPost;
+  /** Where files' bytes live; by default the configured bucket, or the data folder. */
+  fileStore?: FileStore;
   /** When webhook retries run; tests run them by hand. */
   schedule?: (fn: () => void, ms: number) => void;
 }
@@ -47,6 +52,14 @@ export interface Portico extends Core {
   sweepMinute(): void;
   /** Run every day: history, stale sessions, expired sign-ins and links. */
   sweepDaily(): void;
+  /** Deletes files no message carries. Part of the minute sweep; tests await it. */
+  sweepFiles(): Promise<number>;
+}
+
+/** What a pop-up adds under a held message's text when files come with it. Portico's own words. */
+function attachedLine(files: StoredFile[]): string {
+  if (files.length === 0) return "";
+  return `\n\nFiles attached: ${files.map((f) => `${f.name} (${fileSize(f.size)})`).join(", ")}`;
 }
 
 const logInfo = (msg: string, fields: Record<string, unknown>) => log("info", msg, fields);
@@ -144,13 +157,16 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
           from: agents.display(sender),
           to: agents.display(receiver),
           subject: m.subject,
-          text: m.text,
+          text: m.text + attachedLine(files.of(m.id)),
           expiresAt: m.expiresAt,
         });
         return;
       }
       case "message_decided":
         desk.close(m.id, m.status === "declined" ? "declined" : "allowed");
+        if (m.status === "declined") {
+          files.release(m.id).catch((err) => log("error", "file_release_failed", { message_id: m.id, error: errorName(err) }));
+        }
         if (m.status === "pending") {
           wake(m.toId);
           wakeApp(m);
@@ -169,12 +185,24 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   };
 
   const allowList = new AllowList(db);
-  const messages = new Messages({
+  const files: Files = new Files({
+    db,
+    store: opts.fileStore ?? fileStoreFor(config),
+    agents,
+    message: (id) => messages.get(id),
+    publicUrl: () => settings.publicUrl(),
+    signingKey: config.signingKey,
+    now,
+    newId,
+    log: logInfo,
+  });
+  const messages: Messages = new Messages({
     db,
     agents,
     alwaysAllows: (agentId, senderId) => allowList.has(agentId, senderId),
     changes,
     waits: inboxWaits,
+    files,
     now,
     newId,
     notify,
@@ -193,6 +221,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     computers,
     agents,
     messages,
+    files,
     approvals,
     allowList,
     activity,
@@ -219,11 +248,24 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     }
   };
 
+  const sweepFiles = async () => {
+    try {
+      const count = await files.sweep();
+      if (count > 0) log("info", "files_swept", { count });
+      return count;
+    } catch (err) {
+      log("error", "files_sweep_failed", { error: errorName(err) });
+      return 0;
+    }
+  };
+
   return {
     ...core,
     app,
     inboxWaits,
+    sweepFiles,
     sweepMinute() {
+      void sweepFiles();
       sweep("messages_expired", () => messages.expireDue().length);
       sweep("event_subscriptions", () => events.sweep());
       sweep("desk", () => desk.sweep());
