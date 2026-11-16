@@ -31,7 +31,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
   app.route("/api/agent/approvals", popupAnswerRoutes({ approvals: core.approvals, desk: core.desk, views, resolver }));
   app.route(
     "/api/agent",
-    agentRestRoutes({ agents, messages, tasks: core.tasks, presence: core.presence, views, resolver, changes: core.changes, now: core.now }),
+    agentRestRoutes({ agents, messages, tasks: core.tasks, presence: core.presence, wakeUrls: core.wakeUrls, views, resolver, changes: core.changes, now: core.now }),
   );
   app.route("/api/computer", computerApi(core));
   app.route("/api/sign-in-requests", signInRequestApi(core));

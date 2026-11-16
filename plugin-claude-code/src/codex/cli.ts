@@ -126,7 +126,7 @@ async function join(args: string[], io: CodexCliIo, deps: CodexCliDeps): Promise
   if (!line) return usageError(io, "A join line is required.", JOIN_USAGE);
 
   const configPath = computerConfigPath(io.env);
-  const joined = await joinComputer({ line, name, replace }, { configPath, fetch: deps.fetch, hostname: deps.hostname });
+  const joined = await joinComputer({ line, name, replace, client: "codex" }, { configPath, fetch: deps.fetch, hostname: deps.hostname });
   if (joined.attached) {
     io.out(`This computer is already on Portico at ${joined.url} as computer "${withoutControls(joined.computer)}". Used the line here.`);
   } else {

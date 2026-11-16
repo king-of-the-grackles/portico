@@ -54,7 +54,8 @@ export interface WakeUrlsDeps {
 }
 
 /**
- * Wake URLs: an app's webhook trigger, such as a Grok Bot routine's, that the agent's manager gives Portico. When a
+ * Wake URLs: an app's webhook trigger, such as a Grok Bot routine's, that the agent registers while joining or the
+ * agent's manager gives Portico. When a
  * message for the agent arrives, Portico posts to it with the key as a bearer token, and the app starts a run that
  * checks the inbox. One wake that went through covers every message until the agent checks in.
  */
@@ -106,8 +107,11 @@ export class WakeUrls {
     this.recent.delete(agentId);
   }
 
-  /** Saves the agent's wake URL and key, replacing any earlier one. Only for apps and connectors. */
-  set(agent: Agent, personId: string, input: { url?: unknown; key?: unknown }): WakeUrlView {
+  /**
+   * Saves the agent's wake URL and key, replacing any earlier one. Only for apps and connectors. `personId` is the
+   * manager who set it, or null when the agent registered its own while joining.
+   */
+  set(agent: Agent, personId: string | null, input: { url?: unknown; key?: unknown }): WakeUrlView {
     if (agent.type === "session") throw new PorticoError("not_allowed", "Sessions get messages pushed and don't use a wake URL.");
     const url = cleanWebhookUrl(input.url, this.allowPrivate);
     if (!url) throw new PorticoError("bad_request", "The wake URL must be an https:// address, without a user name or password.");
@@ -123,18 +127,18 @@ export class WakeUrls {
       )
       .run({ agentId: agent.id, url, key, personId, at: this.now().toISOString() });
     this.reset(agent.id);
-    this.activity.record("wake_set", { agentId: agent.id, personId, detail: { host: new URL(url).host } });
+    this.activity.record("wake_set", { agentId: agent.id, personId, detail: { host: new URL(url).host, by_agent: personId === null } });
     this.changes.emit("agents");
     return this.view(agent.id)!;
   }
 
-  /** Returns whether there was one to remove. */
-  clear(agent: Agent, personId: string): boolean {
+  /** Returns whether there was one to remove. `personId` is null when the agent removed its own. */
+  clear(agent: Agent, personId: string | null): boolean {
     const row = this.row(agent.id);
     if (!row) return false;
     this.db.query("DELETE FROM wake_urls WHERE agent_id = $agentId").run({ agentId: agent.id });
     this.reset(agent.id);
-    this.activity.record("wake_removed", { agentId: agent.id, personId, detail: { host: new URL(row.url).host } });
+    this.activity.record("wake_removed", { agentId: agent.id, personId, detail: { host: new URL(row.url).host, by_agent: personId === null } });
     this.changes.emit("agents");
     return true;
   }

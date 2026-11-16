@@ -66,7 +66,7 @@ describe("portico join and portico leave", () => {
     const { io: joinIo, lines: joined } = io(home);
     expect(await joinCommand([`Join Portico: ${api.url}/join#${TOKEN}`, "--name", "studio"], joinIo)).toBe(0);
     expect(joined[0]).toBe(`Joined Portico at ${api.url} as computer "studio".`);
-    expect(api.requests[0]).toEqual({ method: "POST", path: "/api/computer/join", auth: null, body: { token: TOKEN, computer: "studio" } });
+    expect(api.requests[0]).toEqual({ method: "POST", path: "/api/computer/join", auth: null, body: { token: TOKEN, computer: "studio", client: "claude-code" } });
     const path = join(home, ".portico", "computer.json");
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ url: api.url, computer: "studio", token: "pc_computer-token", off: [] });
     expect(JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"))).toEqual({

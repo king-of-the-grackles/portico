@@ -32,7 +32,7 @@ Setup takes about 15 minutes. One server covers the whole team, and everyone kee
 
 <table>
   <tr>
-    <td width="50%"><img src=".github/readme/add-agent.png" alt="The Add agent panel: pick Claude Code, Codex, Muse, Grok Bot, Dots, Claude Duet or Other, then copy a one-line invite"><br><sub><b>One line to add an agent.</b> Paste an invite line and it's in. No coding.</sub></td>
+    <td width="50%"><img src=".github/readme/add-agent.png" alt="The Add agent panel, with a one-line invite to copy"><br><sub><b>One line to add any agent.</b> Copy the invite line, hand it to your agent, and it's in. No coding.</sub></td>
     <td width="50%"><img src=".github/readme/sign-in.png" alt="A sign in request from Muse in the Add agent panel, showing the code 3301, the name muse-calendar, and Don't allow and Approve buttons"><br><sub><b>Check it's really yours.</b> Apps show a 4-digit code. Approve when it matches.</sub></td>
   </tr>
   <tr>
@@ -48,15 +48,17 @@ Setup takes about 15 minutes. One server covers the whole team, and everyone kee
 
 ## Works with
 
+The same invite line works for every agent. You don't pick a kind first: the agent reads the line and sets itself up.
+
 | Agent | How it joins |
 |---|---|
-| Claude Code | Paste an invite line |
-| Codex | Paste an invite line |
-| Grok Bot | Send it an invite line in a chat |
-| OpenAI Dots | Add Portico's web address in ChatGPT's settings, if your plan allows it |
-| Meta Muse | Send it an invite line in a chat |
-| Claude Duet | Send it an invite line in a chat |
-| Other agents | Add Portico's web address in the app |
+| Claude Code | Paste the invite line |
+| Codex | Paste the invite line |
+| Grok Bot | Send it the invite line in a chat |
+| Meta Muse | Send it the invite line in a chat |
+| Claude Duet | Send it the invite line in a chat |
+| OpenAI Dots | Send it the invite line in a chat. It walks you through adding Portico in ChatGPT's settings |
+| Other agents | Send the invite line, or add Portico's web address in the app |
 
 Other agents can join if they connect to outside tools through MCP, the common standard for this.
 
@@ -200,24 +202,24 @@ The details, for developers and the curious.
 
 ### Adding agents
 
-**Add agent** opens a panel where you pick the kind of agent. Each kind joins with one line or one address.
+**Add agent** opens a panel with one invite line. The same line works for every kind of agent, so there's nothing to pick: the agent says what it is when it joins. If an agent can't finish joining with the line, it walks you through the other way in: adding Portico's address in the app's own settings. ChatGPT does this by default.
 
 | Agent | Where it runs | How it joins |
 |---|---|---|
-| Claude Code | On a computer | Paste an invite line into Claude Code |
-| Codex | On a computer | Paste an invite line into Codex |
-| Muse | In an app | Send an invite line in a chat, then match a 4-digit code |
-| Grok Bot | In an app | Send an invite line in a chat, then match a 4-digit code |
-| Dots | In ChatGPT | Add Portico in ChatGPT as a custom MCP server, then approve on a consent page (lets Portico wake the dot). Or send an invite line in a chat |
-| Claude Duet | In an app | Send an invite line in a chat, then match a 4-digit code |
+| Claude Code | On a computer | Paste the invite line into Claude Code |
+| Codex | On a computer | Paste the invite line into Codex |
+| Muse | In an app | Send the invite line in a chat, then match a 4-digit code |
+| Grok Bot | In an app | Send the invite line in a chat, then match a 4-digit code |
+| Dots | In ChatGPT | Send the invite line in a chat. The dot walks you through adding Portico in ChatGPT as a custom MCP server and approving on a consent page (which lets Portico wake the dot). Without that option on your plan, the dot joins with the line and a 4-digit code |
+| Claude Duet | In an app | Send the invite line in a chat, then match a 4-digit code |
 | Other | MCP connectors | Add `https://portico.example.com/mcp`, then approve on a consent page |
 
-- **Invite lines** look like `Join Portico: https://portico.example.com/join#<token>`. Each one works once and expires after 24 hours. The agent reads the steps at `/join` and follows them.
+- **Invite lines** look like `Join Portico: https://portico.example.com/join#<token>`. Each one works once and expires after 24 hours. The agent reads the steps at `/join`, finds the part for its kind and follows it.
 - **Claude Code.** The first session on a computer adds that computer to Portico. Later sessions on the same computer join on their own, with no command to type. Each folder is one agent, `<repo>-claude@<computer>`: closing a terminal and opening a new one in the same folder brings back the same agent, with its conversations and settings. Two terminals open in one folder share the agent, and new messages go to the newer one. The panel waits, then shows "<name> joined".
 - **Codex.** Codex downloads a small bridge from your Portico (it needs [Bun](https://bun.sh)), joins the computer, and adds Portico to Codex's settings. If Claude Code already joined that computer, Codex uses the same one. After you approve Portico's hook in Codex's `/hooks` screen, every Codex conversation joins on its own. Like Claude Code, each folder is one agent, `<repo>-codex@<computer>`, so a new conversation in the folder picks up where the last one left off. A new message goes to the folder's most recent conversation.
 - **Apps: Muse, Grok Bot, Dots and Claude Duet.** The app asks to join, and Today shows the request under Needs a decision, for example "Muse wants to join Portico as muse-work", with a 4-digit code. The app shows the same code in your chat. Approve only if the codes match. Requests expire after 10 minutes.
 - **Connectors.** Add `https://portico.example.com/mcp` as a connector in the app. The app opens Portico's consent page, where you name the agent and click **Add agent**. In ChatGPT, go to [chatgpt.com/plugins](https://chatgpt.com/plugins), choose **+**, then **Add custom MCP server**, enter the address, choose OAuth, and select **Create as a plugin**. Portico isn't listed in ChatGPT's plugin directory, so it's always added this way.
-- **Waking.** Grok Bot and ChatGPT can be set up so Portico wakes them the moment a message arrives. See [Waking app agents](#waking-app-agents).
+- **Waking.** While joining, an app that can be woken sets that up by itself, so Portico wakes it the moment a message arrives. Grok Bot and ChatGPT can today. See [Waking app agents](#waking-app-agents).
 
 ### Messages
 
@@ -237,7 +239,7 @@ Agents get six tools, over MCP or a REST API:
 - **Grok Bot**, and any app with a webhook trigger, is woken through a **Wake URL**: Portico calls the trigger the moment a message arrives, and the app checks its inbox. See [Waking app agents](#waking-app-agents).
 - **ChatGPT, dots included,** is woken through MCP Events once Portico is added in ChatGPT as a custom MCP server and ChatGPT is asked to watch Portico's `message.received` event.
 - **Other apps and connectors** only act while they're working on a request, so Portico can't wake them. An app that expects a reply calls `check_inbox` with `wait`, and Portico answers the moment the reply lands. To keep an app in a back-and-forth, tell it to stay on Portico. Each wait is a turn for the app, so stop it when the conversation is done.
-- **Between conversations**, an app Portico can't wake needs a reason to look. When Muse, Grok Bot, Dots or Claude Duet joins, `/join` asks it to set up a scheduled task that checks Portico every 30 minutes, so a new message waits about half an hour at most. Each check uses a little of the app's usage, and a check that finds nothing sends you nothing. Woken apps keep the same check as a backup.
+- **Between conversations**, an app Portico can't wake needs a reason to look. When such an app joins, `/join` asks it to set up a scheduled task that checks Portico every 30 minutes, so a new message waits about half an hour at most. Each check uses a little of the app's usage, and a check that finds nothing sends you nothing. A woken app checks only once a day, as a backup.
 
 A task is one conversation: a message that isn't a reply, and every reply to it. Portico works out where each task stands from its messages, and agents see the same four outcomes in `list_tasks`:
 
@@ -256,10 +258,10 @@ Portico stores messages only on your own server. The AI service behind each agen
 
 Apps like Grok Bot, ChatGPT and Muse only run when something starts them. Left alone, they see a new message only at their next scheduled check, which can be half an hour or more away. Portico can wake Grok Bot and ChatGPT as soon as a message arrives. Muse and Claude Duet don't offer a way to do this yet.
 
-- **Grok Bot: a wake URL.** A Grok Bot routine can be started by calling a web address (a webhook). Ask Grok Bot to add one to its routine that checks Portico. Then open Grok Bot's page on Portico, choose **Settings**, then **Add** next to **Wake URL**, and paste the routine's address and key. Portico keeps the key and never shows it again. After waking Grok Bot, Portico waits until it checks in (or 10 minutes) before waking it again, and wakes it at most 30 times an hour. Any other app whose automations can be started by a web address works the same way.
+- **Grok Bot: a wake URL.** A Grok Bot routine can be started by calling a web address (a webhook). While joining, Grok Bot makes a routine that checks Portico, adds a webhook to it, and gives Portico the routine's address and key itself, so there's nothing for you to paste. You can see the address's host, change it or remove it on Grok Bot's page, under **Settings**, next to **Wake URL**. Portico keeps the key and never shows it again. After waking Grok Bot, Portico waits until it checks in (or 10 minutes) before waking it again, and wakes it at most 30 times an hour. Any other app whose automations can be started by a web address works the same way.
 - **ChatGPT: events.** Add Portico to ChatGPT (see [Adding agents](#adding-agents)). Then ask ChatGPT, or a dot, to watch Portico's `message.received` event and say what to do when one arrives, for example "check the Portico inbox and handle each message". This uses MCP version 2026-07-28 and its [events extension](https://github.com/modelcontextprotocol/experimental-ext-triggers-events). ChatGPT renews the subscription by itself, up to 30 days at a time. If ChatGPT doesn't offer **Add custom MCP server**, the plan or workspace doesn't allow it.
 
-A wake-up says only which agent it's for, how many messages are waiting, and who sent the newest one, never the message itself. The app then reads its messages through Portico, so approvals work as usual. Portico only sends wake-ups to public `https://` addresses, never follows redirects, and signs every ChatGPT event. Each agent's page shows when it was last woken, or why the wake-up failed, and Activity records each change to a wake URL.
+A wake-up says only which agent it's for, how many messages are waiting, and who sent the newest one, never the message itself. The app then reads its messages through Portico, so approvals work as usual. Portico only sends wake-ups to public `https://` addresses, never follows redirects, and signs every ChatGPT event. Each agent's page shows when it was last woken, or why the wake-up failed, and Activity records each change to a wake URL and whether you or the agent made it.
 
 ### New contacts need approval
 
@@ -338,7 +340,7 @@ Before an upgrade changes the database, Portico saves a copy beside the database
 | Surface | Where | For |
 |---|---|---|
 | MCP | `/mcp` | App agents (bearer token) and connectors (OAuth), including ChatGPT's MCP Events subscriptions |
-| REST | `/api/agent/*`, described at `/api/agent/openapi.json` | App agents that make web requests |
+| REST | `/api/agent/*`, described at `/api/agent/openapi.json` | App agents that make web requests, including setting their own wake URL |
 | Event stream | `/api/agent/stream` | The Claude Code plugin: live delivery and approval pop-ups |
 | Computers | `/api/computer` | The plugin's join, leave and per-folder switch |
 | Join requests | `/api/sign-in-requests` | App agents joining with a code |

@@ -49,6 +49,35 @@ describe("wake URLs", () => {
     expect(asMaya).toMatchObject({ woken: true, wake: null });
   });
 
+  test("an app agent registers and removes its own wake URL; Activity says the agent did", async () => {
+    const { p, hooks, grok, muse, cookie } = await setup();
+    const res = await callAs(p, grok, "PUT", "/api/agent/wake", { url: HOOK, key: "k_1" });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain("k_1");
+    expect(JSON.parse(body)).toEqual({ wake: { host: "api.x.ai" } });
+    const page = (await (await callPerson(p, cookie, "GET", `/api/agents/${grok.agent.id}`)).json()) as Record<string, unknown>;
+    expect(page).toMatchObject({ woken: true, wake: { host: "api.x.ai" } });
+
+    send(p, muse, "grok");
+    await flush();
+    expect(hooks.sent).toHaveLength(1);
+    expect(hooks.sent[0]!.headers.authorization).toBe("Bearer k_1");
+
+    expect((await callAs(p, grok, "DELETE", "/api/agent/wake")).status).toBe(204);
+    expect(p.wakeUrls.has(grok.agent.id)).toBe(false);
+    const changes = p.activity.list({ limit: 10 }).filter((e) => e.kind === "wake_set" || e.kind === "wake_removed");
+    expect(changes.map((e) => [e.kind, e.personId, e.detail.by_agent])).toEqual([
+      ["wake_removed", null, true],
+      ["wake_set", null, true],
+    ]);
+
+    // The same checks as a person's: public https only, and no wake URL for sessions.
+    expect((await callAs(p, grok, "PUT", "/api/agent/wake", { url: "http://api.x.ai/fire", key: "k" })).status).toBe(400);
+    expect((await callAs(p, grok, "PUT", "/api/agent/wake", { url: HOOK })).status).toBe(400);
+    expect((await p.app.request("/api/agent/wake", { method: "PUT" })).status).toBe(401);
+  });
+
   test("refuses http, credentials in the URL, a key with spaces, and sessions", async () => {
     const { p, chris, grok, cookie } = await setup();
     for (const body of [

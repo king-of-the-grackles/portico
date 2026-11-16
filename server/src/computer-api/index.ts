@@ -44,9 +44,9 @@ export function computerApi(core: Core): Hono {
 
   // The join line is the credential: no token yet. Ten unknown lines in 15 minutes from one address close the route to that address for a while.
   route.post("/join", async (c) => {
-    const body = (await readJson(c)) as { token?: unknown; computer?: unknown } | null;
+    const body = (await readJson(c)) as { token?: unknown; computer?: unknown; client?: unknown } | null;
     const { computer, token, joinLine } = limitedRedeem(limiter, clientIp(c), () =>
-      core.computers.redeem(body?.token, body?.computer),
+      core.computers.redeem(body?.token, body?.computer, body?.client),
     );
     return c.json({ computer: { id: computer.id, name: computer.name }, token, kind: joinLine.kind }, 201);
   });
@@ -54,8 +54,8 @@ export function computerApi(core: Core): Hono {
   // A join line used on a computer that already joined, e.g. Codex on a computer where Claude Code joined first.
   route.post("/lines", async (c) => {
     const computer = currentComputer(core, c);
-    const body = (await readJson(c)) as { token?: unknown } | null;
-    const joinLine = limitedRedeem(limiter, clientIp(c), () => core.computers.attach(computer, body?.token));
+    const body = (await readJson(c)) as { token?: unknown; client?: unknown } | null;
+    const joinLine = limitedRedeem(limiter, clientIp(c), () => core.computers.attach(computer, body?.token, body?.client));
     return c.json({ computer: { id: computer.id, name: computer.name }, kind: joinLine.kind });
   });
 

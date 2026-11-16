@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import type { AgentPageData } from "../src/api/agents";
 import type { TaskListData, TodayData } from "../src/api/tasks";
 import type { ActivityView, AgentView, HeldCard, MessageView, PersonView, SignInView, TaskView } from "../src/api/views";
-import { agentState, clock, dayHeading, duration, esc, expiresIn, longDate } from "../src/web/client/render/common";
+import { agentState, clock, dayHeading, duration, esc, expiresIn, longDate, renderAddSheet } from "../src/web/client/render/common";
 import { homeState, renderHome } from "../src/web/client/render/home";
 import { eventText } from "../src/web/client/render/activity";
 import { taskLine } from "../src/web/client/render/tasks";
-import type { HomeState } from "../src/web/client/render/types";
+import type { AddState, HomeState } from "../src/web/client/render/types";
 import {
   addAppAgent,
   addComputer,
@@ -424,7 +424,7 @@ describe("an agent's page", () => {
   test("an app's wake URL: off with Add, the form, then the host and how the last wake went", () => {
     const off = text(render(page(grok, {}, { settingsOpen: true, detailsOpen: true })));
     expect(off).toContain(
-      "Wake URL Off. Grok Bot sees new messages on the next check. Add an app's webhook trigger, such as a Grok Bot routine's, and Portico wakes Grok Bot when a message arrives. Add",
+      "Wake URL Off. Grok Bot sees new messages on the next check. An app with a webhook trigger, such as a Grok Bot routine's, sets this up while joining. Add one here by hand, and Portico wakes Grok Bot when a message arrives. Add",
     );
     expect(off).not.toContain("When a message arrives");
 
@@ -669,5 +669,44 @@ describe("the pages", () => {
     for (const kind of ["claude-code", "codex", "muse", "grok-bot", "dots", "claude-duet", "other"]) {
       expect((await p.app.request(`/assets/icons/${kind}.svg`)).headers.get("content-type")).toBe("image/svg+xml");
     }
+  });
+});
+
+describe("the Add agent sheet", () => {
+  const add = (over: Partial<AddState> = {}): AddState => ({
+    line: { id: "l-1", line: "Join Portico: https://portico.example.com/join#secret", expiresAt: "2026-10-28T12:00:00.000Z" },
+    lineError: "",
+    copied: false,
+    stage: "pick",
+    signIn: null,
+    reqName: "",
+    reqError: "",
+    joined: null,
+    busy: false,
+    ...over,
+  });
+  const ctx = { publicUrl: "https://portico.example.com", now: Date.parse("2026-10-27T12:00:00.000Z") };
+
+  test("one join line for every agent: the kinds it works with, one Copy, and nothing to pick or set up", () => {
+    const html = renderAddSheet(add(), ctx);
+    expect(html).not.toContain("Pick an agent");
+    expect(html).not.toContain('role="radio"');
+    expect(html).toContain('value="Join Portico: https://portico.example.com/join#secret"');
+    for (const kind of ["claude-code", "codex", "muse", "grok-bot", "dots", "claude-duet"]) expect(html).toContain(`/assets/icons/${kind}.svg`);
+    expect(text(html)).toContain("Works with Claude Code, Codex, Muse, Grok Bot, Dots, Claude Duet and other agents.");
+    expect(text(html)).toContain("Give this line to the agent.");
+    expect(text(html)).toContain("Paste the line into a chat with the agent. The agent does the rest.");
+    expect(html.match(/data-action="add-copy/g)).toHaveLength(1);
+    // The other ways in live on /join, which the agent reads and helps with: the sheet has no link or second path.
+    expect(html).not.toContain('href="/join"');
+    expect(html).not.toContain("/mcp");
+    expect(text(html)).not.toMatch(/wak|webhook|server address|ChatGPT/i);
+    expect(text(html)).not.toContain("Waiting for the agent to connect");
+    expect(copyProblems(text(html))).toEqual([]);
+  });
+
+  test("waits once the line is copied, and Copy stays off until the line is made", () => {
+    expect(text(renderAddSheet(add({ copied: true }), ctx))).toContain("Waiting for the agent to connect");
+    expect(renderAddSheet(add({ line: null }), ctx)).toMatch(/data-action="add-copy" disabled/);
   });
 });

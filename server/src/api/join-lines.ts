@@ -18,7 +18,7 @@ export function joinLineRoutes(core: Core): Hono<PersonEnv> {
     const body = (await readJson(c)) as { kind?: unknown } | null;
     const { joinLine, secret } = core.computers.createJoinLine(me.id, body?.kind);
     const line = `Join Portico: ${core.settings.publicUrl()}/join#${secret}`;
-    return c.json({ joinLine: { id: joinLine.id, kind: joinLine.kind, line, expiresAt: joinLine.expiresAt } }, 201);
+    return c.json({ joinLine: { id: joinLine.id, line, expiresAt: joinLine.expiresAt } }, 201);
   });
 
   // Only the person who made the line sees it. The agent is the first that joined through it: the first session on a
@@ -35,7 +35,6 @@ export function joinLineRoutes(core: Core): Hono<PersonEnv> {
     return c.json({
       joinLine: {
         id: joinLine.id,
-        kind: joinLine.kind,
         expiresAt: joinLine.expiresAt,
         usedAt: joinLine.usedAt,
         agent: agent ? personViews(core, me).agent(agent) : null,
