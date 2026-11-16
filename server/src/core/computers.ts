@@ -35,11 +35,18 @@ const APP_LINE = "This join line is for an app agent. Follow the steps for app a
 /** Kinds an MCP connector can be, signing in with OAuth from the server address instead of a join line. */
 export const CONNECTOR_KINDS: readonly AgentKind[] = ["dots", "claude-duet", "other"];
 
+/** What a join line's kind column holds while the line is for any agent. */
+const ANY_KIND = "any";
+
 /** A one-time line from Add agent: a computer joins with it, or an app agent asks to sign in with it. */
 export interface JoinLine {
   id: string;
   createdBy: string;
-  kind: AgentKind;
+  /**
+   * Null for a line any agent can use, until a coding agent says which client used the line. A line made for one kind
+   * only works for that kind.
+   */
+  kind: AgentKind | null;
   createdAt: string;
   expiresAt: string;
   usedAt: string | null;
@@ -64,7 +71,7 @@ function toJoinLine(row: JoinLineRow): JoinLine {
   return {
     id: row.id,
     createdBy: row.created_by,
-    kind: row.kind as AgentKind,
+    kind: row.kind === ANY_KIND ? null : (row.kind as AgentKind),
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     usedAt: row.used_at,
@@ -118,6 +125,18 @@ const JOIN_LINE_KEEP_MS = DAY_MS;
 /** Registered OAuth clients with no tokens and no codes are deleted after this: registration is open to anyone. */
 const UNUSED_CLIENT_MS = HOUR_MS;
 const AGAIN = "Make a new one with Add agent on Portico.";
+
+/**
+ * The kind a computer line ends up with: the line's own, or for a line any agent can use, the coding agent that says
+ * the line was used by that client (null when the client doesn't say). A line made for an app can't add a computer.
+ */
+function computerLineKind(line: JoinLine, client: unknown): AgentKind | null {
+  if (line.kind !== null) {
+    if (!COMPUTER_KINDS.includes(line.kind)) throw new PorticoError("bad_request", APP_LINE);
+    return line.kind;
+  }
+  return COMPUTER_KINDS.find((kind) => kind === client) ?? null;
+}
 
 /** A joining computer's proposed name (usually its hostname) as a computer name: slugged, without `.local`. */
 export function computerSlug(raw: string): string {
@@ -275,16 +294,20 @@ export class Computers {
 
   // ---- join lines ----
 
-  /** A join line for one kind of agent. The secret is returned only here and stored only as a hash. */
-  createJoinLine(personId: string, kind: unknown): { joinLine: JoinLine; secret: string } {
+  /**
+   * A join line: for any agent, or with a kind, for that kind only. The secret is returned only here and stored only
+   * as a hash.
+   */
+  createJoinLine(personId: string, kind?: unknown): { joinLine: JoinLine; secret: string } {
     const kinds = [...COMPUTER_KINDS, ...APP_KINDS];
-    if (!kinds.some((k) => k === kind)) throw new PorticoError("bad_request", `kind must be one of: ${kinds.join(", ")}.`);
+    const any = kind === undefined || kind === null;
+    if (!any && !kinds.some((k) => k === kind)) throw new PorticoError("bad_request", `kind must be one of: ${kinds.join(", ")}.`);
     const secret = newLinkSecret();
     const at = this.now();
     const joinLine: JoinLine = {
       id: this.newId(),
       createdBy: personId,
-      kind: kind as AgentKind,
+      kind: any ? null : (kind as AgentKind),
       createdAt: at.toISOString(),
       expiresAt: new Date(at.getTime() + LIMITS.joinLineHours * HOUR_MS).toISOString(),
       usedAt: null,
@@ -299,12 +322,12 @@ export class Computers {
       .run({
         id: joinLine.id,
         createdBy: personId,
-        kind: joinLine.kind,
+        kind: joinLine.kind ?? ANY_KIND,
         hash: hashSecret(secret),
         createdAt: joinLine.createdAt,
         expiresAt: joinLine.expiresAt,
       });
-    this.log("join_line_created", { join_line_id: joinLine.id, kind: joinLine.kind });
+    this.log("join_line_created", { join_line_id: joinLine.id, kind: joinLine.kind ?? ANY_KIND });
     this.changes.emit("join-lines");
     return { joinLine, secret };
   }
@@ -316,21 +339,18 @@ export class Computers {
 
   /**
    * Redeems a computer line: adds a computer for the person who made the line, under the first free form of the
-   * proposed name, and returns its token once. The line works once.
+   * proposed name, and returns its token once. The line works once. `client` is the coding agent that used the line,
+   * when the agent says: a line for any agent takes that as its kind.
    */
-  redeem(rawSecret: unknown, proposedName: unknown): { computer: Computer; token: string; joinLine: JoinLine } {
+  redeem(rawSecret: unknown, proposedName: unknown, client?: unknown): { computer: Computer; token: string; joinLine: JoinLine } {
     const name = typeof proposedName === "string" && proposedName.trim() !== "" ? proposedName.slice(0, 200) : "computer";
     return this.db.transaction(() => {
       const line = this.usableLine(rawSecret);
-      if (!COMPUTER_KINDS.includes(line.kind)) throw new PorticoError("bad_request", APP_LINE);
+      const kind = computerLineKind(line, client);
       const { computer, token } = this.create(line.createdBy, name);
-      const at = this.iso();
-      this.db
-        .query("UPDATE join_lines SET used_at = $at, computer_id = $computerId WHERE id = $id")
-        .run({ id: line.id, at, computerId: computer.id });
+      const joinLine = this.useOnComputer(line, kind, computer);
       this.log("computer_joined", { join_line_id: line.id, computer: computer.name });
-      this.changes.emit("join-lines");
-      return { computer, token, joinLine: { ...line, usedAt: at, computerId: computer.id } };
+      return { computer, token, joinLine };
     })();
   }
 
@@ -339,33 +359,39 @@ export class Computers {
    * first: the line is marked used by that computer, and no second computer is made. Only the computer's own person's
    * line can attach.
    */
-  attach(computer: Computer, rawSecret: unknown): JoinLine {
+  attach(computer: Computer, rawSecret: unknown, client?: unknown): JoinLine {
     return this.db.transaction(() => {
       const line = this.usableLine(rawSecret);
-      if (!COMPUTER_KINDS.includes(line.kind)) throw new PorticoError("bad_request", APP_LINE);
+      const kind = computerLineKind(line, client);
       if (line.createdBy !== computer.ownerId) {
         throw new PorticoError(
           "not_allowed",
           "This join line is from a different person than the one this computer joined for. Ask that person for a join line.",
         );
       }
-      const at = this.iso();
-      this.db
-        .query("UPDATE join_lines SET used_at = $at, computer_id = $computerId WHERE id = $id")
-        .run({ id: line.id, at, computerId: computer.id });
+      const joinLine = this.useOnComputer(line, kind, computer);
       this.log("join_line_attached", { join_line_id: line.id, computer: computer.name });
-      this.changes.emit("join-lines");
-      return { ...line, usedAt: at, computerId: computer.id };
+      return joinLine;
     })();
+  }
+
+  /** Marks a line used by a computer, with the client that used it when known. */
+  private useOnComputer(line: JoinLine, kind: AgentKind | null, computer: Computer): JoinLine {
+    const at = this.iso();
+    this.db
+      .query("UPDATE join_lines SET used_at = $at, computer_id = $computerId, kind = $kind WHERE id = $id")
+      .run({ id: line.id, at, computerId: computer.id, kind: kind ?? ANY_KIND });
+    this.changes.emit("join-lines");
+    return { ...line, kind, usedAt: at, computerId: computer.id };
   }
 
   /**
    * Sets each recent computer line's agent to the agent of the first run of the line's kind started on its computer
-   * since the line was used, once one has.
+   * since the line was used, once one has. A line whose client isn't known takes the first run of any client.
    */
   linkFirstSessions(): number {
-    const first = `FROM agent_runs r WHERE r.computer_id = join_lines.computer_id AND r.client = join_lines.kind
-           AND r.started_at >= join_lines.used_at`;
+    const first = `FROM agent_runs r WHERE r.computer_id = join_lines.computer_id
+           AND (join_lines.kind = '${ANY_KIND}' OR r.client = join_lines.kind) AND r.started_at >= join_lines.used_at`;
     const changed = this.db
       .query(
         `UPDATE join_lines SET agent_id = (SELECT r.agent_id ${first} ORDER BY r.started_at, r.id LIMIT 1)
@@ -389,13 +415,15 @@ export class Computers {
     }
     return this.db.transaction(() => {
       const line = this.usableLine(rawSecret);
-      if (!APP_KINDS.includes(line.kind)) {
+      if (line.kind !== null && !APP_KINDS.includes(line.kind)) {
         const label = COMPUTER_LABELS[line.kind] ?? "a coding agent";
         throw new PorticoError("bad_request", `This join line is for ${label} on a computer. Follow the ${label} steps at /join.`);
       }
-      // The person picked the kind with the line. Only a line for any other app takes the agent's own word for it.
+      // A line for any agent, or for any other app, takes the agent's own word for its kind: the kind only picks the
+      // icon and label, and the person sees both before approving. A line made for one kind keeps that kind.
       const asked = input.kind as AgentKind | undefined;
-      const kind = line.kind === "other" && asked && APP_KINDS.includes(asked) ? asked : line.kind;
+      const open = line.kind === null || line.kind === "other";
+      const kind = open ? (asked && APP_KINDS.includes(asked) ? asked : "other") : line.kind!;
       const pollSecret = newToken("ps_");
       const at = this.now();
       const request: SignInRequest = {

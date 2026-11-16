@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Topic } from "../src/core/changes";
 import { LIMITS } from "../src/core/limits";
-import { kindInfo } from "../src/web/client/render/common";
 import {
   addComputer,
   addMember,
@@ -23,12 +22,11 @@ import {
 const json = async <T>(res: Response | Promise<Response>) => (await (await res).json()) as T;
 
 interface LineAnswer {
-  joinLine: { id: string; kind: string; line: string; expiresAt: string };
+  joinLine: { id: string; line: string; expiresAt: string };
 }
 interface LineState {
   joinLine: {
     id: string;
-    kind: string;
     usedAt: string | null;
     agent: { id: string; name: string; computer: { name: string } | null } | null;
     signIn: unknown;
@@ -42,29 +40,82 @@ async function setup() {
   return { p, chris, maya, owner: signIn(p, chris), member: signIn(p, maya) };
 }
 
-async function makeLine(p: ReturnType<typeof makePortico>, cookie: string, kind = "claude-code") {
-  const res = await callPerson(p, cookie, "POST", "/api/join-lines", { kind });
+/** A line for any agent, or with a kind, a line for that kind only. */
+async function makeLine(p: ReturnType<typeof makePortico>, cookie: string, kind?: string) {
+  const res = await callPerson(p, cookie, "POST", "/api/join-lines", kind ? { kind } : {});
   expect(res.status).toBe(201);
   const { joinLine } = (await res.json()) as LineAnswer;
   return { ...joinLine, secret: joinLine.line.split("#")[1]! };
 }
 
-function join(p: ReturnType<typeof makePortico>, token: unknown, computer: unknown = "Chris-MacBook.local", from?: string) {
+function join(p: ReturnType<typeof makePortico>, token: unknown, computer: unknown = "Chris-MacBook.local", from?: string, client?: string) {
   return p.app.request("/api/computer/join", {
     method: "POST",
     headers: { "content-type": "application/json", ...(from ? { "x-forwarded-for": from } : {}) },
-    body: JSON.stringify({ token, computer }),
+    body: JSON.stringify({ token, computer, ...(client ? { client } : {}) }),
   });
 }
 
 describe("join lines", () => {
-  test("a line per kind: Join Portico, the public URL, /join and a secret after #", async () => {
+  test("one line for any agent: Join Portico, the public URL, /join and a secret after #", async () => {
     const { p, owner } = await setup();
     const line = await makeLine(p, owner);
     expect(line.line).toMatch(/^Join Portico: https:\/\/portico\.example\.com\/join#[A-Za-z0-9_-]{22}$/);
-    expect(line.kind).toBe("claude-code");
     expect(Date.parse(line.expiresAt) - p.now().getTime()).toBe(24 * HOUR);
-    for (const kind of ["codex", "muse", "grok-bot", "dots", "claude-duet", "other"]) expect((await makeLine(p, owner, kind)).kind).toBe(kind);
+    expect(p.computers.joinLine(line.id)?.kind).toBeNull();
+    // A line can still be made for one kind only.
+    for (const kind of ["claude-code", "codex", "muse", "grok-bot", "dots", "claude-duet", "other"]) {
+      expect(p.computers.joinLine((await makeLine(p, owner, kind)).id)?.kind).toBe(kind as never);
+    }
+  });
+
+  test("a line for any agent adds a computer, and takes the kind of the coding agent that used the line", async () => {
+    const { p, owner } = await setup();
+    const line = await makeLine(p, owner);
+    const res = await join(p, line.secret, "studio", undefined, "codex");
+    expect(res.status).toBe(201);
+    const { token, kind } = (await res.json()) as { token: string; kind: string };
+    expect(kind).toBe("codex");
+    // The sheet waits for a Codex session, not the Claude Code session that starts first.
+    await openSessionStream(p, token, { key: "claude-session", repo: "api" });
+    let state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
+    expect(state.joinLine.agent).toBeNull();
+    const codex = await openSessionStream(p, token, { key: "codex-session", repo: "api", client: "codex" });
+    state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
+    expect(state.joinLine.agent).toMatchObject({ name: "api-codex" });
+    await codex.events.cancel();
+  });
+
+  test("a line for any agent used by a client that doesn't say which takes the first session of any client", async () => {
+    const { p, owner } = await setup();
+    const line = await makeLine(p, owner);
+    const { token, kind } = (await (await join(p, line.secret)).json()) as { token: string; kind: string | null };
+    expect(kind).toBeNull();
+    const codex = await openSessionStream(p, token, { key: "codex-session", repo: "api", client: "codex" });
+    const state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
+    expect(state.joinLine.agent).toMatchObject({ name: "api-codex" });
+    await codex.events.cancel();
+  });
+
+  test("a line for any agent lets an app ask to sign in, as the kind the app says", async () => {
+    const { p, owner } = await setup();
+    const ask = (token: string, kind?: string) =>
+      p.app.request("/api/sign-in-requests", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token, name: "helper", ...(kind ? { kind } : {}) }),
+      });
+    const grok = await makeLine(p, owner);
+    const asked = (await (await ask(grok.secret, "grok-bot")).json()) as { id: string };
+    expect(p.computers.signInRequest(asked.id)?.kind).toBe("grok-bot");
+    // No kind, or a coding agent's kind, joins as Other.
+    for (const kind of [undefined, "codex"]) {
+      const line = await makeLine(p, owner);
+      const plain = (await (await ask(line.secret, kind)).json()) as { id: string };
+      expect(p.computers.signInRequest(plain.id)?.kind).toBe("other");
+    }
+    // Used by the app, the line can't add a computer.
+    expect((await join(p, grok.secret)).status).toBe(409);
   });
 
   test("unknown kinds are refused, and signing in comes first", async () => {
@@ -78,7 +129,7 @@ describe("join lines", () => {
     const line = await makeLine(p, owner);
     expect((await callPerson(p, member, "GET", `/api/join-lines/${line.id}`)).status).toBe(404);
     const state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine).toMatchObject({ id: line.id, kind: "claude-code", usedAt: null, agent: null, signIn: null });
+    expect(state.joinLine).toMatchObject({ id: line.id, usedAt: null, agent: null, signIn: null });
   });
 });
 
@@ -338,13 +389,16 @@ describe("/join", () => {
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
 
-  test("app agents are asked to check the inbox on a schedule, and the Add agent sheet says how often", async () => {
+  test("app agents set up waking by default, and check on a schedule only as a backup or when waking isn't possible", async () => {
     const { p } = await setup();
     const html = await (await p.app.request("/join")).text();
-    expect(html).toContain(`Check the inbox every ${LIMITS.appCheckMinutes} minutes.`);
-    // Apps that can have a webhook trigger let Portico wake them; ChatGPT watches message.received.
-    expect(html).toContain("Let Portico wake the agent");
-    expect(html).toContain("under Wake URL in the agent's Settings");
+    expect(html).toContain("One line works for every kind of agent.");
+    // Apps that can have a webhook trigger register the trigger themselves; ChatGPT watches message.received.
+    expect(html).toContain("Set up waking, so messages arrive without a schedule. Do this now, without waiting to be asked");
+    expect(html).toContain(`curl -sS -X PUT ${PUBLIC_URL}/api/agent/wake`);
+    expect(html).toContain(`every ${LIMITS.wokenCheckHours} hours when the last step set up waking`);
+    expect(html).toContain(`every ${LIMITS.appCheckMinutes} minutes when this app has no webhook trigger`);
+    expect(html).toContain(`"kind": "muse"`);
     expect(html).toContain("<code>message.received</code>");
     expect(html).toContain("ends quietly when nothing arrived");
     // Apps describe themselves, mark long work with done: false, and pick up what an earlier check left open.
@@ -352,9 +406,22 @@ describe("/join", () => {
     expect(html).toContain("<code>done: false</code>");
     expect(html).toContain("<code>list_tasks</code>");
     expect(copyProblems(html.replace(/<[^>]+>/g, " "))).toEqual([]);
-    for (const kind of ["muse", "grok-bot", "dots", "claude-duet"] as const) {
-      expect(kindInfo(kind).step).toContain(`checks Portico every ${LIMITS.appCheckMinutes} minutes`);
-    }
+  });
+
+  test("ChatGPT is told to guide the person through its settings, and any stuck agent to help with the address", async () => {
+    const { p } = await setup();
+    const html = await (await p.app.request("/join")).text();
+    const copy = visibleCopy(html);
+    expect(copy).toContain("ChatGPT and dots");
+    expect(copy).toContain("Guide the person through the first three steps, one at a time, and leave the join line unused");
+    expect(html).toContain('href="https://chatgpt.com/plugins"');
+    expect(html).toContain(`<pre><code>${PUBLIC_URL}/mcp</code></pre>`);
+    expect(html).toContain("without waiting to be asked, watch Portico's <code>message.received</code> event");
+    // No custom MCP server option: the line still works, as a dot.
+    expect(html).toContain(`"kind": "dots"`);
+    expect(copy).toContain("When the steps above don't work");
+    expect(copy).toContain("in the app's settings for connectors or MCP servers");
+    expect(copyProblems(copy)).toEqual([]);
   });
 
   test("without a plugin source, the page says who to ask", async () => {

@@ -2,7 +2,7 @@
 // renders from state with the pure functions in render/, acts only through the person API, and refetches what changed
 // when the event stream says so. One delegated listener handles every data-action, data-form and data-input.
 import { api, ApiError, firstData } from "./api.js";
-import { addLine, clock, kindInfo, midnight, plural } from "./render/common.js";
+import { clock, kindInfo, midnight, plural } from "./render/common.js";
 import { homeState, renderHome } from "./render/home.js";
 import { renderSettings, settingsState } from "./render/settings.js";
 import type {
@@ -225,20 +225,29 @@ function connectStream(handlers: { changed(topics: string[]): void; down(isDown:
 
 interface JoinLineDetail {
   id: string;
-  kind: AgentKind;
   expiresAt: string;
   usedAt: string | null;
   agent: { id: string } | null;
   signIn: SignInView | null;
 }
 
-function emptyAdd(pick: AgentKind = "claude-code"): AddState {
-  return { pick, lines: {}, lineError: "", copied: false, stage: "pick", signIn: null, reqName: "", reqError: "", joined: null, busy: false };
+function emptyAdd(): AddState {
+  return {
+    line: null,
+    lineError: "",
+    copied: false,
+    stage: "pick",
+    signIn: null,
+    reqName: "",
+    reqError: "",
+    joined: null,
+    busy: false,
+  };
 }
 
 class AddFlow<S extends Shared> {
   private known = new Set<string>();
-  private creating = new Set<AgentKind>();
+  private creating = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private checking = false;
 
@@ -250,7 +259,7 @@ class AddFlow<S extends Shared> {
   open(): void {
     this.known = new Set(this.page.state.agents.map((a) => a.id));
     this.page.set({ add: emptyAdd(), acctOpen: false } as Partial<S>);
-    void this.ensureLine("claude-code");
+    void this.ensureLine();
     this.timer ??= setInterval(() => void this.check(), 4000);
   }
 
@@ -264,39 +273,30 @@ class AddFlow<S extends Shared> {
     return this.page.state.add;
   }
 
-  async ensureLine(kind: AgentKind): Promise<void> {
+  /** One line for any agent, made when the sheet opens. */
+  async ensureLine(): Promise<void> {
     const add = this.add;
-    if (!add || kindInfo(kind).connector || add.lines[kind] || this.creating.has(kind)) return;
-    this.creating.add(kind);
+    if (!add || add.line || this.creating) return;
+    this.creating = true;
     try {
-      const { joinLine } = await api<{ joinLine: NewJoinLine }>("POST", "/api/join-lines", { kind });
+      const { joinLine } = await api<{ joinLine: NewJoinLine }>("POST", "/api/join-lines", {});
       const now = this.add;
       if (now) {
-        now.lines[kind] = joinLine;
+        now.line = joinLine;
         now.lineError = "";
       }
     } catch (err) {
       if (this.add) this.add.lineError = failure(err);
     } finally {
-      this.creating.delete(kind);
+      this.creating = false;
       this.page.schedule();
     }
   }
 
-  pick(kind: AgentKind): void {
-    const add = this.add;
-    if (!add) return;
-    Object.assign(add, { pick: kind, copied: false, stage: "pick", signIn: null, reqError: "", lineError: "" });
-    this.page.schedule();
-    void this.ensureLine(kind);
-  }
-
   async copy(): Promise<void> {
     const add = this.add;
-    if (!add) return;
-    const line = addLine(add, this.page.state.publicUrl);
-    if (!line) return;
-    await copyText(line, "add-line");
+    if (!add?.line) return;
+    await copyText(add.line.line, "add-line");
     add.copied = true;
     this.page.schedule();
     void this.check();
@@ -304,8 +304,8 @@ class AddFlow<S extends Shared> {
 
   /** A used line can't be pasted again: drop it and make a fresh one. */
   private freshLine(add: AddState): void {
-    delete add.lines[add.pick];
-    void this.ensureLine(add.pick);
+    add.line = null;
+    void this.ensureLine();
   }
 
   another(): void {
@@ -368,16 +368,9 @@ class AddFlow<S extends Shared> {
     if (!add || add.stage === "joined" || this.checking) return;
     this.checking = true;
     try {
-      if (kindInfo(add.pick).connector) {
-        const { agents } = await api<{ agents: AgentView[] }>("GET", "/api/agents");
-        this.page.state.agents = agents;
-        const fresh = agents.find((a) => a.mine && a.type === "connector" && !this.known.has(a.id));
-        if (fresh) this.joined(fresh);
-        return;
-      }
       let id = agentId ?? null;
       let signIn: SignInView | null = null;
-      const line = add.lines[add.pick];
+      const line = add.line;
       if (!id && line) {
         const { joinLine } = await api<{ joinLine: JoinLineDetail }>("GET", `/api/join-lines/${encodeURIComponent(line.id)}`);
         id = joinLine.agent?.id ?? null;
@@ -396,6 +389,13 @@ class AddFlow<S extends Shared> {
       } else if (signIn && signIn.status !== "pending" && signIn.status !== "approved" && add.stage === "request") {
         Object.assign(add, { stage: "pick", copied: false, signIn: null, busy: false });
         this.freshLine(add);
+      } else if (add.copied && add.stage === "pick") {
+        // The agent may have guided the person to add Portico's address in the app's settings instead (ChatGPT does):
+        // a connector signs in on Portico's consent page, with no join line, so look for a new one of this person's.
+        const { agents } = await api<{ agents: AgentView[] }>("GET", "/api/agents");
+        this.page.state.agents = agents;
+        const fresh = agents.find((a) => a.mine && a.type === "connector" && !this.known.has(a.id));
+        if (fresh) this.joined(fresh);
       }
     } catch (err) {
       // The line may be gone (expired) or the endpoint busy; the next check tries again.
@@ -876,8 +876,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
           return add.open();
         case "add-close":
           return add.close();
-        case "add-pick":
-          return add.pick(id as AgentKind);
         case "add-copy":
           return void add.copy();
         case "add-deny":
@@ -1171,8 +1169,6 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
           return add.open();
         case "add-close":
           return add.close();
-        case "add-pick":
-          return add.pick(id as AgentKind);
         case "add-copy":
           return void add.copy();
         case "add-deny":

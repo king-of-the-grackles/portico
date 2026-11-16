@@ -61,7 +61,7 @@ function renderWakeRow(s: HomeState, data: AgentPageData): string {
   const name = esc(a.label);
   const help = wake
     ? `On. When a message arrives, Portico posts to ${esc(wake.host)}. ${esc(wakeOutcome(a.label, wake.lastAt, wake.lastStatus, s.now))}`
-    : `Off. ${name} sees new messages on the next check. Add an app's webhook trigger, such as a Grok Bot routine's, and Portico wakes ${name} when a message arrives.`;
+    : `Off. ${name} sees new messages on the next check. An app with a webhook trigger, such as a Grok Bot routine's, sets this up while joining. Add one here by hand, and Portico wakes ${name} when a message arrives.`;
   const busy = when(s.busy === `wake:${a.id}`, " disabled");
   const actions = wake
     ? `<button type="button" class="btn btn-text" data-action="wake-remove"${busy}>Remove</button><button type="button" class="btn btn-secondary" data-action="wake-start"${busy}>Change</button>`

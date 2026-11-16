@@ -89,7 +89,7 @@ describe("join", () => {
     const run = await cli(["join", "Join", "Portico:", `${server.url}/join#${TOKEN}`, "--name", "studio"], { path, cwd: dir });
     expect(run.code).toBe(0);
     expect(run.out[0]).toBe(`Joined Portico at ${server.url} as computer "studio".`);
-    expect(server.requests[0]!.body).toEqual({ token: TOKEN, computer: "studio" });
+    expect(server.requests[0]!.body).toEqual({ token: TOKEN, computer: "studio", client: "claude-code" });
     const missing = await cli(["join", `${server.url}/join#${TOKEN}`, "--name", "--replace"], { path, cwd: dir });
     expect(missing.code).toBe(1);
     expect(missing.err).toEqual(["--name needs a value. Usage: join <line> [--name <computer>] [--replace] [--no-allow]"]);

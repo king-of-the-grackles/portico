@@ -89,16 +89,14 @@ export interface SettingsData {
 /** A join line just made by POST /api/join-lines. The line carries the secret, so it lives only in the page's memory. */
 export interface NewJoinLine {
   id: string;
-  kind: AgentKind;
   line: string;
   expiresAt: string;
 }
 
 /** The Add agent sheet. */
 export interface AddState {
-  pick: AgentKind;
-  /** Lines made while the sheet is open, one per kind. */
-  lines: Partial<Record<AgentKind, NewJoinLine>>;
+  /** The join line made when the sheet opened: one line works for every kind of agent. */
+  line: NewJoinLine | null;
   lineError: string;
   copied: boolean;
   stage: "pick" | "request" | "joined";

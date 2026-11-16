@@ -107,7 +107,7 @@ async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
   if (!line) return usageError(io, "A join line is required.", JOIN_USAGE);
 
   const joined = await joinComputer(
-    { line, name, replace },
+    { line, name, replace, client: "claude-code" },
     { configPath: computerConfigPath(io.env), fetch: deps.fetch, hostname: deps.hostname },
   );
   if (joined.attached) {

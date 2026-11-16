@@ -28,8 +28,10 @@ export const LIMITS = {
    * the 45-second timeout of GPT actions.
    */
   maxInboxWaitSeconds: 40,
-  /** How often an app agent's scheduled task checks the inbox, as /join and the instructions for apps ask. */
+  /** How often an app agent Portico can't wake checks the inbox with a scheduled task, as /join and the instructions for apps ask. */
   appCheckMinutes: 30,
+  /** How often an app agent Portico wakes still checks the inbox, to catch a wake that didn't get through. */
+  wokenCheckHours: 24,
   /** check_inbox calls that may wait at once for one agent. */
   maxInboxWaitsPerAgent: 3,
 } as const;

@@ -8,6 +8,7 @@ import { HTTP_STATUS, PorticoError } from "../core/errors";
 import { inboxWaitMs } from "../core/inbox-waits";
 import { DELIVERY_BATCH_MAX, type Messages } from "../core/messages";
 import type { Tasks } from "../core/tasks";
+import type { WakeUrls } from "../core/wake-urls";
 import { parseStatusReport, type Presence } from "../core/presence";
 import { errorName, log } from "../log";
 import { type AgentEnv, requireAgent, requireSession, type Resolver, unauthorized } from "./auth";
@@ -25,6 +26,7 @@ const SendBody = z.object({
   key: z.string().nullish(),
 });
 const ProfileBody = z.object({ description: z.string().nullish(), doing: z.string().nullish() });
+const WakeBody = z.object({ url: z.string(), key: z.string() });
 const AckIds = z.array(z.string()).max(DELIVERY_BATCH_MAX).default([]);
 const AckBody = z.object({ messages: AckIds, updates: AckIds });
 
@@ -54,6 +56,7 @@ export interface AgentRestDeps {
   messages: Messages;
   tasks: Tasks;
   presence: Presence;
+  wakeUrls: WakeUrls;
   views: AgentViews;
   resolver: Resolver;
   changes: Changes;
@@ -109,6 +112,23 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
     const agent = agents.updateOwn(c.get("agent"), body);
     agents.checkedIn(agent);
     return c.json({ agent: views.entry(agents.entry(agent)) });
+  });
+
+  // An app's own webhook trigger, registered while joining, so no person has to paste the address and key. The key
+  // goes in once and never comes back out. The agent's page shows the host, and Activity records each change.
+  api.put("/wake", async (c) => {
+    const body = WakeBody.parse(await readJson(c));
+    const agent = c.get("agent");
+    const wake = deps.wakeUrls.set(agent, null, body);
+    agents.checkedIn(agent);
+    return c.json({ wake: { host: wake.host } });
+  });
+
+  api.delete("/wake", (c) => {
+    const agent = c.get("agent");
+    deps.wakeUrls.clear(agent, null);
+    agents.checkedIn(agent);
+    return c.body(null, 204);
   });
 
   // With ?wait=N, answers as soon as something arrives, or after N seconds (capped) with nothing.

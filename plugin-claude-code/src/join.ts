@@ -61,6 +61,8 @@ export interface JoinOptions {
   name?: string;
   /** Join again over an existing computer file, keeping its folders that are off. */
   replace?: boolean;
+  /** The coding agent joining, so a join line any agent can use shows which one used the line. */
+  client?: "claude-code" | "codex";
 }
 
 export interface JoinDeps {
@@ -95,7 +97,7 @@ export async function joinComputer(opts: JoinOptions, deps: JoinDeps): Promise<J
   if (existing && !opts.replace && existing.url === url) {
     const answer = await callPortico(url, "POST", "/api/computer/lines", {
       token: existing.token,
-      body: { token: joinToken },
+      body: { token: joinToken, client: opts.client },
       fetch: deps.fetch,
     });
     if (answer.status === 401) {
@@ -113,7 +115,7 @@ export async function joinComputer(opts: JoinOptions, deps: JoinDeps): Promise<J
   }
   const name = opts.name ?? defaultComputerName((deps.hostname ?? systemHostname)());
   const answer = await callPortico(url, "POST", "/api/computer/join", {
-    body: { token: joinToken, computer: name },
+    body: { token: joinToken, computer: name, client: opts.client },
     fetch: deps.fetch,
   });
   if (!answer.ok) throw new CommandError(refusal(url, answer));

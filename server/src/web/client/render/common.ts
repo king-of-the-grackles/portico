@@ -19,67 +19,19 @@ export function when(condition: unknown, text: string | (() => string)): string 
 
 export interface KindInfo {
   label: string;
-  where: string;
-  /** Connectors add Portico's /mcp address in their client instead of pasting a join line. */
-  connector: boolean;
-  step: string;
-  wait: string;
 }
 
 export const KINDS: Record<AgentKind, KindInfo> = {
-  "claude-code": {
-    label: "Claude Code",
-    where: "On a computer",
-    connector: false,
-    step: "Paste this into Claude Code on the computer that should join.",
-    wait: "Waiting for Claude Code to connect",
-  },
-  codex: {
-    label: "Codex",
-    where: "On a computer",
-    connector: false,
-    step: "Paste this into Codex on the computer that should join.",
-    wait: "Waiting for Codex to connect",
-  },
-  muse: {
-    label: "Muse",
-    where: "In an app",
-    connector: false,
-    step: "Send this to Muse in a chat, then approve the sign in request here. Muse then checks Portico every 30 minutes.",
-    wait: "Waiting for the sign in request from Muse",
-  },
-  "grok-bot": {
-    label: "Grok Bot",
-    where: "In an app",
-    connector: false,
-    step:
-      "Send this to Grok Bot in a chat, then approve the sign in request here. Grok Bot then checks Portico every 30 minutes, or right away once a routine's webhook URL and key are under Wake URL in Grok Bot's Settings.",
-    wait: "Waiting for the sign in request from Grok Bot",
-  },
-  dots: {
-    label: "Dots",
-    where: "In ChatGPT",
-    connector: false,
-    step: "Send this to the dot in a chat, then approve the sign in request here. The dot then checks Portico every 30 minutes.",
-    wait: "Waiting for the sign in request from the dot",
-  },
-  "claude-duet": {
-    label: "Claude Duet",
-    where: "In an app",
-    connector: false,
-    step: "Send this to Claude Duet in a chat, then approve the sign in request here. Claude Duet then checks Portico every 30 minutes.",
-    wait: "Waiting for the sign in request from Claude Duet",
-  },
-  other: {
-    label: "Other",
-    where: "Any MCP client",
-    connector: true,
-    step: "Add this server to an MCP client. Portico then opens a page to approve the connection.",
-    wait: "Waiting for the sign in",
-  },
+  "claude-code": { label: "Claude Code" },
+  codex: { label: "Codex" },
+  muse: { label: "Muse" },
+  "grok-bot": { label: "Grok Bot" },
+  dots: { label: "Dots" },
+  "claude-duet": { label: "Claude Duet" },
+  other: { label: "Other" },
 };
 
-/** The Add agent picker's order. */
+/** The order agent kinds show in, where every kind's logo is listed. */
 export const PICK_ORDER: AgentKind[] = ["claude-code", "codex", "muse", "grok-bot", "dots", "claude-duet", "other"];
 
 export function kindInfo(kind: string): KindInfo {
@@ -383,35 +335,28 @@ export function renderReconnecting(on: boolean): string {
 
 // ---- the Add agent sheet ----
 
-/** The line the sheet shows: a join line, or Portico's /mcp address for connectors. */
-export function addLine(add: AddState, publicUrl: string): string {
-  if (kindInfo(add.pick).connector) return `${publicUrl}/mcp`;
-  return add.lines[add.pick]?.line ?? "";
-}
-
-/** Add agent: pick, copy the line, wait, then the sign-in request (app agents) and "<name> joined". */
+/** Add agent: copy the one join line, wait, then the sign-in request (app agents) and "<name> joined". */
 export function renderAddSheet(add: AddState | null, ctx: { publicUrl: string; now: number }): string {
   if (!add) return "";
-  const info = kindInfo(add.pick);
-  const line = addLine(add, ctx.publicUrl);
-  const picker = `<div role="radiogroup" aria-labelledby="add-pick-label" class="pick">
-    <span id="add-pick-label" class="lbl">Pick an agent</span>
-    <div class="pick-grid">${PICK_ORDER.map((kind) => {
-      const k = KINDS[kind];
-      const on = kind === add.pick;
-      return `<button type="button" role="radio" aria-checked="${on}" class="tile${when(on, " is-selected")}" data-action="add-pick" data-id="${kind}">${logo(kind)}<span class="tile-text"><span class="tile-label">${esc(k.label)}</span><span class="tile-where">${esc(k.where)}</span></span></button>`;
-    }).join("")}</div>
-  </div>`;
+  const line = add.line?.line ?? "";
+  const shown = PICK_ORDER.filter((kind) => kind !== "other");
   const lineBox = `<div class="add-box">
-    <p class="add-step">${esc(info.step)}</p>
-    <label for="add-line" class="sr">${info.connector ? "Server address" : "Join line"}</label>
-    <input id="add-line" class="line-field" readonly value="${esc(line)}">
+    <div class="add-kinds">
+      <div aria-hidden="true" class="first-logos">${shown.map((kind) => logo(kind)).join("")}</div>
+      <p class="add-note">Works with ${esc(shown.map((kind) => KINDS[kind].label).join(", "))} and other agents.</p>
+    </div>
+    <p class="add-step">Give this line to the agent.</p>
+    <p class="add-note">Paste the line into a chat with the agent. The agent does the rest.</p>
+    <div class="copy-row">
+      <label for="add-line" class="sr">Join line</label>
+      <input id="add-line" class="line-field" readonly value="${esc(line)}">
+      <button type="button" class="btn btn-primary" data-action="add-copy"${when(!line, " disabled")}>${ICON.copy()}${add.copied ? "Copied" : "Copy"}</button>
+    </div>
     ${when(add.lineError, `<span role="alert" class="field-error">${esc(add.lineError)}</span>`)}
-    <button type="button" class="btn btn-primary btn-lg add-copy" data-action="add-copy"${when(!line, " disabled")}>${ICON.copy()}${add.copied ? "Copied" : "Copy"}</button>
-    <p class="add-note">${info.connector ? "Works only after approval." : "Single use. Expires in 24 h."}</p>
+    <p class="add-note">Works once. Expires in 24 h.</p>
     ${when(
       add.stage === "pick" && add.copied,
-      `<div role="status" class="waiting enter" data-key="add-waiting"><span class="dot dot-wait"></span><span>${esc(info.wait)}</span></div>`,
+      `<div role="status" class="waiting enter" data-key="add-waiting"><span class="dot dot-wait"></span><span>Waiting for the agent to connect</span></div>`,
     )}
   </div>`;
   let request = "";
@@ -448,7 +393,6 @@ export function renderAddSheet(add: AddState | null, ctx: { publicUrl: string; n
       <div class="grow"><h2 id="add-title" class="sheet-title">Add agent</h2><p class="sheet-sub">One line connects any agent to Portico.</p></div>
       <button type="button" class="icon-btn" aria-label="Close" data-action="add-close">${ICON.close(20)}</button>
     </div>
-    ${when(add.stage === "pick", picker)}
     ${when(add.stage !== "joined", lineBox)}
     ${request}
     ${joined}
