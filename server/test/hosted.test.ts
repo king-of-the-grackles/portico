@@ -58,6 +58,14 @@ async function workspace(hosted: Hosted, slug: string) {
   return { ws, p, owner, grok, muse, host: `${slug}.portico.test` };
 }
 
+describe("health check", () => {
+  test("answers at any address, since a platform's check names no domain", async () => {
+    const { call } = start();
+    expect((await call("10.0.0.7:8790", "/healthz")).status).toBe(200);
+    expect((await call("10.0.0.7:8790", "/")).status).toBe(404);
+  });
+});
+
 describe("hosted settings", () => {
   test("hosted mode is on only with a domain, and a workspace's address comes from the domain", () => {
     expect(hostedEnv({})).toBeNull();
@@ -114,8 +122,8 @@ describe("routing by host", () => {
     expect(unknown.status).toBe(404);
     expect(await unknown.text()).toContain("No workspace at this address");
     expect((await call("nobody.portico.test", "/api/agent/agents")).status).toBe(404);
-    expect((await call("a.acme.portico.test", "/healthz")).status).toBe(404);
-    expect((await call("acme.portico.test.evil.example", "/healthz")).status).toBe(404);
+    expect((await call("a.acme.portico.test", "/")).status).toBe(404);
+    expect((await call("acme.portico.test.evil.example", "/")).status).toBe(404);
     expect((await call("acme.portico.test", "/healthz")).status).toBe(200);
   });
 });
@@ -219,7 +227,7 @@ describe("opening and closing", () => {
     const acme = await workspace(hosted, "acme");
     hosted.remove(acme.ws);
     expect(existsSync(join(hosted.config.dataDir, "w", acme.ws.id))).toBe(false);
-    expect((await call(acme.host, "/healthz")).status).toBe(404);
+    expect((await call(acme.host, "/")).status).toBe(404);
   });
 });
 

@@ -268,6 +268,8 @@ export class Hosted {
 
   /** Every request comes through here. */
   fetch = async (request: Request): Promise<Response> => {
+    // The host's health check names no domain, so it gets an answer at any address.
+    if (new URL(request.url).pathname === "/healthz") return Response.json({ ok: true });
     const target = this.resolve(request.headers.get("host") ?? new URL(request.url).host);
     if (target === "base") return this.site.fetch(request);
     if (target === null) return noWorkspace(request, this.config.baseUrl);
