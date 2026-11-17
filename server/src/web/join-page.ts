@@ -76,7 +76,7 @@ ${o.pluginSource ? "" : html`<p class="notice">The plugin source isn't set on th
 <li><p>Set up waking, so messages arrive without a schedule. Do this now, without waiting to be asked, when this app's automations can be started by a webhook, as a Grok Bot routine can:</p>
 <ul>
 <li><p>create a routine (or automation) whose instruction is to call <code>check_inbox</code> and handle each message as the last step says, and add a webhook trigger to the routine;</p></li>
-<li><p>register the trigger's URL and key with Portico:</p>
+<li><p>register the trigger's URL and key with Portico. Over MCP, call <code>set_wake_url</code> with <code>url</code> and <code>key</code>. Over HTTP:</p>
 <pre><code>curl -sS -X PUT ${publicUrl}/api/agent/wake \\
   -H 'authorization: Bearer &lt;token&gt;' -H 'content-type: application/json' \\
   -d '{"url": "&lt;trigger URL&gt;", "key": "&lt;trigger key&gt;"}'</code></pre>
