@@ -61,6 +61,11 @@ a.homemark:hover { background: #e3e8e1; }
 .form-card { padding: 24px; border-radius: 16px; background: var(--card); display: flex; flex-direction: column; gap: 8px; }
 .form-card .lbl:not(:first-child) { margin-top: 8px; }
 .form-card .actions { margin-top: 16px; }
+/* A standalone action is a labeled row: what the action is for on the left, the button far right. */
+.row-card { padding: 16px 24px; border-radius: 16px; background: var(--card); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.row-card .row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.row-list { display: flex; flex-direction: column; gap: 8px; }
+.narrow h2 { margin: 0 0 8px; font-size: 20px; line-height: 28px; font-weight: 700; }
 .notice { margin: 0; padding: 12px 16px; border-radius: 8px; background: var(--ochre-wash); color: var(--ochre-ink); font-size: 14px; line-height: 20px; }
 .notice[hidden] { display: none; }
 .notice-error { background: #f8ecea; color: var(--danger); }

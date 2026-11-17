@@ -1,4 +1,6 @@
+import type { HostedConfig } from "./config";
 import type { PorticoConfig } from "./core/types";
+import { Hosted } from "./hosted/router";
 import { LIMITS, MAX_BODY_BYTES } from "./core/limits";
 import { openDb } from "./db";
 import { log } from "./log";
@@ -49,6 +51,49 @@ export function startServer(config: PorticoConfig, opts: { port?: number } = {})
       clearInterval(dailyTimer);
       server.stop(true);
       db.close();
+    },
+  };
+}
+
+export interface RunningHosted {
+  port: number;
+  hosted: Hosted;
+  stop(): void;
+}
+
+/** How often closed workspaces are opened for their expiries. */
+const CLOSED_SWEEP_MS = 15 * MINUTE_MS;
+
+/** Hosted Portico: one server routing each request to its workspace by host. */
+export function startHosted(config: HostedConfig, opts: { port?: number } = {}): RunningHosted {
+  const hosted = new Hosted(config);
+  let server: ReturnType<typeof Bun.serve>;
+  try {
+    server = Bun.serve({
+      port: opts.port ?? config.port,
+      fetch: hosted.fetch,
+      maxRequestBodySize: hosted.takesUploads ? LIMITS.maxFileMb * 1024 * 1024 + MAX_BODY_BYTES : MAX_BODY_BYTES * 2,
+      idleTimeout: 60,
+    });
+  } catch (err) {
+    hosted.stop();
+    throw err;
+  }
+  void hosted.sweepAll(true);
+  const minuteTimer = setInterval(() => hosted.sweepMinute(), MINUTE_MS);
+  const closedTimer = setInterval(() => void hosted.sweepAll(), CLOSED_SWEEP_MS);
+  const dailyTimer = setInterval(() => void hosted.sweepAll(true), DAY_MS);
+  const port = server.port as number;
+  log("info", "portico_hosted_started", { port, domain: config.domain, workspaces: hosted.control.all().length });
+  return {
+    port,
+    hosted,
+    stop() {
+      clearInterval(minuteTimer);
+      clearInterval(closedTimer);
+      clearInterval(dailyTimer);
+      server.stop(true);
+      hosted.stop();
     },
   };
 }

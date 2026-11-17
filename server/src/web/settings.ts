@@ -24,7 +24,8 @@ export function settingsData(core: Core, me: Person): SettingsData {
     agents: agentsInOrder(core.agents, me).map(views.agent),
     people: peopleListing(core, me),
     computers: core.computers.list(me.id).map((computer) => computerView(core, me, computer)),
-    passkeys: core.accounts.passkeys.list(me.id).map(passkeyView),
+    passkeys: core.central ? null : core.accounts.passkeys.list(me.id).map(passkeyView),
+    passwords: core.central === null,
   };
 }
 

@@ -15,7 +15,7 @@ import type { People } from "./people";
 import type { Presence } from "./presence";
 import type { Settings } from "./settings";
 import type { Tasks } from "./tasks";
-import type { PorticoConfig } from "./types";
+import type { CentralSignIn, PorticoConfig } from "./types";
 import type { WakeUrls } from "./wake-urls";
 
 /**
@@ -43,6 +43,8 @@ export interface Core {
   desk: Desk;
   wakeUrls: WakeUrls;
   events: EventSubscriptions;
+  /** Hosted Portico's sign-in on the base domain; null where people sign in with a password. */
+  central: CentralSignIn | null;
   now: () => Date;
   newId: () => string;
 }

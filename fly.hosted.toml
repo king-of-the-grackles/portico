@@ -1,0 +1,44 @@
+# Fly.io config for hosted Portico: many workspaces on one server, each at <name>.<domain>.
+# Pass the app's name with -a on each fly command, and set PORTICO_HOSTED_DOMAIN to the domain:
+#   fly deploy -c fly.hosted.toml -a <app name> --ha=false
+# Secrets (fly secrets set): PORTICO_FILES_BUCKET and the bucket's keys, which `fly storage create` sets as
+# BUCKET_NAME, AWS_ENDPOINT_URL_S3, AWS_REGION, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+# The domain needs a certificate for itself and one for *.<domain> (fly certs add).
+app = "portico-hosted"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORTICO_HOSTED_DOMAIN = "portico.chat"
+  # The control database and every workspace's folder live on the volume.
+  PORTICO_HOSTED_DATA = "/data/hosted"
+  # People sign in with Descope on the base domain. A project ID is public: the sign-in page shows the same value.
+  PORTICO_DESCOPE_PROJECT_ID = "P3MD7hNBI7xhF3svzdJQHDkFRcYe"
+  PORTICO_PLUGIN_SOURCE = "king-of-the-grackles/portico"
+
+# SQLite lives on one volume, so hosted Portico runs on one machine: deploy with --ha=false.
+[mounts]
+  source = "portico_hosted_data"
+  destination = "/data"
+  initial_size = "3gb"
+
+[http_service]
+  internal_port = 8790
+  force_https = true
+  # A stopped machine drops the agents' live streams and misses the expiry sweeps.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

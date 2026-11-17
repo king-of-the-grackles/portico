@@ -140,6 +140,7 @@ export class FolderStore implements FileStore {
   }
 }
 
-export function fileStoreFor(config: { dataDir: string; files: BucketConfig | null }): FileStore {
-  return config.files ? new BucketStore(config.files) : new FolderStore(join(config.dataDir, "files"));
+/** The configured bucket, or `files` in the data folder. `prefix` keeps one Portico's files apart in a shared bucket. */
+export function fileStoreFor(config: { dataDir: string; files: BucketConfig | null }, prefix = "files/"): FileStore {
+  return config.files ? new BucketStore(config.files, prefix) : new FolderStore(join(config.dataDir, "files"));
 }

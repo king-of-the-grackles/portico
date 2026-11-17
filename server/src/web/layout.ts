@@ -28,14 +28,18 @@ export interface PageOptions {
   /** Stylesheets under /assets besides base.css, e.g. "app.css". */
   styles?: string[];
   status?: 200 | 400 | 403 | 404 | 410 | 503;
+  /** A page that loads something from outside Portico names its own policy. */
+  csp?: string;
+  /** A page whose address holds a secret sends no address on: "no-referrer". */
+  referrer?: "no-referrer";
 }
 
 /** Sends a page with the headers every Portico page uses. */
 export function sendPage(c: Context, opts: PageOptions): Response | Promise<Response> {
   c.header("Cache-Control", "no-store");
-  c.header("Referrer-Policy", "same-origin");
+  c.header("Referrer-Policy", opts.referrer ?? "same-origin");
   c.header("X-Frame-Options", "DENY");
-  c.header("Content-Security-Policy", CSP);
+  c.header("Content-Security-Policy", opts.csp ?? CSP);
   const styles = ["base.css", ...(opts.styles ?? [])];
   const page = html`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><link rel="icon" href="/assets/icon.svg" type="image/svg+xml"><title>${opts.title}</title>
@@ -43,7 +47,7 @@ export function sendPage(c: Context, opts: PageOptions): Response | Promise<Resp
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400..700&amp;display=swap">
 ${styles.map((s) => html`<link rel="stylesheet" href="/assets/${s}">`)}
 ${opts.data === undefined ? "" : html`<script type="application/json" id="first-data">${raw(scriptJson(opts.data))}</script>`}
-${(opts.scripts ?? []).map((s) => html`<script type="module" src="/assets/${s}"></script>`)}
+${(opts.scripts ?? []).map((s) => html`<script type="module" src="${s.startsWith("https://") ? s : `/assets/${s}`}"></script>`)}
 </head><body>${opts.body}</body></html>`;
   return c.html(page, opts.status ?? 200);
 }

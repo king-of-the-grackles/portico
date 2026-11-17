@@ -183,7 +183,7 @@ export function renderAccount(s: SettingsState): string {
     ${when(s.accountError, `<p role="alert" class="field-error mb12">${esc(s.accountError)}</p>`)}
     <ul class="rows card-list">
       ${nameRow}
-      ${passwordRow}
+      ${when(s.passwords, passwordRow)}
       ${passkeys}
       <li class="srow" data-key="acct-signout"><span class="row-text"><strong>Sign out</strong><span class="row-help">Ends the Portico session in this browser.</span></span><span class="actions"><button type="button" class="btn btn-text" data-action="sign-out">${ICON.signOut()}Sign out</button></span></li>
     </ul>
@@ -223,6 +223,7 @@ export function settingsState(data: {
   people: { people: PersonRow[]; invites: InviteView[]; claims: ClaimView[] } | null;
   computers: ComputerView[] | null;
   passkeys: PasskeyView[] | null;
+  passwords?: boolean;
   now: number;
 }): SettingsState {
   return {
@@ -235,6 +236,7 @@ export function settingsState(data: {
     claims: data.people?.claims ?? [],
     computers: data.computers,
     passkeys: data.passkeys,
+    passwords: data.passwords ?? true,
     acctOpen: false,
     add: null,
     reconnecting: false,

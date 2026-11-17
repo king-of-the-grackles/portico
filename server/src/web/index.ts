@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { type PersonEnv, loadPerson } from "../api/context";
 import type { Core } from "../core/core";
 import { assetRoutes } from "./assets";
+import { centralPages } from "./central";
 import { codexBridgeRoutes } from "./codex-bridge";
 import { homePage } from "./home";
 import { invitePage } from "./invite";
@@ -27,8 +28,12 @@ export function webRoutes(core: Core): Hono<PersonEnv> {
     await next();
   });
   web.use("*", loadPerson(core.accounts));
-  web.route("/", setupPage(core));
-  web.route("/", signInPage(core));
+  // A hosted workspace signs people in on the base domain: no setup link and no password page.
+  if (core.central) web.route("/", centralPages(core, core.central));
+  else {
+    web.route("/", setupPage(core));
+    web.route("/", signInPage(core));
+  }
   web.route("/", invitePage(core));
   web.route("/", joinPage(core));
   web.route("/", settingsPage(core));

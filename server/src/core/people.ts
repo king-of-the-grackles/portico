@@ -113,10 +113,22 @@ export class People {
   }
 
   /** Throws `conflict` when the name is taken by anyone, in any letter case. */
-  create(input: { name: string; role: Role; status: PersonStatus; passwordHash: string; inviteId?: string | null }): Person {
+  create(input: {
+    name: string;
+    role: Role;
+    status: PersonStatus;
+    passwordHash: string;
+    inviteId?: string | null;
+    /** Hosted Portico: the person's account with the sign-in service. */
+    externalId?: string | null;
+  }): Person {
     const name = cleanPersonName(input.name);
     if (this.byName(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
     if (input.role === "owner" && this.owner()) throw new PorticoError("conflict", "Portico already has an owner.");
+    const externalId = input.externalId ?? null;
+    if (externalId !== null && this.byExternalId(externalId)) {
+      throw new PorticoError("conflict", "This account already has a place on this Portico.");
+    }
     const at = this.iso();
     const person: Person = {
       id: this.newId(),
@@ -129,10 +141,10 @@ export class People {
     };
     this.db
       .query(
-        `INSERT INTO people (id, name, role, status, password_hash, invite_id, created_at, approved_at)
-         VALUES ($id, $name, $role, $status, $passwordHash, $inviteId, $createdAt, $approvedAt)`,
+        `INSERT INTO people (id, name, role, status, password_hash, invite_id, created_at, approved_at, external_id)
+         VALUES ($id, $name, $role, $status, $passwordHash, $inviteId, $createdAt, $approvedAt, $externalId)`,
       )
-      .run({ ...person, passwordHash: input.passwordHash });
+      .run({ ...person, passwordHash: input.passwordHash, externalId });
     this.changes.emit("people");
     return person;
   }
@@ -144,6 +156,12 @@ export class People {
 
   byName(name: string): Person | null {
     const row = this.db.query("SELECT * FROM people WHERE name = $name").get({ name: name.trim() }) as PersonRow | null;
+    return row ? toPerson(row) : null;
+  }
+
+  /** The person signed in through an outside account, in hosted Portico. */
+  byExternalId(externalId: string): Person | null {
+    const row = this.db.query("SELECT * FROM people WHERE external_id = $externalId").get({ externalId }) as PersonRow | null;
     return row ? toPerson(row) : null;
   }
 
@@ -174,6 +192,12 @@ export class People {
     this.db.query("UPDATE people SET name = $name WHERE id = $id").run({ id, name });
     this.changes.emit("people", "agents", "me");
     return this.require(id);
+  }
+
+  /** Ties the person to an account with an outside sign-in service, which then signs the person in. */
+  setExternalId(id: string, externalId: string): void {
+    this.db.query("UPDATE people SET external_id = $externalId WHERE id = $id").run({ id, externalId });
+    this.changes.emit("people");
   }
 
   setPasswordHash(id: string, passwordHash: string): void {
@@ -313,7 +337,7 @@ export class People {
    * Claims an open invite: creates a pending member with the chosen name and password, and uses the link up. Both
    * happen together or not at all, so a name in use leaves the link open for another try.
    */
-  claim(input: { secret: unknown; name: unknown; passwordHash: string }): Person {
+  claim(input: { secret: unknown; name: unknown; passwordHash: string; externalId?: string | null }): Person {
     return this.db.transaction(() => {
       const invite = this.openInvite(input.secret);
       const person = this.create({
@@ -322,6 +346,7 @@ export class People {
         status: "pending",
         passwordHash: input.passwordHash,
         inviteId: invite.id,
+        externalId: input.externalId ?? null,
       });
       this.db.query("UPDATE invites SET claimed_at = $at WHERE id = $id").run({ id: invite.id, at: person.createdAt });
       return person;

@@ -157,6 +157,22 @@ export interface BucketConfig {
   secretAccessKey: string;
 }
 
+/**
+ * Hosted Portico's sign-in on the base domain, as one workspace sees it. People sign in once on the base domain, which
+ * hands the browser to a workspace with a pass: good once, for a minute, for that workspace and the browser that asked.
+ * With this set, the workspace takes no passwords or passkeys of its own.
+ */
+export interface CentralSignIn {
+  /** The base domain's own address, where the account's workspaces are listed. */
+  homeUrl: string;
+  /** Where the browser goes to sign in and come back with a pass. `state` ties the pass to the browser that asked. */
+  startUrl(state: string, next: string): string;
+  /** The account a pass names. Null for a pass that is unknown, used, expired, or asked for with another state. */
+  take(pass: string, state: string): string | null;
+  /** The account now has a place in this workspace: the base domain lists the workspace for the account. */
+  joined(accountId: string): void;
+}
+
 export interface PorticoConfig {
   port: number;
   /** ":memory:" in tests. */
