@@ -9,6 +9,7 @@ import type { AllowList, Approvals } from "./approvals";
 import type { Changes } from "./changes";
 import type { Computers } from "./computers";
 import type { EventSubscriptions } from "./events";
+import type { Files } from "./files";
 import type { Messages } from "./messages";
 import type { People } from "./people";
 import type { Presence } from "./presence";
@@ -31,6 +32,7 @@ export interface Core {
   computers: Computers;
   agents: Agents;
   messages: Messages;
+  files: Files;
   approvals: Approvals;
   allowList: AllowList;
   activity: Activity;

@@ -207,5 +207,31 @@ const releasedNames: Migration = (db) => {
   )`);
 };
 
+/**
+ * 106: files on messages. A file is uploaded first and then attached; `message_files` says which messages carry it, so
+ * one file can be passed along a chain without being uploaded again. A file no message carries is swept. The size is
+ * the one the agent stated when the upload started, which is what the storage cap counts.
+ */
+const messageFiles: Migration = (db) => {
+  db.run(`CREATE TABLE files (
+    id TEXT PRIMARY KEY,
+    uploader_id TEXT REFERENCES agents (id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('uploading', 'ready')),
+    checksum TEXT,
+    created_at TEXT NOT NULL,
+    upload_expires_at TEXT
+  )`);
+  db.run(`CREATE TABLE message_files (
+    message_id TEXT NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
+    file_id TEXT NOT NULL REFERENCES files (id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (message_id, file_id)
+  )`);
+  db.run("CREATE INDEX message_files_file ON message_files (file_id)");
+};
+
 /** Every change since the first schema (version 100), oldest first: the first is version 101. Never edit a shipped one. */
-export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks, wakes, releasedNames];
+export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks, wakes, releasedNames, messageFiles];

@@ -1,6 +1,7 @@
 import type { ActivityEntry, ActivityKind } from "../core/activity";
 import type { Agents, Run } from "../core/agents";
 import type { Approvals } from "../core/approvals";
+import type { Files } from "../core/files";
 import type { Messages } from "../core/messages";
 import type { People } from "../core/people";
 import type { Task, TaskOutcome, TaskReason, TaskStepKind } from "../core/tasks";
@@ -75,6 +76,14 @@ export interface AllowEntry {
   addedAt: string;
 }
 
+/** A file a message carries. The page downloads it from /api/files/:id. */
+export interface FileView {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+}
+
 export interface MessageView {
   id: string;
   threadId: string;
@@ -91,6 +100,7 @@ export interface MessageView {
   decision: Decision | null;
   decidedAt: string | null;
   decidedBy: PersonRef | null;
+  files: FileView[];
 }
 
 /** A held message as its approval card shows it, with the facts Portico checks itself (managedBy: the sender's manager). */
@@ -210,6 +220,7 @@ export interface ViewDeps {
   people: People;
   messages: Messages;
   approvals: Approvals;
+  files: Files;
 }
 
 /** The longest text a reply quote or a thread's last line carries; the page clips further. */
@@ -222,7 +233,7 @@ function clipText(text: string, max = QUOTE_MAX): string {
 
 /** View builders for one signed-in person. */
 export function personViews(deps: ViewDeps, me: Person) {
-  const { agents, people, messages, approvals } = deps;
+  const { agents, people, messages, approvals, files } = deps;
   const peopleById = new Map<string, Person | null>();
   const personRef = (id: string): PersonRef => {
     if (!peopleById.has(id)) peopleById.set(id, people.get(id));
@@ -294,6 +305,7 @@ export function personViews(deps: ViewDeps, me: Person) {
       decision: m.decision,
       decidedAt: m.decidedAt,
       decidedBy: m.decidedBy ? personRef(m.decidedBy) : null,
+      files: files.of(m.id).map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.size })),
     };
   };
 

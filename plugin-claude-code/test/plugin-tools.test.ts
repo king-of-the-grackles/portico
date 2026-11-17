@@ -94,10 +94,10 @@ describe("the plugin's MCP server", () => {
     }
   });
 
-  test("lists the six Portico tools", async () => {
+  test("lists the seven Portico tools", async () => {
     const { host } = await session();
     const { tools } = await host.listTools();
-    expect(tools.map((t) => t.name)).toEqual(["list_agents", "send_message", "check_inbox", "list_tasks", "get_task", "update_profile"]);
+    expect(tools.map((t) => t.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile"]);
   });
 
   test("list_agents shows the other agents", async () => {
@@ -284,7 +284,7 @@ describe("a folder that is off Portico", () => {
     await waitFor(() => recorded.length === 1);
     expect(recorded).toEqual([false]);
     await waitFor(() => s.toolListChanges() === 1);
-    expect((await s.host.listTools()).tools).toHaveLength(6);
+    expect((await s.host.listTools()).tools).toHaveLength(7);
   });
 
   test("while quiet, a tool call gets the note", async () => {
@@ -349,7 +349,7 @@ describe("a computer that hasn't joined", () => {
     plugin.start(); // the handshake happened before the takeover, so the session starts the stream itself
     await waitFor(() => connected(p, ADDRESS));
     await waitFor(() => host.toolListChanges() === 1);
-    expect((await host.host.listTools()).tools).toHaveLength(6);
+    expect((await host.host.listTools()).tools).toHaveLength(7);
     await waitFor(() => sock.posts.length === 1);
     expect(sock.posts[0]!.content).toBe(`<portico-notice>\n${joinedNotice("api-claude")}\n</portico-notice>`);
     expect(copyProblems(joinedNotice("api-claude"))).toEqual([]);

@@ -34,6 +34,20 @@ export const LIMITS = {
   wokenCheckHours: 24,
   /** check_inbox calls that may wait at once for one agent. */
   maxInboxWaitsPerAgent: 3,
+  /** The largest file a message can carry. */
+  maxFileMb: 100,
+  /** The largest text file an agent can hand over inside the create_upload call itself, with no upload. */
+  maxInlineFileKb: 100,
+  maxFilesPerMessage: 5,
+  /** Every file Portico holds, together: a safety cap, counted from the sizes agents state when uploads start. */
+  maxStoredGb: 5,
+  /** What one agent can hold in files no message carries yet, so one agent can't fill the storage cap for everyone. */
+  maxLooseFiles: 20,
+  maxLooseGb: 1,
+  /** How long an upload address and a download address work. */
+  fileLinkMinutes: 15,
+  /** A file no message carries is deleted after this. */
+  looseFileHours: 1,
 } as const;
 
 export const MINUTE_MS = 60_000;

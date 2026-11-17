@@ -157,6 +157,15 @@ export function taskRoutes(core: Core): Hono<PersonEnv> {
     return c.json({ task: views.task(found.task), messages: messages.map(views.message) });
   });
 
+  // A file on a message the person can see: sends the browser on to a short-lived download.
+  route.get("/files/:id", async (c) => {
+    const me = currentPerson(c);
+    const file = core.files.get(c.req.param("id"));
+    if (!file || !core.files.personMayDownload(me, file)) throw new PorticoError("not_found", "No such file.");
+    const link = await core.files.link(file);
+    return c.redirect(link.url, 302);
+  });
+
   route.get("/activity", (c) => {
     const me = currentPerson(c);
     const views = personViews(core, me);

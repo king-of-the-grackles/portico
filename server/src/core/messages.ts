@@ -138,6 +138,15 @@ function checkText(value: unknown): string {
   return value;
 }
 
+/** What sending needs from files: which ones a sender may attach, putting them on a message, and reading them back. */
+export interface MessageFiles {
+  /** The IDs as given, cleaned, with no check of who may attach them. */
+  ids(attachments: unknown): string[];
+  attachable(caller: Agent, attachments: unknown): string[];
+  attach(messageId: string, ids: string[]): void;
+  of(messageId: string): { id: string }[];
+}
+
 export interface MessagesDeps {
   db: Database;
   agents: Agents;
@@ -146,6 +155,8 @@ export interface MessagesDeps {
   changes: Changes;
   /** Where check_inbox calls wait; Portico wakes them as it nudges sessions. */
   waits: InboxWaits;
+  /** The files a message can carry. Without it, messages carry none. */
+  files?: MessageFiles;
   now?: () => Date;
   newId?: () => string;
   notify?: (notice: Notice) => void;
@@ -159,6 +170,7 @@ export class Messages {
   private readonly alwaysAllows: (agentId: string, senderId: string) => boolean;
   private readonly changes: Changes;
   private readonly waits: InboxWaits;
+  private readonly files: MessageFiles | null;
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly notify: (notice: Notice) => void;
@@ -172,6 +184,7 @@ export class Messages {
     this.alwaysAllows = deps.alwaysAllows;
     this.changes = deps.changes;
     this.waits = deps.waits;
+    this.files = deps.files ?? null;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.notify = deps.notify ?? (() => {});
@@ -182,11 +195,21 @@ export class Messages {
    * Sends a message. It's held for the receiver's owner when the receiver requires approval, doesn't always allow the
    * sender, and hasn't itself written in the message's conversation in the last 24 hours. Every message obeys the size
    * limit, the hourly limit and the loop guard. A reply with done: false says more is coming. A message with a key the
-   * sender used before isn't sent again: the first one comes back.
+   * sender used before isn't sent again: the first one comes back. Attachments are file IDs: finished uploads of the
+   * sender's own, or files the sender received.
    */
   send(
     caller: Agent,
-    input: { to?: unknown; subject: unknown; text: unknown; replyTo?: unknown; summary?: unknown; done?: unknown; key?: unknown },
+    input: {
+      to?: unknown;
+      subject: unknown;
+      text: unknown;
+      replyTo?: unknown;
+      summary?: unknown;
+      done?: unknown;
+      key?: unknown;
+      attachments?: unknown;
+    },
   ): { message: Message; delivery: DeliveryTier; note: string | null } {
     const subject = checkSubject(input.subject);
     const text = checkText(input.text);
@@ -203,7 +226,21 @@ export class Messages {
         // the first one would drop it silently, so say so instead.
         const replyTo = typeof input.replyTo === "string" && input.replyTo !== "" ? input.replyTo : null;
         const to = typeof input.to === "string" && input.to.trim() !== "" ? this.agents.resolve(input.to, caller.id).id : first.toId;
-        if (first.subject !== subject || first.text !== text || first.final !== final || first.replyTo !== replyTo || first.toId !== to) {
+        // Compared as named, before any check of the files: a retry stays safe after the first message's files went
+        // (a declined message drops them), and then there is nothing left to compare.
+        const named = this.files?.ids(input.attachments) ?? [];
+        const firstFiles = (this.files?.of(first.id) ?? []).map((file) => file.id);
+        const sameFiles =
+          (first.status === "declined" && firstFiles.length === 0) ||
+          (firstFiles.length === named.length && firstFiles.every((id, i) => id === named[i]));
+        if (
+          first.subject !== subject ||
+          first.text !== text ||
+          first.final !== final ||
+          first.replyTo !== replyTo ||
+          first.toId !== to ||
+          !sameFiles
+        ) {
           throw new PorticoError(
             "conflict",
             `The key ${sendKey} already sent message ${first.id} (${first.subject}), which differs from this one. A retry ` +
@@ -218,6 +255,7 @@ export class Messages {
         };
       }
     }
+    const fileIds = this.attachmentIds(caller, input.attachments);
     let receiver: Agent | null =
       typeof input.to === "string" && input.to.trim() !== "" ? this.agents.resolve(input.to, caller.id) : null;
     let replyTo: string | null = null;
@@ -277,6 +315,7 @@ export class Messages {
         senderNotifiedAt: null,
       };
       this.insert(m);
+      if (fileIds.length > 0) this.files!.attach(id, fileIds);
       this.db.query("UPDATE threads SET last_message_at = $at WHERE id = $id").run({ id: thread.id, at });
       return m;
     })();
@@ -611,6 +650,12 @@ export class Messages {
   }
 
   // ---- helpers ----
+
+  private attachmentIds(caller: Agent, attachments: unknown): string[] {
+    if (attachments === undefined || attachments === null) return [];
+    if (!this.files) throw new PorticoError("bad_request", "This Portico doesn't take attachments.");
+    return this.files.attachable(caller, attachments);
+  }
 
   private requireBudget(caller: Agent, receiver: Agent): void {
     const since = this.iso(-HOUR_MS);

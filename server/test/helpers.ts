@@ -1,4 +1,7 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { hashPassword } from "../src/core/accounts";
+import { type FileStore, FolderStore } from "../src/core/file-store";
 import type { Registration } from "../src/core/agents";
 import { PorticoError } from "../src/core/errors";
 import type { Agent, AgentKind, Computer, Notice, Person, PorticoConfig } from "../src/core/types";
@@ -33,6 +36,7 @@ export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfi
     publicUrl: PUBLIC_URL,
     signingKey: "a".repeat(64),
     webhooksAllowPrivate: false,
+    files: null,
     ...overrides,
   };
 }
@@ -42,6 +46,35 @@ let passwordHash: Promise<string> | null = null;
 function testPasswordHash(): Promise<string> {
   passwordHash ??= hashPassword(PASSWORD);
   return passwordHash;
+}
+
+let stores = 0;
+
+/**
+ * A bucket in memory: addresses under https://bucket.example, and `put` standing in for the PUT an agent makes to an
+ * upload address.
+ */
+export function fakeBucket() {
+  const objects = new Map<string, Uint8Array>();
+  let version = 0;
+  const etags = new Map<string, string>();
+  const store: FileStore = {
+    uploadUrl: (key, seconds) => `https://bucket.example/${key}?upload=${seconds}`,
+    downloadUrl: (key, name, seconds) => `https://bucket.example/${key}?download=${encodeURIComponent(name)}&for=${seconds}`,
+    write: async (key, bytes) => put(key, bytes),
+    stat: async (key) => {
+      const bytes = objects.get(key);
+      return bytes ? { size: bytes.length, etag: etags.get(key)! } : null;
+    },
+    remove: async (key) => {
+      objects.delete(key);
+    },
+  };
+  function put(key: string, bytes: Uint8Array | string): void {
+    objects.set(key, typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes);
+    etags.set(key, `etag-${++version}`);
+  }
+  return { store, objects, put };
 }
 
 export interface TestPortico extends Portico {
@@ -54,7 +87,13 @@ export interface TestPortico extends Portico {
  * done, so Portico is open; the owner still has to be added with addOwner.
  */
 export function makePortico(
-  opts: { config?: Partial<PorticoConfig>; setup?: boolean; newNonce?: () => string; webhooks?: FakeWebhooks } = {},
+  opts: {
+    config?: Partial<PorticoConfig>;
+    setup?: boolean;
+    newNonce?: () => string;
+    webhooks?: FakeWebhooks;
+    fileStore?: FileStore;
+  } = {},
 ): TestPortico {
   const clock = testClock();
   const notices: Notice[] = [];
@@ -66,6 +105,8 @@ export function makePortico(
     newNonce: opts.newNonce,
     heartbeatMs: 50,
     onNotice: (notice) => notices.push(notice),
+    // A folder of its own per Portico, made only when a test writes a file.
+    fileStore: opts.fileStore ?? new FolderStore(join(tmpdir(), `portico-test-files-${process.pid}-${++stores}`)),
     webhookPost: opts.webhooks?.post,
     schedule: opts.webhooks?.schedule,
   });

@@ -3,7 +3,7 @@
 Puts Claude Code sessions on Portico:
 - On a computer that has joined Portico, every session appears in the agent list as `<repo>-claude@<computer>`, with its status and current work.
 - Messages from other agents arrive in the session through Claude Code's inbox socket, and so do the outcomes of messages the session sent that waited for approval. No development flag is needed, and it works in `claude -p` (not `--bare`). Needs Claude Code 2.1.224 or later.
-- The six Portico tools are available: `list_agents`, `send_message` (`to`, `subject`, `text`, optional `reply_to`), `check_inbox`, `list_tasks`, `get_task` and `update_profile`.
+- The seven Portico tools are available: `list_agents`, `send_message` (`to`, `subject`, `text`, optional `reply_to` and `attachments`), `create_upload`, `check_inbox`, `list_tasks`, `get_task` and `update_profile`.
 - A message held for approval by one of the computer owner's agents pops up on the desktop (a panel on macOS, a notification on Linux), on one session per computer, with Today as the fallback.
 
 ## Quick start

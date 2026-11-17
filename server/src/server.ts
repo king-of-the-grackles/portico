@@ -1,5 +1,5 @@
 import type { PorticoConfig } from "./core/types";
-import { MAX_BODY_BYTES } from "./core/limits";
+import { LIMITS, MAX_BODY_BYTES } from "./core/limits";
 import { openDb } from "./db";
 import { log } from "./log";
 import { createPortico, type Portico } from "./portico";
@@ -21,8 +21,9 @@ export function startServer(config: PorticoConfig, opts: { port?: number } = {})
     server = Bun.serve({
       port: opts.port ?? config.port,
       fetch: portico.app.fetch,
-      // A backstop above jsonBodyLimit.
-      maxRequestBodySize: MAX_BODY_BYTES * 2,
+      // A backstop above jsonBodyLimit. With files in the data folder, uploads come through Portico, so the backstop
+      // rises to the file limit and every route but /files keeps the old one (see buildApp).
+      maxRequestBodySize: portico.files.takesUploads ? LIMITS.maxFileMb * 1024 * 1024 + MAX_BODY_BYTES : MAX_BODY_BYTES * 2,
       // Above the streams' heartbeat (25 s), so quiet live streams aren't cut. Bun's default is 10 s.
       idleTimeout: 60,
     });

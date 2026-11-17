@@ -1,7 +1,7 @@
 // Tasks and decisions, shared by Today, Activity and the agent pages: one row per task (status, task, who, when) whose
 // steps open inside the row, and the cards for what needs a person's decision. Pure: state in, HTML out.
 import { agentState, clock, duration, esc, expiresIn, kindInfo, logo, pav, when } from "./common.js";
-import type { AgentRef, AgentView, HeldCard, HomeState, MessageView, SignInView, TaskDetail, TaskOutcome, TaskView } from "./types.js";
+import type { AgentRef, AgentView, FileView, HeldCard, HomeState, MessageView, SignInView, TaskDetail, TaskOutcome, TaskView } from "./types.js";
 
 /** The four outcomes, in plain words. */
 export const OUTCOME_LABEL: Record<TaskOutcome, string> = {
@@ -76,6 +76,29 @@ function renderSteps(t: TaskView): string {
     .join("")}</ol>`;
 }
 
+function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value >= 100 ? Math.round(value) : Math.round(value * 10) / 10} ${units[unit]}`;
+}
+
+/** The files a message carries: each name downloads the file. Files come from an agent, so they never open in the page. */
+export function renderFiles(files: FileView[]): string {
+  if (files.length === 0) return "";
+  return `<ul class="files" aria-label="Files">${files
+    .map(
+      (f) =>
+        `<li class="file"><a href="/api/files/${encodeURIComponent(f.id)}" download="${esc(f.name)}">${esc(f.name)}</a><span class="file-size tnum">${fileSize(f.size)}</span></li>`,
+    )
+    .join("")}</ul>`;
+}
+
 /** Longer messages show their first lines until opened. */
 const LONG_MESSAGE = 600;
 
@@ -88,6 +111,7 @@ function renderMessage(m: MessageView, s: HomeState): string {
     <p class="tmsg-subject">${esc(m.subject)}</p>
     <p class="tmsg-text">${esc(text)}</p>
     ${when(long, `<button type="button" class="morebtn" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Show less" : "Show all"}</button>`)}
+    ${renderFiles(m.files)}
   </li>`;
 }
 
@@ -154,6 +178,7 @@ export function renderHeldCard(s: HomeState, m: HeldCard): string {
       <p class="dcard-why tnum">${esc(heldReason(s, m))}</p>
     </div></div>
     ${when(shown, () => `<div class="msg-box enter" data-key="dm-${esc(m.id)}"><p class="msg-full">${esc(m.text)}</p></div>`)}
+    ${renderFiles(m.files)}
     <div class="actions">
       <button type="button" class="btn btn-link start" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Hide message" : "Show message"}</button>
       ${decideButtons(s, m)}
