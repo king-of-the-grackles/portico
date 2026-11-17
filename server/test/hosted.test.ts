@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceCommand } from "../src/commands/workspace";
-import { ConfigError, type HostedConfig, hostedEnv } from "../src/config";
+import { ConfigError, ensureSigningKey, type HostedConfig, hostedEnv } from "../src/config";
 import { cleanPublicUrl } from "../src/core/settings";
 import { checkSlug } from "../src/hosted/control";
 import { Hosted } from "../src/hosted/router";
-import { addAppAgent, addOwner, errorCode, fakeConnection, HOUR, MINUTE, signIn, testClock } from "./helpers";
+import { openDb } from "../src/db";
+import { createPortico } from "../src/portico";
+import { addAppAgent, addOwner, errorCode, fakeConnection, HOUR, MINUTE, PASSWORD, signIn, testClock, testConfig } from "./helpers";
 
 const dirs: string[] = [];
 const running: Hosted[] = [];
@@ -232,6 +234,68 @@ describe("opening and closing", () => {
 });
 
 describe("portico workspace", () => {
+  test("import brings a single Portico over: its people sign in and its agents' tokens work at the new address", async () => {
+    // A single Portico on disk, with an owner, two agents and a message between them.
+    const folder = mkdtempSync(join(tmpdir(), "portico-single-"));
+    dirs.push(folder);
+    const single = createPortico(testConfig({ dbPath: join(folder, "portico.db"), dataDir: folder, signingKey: ensureSigningKey(folder) }), {
+      db: openDb(join(folder, "portico.db")),
+    });
+    single.settings.set("setup_done_at", new Date().toISOString());
+    const owner = await addOwner(single, "Chris");
+    const grok = addAppAgent(single, owner, "grok", { kind: "grok-bot" });
+    const muse = addAppAgent(single, owner, "muse");
+    const sent = await single.app.request("/api/agent/messages", {
+      method: "POST",
+      headers: { authorization: `Bearer ${grok.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ to: "muse", subject: "Before the move", text: "hello" }),
+    });
+    expect(sent.status).toBe(201);
+    // Left open on purpose: the copy has to be whole while the source still runs.
+    const key = readFileSync(join(folder, "signing.key"), "utf8");
+
+    const config = hostedConfig();
+    const env = { PORTICO_HOSTED_DOMAIN: config.domain, PORTICO_HOSTED_DATA: config.dataDir };
+    const out: string[] = [];
+    const io = { env, cwd: config.dataDir, out: (line: string) => out.push(line), err: (line: string) => out.push(`ERR ${line}`) };
+    expect(await workspaceCommand(["import", "moved", folder], io)).toBe(0);
+    expect(out[0]).toBe("Made https://moved.portico.test with 1 person and 2 agents.");
+    single.db.close();
+    // The source is only read.
+    expect(readFileSync(join(folder, "signing.key"), "utf8")).toBe(key);
+    expect(existsSync(join(folder, "portico.db"))).toBe(true);
+
+    const { hosted, call } = start(config);
+    const ws = hosted.control.bySlug("moved")!;
+    expect(ws.createdBy).toBeNull();
+    expect(readFileSync(join(config.dataDir, "w", ws.id, "signing.key"), "utf8")).toBe(key);
+    // The agents' tokens work, and the message came along.
+    const inbox = await call("moved.portico.test", "/api/agent/inbox", { token: muse.token });
+    expect(inbox.status).toBe(200);
+    expect(JSON.stringify(await inbox.json())).toContain("Before the move");
+    // The owner signs in with the old password, and links name the new address.
+    const signedIn = await call("moved.portico.test", "/api/session", {
+      method: "POST",
+      headers: { origin: "https://moved.portico.test" },
+      body: JSON.stringify({ name: "Chris", password: PASSWORD }),
+    });
+    expect(signedIn.status).toBe(200);
+    expect(hosted.portico(ws).settings.publicUrl()).toBe("https://moved.portico.test");
+
+    // What can't be brought over says why, and leaves nothing behind.
+    expect(await workspaceCommand(["import", "moved", folder], io)).toBe(1);
+    expect(out.at(-1)).toContain("taken");
+    const empty = mkdtempSync(join(tmpdir(), "portico-single-"));
+    dirs.push(empty);
+    expect(await workspaceCommand(["import", "other", empty], io)).toBe(1);
+    expect(out.at(-1)).toContain("portico.db and signing.key");
+    writeFileSync(join(empty, "portico.db"), "not a database");
+    writeFileSync(join(empty, "signing.key"), key);
+    expect(await workspaceCommand(["import", "other", empty], io)).toBe(1);
+    expect(await workspaceCommand(["import", "other"], io)).toBe(1);
+    expect(hosted.control.bySlug("other")).toBeNull();
+  });
+
   test("create prints the workspace's setup link, and list shows the workspaces", async () => {
     const config = hostedConfig();
     const env = { PORTICO_HOSTED_DOMAIN: config.domain, PORTICO_HOSTED_DATA: config.dataDir };

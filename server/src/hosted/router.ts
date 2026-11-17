@@ -1,5 +1,5 @@
-import type { Database } from "bun:sqlite";
-import { mkdirSync, rmSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { ensureSigningKey, type HostedConfig } from "../config";
@@ -200,6 +200,58 @@ export class Hosted {
     this.workspaceConfig(workspace);
     log("info", "workspace_created", { workspace_id: workspace.id });
     return workspace;
+  }
+
+  /**
+   * Makes a workspace out of a single Portico's data folder: its database and its signing key, so every agent's and
+   * computer's token still works at the new address. The folder is only read. The workspace keeps its people's
+   * passwords, as one made from the command line does.
+   */
+  importFrom(slug: unknown, folder: string): { workspace: Workspace; people: number; agents: number } {
+    const dbPath = join(folder, "portico.db");
+    const keyPath = join(folder, "signing.key");
+    if (!existsSync(dbPath) || !existsSync(keyPath)) {
+      throw new PorticoError("bad_request", `${folder} needs a Portico's portico.db and signing.key.`);
+    }
+    let source: Database;
+    try {
+      source = new Database(dbPath, { readonly: true });
+    } catch {
+      throw new PorticoError("bad_request", `${dbPath} doesn't open as a database.`);
+    }
+    let workspace: Workspace | null = null;
+    try {
+      const has = (table: string) => source.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== null;
+      let known = false;
+      try {
+        known = has("people") && has("settings") && has("agents");
+      } catch {
+        // Not a database at all.
+      }
+      if (!known) throw new PorticoError("bad_request", `${dbPath} isn't a Portico database.`);
+      const done = source.query("SELECT 1 FROM settings WHERE key = 'setup_done_at'").get();
+      if (!done) throw new PorticoError("bad_request", "That Portico was never set up, so there's nothing to bring over.");
+      // Files on a disk stay behind: only what the database holds comes over.
+      if (has("files") && source.query("SELECT 1 FROM files LIMIT 1").get()) {
+        throw new PorticoError("bad_request", "That Portico holds attached files, and import doesn't bring files over yet.");
+      }
+      workspace = this.create(slug);
+      const dir = this.dir(workspace);
+      // A whole, settled copy, whatever the source's write-ahead log still holds.
+      rmSync(join(dir, "portico.db"), { force: true });
+      source.run(`VACUUM INTO '${join(dir, "portico.db").replaceAll("'", "''")}'`);
+      copyFileSync(keyPath, join(dir, "signing.key"));
+      const portico = this.portico(workspace);
+      const people = (portico.db.query("SELECT COUNT(*) AS n FROM people").get() as { n: number }).n;
+      const agents = (portico.db.query("SELECT COUNT(*) AS n FROM agents").get() as { n: number }).n;
+      log("info", "workspace_imported", { workspace_id: workspace.id, people, agents });
+      return { workspace, people, agents };
+    } catch (err) {
+      if (workspace) this.remove(workspace);
+      throw err;
+    } finally {
+      source.close();
+    }
   }
 
   /** The workspace's Portico, opened if it was closed. */

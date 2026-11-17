@@ -17,9 +17,10 @@ Commands:
   doctor            Check that Portico answers at the public URL and that setup is done.
   join '<line>'     Join this computer to Portico with a join line from Add agent.
   leave             Take this computer off Portico and undo the join.
-  workspace create <name> | list
+  workspace create <name> | import <name> <folder> | list
                     Hosted Portico only (PORTICO_HOSTED_DOMAIN): make a workspace and print
-                    the workspace's setup link, or list the workspaces.
+                    the workspace's setup link, make one from a single Portico's data
+                    folder (portico.db and signing.key), or list the workspaces.
   help              Show this message.
 `;
 
