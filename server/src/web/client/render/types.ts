@@ -86,6 +86,8 @@ export interface SettingsData {
   people: { people: PersonRow[]; invites: InviteView[]; claims: ClaimView[] } | null;
   computers: ComputerView[] | null;
   passkeys: PasskeyView[] | null;
+  /** False on hosted Portico, where sign-in happens on the base domain: no password to change. */
+  passwords?: boolean;
 }
 
 /** A join line just made by POST /api/join-lines. The line carries the secret, so it lives only in the page's memory. */
@@ -182,6 +184,8 @@ export interface SettingsState {
   claims: ClaimView[];
   computers: ComputerView[] | null;
   passkeys: PasskeyView[] | null;
+  /** Whether this Portico has passwords to change. */
+  passwords: boolean;
   acctOpen: boolean;
   add: AddState | null;
   reconnecting: boolean;

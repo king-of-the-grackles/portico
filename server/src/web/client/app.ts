@@ -1006,6 +1006,7 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
     }
   };
   const loadPasskeys = async () => {
+    if (!s().passwords) return;
     try {
       page.set({ passkeys: (await api<{ passkeys: PasskeyView[] }>("GET", "/api/passkeys")).passkeys });
     } catch (err) {

@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { PorticoError } from "../core/errors";
-import { NAME } from "../core/limits";
+import { DAY_MS, LIMITS, NAME } from "../core/limits";
+import { hashSecret, newToken } from "../core/tokens";
 
 /** One workspace: a whole Portico of its own, at `<slug>.<base domain>`. */
 export interface Workspace {
@@ -28,7 +29,7 @@ const RESERVED = new Set([
 
 const MIN_SLUG = 3;
 const MAX_SLUG = 40;
-const VERSION = 1;
+const VERSION = 2;
 
 /** A workspace's address name as given: lowercase letters, digits and hyphens, 3 to 40 characters, not reserved. */
 export function checkSlug(value: unknown): string {
@@ -44,8 +45,9 @@ export function checkSlug(value: unknown): string {
 }
 
 /**
- * The control database: the list of workspaces and nothing else. Whatever happens inside a workspace (people, agents,
- * messages, tokens) lives in that workspace's own database and never here.
+ * The control database: the list of workspaces, who is signed in on the base domain, and which accounts have a place
+ * in which workspace (for the base domain's list only: each workspace's own people decide who gets in). Whatever
+ * happens inside a workspace (agents, messages, tokens) lives in that workspace's own database and never here.
  */
 export class Control {
   private readonly db: Database;
@@ -72,9 +74,79 @@ export class Control {
           created_at TEXT NOT NULL
         )`);
         this.db.run("CREATE INDEX workspaces_created_by ON workspaces (created_by)");
-        this.db.run(`PRAGMA user_version = ${VERSION}`);
+        this.db.run("PRAGMA user_version = 1");
       })();
     }
+    if (version < 2) {
+      this.db.transaction(() => {
+        this.db.run(`CREATE TABLE sessions (
+          token_hash TEXT PRIMARY KEY,
+          account_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL
+        )`);
+        this.db.run(`CREATE TABLE members (
+          account_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          PRIMARY KEY (account_id, workspace_id)
+        )`);
+        this.db.run("PRAGMA user_version = 2");
+      })();
+    }
+  }
+
+  // ---- sign-ins on the base domain ----
+
+  /** A new sign-in for the account. The token goes in the base domain's cookie and is stored only as a hash. */
+  startSession(accountId: string): { token: string; expiresAt: string } {
+    const token = newToken("pb_");
+    const at = this.now();
+    const expiresAt = new Date(at.getTime() + LIMITS.webSessionDays * DAY_MS).toISOString();
+    this.db
+      .query("INSERT INTO sessions (token_hash, account_id, created_at, expires_at) VALUES ($hash, $accountId, $at, $expiresAt)")
+      .run({ hash: hashSecret(token), accountId, at: at.toISOString(), expiresAt });
+    return { token, expiresAt };
+  }
+
+  /** The account signed in with this cookie token, or null when the token is unknown or expired. */
+  accountForSession(token: string | undefined): string | null {
+    if (!token) return null;
+    const row = this.db
+      .query("SELECT account_id, expires_at FROM sessions WHERE token_hash = $hash")
+      .get({ hash: hashSecret(token) }) as { account_id: string; expires_at: string } | null;
+    return row && Date.parse(row.expires_at) > this.now().getTime() ? row.account_id : null;
+  }
+
+  endSession(token: string | undefined): void {
+    if (token) this.db.query("DELETE FROM sessions WHERE token_hash = $hash").run({ hash: hashSecret(token) });
+  }
+
+  /** Daily: deletes expired sign-ins. Returns how many. */
+  sweep(): number {
+    return this.db.query("DELETE FROM sessions WHERE expires_at <= $now").run({ now: this.now().toISOString() }).changes;
+  }
+
+  // ---- which accounts have a place where ----
+
+  addMember(accountId: string, workspaceId: string): void {
+    this.db
+      .query("INSERT OR IGNORE INTO members (account_id, workspace_id) VALUES ($accountId, $workspaceId)")
+      .run({ accountId, workspaceId });
+  }
+
+  removeMember(accountId: string, workspaceId: string): void {
+    this.db.query("DELETE FROM members WHERE account_id = $accountId AND workspace_id = $workspaceId").run({ accountId, workspaceId });
+  }
+
+  /** The workspaces the account was last known to have a place in, oldest first. */
+  memberOf(accountId: string): Workspace[] {
+    const rows = this.db
+      .query(
+        `SELECT w.* FROM workspaces w JOIN members m ON m.workspace_id = w.id
+         WHERE m.account_id = $accountId ORDER BY w.created_at, w.id`,
+      )
+      .all({ accountId }) as WorkspaceRow[];
+    return rows.map(toWorkspace);
   }
 
   create(slug: unknown, createdBy: string | null = null): Workspace {
@@ -116,7 +188,10 @@ export class Control {
   }
 
   remove(id: string): void {
-    this.db.query("DELETE FROM workspaces WHERE id = $id").run({ id });
+    this.db.transaction(() => {
+      this.db.query("DELETE FROM members WHERE workspace_id = $id").run({ id });
+      this.db.query("DELETE FROM workspaces WHERE id = $id").run({ id });
+    })();
   }
 
   close(): void {

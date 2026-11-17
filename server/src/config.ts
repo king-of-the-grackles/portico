@@ -90,6 +90,8 @@ export interface HostedConfig {
   pluginSource: string | null;
   webhooksAllowPrivate: boolean;
   files: BucketConfig | null;
+  /** PORTICO_DESCOPE_PROJECT_ID: people sign in with Descope on the base domain. Null keeps each workspace's passwords. */
+  descopeProjectId: string | null;
 }
 
 /**
@@ -105,6 +107,10 @@ export function hostedEnv(env: Env): HostedConfig | null {
   }
   const base = parseEnv({ ...env, PORTICO_PUBLIC_URL: undefined }, "");
   const local = raw.split(":")[0] === "localhost";
+  const descopeProjectId = env.PORTICO_DESCOPE_PROJECT_ID?.trim() || null;
+  if (descopeProjectId !== null && !/^[A-Za-z0-9]{8,64}$/.test(descopeProjectId)) {
+    throw new ConfigError(["PORTICO_DESCOPE_PROJECT_ID must be a Descope project ID: letters and digits only"]);
+  }
   return {
     domain: raw,
     baseUrl: `${local ? "http" : "https"}://${raw}`,
@@ -113,6 +119,7 @@ export function hostedEnv(env: Env): HostedConfig | null {
     pluginSource: base.pluginSource,
     webhooksAllowPrivate: base.webhooksAllowPrivate,
     files: base.files,
+    descopeProjectId,
   };
 }
 

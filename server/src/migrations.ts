@@ -233,5 +233,14 @@ const messageFiles: Migration = (db) => {
   db.run("CREATE INDEX message_files_file ON message_files (file_id)");
 };
 
+/**
+ * 107: a person's account with an outside sign-in service. Hosted Portico signs people in on the base domain, and each
+ * workspace finds its own person by that account. Null for everyone who signs in with a password.
+ */
+const outsideAccounts: Migration = (db) => {
+  db.run("ALTER TABLE people ADD COLUMN external_id TEXT");
+  db.run("CREATE UNIQUE INDEX people_external_id ON people (external_id) WHERE external_id IS NOT NULL");
+};
+
 /** Every change since the first schema (version 100), oldest first: the first is version 101. Never edit a shipped one. */
-export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks, wakes, releasedNames, messageFiles];
+export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks, wakes, releasedNames, messageFiles, outsideAccounts];

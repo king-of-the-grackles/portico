@@ -2,9 +2,10 @@ import { Hono } from "hono";
 import type { Core } from "../core/core";
 import type { Person } from "../core/types";
 import { PorticoError } from "../core/errors";
-import { checkNewPassword, hashPassword } from "../core/accounts";
+import { checkNewPassword, hashPassword, NO_PASSWORD } from "../core/accounts";
 import { cleanPersonName, type Claim, type Invite } from "../core/people";
 import { log } from "../log";
+import { clearWaitingAccount, waitingAccount } from "../web/central";
 import { type PersonEnv, currentOwner, currentPerson } from "./context";
 import { jsonObject, startBrowserSession } from "./session";
 import { type ClaimView, type InviteView, type PersonView, personViews } from "./views";
@@ -86,8 +87,18 @@ export function peopleRoutes(core: Core): Hono<PersonEnv> {
     people.openInvite(body.secret);
     const name = cleanPersonName(body.name);
     if (people.byName(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
-    const password = checkNewPassword(body.password);
-    const person = people.claim({ secret: body.secret, name, passwordHash: await hashPassword(password) });
+    let person: Person;
+    if (core.central) {
+      // Hosted: the claim belongs to the account that just signed in on the base domain. No password is ever set.
+      const accountId = waitingAccount(c, core);
+      if (!accountId) throw new PorticoError("unauthorized", "Sign in first, then join with this invite link.");
+      person = people.claim({ secret: body.secret, name, passwordHash: NO_PASSWORD, externalId: accountId });
+      clearWaitingAccount(c, core);
+      core.central.joined(accountId);
+    } else {
+      const password = checkNewPassword(body.password);
+      person = people.claim({ secret: body.secret, name, passwordHash: await hashPassword(password) });
+    }
     startBrowserSession(c, core, person.id);
     log("info", "invite_claimed", { invite_id: person.inviteId, person_id: person.id });
     return c.json({ person: personViews(core, person).person(person), next: "/invite" }, 201);

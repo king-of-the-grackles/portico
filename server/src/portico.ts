@@ -20,7 +20,7 @@ import { People } from "./core/people";
 import { Presence } from "./core/presence";
 import { Settings } from "./core/settings";
 import { Tasks } from "./core/tasks";
-import type { Message, Notice, PorticoConfig } from "./core/types";
+import type { CentralSignIn, Message, Notice, PorticoConfig } from "./core/types";
 import { WakeUrls } from "./core/wake-urls";
 import { safePost, type WebhookPost } from "./core/webhooks";
 import { Desk } from "./desk";
@@ -40,6 +40,8 @@ export interface PorticoOptions {
   webhookPost?: WebhookPost;
   /** Where files' bytes live; by default the configured bucket, or the data folder. */
   fileStore?: FileStore;
+  /** Hosted Portico: people sign in on the base domain, and this Portico takes no passwords. */
+  central?: CentralSignIn;
   /** When webhook retries run; tests run them by hand. */
   schedule?: (fn: () => void, ms: number) => void;
 }
@@ -232,6 +234,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     desk,
     wakeUrls,
     events,
+    central: opts.central ?? null,
     now,
     newId,
   };

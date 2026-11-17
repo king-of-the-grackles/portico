@@ -2,9 +2,10 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, 
 
 /**
  * Secret prefixes, so a leaked value says what it is: `pc_` a computer, `pa_` an app agent, `pt_` and `pr_` a
- * connector's OAuth access and refresh tokens, `pw_` a browser sign-in, `ps_` a sign-in request's poll secret.
+ * connector's OAuth access and refresh tokens, `pw_` a browser sign-in, `ps_` a sign-in request's poll secret, `pb_` a browser sign-in on hosted Portico's base
+ * domain.
  */
-export type TokenPrefix = "pc_" | "pa_" | "pt_" | "pr_" | "pw_" | "ps_";
+export type TokenPrefix = "pc_" | "pa_" | "pt_" | "pr_" | "pw_" | "ps_" | "pb_";
 
 /** The prefix and 32 random bytes, base64url. */
 export function newToken(prefix: TokenPrefix): string {

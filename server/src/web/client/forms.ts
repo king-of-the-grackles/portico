@@ -29,6 +29,7 @@ async function submit(form: HTMLFormElement): Promise<void> {
   if (button) button.disabled = true;
   try {
     const answer = (await api<{ next?: unknown } | null>(method, path, fields(form))) ?? {};
+    form.dispatchEvent(new CustomEvent("portico:done"));
     const next = form.dataset.next ?? (typeof answer.next === "string" ? answer.next : null);
     if (next) location.assign(next);
     else location.reload();

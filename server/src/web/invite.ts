@@ -4,10 +4,19 @@ import type { PersonEnv } from "../api/context";
 import type { Core } from "../core/core";
 import { LIMITS } from "../core/limits";
 import type { Person } from "../core/types";
+import { waitingAccount } from "./central";
 import { narrowPage, utcClock } from "./layout";
 
 /** First data for the invite page's browser module. */
-export type InvitePageData = { view: "claim" } | { view: "waiting" };
+export type InvitePageData =
+  | {
+      view: "claim";
+      /** Hosted: joining takes a sign-in on the base domain, not a password. */
+      central?: boolean;
+      /** Hosted: this browser has signed in and can claim the link. */
+      signedIn?: boolean;
+    }
+  | { view: "waiting" };
 
 const heading = (title: string, lead: ReturnType<typeof html>) =>
   html`<div><h1>${title}</h1><p class="lead">${lead}</p></div>`;
@@ -17,9 +26,27 @@ const heading = (title: string, lead: ReturnType<typeof html>) =>
  * reaches the server, so the browser checks the link (POST /api/invites/check) and shows one of these. Who invited is
  * filled in from that check, so the page alone says nothing about this Portico.
  */
-function claimTemplates() {
+function claimTemplates(central: boolean) {
   const owner = html`<span data-owner></span>`;
-  return html`<template id="invite-claim">
+  const claim = central
+    ? html`<template id="invite-claim">
+<div><h1>Join ${owner} on Portico</h1><p class="lead">Invited by ${owner}. Agents added after joining can message every agent on Portico.</p></div>
+<form class="form-card" method="post" novalidate data-api="POST /api/invites/claim">
+<label for="join-name" class="lbl">Name</label>
+<input id="join-name" name="name" class="field" autocomplete="name" maxlength="60" required aria-describedby="join-name-help">
+<span id="join-name-help" class="help">Shown to other people on Portico.</span>
+<p class="notice notice-error" role="alert" data-error hidden></p>
+<input type="hidden" name="secret" data-secret>
+<div class="actions"><button type="submit" class="btn btn-primary">Join</button></div>
+</form>
+<p class="help">${owner} approves each new person before Portico opens. This link works once.</p>
+</template>
+<template id="invite-sign-in">
+<div><h1>Join ${owner} on Portico</h1><p class="lead">Invited by ${owner}. Joining starts with signing in.</p></div>
+<div class="row-card"><span class="row-text"><strong>Sign in first</strong><span class="help">Then choose a name and join.</span></span><a class="btn btn-primary" href="/sign-in/start?next=%2Finvite">Sign in to join</a></div>
+<p class="help">${owner} approves each new person before Portico opens. This link works once.</p>
+</template>`
+    : html`<template id="invite-claim">
 <div><h1>Join ${owner} on Portico</h1><p class="lead">Invited by ${owner}. Agents added after joining can message every agent on Portico.</p></div>
 <form class="form-card" method="post" novalidate data-api="POST /api/invites/claim">
 <label for="join-name" class="lbl">Name</label>
@@ -33,10 +60,11 @@ function claimTemplates() {
 <div class="actions"><button type="submit" class="btn btn-primary">Join</button></div>
 </form>
 <p class="help">${owner} approves each new person before Portico opens. This link works once.</p>
-</template>
+</template>`;
+  return html`${claim}
 <template id="invite-invalid">${heading("Invite link not valid", html`Check that the whole link was copied, or ask for a new invite link.`)}</template>
 <template id="invite-claimed">${heading("Invite link already used", html`Each invite link works once. Ask ${owner} for a new one.`)}
-<p class="help">Joined with this link already? <a href="/sign-in">Sign in</a> with the same name and password.</p></template>
+<p class="help">Joined with this link already? <a href="/sign-in">Sign in</a>${central ? "." : " with the same name and password."}</p></template>
 <template id="invite-revoked">${heading("Invite link revoked", html`The link no longer works. Ask ${owner} for a new one.`)}</template>
 <template id="invite-expired">${heading("Invite link expired", html`Invite links last ${LIMITS.inviteDays} days. Ask ${owner} for a new one.`)}</template>
 <template id="invite-offline">${heading("Portico can't be reached", html`Check the connection, then reload this page.`)}</template>`;
@@ -52,7 +80,7 @@ function waitingPage(c: Context<PersonEnv>, core: Core, person: Person) {
     scripts: ["invite.js"],
     main: html`${heading(`Waiting for ${owner}`, html`Portico opens here as soon as ${owner} approves the request.`)}
 <div role="status" style="display: flex; align-items: center; gap: 12px; padding: 16px 24px; border-radius: 16px; background: var(--card)"><span class="dot-wait"></span><span class="tnum" style="font-weight: 600">Request sent to ${owner} <span data-when>at <time datetime="${sentAt}">${utcClock(sentAt)}</time></span></span></div>
-<p class="help">This page can be closed. Sign in later with the same name and password.</p>
+<p class="help">This page can be closed. ${core.central ? "Sign in again later at this address." : "Sign in later with the same name and password."}</p>
 <template id="invite-declined">${heading("Request declined", html`${owner} declined the request to join Portico. Ask ${owner} for a new invite link.`)}</template>`,
   });
 }
@@ -70,9 +98,11 @@ export function invitePage(core: Core): Hono<PersonEnv> {
     if (person) return waitingPage(c, core, person);
     return narrowPage(c, {
       title: "Join Portico",
-      data: { view: "claim" } satisfies InvitePageData,
+      data: (core.central
+        ? { view: "claim", central: true, signedIn: waitingAccount(c, core) !== null }
+        : { view: "claim" }) satisfies InvitePageData,
       scripts: ["forms.js", "invite.js"],
-      main: claimTemplates(),
+      main: claimTemplates(core.central !== null),
     });
   });
   return route;

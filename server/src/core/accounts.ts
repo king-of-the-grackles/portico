@@ -25,6 +25,9 @@ export function verifyPassword(password: string, hash: string): Promise<boolean>
   return Bun.password.verify(password, hash).catch(() => false);
 }
 
+/** Stored for a person who signs in through hosted Portico's base domain: no password matches this. */
+export const NO_PASSWORD = "!";
+
 const MAX_PASSWORD_CHARS = 1000;
 
 /** A new password as typed: 12 characters or more. Returned unchanged; spaces count. */
