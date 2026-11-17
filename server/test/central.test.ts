@@ -208,7 +208,7 @@ describe("signing in on the base domain", () => {
     expect(b.cookies(BASE).size).toBe(0);
 
     const signedOut = await b.call(`https://${BASE}/`);
-    expect(await signedOut.text()).toContain('href="/sign-in"');
+    expect(signedOut.headers.get("location")).toBe("/sign-in");
     const page = await b.call(`https://${BASE}/sign-in`);
     const text = await page.text();
     expect(text).toContain(`<descope-wc project-id="${PROJECT}"`);
@@ -237,10 +237,9 @@ describe("signing in on the base domain", () => {
     const { b } = await withWorkspace(hosted, "u1", "acme");
     const signedOut = browser(hosted);
     for (const res of [
-      await signedOut.call(`https://${BASE}/`),
       await signedOut.call(`https://${BASE}/sign-in`),
       await b.call(`https://${BASE}/`),
-      await signedOut.call(`https://acme.${BASE}/sign-in`),
+      await signedOut.call(`https://acme.${BASE}/sign-in?out`),
       await signedOut.call(`https://acme.${BASE}/invite`),
       await signedOut.call(`https://acme.${BASE}/hand-off?pass=x`),
     ]) {
@@ -313,7 +312,9 @@ describe("the pass from the base domain to a workspace", () => {
     const { hosted } = start();
     await withWorkspace(hosted, "u1", "acme");
     const b = browser(hosted);
-    const page = await b.call(`https://acme.${BASE}/sign-in?next=%2Fsettings`);
+    // A visit goes straight on; only a browser that just signed out sees the page with the button.
+    expect((await b.call(`https://acme.${BASE}/sign-in?next=%2Fsettings`)).headers.get("location")).toBe("/sign-in/start?next=%2Fsettings");
+    const page = await b.call(`https://acme.${BASE}/sign-in?out&next=%2Fsettings`);
     expect(await page.text()).toContain('href="/sign-in/start?next=%2Fsettings"');
 
     const started = await b.call(`https://acme.${BASE}/sign-in/start?next=%2Fsettings`);

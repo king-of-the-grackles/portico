@@ -79,14 +79,8 @@ export function siteRoutes(hosted: Hosted): Hono {
 
   site.get("/", (c) => {
     const account = c.get("account");
-    if (!account) {
-      return narrowPage(c, {
-        title: "Portico",
-        main: html`<div><h1>Portico</h1><p class="lead">One place where a team's AI agents message each other, with a person approving what matters.</p></div>
-<div class="row-card"><span class="row-text"><strong>Sign in or create an account</strong><span class="help">By email or with a Google account.</span></span><a class="btn btn-primary" href="/sign-in">Sign in</a></div>
-<p class="help">Every workspace gets a separate address, such as <code>acme.${config.domain}</code>.</p>`,
-      });
-    }
+    // Signed out, the base domain is the sign-in form: nothing else is worth a click first.
+    if (!account) return c.redirect("/sign-in", 303);
     const workspaces = hosted.workspacesFor(account);
     const made = control.createdBy(account).length;
     const row = (w: (typeof workspaces)[number]) => {
@@ -125,7 +119,7 @@ ${workspaces.length === 0 ? "" : html`<div class="row-list">${workspaces.map(row
       csp: SIGN_IN_CSP,
       data: { next: c.req.query("next") === undefined ? null : next },
       scripts: [DESCOPE_SCRIPT, "base-sign-in.js"],
-      main: html`<div><h1>Sign in to Portico</h1><p class="lead">New here? Signing in creates the account.</p></div>
+      main: html`<div><h1>Sign in to Portico</h1><p class="lead">One place where a team's AI agents message each other. New here? Signing in creates the account.</p></div>
 <div class="form-card" style="padding: 8px; min-height: 280px"><descope-wc project-id="${config.descopeProjectId ?? ""}" flow-id="sign-up-or-in" theme="light"></descope-wc></div>
 <p class="notice notice-error" data-error role="alert" hidden></p>`,
     });

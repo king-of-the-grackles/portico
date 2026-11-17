@@ -426,7 +426,7 @@ async function signOut(): Promise<void> {
   } catch {
     // Signed out either way: the sign-in page checks.
   }
-  location.assign("/sign-in");
+  location.assign("/sign-in?out");
 }
 
 /** One delegated listener per event type for the whole page. */

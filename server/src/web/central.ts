@@ -44,6 +44,8 @@ export function centralPages(core: Core, central: CentralSignIn): Hono<PersonEnv
     const person = c.get("person");
     if (person) return c.redirect(afterSignIn(person, next), 303);
     const start = next === "/" ? "/sign-in/start" : `/sign-in/start?next=${encodeURIComponent(next)}`;
+    // Straight on to signing in. Only a browser that just signed out stops here, so signing out isn't undone at once.
+    if (c.req.query("out") === undefined) return c.redirect(start, 303);
     return narrowPage(c, {
       title: "Sign in to Portico",
       main: html`<div><h1>Sign in to Portico</h1><p class="lead">Signing in opens this workspace.</p></div>
