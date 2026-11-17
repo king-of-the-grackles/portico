@@ -32,11 +32,15 @@ export class Settings {
   }
 }
 
-/** Whether a URL points at this computer: localhost or 127.0.0.1. */
+/** Whether a host name is this computer: localhost, a name under it (acme.localhost), or 127.0.0.1. */
+function isLocalHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1";
+}
+
+/** Whether a URL points at this computer. */
 export function isLocalUrl(url: string): boolean {
   try {
-    const { hostname } = new URL(url);
-    return hostname === "localhost" || hostname === "127.0.0.1";
+    return isLocalHost(new URL(url).hostname);
   } catch {
     return false;
   }
@@ -51,7 +55,7 @@ export function cleanPublicUrl(raw: string): string | null {
   } catch {
     return null;
   }
-  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  const local = isLocalHost(url.hostname);
   if (url.protocol !== "https:" && !(local && url.protocol === "http:")) return null;
   if (url.username || url.password || url.search || url.hash) return null;
   return `${url.origin}${url.pathname === "/" ? "" : url.pathname}`;

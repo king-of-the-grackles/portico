@@ -1,9 +1,9 @@
-import { ConfigError, loadConfig, platformUrl } from "../config";
+import { ConfigError, type HostedConfig, hostedEnv, loadConfig, platformUrl } from "../config";
 import type { Core } from "../core/core";
 import { isLocalUrl } from "../core/settings";
 import type { PorticoConfig } from "../core/types";
 import { SchemaMismatchError } from "../db";
-import { startServer } from "../server";
+import { startHosted, startServer } from "../server";
 import type { CliIo } from "./io";
 
 export const SETUP_LINK_LINE = "Open this link in a browser to set up Portico. The link works once and expires in 1 hour.";
@@ -41,9 +41,30 @@ export function startupProblem(err: unknown, config: Pick<PorticoConfig, "port" 
   return null;
 }
 
+function serveHosted(hosted: HostedConfig, io: CliIo): number | "running" {
+  try {
+    const running = startHosted(hosted);
+    io.out(`Hosted Portico at ${hosted.baseUrl}. Make a workspace with: portico workspace create <name>`);
+    const shutdown = () => {
+      running.stop();
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+    return "running";
+  } catch (err) {
+    const problem = startupProblem(err, { port: hosted.port, dbPath: `${hosted.dataDir}/control.db` });
+    if (!problem) throw err;
+    io.err(problem);
+    return 1;
+  }
+}
+
 export async function serveCommand(io: CliIo): Promise<number | "running"> {
   let config: PorticoConfig;
   try {
+    const hosted = hostedEnv(io.env);
+    if (hosted) return serveHosted(hosted, io);
     config = loadConfig(io.env);
   } catch (err) {
     if (err instanceof ConfigError) {

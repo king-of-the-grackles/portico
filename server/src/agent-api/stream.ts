@@ -99,6 +99,11 @@ export class AgentStreams {
     return this.open.has(runId);
   }
 
+  /** How many streams are open in all. */
+  count(): number {
+    return this.open.size;
+  }
+
   /** How many of the agent's runs are open. */
   liveRuns(agentId: string): number {
     return this.byAgent.get(agentId)?.size ?? 0;

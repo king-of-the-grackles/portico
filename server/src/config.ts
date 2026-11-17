@@ -78,6 +78,44 @@ function bucketConfig(env: Env, problems: string[]): BucketConfig | null {
   };
 }
 
+/** Hosted Portico: many workspaces on one server, each at `<slug>.<domain>` with a data folder of its own. */
+export interface HostedConfig {
+  /** The base domain, with a port when there is one: `portico.example`, or `localhost:8790` on a developer's computer. */
+  domain: string;
+  /** The base domain's own address: sign-up and "your workspaces". */
+  baseUrl: string;
+  /** Holds control.db and one folder per workspace under `w`. */
+  dataDir: string;
+  port: number;
+  pluginSource: string | null;
+  webhooksAllowPrivate: boolean;
+  files: BucketConfig | null;
+}
+
+/**
+ * Hosted mode, switched on by PORTICO_HOSTED_DOMAIN. PORTICO_HOSTED_DATA names the data folder (default ./hosted).
+ * Null without the domain: Portico then runs as one workspace, as ever. PORTICO_DB_PATH and PORTICO_PUBLIC_URL don't
+ * apply in hosted mode: every workspace gets both from its slug.
+ */
+export function hostedEnv(env: Env): HostedConfig | null {
+  const raw = env.PORTICO_HOSTED_DOMAIN?.trim().toLowerCase();
+  if (!raw) return null;
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/.test(raw)) {
+    throw new ConfigError([`PORTICO_HOSTED_DOMAIN "${raw}" must be a domain, such as portico.example, with no https:// and no path`]);
+  }
+  const base = parseEnv({ ...env, PORTICO_PUBLIC_URL: undefined }, "");
+  const local = raw.split(":")[0] === "localhost";
+  return {
+    domain: raw,
+    baseUrl: `${local ? "http" : "https"}://${raw}`,
+    dataDir: resolve(env.PORTICO_HOSTED_DATA?.trim() || "./hosted"),
+    port: base.port,
+    pluginSource: base.pluginSource,
+    webhooksAllowPrivate: base.webhooksAllowPrivate,
+    files: base.files,
+  };
+}
+
 /** The data folder's signing key, made on first start: 32 random bytes as hex, readable only by this account. */
 export function ensureSigningKey(dataDir: string): string {
   const path = join(dataDir, SIGNING_KEY_FILE);
