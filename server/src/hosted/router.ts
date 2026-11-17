@@ -267,6 +267,8 @@ export class Hosted {
       known.lastUsed = this.now().getTime();
       return known;
     }
+    // The record as the control database has it now: whether the workspace has an account decides how people sign in.
+    workspace = this.control.get(workspace.id) ?? workspace;
     const config = this.workspaceConfig(workspace);
     const db = openDb(config.dbPath, (msg, fields) => log("info", msg, { ...fields, workspace_id: workspace.id }));
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -375,6 +377,53 @@ export class Hosted {
         log("error", "workspace_sweep_failed", { workspace_id: workspace.id, error: errorName(err) });
       }
     }
+  }
+
+  /**
+   * A one-use link for a person already in a workspace. Whoever signs in on the base domain with the link becomes
+   * that person's account. This is how an imported workspace's people move from passwords to the base domain's sign-in.
+   */
+  linkFor(workspace: Workspace, personName: string): { secret: string; person: Person } {
+    const person = this.portico(workspace).people.byName(personName.trim());
+    if (!person || person.status !== "active") throw new PorticoError("not_found", `No active person named ${personName} in ${workspace.slug}.`);
+    return { secret: this.control.createLink(workspace.id, person.id), person };
+  }
+
+  /** Whom a link is for, without using the link up. Null when the link, its workspace or its person is gone. */
+  linkTarget(secret: unknown): { workspace: Workspace; person: Person } | null {
+    const link = this.control.link(secret);
+    const workspace = link ? this.control.get(link.workspaceId) : null;
+    const person = workspace ? this.portico(workspace).people.get(link!.personId) : null;
+    return workspace && person ? { workspace, person } : null;
+  }
+
+  /**
+   * Uses a link up: the account becomes the person's sign-in, and the person's password stops working. When the
+   * person is the owner, the workspace becomes the account's, so the whole workspace signs in on the base domain
+   * from then on; the other people each need a link of their own.
+   */
+  useLink(secret: unknown, accountId: string): Workspace {
+    const target = this.linkTarget(secret);
+    this.control.link(secret, true);
+    if (!target) throw new PorticoError("not_found", "This link doesn't work any more. Ask for a new one.");
+    const { workspace, person } = target;
+    const portico = this.portico(workspace);
+    const other = portico.people.byExternalId(accountId);
+    if (other && other.id !== person.id) {
+      throw new PorticoError("conflict", `This sign-in already belongs to ${other.name} in ${workspace.slug}.`);
+    }
+    portico.db.transaction(() => {
+      portico.people.setExternalId(person.id, accountId);
+      portico.people.setPasswordHash(person.id, NO_PASSWORD);
+    })();
+    this.control.addMember(accountId, workspace.id);
+    if (person.role === "owner" && workspace.createdBy === null) {
+      this.control.setCreatedBy(workspace.id, accountId);
+      // Opened again with the base domain's sign-in. Live streams reconnect by themselves.
+      this.close(workspace.id);
+    }
+    log("info", "person_linked", { workspace_id: workspace.id, person_id: person.id });
+    return this.control.get(workspace.id)!;
   }
 
   /** In a shared bucket, each workspace's files sit under the workspace's own prefix. */

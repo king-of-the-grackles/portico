@@ -7,7 +7,7 @@ import { type HostedConfig, hostedEnv } from "../src/config";
 import { PorticoError } from "../src/core/errors";
 import { Descope } from "../src/hosted/descope";
 import { Hosted } from "../src/hosted/router";
-import { copyProblems, MINUTE, testClock, visibleCopy } from "./helpers";
+import { addAppAgent, addMember, addOwner, copyProblems, HOUR, MINUTE, PASSWORD, testClock, visibleCopy } from "./helpers";
 
 const dirs: string[] = [];
 const running: Hosted[] = [];
@@ -466,6 +466,124 @@ describe("a hosted workspace takes no passwords", () => {
     // Not set up yet, and no base-domain sign-in page either: the setup link is the way in.
     expect((await b.call(`https://acme.${BASE}/sign-in/start`)).status).toBe(503);
     expect(hosted.portico(hosted.control.bySlug("acme")!).central).toBeNull();
+  });
+});
+
+describe("moving a workspace's people from passwords to the base domain's sign-in", () => {
+  /** A workspace as import leaves it: made without an account, set up, with an owner and a member who have passwords. */
+  async function passwordWorkspace(hosted: Hosted) {
+    const ws = hosted.create("super");
+    const p = hosted.portico(ws);
+    p.settings.set("setup_done_at", new Date().toISOString());
+    const owner = await addOwner(p, "Chris");
+    const member = await addMember(p, "Maya");
+    const agent = addAppAgent(p, owner, "grok", { kind: "grok-bot" });
+    return { ws, owner, member, agent };
+  }
+  const at = `https://super.${BASE}`;
+  const password = (b: ReturnType<typeof browser>, name: string) =>
+    b.call(`${at}/api/session`, { method: "POST", origin: at, body: { name, password: PASSWORD } });
+
+  test("the owner's link turns the workspace over to the base domain's sign-in, and the owner's agents stay", async () => {
+    const { hosted } = start();
+    const { ws, owner, agent } = await passwordWorkspace(hosted);
+    expect(hosted.portico(ws).central).toBeNull();
+    const { secret } = hosted.linkFor(ws, "Chris");
+
+    // Signed out, the link goes to sign-in first and comes back.
+    const b = browser(hosted);
+    const first = await b.call(`https://${BASE}/link?t=${secret}`);
+    expect(first.status).toBe(303);
+    expect(first.headers.get("location")).toBe(`/sign-in?next=${encodeURIComponent(`/link?t=${secret}`)}`);
+    await b.signIn("u1");
+    const page = await b.call(`https://${BASE}/link?t=${secret}`);
+    expect(page.status).toBe(200);
+    const text = await page.text();
+    expect(text).toContain("Use this sign-in for Chris");
+    expect(copyProblems(visibleCopy(text))).toEqual([]);
+    // Looking uses nothing up.
+    expect(hosted.portico(ws).central).toBeNull();
+
+    const used = await b.call(`https://${BASE}/api/link`, { method: "POST", body: { secret } });
+    expect(used.status).toBe(200);
+    expect(((await used.json()) as { next: string }).next).toBe(`${at}/sign-in/start`);
+    const after = hosted.control.bySlug("super")!;
+    expect(after.createdBy).toBe("u1");
+    expect(hosted.portico(after).central).not.toBeNull();
+    expect(hosted.portico(after).people.byExternalId("u1")!.id).toBe(owner.id);
+
+    // The sign-in opens the workspace as the same person, the password is off, and the agent's token still works.
+    const { res, at: landed } = await b.go(`${at}/sign-in/start`);
+    expect(res.status).toBe(200);
+    expect(landed).toBe(`${at}/`);
+    expect((await password(browser(hosted), "Chris")).status).toBe(404);
+    const agents = await hosted.fetch(new Request(`${at}/api/agent/agents`, { headers: { authorization: `Bearer ${agent.token}` } }));
+    expect(agents.status).toBe(200);
+    // The workspace shows in the account's list.
+    expect(await (await b.call(`https://${BASE}/`)).text()).toContain(`super.${BASE}`);
+
+    // A link works once.
+    const again = await b.call(`https://${BASE}/api/link`, { method: "POST", body: { secret } });
+    expect(again.status).toBe(404);
+    expect((await b.call(`https://${BASE}/link?t=${secret}`)).status).toBe(404);
+  });
+
+  test("a member's link keeps the member's place; an account can't be two people; an old link stops working", async () => {
+    const { hosted, clock } = start();
+    const { ws, member } = await passwordWorkspace(hosted);
+    const owner = browser(hosted);
+    await owner.signIn("u1");
+    expect((await owner.call(`https://${BASE}/api/link`, { method: "POST", body: { secret: hosted.linkFor(ws, "Chris").secret } })).status).toBe(200);
+
+    // The owner's account can't also become the member.
+    const taken = await owner.call(`https://${BASE}/api/link`, {
+      method: "POST",
+      body: { secret: hosted.linkFor(hosted.control.bySlug("super")!, "Maya").secret },
+    });
+    expect(taken.status).toBe(409);
+
+    // A newer link replaces an older one, and a link lasts a day.
+    const old = hosted.linkFor(hosted.control.bySlug("super")!, "Maya").secret;
+    const fresh = hosted.linkFor(hosted.control.bySlug("super")!, "Maya").secret;
+    const maya = browser(hosted);
+    await maya.signIn("u2");
+    expect((await maya.call(`https://${BASE}/api/link`, { method: "POST", body: { secret: old } })).status).toBe(404);
+    expect((await maya.call(`https://${BASE}/api/link`, { method: "POST", body: { secret: fresh } })).status).toBe(200);
+    expect(hosted.portico(hosted.control.bySlug("super")!).people.byExternalId("u2")!.id).toBe(member.id);
+    const { res, at: landed } = await maya.go(`${at}/sign-in/start`);
+    expect(res.status).toBe(200);
+    expect(landed).toBe(`${at}/`);
+
+    const late = hosted.linkFor(hosted.control.bySlug("super")!, "Maya").secret;
+    clock.advance(25 * HOUR);
+    expect((await maya.call(`https://${BASE}/api/link`, { method: "POST", body: { secret: late } })).status).toBe(404);
+    // Nobody signed in, or nobody by that name, gets nothing.
+    expect((await browser(hosted).call(`https://${BASE}/api/link`, { method: "POST", body: { secret: late } })).status).toBe(401);
+    expect(() => hosted.linkFor(hosted.control.bySlug("super")!, "Nobody")).toThrow();
+  });
+
+  test("portico workspace link prints the link", async () => {
+    const config = hostedConfig();
+    const env = { PORTICO_HOSTED_DOMAIN: config.domain, PORTICO_HOSTED_DATA: config.dataDir, PORTICO_DESCOPE_PROJECT_ID: PROJECT };
+    const out: string[] = [];
+    const io = { env, cwd: config.dataDir, out: (line: string) => out.push(line), err: (line: string) => out.push(`ERR ${line}`) };
+    {
+      const hosted = new Hosted(config);
+      const p = hosted.portico(hosted.create("super"));
+      p.settings.set("setup_done_at", new Date().toISOString());
+      await addOwner(p, "Chris");
+      await addMember(p, "Maya");
+      hosted.stop();
+    }
+    expect(await workspaceCommand(["link", "super", "Chris"], io)).toBe(0);
+    expect(out[1]).toMatch(new RegExp(`^ {2}https://${BASE.replaceAll(".", "\\.")}/link\\?t=[A-Za-z0-9_-]+$`));
+    expect(await workspaceCommand(["link", "super", "Maya"], io)).toBe(0);
+    expect(out.at(-1)).toContain("The owner's link comes first");
+    expect(await workspaceCommand(["link", "super", "Nobody"], io)).toBe(1);
+    expect(await workspaceCommand(["link", "nowhere", "Chris"], io)).toBe(1);
+    expect(await workspaceCommand(["link", "super"], io)).toBe(1);
+    expect(await workspaceCommand(["link", "super", "Chris"], { ...io, env: { ...env, PORTICO_DESCOPE_PROJECT_ID: undefined } })).toBe(1);
+    expect(copyProblems(out.join("\n"))).toEqual([]);
   });
 });
 

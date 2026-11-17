@@ -5,13 +5,14 @@ import { Hosted } from "../hosted/router";
 import type { CliIo } from "./io";
 import { SETUP_LINK_LINE } from "./serve";
 
-const USAGE = "Usage: portico workspace create <name> | portico workspace import <name> <folder> | portico workspace remove <name> [--confirm <name>] | portico workspace list";
+const USAGE = "Usage: portico workspace create <name> | portico workspace import <name> <folder> | portico workspace link <name> <person> | portico workspace remove <name> [--confirm <name>] | portico workspace list";
 
 /**
  * `portico workspace`, on a hosted Portico's host with the same settings as `portico serve`. `create` makes a
  * workspace and prints the one-time link that creates its owner, as `portico setup` does for a single Portico.
  * `import` makes a workspace from a single Portico's data folder (its portico.db and signing.key). `remove` says what
- * a workspace holds, and removes the workspace for good only when --confirm repeats the name.
+ * a workspace holds, and removes the workspace for good only when --confirm repeats the name. `link` prints a one-use
+ * link that moves a person from a password to the base domain's sign-in.
  */
 export async function workspaceCommand(args: string[], io: CliIo): Promise<number> {
   let config: HostedConfig | null;
@@ -28,7 +29,7 @@ export async function workspaceCommand(args: string[], io: CliIo): Promise<numbe
   }
   const [action, name, ...rest] = args;
   const removing = action === "remove" && (rest.length === 0 || (rest.length === 2 && rest[0] === "--confirm"));
-  const wanted = action === "create" ? 1 : action === "import" ? 2 : action === "list" ? 0 : -1;
+  const wanted = action === "create" ? 1 : action === "import" || action === "link" ? 2 : action === "list" ? 0 : -1;
   if (name === undefined ? action !== "list" || args.length !== 1 : !removing && args.length - 1 !== wanted) {
     io.err(USAGE);
     return 1;
@@ -62,6 +63,25 @@ export async function workspaceCommand(args: string[], io: CliIo): Promise<numbe
       }
       await hosted.removeWithFiles(workspace);
       io.out(`Removed ${url}: ${holds}.`);
+      return 0;
+    }
+    if (action === "link") {
+      const workspace = hosted.control.bySlug(name!.trim().toLowerCase());
+      if (!workspace) {
+        io.err(`No workspace named ${name}.`);
+        return 1;
+      }
+      if (config.descopeProjectId === null) {
+        io.err("Links need sign-in on the base domain. Set PORTICO_DESCOPE_PROJECT_ID to the value portico serve runs with.");
+        return 1;
+      }
+      const { secret, person } = hosted.linkFor(workspace, rest[0]!);
+      io.out(`A link for ${person.name} in ${hosted.url(workspace)}. The link works once and expires in 1 day.`);
+      io.out(`  ${config.baseUrl}/link?t=${secret}`);
+      io.out(`  Whoever opens the link and signs in becomes ${person.name}, and the password for ${person.name} stops working.`);
+      if (person.role !== "owner" && workspace.createdBy === null) {
+        io.out("  The owner's link comes first: until the owner uses one, this workspace still signs in with passwords.");
+      }
       return 0;
     }
     if (action === "import") {

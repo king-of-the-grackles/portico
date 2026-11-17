@@ -125,6 +125,31 @@ ${workspaces.length === 0 ? "" : html`<div class="row-list">${workspaces.map(row
     });
   });
 
+  // A link that ties this sign-in to a person already in a workspace: shown first, used only on the button.
+  site.get("/link", (c) => {
+    const secret = c.req.query("t") ?? "";
+    c.header("Cache-Control", "no-store");
+    const account = c.get("account");
+    if (!account) return c.redirect(`/sign-in?next=${encodeURIComponent(`/link?t=${encodeURIComponent(secret)}`)}`, 303);
+    const target = hosted.linkTarget(secret);
+    if (!target) {
+      return narrowPage(c, {
+        title: "Link doesn't work",
+        status: 404,
+        referrer: "no-referrer",
+        main: html`<div><h1>This link doesn't work any more</h1><p class="lead">A link works once, for one day. Ask the person who runs the workspace for a new one.</p></div>`,
+      });
+    }
+    return narrowPage(c, {
+      title: "Use this sign-in",
+      referrer: "no-referrer",
+      scripts: ["forms.js"],
+      main: html`<div><h1>Use this sign-in for ${target.person.name}</h1><p class="lead">From now on, this sign-in opens ${new URL(hosted.url(target.workspace)).host} as ${target.person.name}. The password for ${target.person.name} stops working.</p></div>
+<form class="row-card" data-api="POST /api/link"><input type="hidden" name="secret" value="${secret}"><span class="row-text"><strong>${new URL(hosted.url(target.workspace)).host}</strong><span class="help">${target.person.role === "owner" ? "Owner" : "Member"}</span></span><button type="submit" class="btn btn-primary">Use this sign-in</button></form>
+<p class="notice notice-error" data-error role="alert" hidden></p>`,
+    });
+  });
+
   // A signed-in browser, sent here by a workspace, goes back with a pass for that workspace.
   site.get("/go/:slug", (c) => {
     const workspace = control.bySlug(c.req.param("slug"));
@@ -168,6 +193,14 @@ ${workspaces.length === 0 ? "" : html`<div class="row-list">${workspaces.map(row
     const body = await jsonObject(c);
     const workspace = hosted.createFor(account, { slug: body.slug, name: body.name });
     return c.json({ url: hosted.url(workspace), next: `${hosted.url(workspace)}/sign-in/start` }, 201);
+  });
+
+  site.post("/api/link", async (c) => {
+    const account = c.get("account");
+    if (!account) return c.json({ error: "unauthorized", message: "Sign in to Portico first." }, 401);
+    const body = await jsonObject(c);
+    const workspace = hosted.useLink(body.secret, account);
+    return c.json({ url: hosted.url(workspace), next: `${hosted.url(workspace)}/sign-in/start` });
   });
 
   return site as unknown as Hono;

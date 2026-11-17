@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { PorticoError } from "../core/errors";
 import { DAY_MS, LIMITS, NAME } from "../core/limits";
-import { hashSecret, newToken } from "../core/tokens";
+import { hashSecret, newLinkSecret, newToken } from "../core/tokens";
 
 /** One workspace: a whole Portico of its own, at `<slug>.<base domain>`. */
 export interface Workspace {
@@ -29,7 +29,7 @@ const RESERVED = new Set([
 
 const MIN_SLUG = 3;
 const MAX_SLUG = 40;
-const VERSION = 2;
+const VERSION = 3;
 
 /** A workspace's address name as given: lowercase letters, digits and hyphens, 3 to 40 characters, not reserved. */
 export function checkSlug(value: unknown): string {
@@ -93,6 +93,18 @@ export class Control {
         this.db.run("PRAGMA user_version = 2");
       })();
     }
+    if (version < 3) {
+      this.db.transaction(() => {
+        // A one-use link that ties whoever signs in with it to a person already in a workspace.
+        this.db.run(`CREATE TABLE links (
+          secret_hash TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          person_id TEXT NOT NULL,
+          expires_at TEXT NOT NULL
+        )`);
+        this.db.run("PRAGMA user_version = 3");
+      })();
+    }
   }
 
   // ---- sign-ins on the base domain ----
@@ -121,9 +133,45 @@ export class Control {
     if (token) this.db.query("DELETE FROM sessions WHERE token_hash = $hash").run({ hash: hashSecret(token) });
   }
 
-  /** Daily: deletes expired sign-ins. Returns how many. */
+  /** Daily: deletes expired sign-ins and links. Returns how many. */
   sweep(): number {
-    return this.db.query("DELETE FROM sessions WHERE expires_at <= $now").run({ now: this.now().toISOString() }).changes;
+    const now = this.now().toISOString();
+    this.db.query("DELETE FROM links WHERE expires_at <= $now").run({ now });
+    return this.db.query("DELETE FROM sessions WHERE expires_at <= $now").run({ now }).changes;
+  }
+
+  // ---- links that tie a sign-in to a person already in a workspace ----
+
+  /** A new link for the person, replacing any earlier one. The secret goes only into the link, and works for a day. */
+  createLink(workspaceId: string, personId: string): string {
+    const secret = newLinkSecret();
+    const expiresAt = new Date(this.now().getTime() + DAY_MS).toISOString();
+    this.db.transaction(() => {
+      this.db.query("DELETE FROM links WHERE workspace_id = $workspaceId AND person_id = $personId").run({ workspaceId, personId });
+      this.db
+        .query("INSERT INTO links (secret_hash, workspace_id, person_id, expires_at) VALUES ($hash, $workspaceId, $personId, $expiresAt)")
+        .run({ hash: hashSecret(secret), workspaceId, personId, expiresAt });
+    })();
+    return secret;
+  }
+
+  /** Whom a link is for, or null when the link is unknown or expired. `take` uses the link up. */
+  link(secret: unknown, take = false): { workspaceId: string; personId: string } | null {
+    if (typeof secret !== "string" || secret === "") return null;
+    const hash = hashSecret(secret);
+    const row = this.db.query("SELECT workspace_id, person_id, expires_at FROM links WHERE secret_hash = $hash").get({ hash }) as {
+      workspace_id: string;
+      person_id: string;
+      expires_at: string;
+    } | null;
+    if (take) this.db.query("DELETE FROM links WHERE secret_hash = $hash").run({ hash });
+    if (!row || Date.parse(row.expires_at) <= this.now().getTime()) return null;
+    return { workspaceId: row.workspace_id, personId: row.person_id };
+  }
+
+  /** Says which account the workspace belongs to. A workspace with an account signs people in on the base domain. */
+  setCreatedBy(workspaceId: string, accountId: string): void {
+    this.db.query("UPDATE workspaces SET created_by = $accountId WHERE id = $workspaceId").run({ accountId, workspaceId });
   }
 
   // ---- which accounts have a place where ----
@@ -190,6 +238,7 @@ export class Control {
   remove(id: string): void {
     this.db.transaction(() => {
       this.db.query("DELETE FROM members WHERE workspace_id = $id").run({ id });
+      this.db.query("DELETE FROM links WHERE workspace_id = $id").run({ id });
       this.db.query("DELETE FROM workspaces WHERE id = $id").run({ id });
     })();
   }

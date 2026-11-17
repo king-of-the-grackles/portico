@@ -194,6 +194,12 @@ export class People {
     return this.require(id);
   }
 
+  /** Ties the person to an account with an outside sign-in service, which then signs the person in. */
+  setExternalId(id: string, externalId: string): void {
+    this.db.query("UPDATE people SET external_id = $externalId WHERE id = $id").run({ id, externalId });
+    this.changes.emit("people");
+  }
+
   setPasswordHash(id: string, passwordHash: string): void {
     this.db.query("UPDATE people SET password_hash = $passwordHash WHERE id = $id").run({ id, passwordHash });
   }
