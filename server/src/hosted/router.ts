@@ -5,7 +5,7 @@ import type { Hono } from "hono";
 import { ensureSigningKey, type HostedConfig } from "../config";
 import { NO_PASSWORD } from "../core/accounts";
 import { PorticoError } from "../core/errors";
-import { fileStoreFor } from "../core/file-store";
+import { type FileStore, fileStoreFor } from "../core/file-store";
 import { MINUTE_MS } from "../core/limits";
 import { cleanPersonName } from "../core/people";
 import { hashSecret, newLinkSecret } from "../core/tokens";
@@ -35,6 +35,8 @@ export interface HostedOptions {
   heartbeatMs?: number;
   /** Who a sign-in token belongs to; by default Descope, when a project is configured. */
   accountCheck?: AccountCheck;
+  /** Where a workspace's files are kept; tests pass a fake bucket. */
+  fileStore?: (workspace: Workspace) => FileStore;
 }
 
 const IDLE_MS = 10 * 60_000;
@@ -272,8 +274,7 @@ export class Hosted {
       db,
       now: this.opts.now,
       heartbeatMs: this.opts.heartbeatMs,
-      // In a shared bucket, each workspace's files sit under the workspace's own prefix.
-      fileStore: fileStoreFor(config, `w/${workspace.id}/files/`),
+      fileStore: this.fileStore(workspace, config),
       // A workspace made from the command line keeps the setup link and passwords: nobody there has an account.
       central: this.accounts && workspace.createdBy !== null ? this.central(workspace) : undefined,
       schedule: (fn, ms) => {
@@ -376,7 +377,32 @@ export class Hosted {
     }
   }
 
-  /** Removes a workspace for good: its record, then its folder. Files in a bucket go through the bucket's own rules. */
+  /** In a shared bucket, each workspace's files sit under the workspace's own prefix. */
+  private fileStore(workspace: Workspace, config: PorticoConfig): FileStore {
+    return this.opts.fileStore?.(workspace) ?? fileStoreFor(config, `w/${workspace.id}/files/`);
+  }
+
+  /** What a workspace holds, for the person about to remove it. */
+  contents(workspace: Workspace): { people: number; agents: number; messages: number; files: number } {
+    const db = this.portico(workspace).db;
+    const count = (table: string) => (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+    return { people: count("people"), agents: count("agents"), messages: count("messages"), files: count("files") };
+  }
+
+  /**
+   * Removes a workspace and everything in it: its files from wherever they are kept, then its record and its folder.
+   * A file that can't be removed stops the removal, so nothing is left in a bucket with no workspace to find it by.
+   */
+  async removeWithFiles(workspace: Workspace): Promise<{ files: number }> {
+    const config = this.workspaceConfig(workspace);
+    const store = this.fileStore(workspace, config);
+    const ids = (this.portico(workspace).db.query("SELECT id FROM files").all() as { id: string }[]).map((row) => row.id);
+    for (const id of ids) await store.remove(id);
+    this.remove(workspace);
+    return { files: ids.length };
+  }
+
+  /** Removes a workspace's record and folder. Files in a bucket stay: removeWithFiles takes those too. */
   remove(workspace: Workspace): void {
     this.close(workspace.id);
     this.control.remove(workspace.id);

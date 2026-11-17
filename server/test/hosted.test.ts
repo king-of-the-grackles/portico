@@ -9,7 +9,7 @@ import { checkSlug } from "../src/hosted/control";
 import { Hosted } from "../src/hosted/router";
 import { openDb } from "../src/db";
 import { createPortico } from "../src/portico";
-import { addAppAgent, addOwner, errorCode, fakeConnection, HOUR, MINUTE, PASSWORD, signIn, testClock, testConfig } from "./helpers";
+import { addAppAgent, addOwner, errorCode, fakeBucket, fakeConnection, HOUR, MINUTE, PASSWORD, signIn, testClock, testConfig } from "./helpers";
 
 const dirs: string[] = [];
 const running: Hosted[] = [];
@@ -234,6 +234,90 @@ describe("opening and closing", () => {
 });
 
 describe("portico workspace", () => {
+  test("remove says what a workspace holds, and removes only when --confirm repeats the name", async () => {
+    const config = hostedConfig();
+    const env = { PORTICO_HOSTED_DOMAIN: config.domain, PORTICO_HOSTED_DATA: config.dataDir };
+    const out: string[] = [];
+    const io = { env, cwd: config.dataDir, out: (line: string) => out.push(line), err: (line: string) => out.push(`ERR ${line}`) };
+    {
+      const { hosted } = start(config);
+      await workspace(hosted, "acme");
+      await workspace(hosted, "globex");
+      hosted.stop();
+    }
+    const folder = (slug: string) => {
+      const hosted = new Hosted(config);
+      const ws = hosted.control.bySlug(slug);
+      hosted.stop();
+      return ws ? join(config.dataDir, "w", ws.id) : null;
+    };
+    const acme = folder("acme")!;
+
+    // Asking first changes nothing.
+    expect(await workspaceCommand(["remove", "acme"], io)).toBe(0);
+    expect(out.at(-3)).toBe("https://acme.portico.test holds 1 person, 2 agents, 0 messages and 0 files. Nothing is removed yet.");
+    expect(out.at(-1)).toBe("  portico workspace remove acme --confirm acme");
+    expect(existsSync(acme)).toBe(true);
+    // The wrong name, or no such workspace, removes nothing.
+    expect(await workspaceCommand(["remove", "acme", "--confirm", "globex"], io)).toBe(1);
+    expect(out.at(-1)).toContain("Nothing is removed");
+    expect(await workspaceCommand(["remove", "acme", "--yes", "acme"], io)).toBe(1);
+    expect(await workspaceCommand(["remove", "nobody"], io)).toBe(1);
+    expect(existsSync(acme)).toBe(true);
+
+    expect(await workspaceCommand(["remove", "acme", "--confirm", "acme"], io)).toBe(0);
+    expect(out.at(-1)).toStartWith("Removed https://acme.portico.test");
+    expect(existsSync(acme)).toBe(false);
+    expect(folder("acme")).toBeNull();
+    // The other workspace is untouched, and the name is free again.
+    expect(existsSync(folder("globex")!)).toBe(true);
+    expect(await workspaceCommand(["create", "acme"], io)).toBe(0);
+  });
+
+  test("removing a workspace takes its files out of the bucket, and leaves another workspace's alone", async () => {
+    const buckets = new Map<string, ReturnType<typeof fakeBucket>>();
+    const clock = testClock();
+    const hosted = new Hosted(hostedConfig(), {
+      now: clock.now,
+      fileStore: (ws) => {
+        if (!buckets.has(ws.id)) buckets.set(ws.id, fakeBucket());
+        return buckets.get(ws.id)!.store;
+      },
+    });
+    running.push(hosted);
+    const send = async (w: Awaited<ReturnType<typeof workspace>>) => {
+      const call = (path: string, body: unknown) =>
+        hosted.fetch(
+          new Request(`https://${w.host}${path}`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${w.grok.token}`, "content-type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+        );
+      const started = (await (await call("/api/agent/files", { name: "big.bin", size: 4 })).json()) as { file: { id: string } };
+      buckets.get(w.ws.id)!.put(started.file.id, "abcd");
+      expect((await call("/api/agent/messages", { to: "muse", subject: "A file", text: "see attached", attachments: [started.file.id] })).status).toBe(201);
+    };
+    const acme = await workspace(hosted, "acme");
+    const globex = await workspace(hosted, "globex");
+    await send(acme);
+    await send(globex);
+    expect(buckets.get(acme.ws.id)!.objects.size).toBe(1);
+    expect(hosted.contents(acme.ws)).toEqual({ people: 1, agents: 2, messages: 1, files: 1 });
+
+    expect(await hosted.removeWithFiles(acme.ws)).toEqual({ files: 1 });
+    expect(buckets.get(acme.ws.id)!.objects.size).toBe(0);
+    expect(buckets.get(globex.ws.id)!.objects.size).toBe(1);
+    expect(hosted.control.bySlug("acme")).toBeNull();
+
+    // A file that can't be removed stops the removal: the workspace stays, to try again.
+    buckets.get(globex.ws.id)!.store.remove = async () => {
+      throw new Error("bucket unreachable");
+    };
+    await expect(hosted.removeWithFiles(globex.ws)).rejects.toThrow("bucket unreachable");
+    expect(hosted.control.bySlug("globex")).not.toBeNull();
+  });
+
   test("import brings a single Portico over: its people sign in and its agents' tokens work at the new address", async () => {
     // A single Portico on disk, with an owner, two agents and a message between them.
     const folder = mkdtempSync(join(tmpdir(), "portico-single-"));
