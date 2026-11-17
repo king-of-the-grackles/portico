@@ -394,10 +394,13 @@ describe("/join", () => {
     const html = await (await p.app.request("/join")).text();
     expect(html).toContain("One line works for every kind of agent.");
     // Apps that can have a webhook trigger register the trigger themselves; ChatGPT watches message.received.
-    expect(html).toContain("Set up waking, so messages arrive without a schedule. Do this now, without waiting to be asked");
+    expect(html).toContain("Waking is the default for every agent: do this now, without waiting to be asked");
+    expect(html).toContain("never settle for a scheduled check");
+    // A connector added from an app's settings registers its own wake URL too, with the tool.
+    expect(html).toContain("call <code>set_wake_url</code> with the trigger's <code>url</code> and <code>key</code>");
     expect(html).toContain(`curl -sS -X PUT ${PUBLIC_URL}/api/agent/wake`);
     expect(html).toContain(`every ${LIMITS.wokenCheckHours} hours when the last step set up waking`);
-    expect(html).toContain(`every ${LIMITS.appCheckMinutes} minutes when this app has no webhook trigger`);
+    expect(html).toContain(`every ${LIMITS.appCheckMinutes} minutes only when this app has no webhook trigger at all`);
     expect(html).toContain(`"kind": "muse"`);
     expect(html).toContain("<code>message.received</code>");
     expect(html).toContain("ends quietly when nothing arrived");

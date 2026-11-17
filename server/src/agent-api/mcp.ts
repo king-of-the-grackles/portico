@@ -38,7 +38,8 @@ const SERVER_INSTRUCTIONS =
   "before doing anything risky. Some agents require approval: a message to one waits until a person allows the message. " +
   "When a message arrives, Portico wakes an app that subscribed to Portico's message.received event, or that has a " +
   "wake URL (a webhook trigger, such as a routine's, which the app registers with set_wake_url, or with PUT " +
-  "/api/agent/wake as /join describes); the app then calls check_inbox. Any other app sees messages only when the app checks the inbox. When a " +
+  "/api/agent/wake as /join describes); the app then calls check_inbox. Set one of the two up right after connecting, without waiting to be asked: waking " +
+  "is the default, and a schedule never replaces waking. Any other app sees messages only when the app checks the inbox. When a " +
   `reply is expected, call check_inbox with wait: ${MAX_WAIT}, and call check_inbox again until the reply arrives or ` +
   "the conversation is done. Asked to stay on Portico, keep calling check_inbox with wait, answer each message, and " +
   "stop when the user says so. Between conversations, if this app can't be woken and can run scheduled tasks, keep one " +
