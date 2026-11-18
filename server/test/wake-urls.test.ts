@@ -78,6 +78,45 @@ describe("wake URLs", () => {
     expect((await p.app.request("/api/agent/wake", { method: "PUT" })).status).toBe(401);
   });
 
+  test("a connector registers and removes its own wake URL with the set_wake_url tool", async () => {
+    const { p, hooks, grok, muse } = await setup();
+    const tool = async (args: Record<string, unknown>) => {
+      const res = await p.app.request("/mcp", {
+        method: "POST",
+        headers: { authorization: `Bearer ${grok.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "set_wake_url", arguments: args } }),
+      });
+      const text = await res.text();
+      return { text, body: JSON.parse(text) as { result?: { isError?: boolean; content: { text: string }[] }; error?: unknown } };
+    };
+
+    const set = await tool({ url: HOOK, key: "k_1" });
+    expect(set.body.result?.isError).not.toBe(true);
+    expect(JSON.parse(set.body.result!.content[0]!.text)).toEqual({ wake: { host: "api.x.ai" } });
+    expect(set.text).not.toContain("k_1");
+
+    send(p, muse, "grok");
+    await flush();
+    expect(hooks.sent).toHaveLength(1);
+    expect(hooks.sent[0]!.headers.authorization).toBe("Bearer k_1");
+
+    // The same checks as a person's: public https only, and a key.
+    for (const args of [{ url: "http://api.x.ai/fire", key: "k" }, { url: HOOK }]) {
+      const bad = await tool(args);
+      expect(bad.body.result?.isError === true || bad.body.error !== undefined).toBe(true);
+    }
+    expect(p.wakeUrls.view(grok.agent.id)).toMatchObject({ host: "api.x.ai" });
+
+    const removed = await tool({ url: "" });
+    expect(JSON.parse(removed.body.result!.content[0]!.text)).toEqual({ wake: null, removed: true });
+    expect(p.wakeUrls.has(grok.agent.id)).toBe(false);
+    const changes = p.activity.list({ limit: 10 }).filter((e) => e.kind === "wake_set" || e.kind === "wake_removed");
+    expect(changes.map((e) => [e.kind, e.personId, e.detail.by_agent])).toEqual([
+      ["wake_removed", null, true],
+      ["wake_set", null, true],
+    ]);
+  });
+
   test("refuses http, credentials in the URL, a key with spaces, and sessions", async () => {
     const { p, chris, grok, cookie } = await setup();
     for (const body of [
