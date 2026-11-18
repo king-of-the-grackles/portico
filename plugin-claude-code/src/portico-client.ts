@@ -216,6 +216,11 @@ export class PorticoClient {
     return this.call("PATCH", "/api/agent/profile", body);
   }
 
+  /** Runs one of the workspace tools on Portico: the arguments go as given, and Portico checks them. */
+  workspaceTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+    return this.call("POST", `/api/agent/workspace-tools/${encodeURIComponent(name)}`, args);
+  }
+
   /**
    * Picks up new messages and outcomes, marking them delivered and reported. With `wait` (seconds), Portico answers as
    * soon as something arrives, or after the wait (capped by Portico) with nothing; Portico checks the value.

@@ -10,9 +10,10 @@ import { type InboxSocket, SocketError } from "./socket";
 import type { SessionWatcher } from "./status";
 import { StreamClient, type StreamClientOptions } from "./stream";
 import { inboxText, runTool, TOOLS, WAIT_HINT, WAKE_HINT } from "./tools";
+import { WORKSPACE_TOOLS } from "./workspace-tools";
 
 export const SERVER_NAME = "portico";
-export const SERVER_VERSION = "0.8.3";
+export const SERVER_VERSION = "0.9.0";
 
 /**
  * A Codex conversation whose status Codex doesn't report shows available after this long with no Portico tool call, in
@@ -203,7 +204,11 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
       },
     }) ?? null;
   // These replace a waiting server's handlers.
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: quiet === null || host.client === "codex" ? TOOLS : [] }));
+  /** Whether this Portico has workspaces, as its hello said: the workspace tools show only there. */
+  let workspacesOn = false;
+  server.setRequestHandler(ListToolsRequestSchema, () => ({
+    tools: quiet === null || host.client === "codex" ? (workspacesOn ? [...TOOLS, ...WORKSPACE_TOOLS] : TOOLS) : [],
+  }));
   server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     // The link's own call, finding which conversation this server belongs to: not the model's, and never run.
@@ -309,8 +314,12 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     : null;
 
   const onHello = (data: unknown) => {
-    const { address, name } = (data ?? {}) as { address?: unknown; name?: unknown };
+    const { address, name, workspaces } = (data ?? {}) as { address?: unknown; name?: unknown; workspaces?: unknown };
     if (typeof address === "string") log("info", "session_registered", { address });
+    if ((workspaces === true) !== workspacesOn) {
+      workspacesOn = workspaces === true;
+      server.sendToolListChanged().catch((err) => log("warn", "tool_list_notice_failed", { error: errorName(err) }));
+    }
     // Portico registered the session, so the folder is on there, whatever the local copy said.
     if (quiet === host.folderOffNote) deps.folder?.record(false);
     setQuiet(null);

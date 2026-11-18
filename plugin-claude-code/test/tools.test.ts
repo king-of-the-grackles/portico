@@ -2,11 +2,29 @@ import { expect, test } from "bun:test";
 import { mcpTools } from "../../server/src/agent-api/mcp";
 import { addAppAgent, addComputer, addOwner, addSession, callAs, makePortico } from "../../server/test/helpers";
 import type { Inbox } from "../src/portico-client";
-import { inboxText, TOOLS } from "../src/tools";
+import { PorticoClient } from "../src/portico-client";
+import { inboxText, runTool, TOOLS } from "../src/tools";
+import { WORKSPACE_TOOLS } from "../src/workspace-tools";
+import { workspaceTools } from "../../server/src/agent-api/workspace-tools";
 
 test("the plugin's tools match Portico's /mcp tools exactly", () => {
   expect(TOOLS).toEqual(mcpTools() as unknown as typeof TOOLS);
   expect(TOOLS.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile"]);
+});
+
+test("the plugin's workspace tools match Portico's exactly, and Portico runs them", async () => {
+  expect(WORKSPACE_TOOLS).toEqual(workspaceTools() as unknown as typeof WORKSPACE_TOOLS);
+  const p = makePortico({ config: { workspaces: true } });
+  const owner = p.people.setHandle((await addOwner(p)).id, "chris");
+  const { computer, token } = addComputer(p, owner);
+  const { key } = addSession(p, computer);
+  const client = new PorticoClient({ url: "http://portico.test", token, sessionKey: key, fetch: (async (input: RequestInfo | URL, init?: RequestInit) => p.app.request(String(input).replace("http://portico.test", ""), init)) as typeof fetch });
+  const made = await runTool(client, "create_workspace", { name: "Design" });
+  expect(made.isError).toBeFalsy();
+  const listed = JSON.parse(((await runTool(client, "list_workspaces", {})).content[0] as { text: string }).text) as { workspaces: { name: string }[] };
+  expect(listed.workspaces.map((w) => w.name)).toEqual(["Personal", "Design"]);
+  const refused = await runTool(client, "share_workspace", { workspace: "nope" });
+  expect(refused.isError).toBe(true);
 });
 
 test("send_message requires subject and text, and names the built-in limits", () => {

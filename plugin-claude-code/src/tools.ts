@@ -1,5 +1,6 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { ApiError, type Inbox, MAX_INBOX_WAIT_SECONDS, type PorticoClient } from "./portico-client";
+import { WORKSPACE_TOOL_NAMES } from "./workspace-tools";
 
 /** Portico's built-in limits, as its /mcp tools name them. */
 const MAX_SUBJECT_CHARS = 120;
@@ -300,6 +301,7 @@ export async function runTool(
           }),
         );
       default:
+        if (WORKSPACE_TOOL_NAMES.includes(name)) return json(await client.workspaceTool(name, args));
         return failure(`bad_request: Unknown tool ${name}.`);
     }
   } catch (err) {
