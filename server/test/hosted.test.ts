@@ -30,6 +30,7 @@ function hostedConfig(overrides: Partial<HostedConfig> = {}): HostedConfig {
     pluginSource: null,
     webhooksAllowPrivate: false,
     files: null,
+    mail: null,
     descopeProjectId: null,
     ...overrides,
   };

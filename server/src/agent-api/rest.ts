@@ -16,6 +16,7 @@ import { type AgentEnv, requireAgent, requireSession, type Resolver, unauthorize
 import { jsonBodyLimit } from "./limits";
 import { getAgentTask, listAgentTasks } from "./tasks";
 import { type AgentViews, UNTRUSTED_PROFILES } from "./views";
+import { runWorkspaceTool, WORKSPACE_TOOL_NAMES, type WorkspaceToolDeps } from "./workspace-tools";
 
 const SendBody = z.object({
   to: z.string().optional(),
@@ -70,6 +71,7 @@ export interface AgentRestDeps {
   resolver: Resolver;
   changes: Changes;
   now: () => Date;
+  workspaceTools: WorkspaceToolDeps;
 }
 
 /**
@@ -86,7 +88,18 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
   api.get("/agents", (c) => {
     const agent = c.get("agent");
     agents.checkedIn(agent);
-    return c.json({ agents: agents.entries(agent.id).map(views.entry), note: UNTRUSTED_PROFILES });
+    return c.json({ agents: agents.entriesFor(agent).map((e) => views.entry(e, agent)), note: UNTRUSTED_PROFILES });
+  });
+
+  // The workspace tools, one route for all: the body is the tool's arguments, as on /mcp.
+  api.post("/workspace-tools/:name", async (c) => {
+    const agent = c.get("agent");
+    const name = c.req.param("name");
+    if (!WORKSPACE_TOOL_NAMES.includes(name)) throw new PorticoError("not_found", "No such tool.");
+    const body = c.req.header("content-length") === "0" ? {} : await readJson(c).catch(() => ({}));
+    const args = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+    agents.checkedIn(agent);
+    return c.json(runWorkspaceTool(deps.workspaceTools, agent, name, args));
   });
 
   api.post("/messages", async (c) => {
@@ -104,7 +117,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       attachments: body.attachments,
     });
     agents.checkedIn(agent);
-    return c.json({ message: views.message(message), delivery, ...(note ? { note } : {}) }, 201);
+    return c.json({ message: views.message(message, agent), delivery, ...(note ? { note } : {}) }, 201);
   });
 
   // Starts a file to attach. Small text comes in the call; anything else gets an address to PUT the bytes to.
@@ -176,7 +189,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       if (outcome === "gone") return unauthorized(c, deps.resolver);
     }
     const { messages: picked, updates } = messages.inbox(agent);
-    return c.json({ messages: picked.map(views.delivery), updates: updates.map(views.update) });
+    return c.json({ messages: picked.map((m) => views.delivery(m, agent)), updates: updates.map((m) => views.update(m, agent)) });
   });
 
   // Peek and ack, for sessions' plugins: a GET changes nothing, and only the ack marks what was delivered.
@@ -184,7 +197,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
     const agent = c.get("agent");
     requireSession(agent, "use deliveries; apps and connectors call check_inbox");
     const pending = messages.pending(agent);
-    return c.json({ messages: pending.messages.map(views.delivery), updates: pending.updates.map(views.update) });
+    return c.json({ messages: pending.messages.map((m) => views.delivery(m, agent)), updates: pending.updates.map((m) => views.update(m, agent)) });
   });
 
   api.post("/deliveries/ack", async (c) => {

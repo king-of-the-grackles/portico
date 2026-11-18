@@ -14,14 +14,17 @@ import type {
   InviteView,
   MessageView,
   PasskeyView,
+  PersonRef,
   PersonView,
   RunView,
   SignInView,
   TaskView,
 } from "../../../api/views";
+import type { AskView, JoinView, ShareView, WorkspacePageData, WorkspaceView } from "../../../api/workspaces";
 import type { TaskOutcome } from "../../../core/tasks";
 import type { AgentKind } from "../../../core/types";
 
+export type { AskView, JoinView, ShareView, WorkspacePageData, WorkspaceView };
 export type {
   ActivityView,
   AgentKind,
@@ -36,6 +39,7 @@ export type {
   InviteView,
   MessageView,
   PasskeyView,
+  PersonRef,
   PersonView,
   RunView,
   SignInView,
@@ -46,7 +50,13 @@ export type {
 };
 
 /** Which page of the control plane is showing: Today (/), Activity (/activity) or an agent's page (/a/:id). */
-export type Route = { page: "today" } | { page: "activity" } | { page: "agent"; id: string };
+export type Route =
+  | { page: "today" }
+  | { page: "activity" }
+  | { page: "agent"; id: string }
+  /** With workspaces: one workspace's page (/w/:id), and every agent with its workspaces (/agents). */
+  | { page: "workspace"; id: string }
+  | { page: "agents" };
 
 /** What GET /api/tasks/:id answers: one task's steps and every message in it, oldest first. */
 export interface TaskDetail {
@@ -67,7 +77,10 @@ export interface HomeData {
   me: PersonView;
   publicUrl: string;
   agents: AgentView[];
-  approvals: { held: HeldCard[]; signIns: SignInView[] };
+  approvals: { held: HeldCard[]; signIns: SignInView[]; joins: JoinView[]; asks: AskView[] };
+  /** The person's workspaces, Personal first. Null where Portico has no workspaces. */
+  workspaces: WorkspaceView[] | null;
+  workspacePage: WorkspacePageData | null;
   route: Route;
   today: TodayData | null;
   tasks: TaskListData | null;
@@ -88,6 +101,8 @@ export interface SettingsData {
   passkeys: PasskeyView[] | null;
   /** False on hosted Portico, where sign-in happens on the base domain: no password to change. */
   passwords?: boolean;
+  /** With workspaces, people come and go by sharing a workspace, and each person has a handle. */
+  workspaces?: boolean;
 }
 
 /** A join line just made by POST /api/join-lines. The line carries the secret, so it lives only in the page's memory. */
@@ -133,6 +148,15 @@ export interface WakeEditState {
   error: string;
 }
 
+/** The form open on a workspace's page or the Agents page. */
+export type WorkspaceForm =
+  /** A new shared workspace. `thenShare` opens Share on it afterwards: sharing from Personal starts here. */
+  | { kind: "new"; name: string; agentIds: string[]; thenShare: boolean; error: string }
+  | { kind: "rename"; name: string; error: string }
+  | { kind: "share"; email: string; error: string }
+  /** My agents not in the workspace yet, ticked to put in. */
+  | { kind: "agents"; agentIds: string[]; error: string };
+
 /** What Today, Activity and the agent pages render. */
 export interface HomeState {
   now: number;
@@ -141,6 +165,19 @@ export interface HomeState {
   agents: AgentView[];
   held: HeldCard[];
   signIns: SignInView[];
+  joins: JoinView[];
+  asks: AskView[];
+  workspaces: WorkspaceView[] | null;
+  workspacePage: WorkspacePageData | null;
+  wsForm: WorkspaceForm | null;
+  /** The People list on a workspace's page. */
+  peopleOpen: boolean;
+  /** What waits for a second press: `delete`, `leave`, `person:<id>` or `share:<id>`. */
+  wsConfirm: string | null;
+  /** Share links copied in this page, by share ID. */
+  wsCopied: Record<string, boolean>;
+  /** How the last share's email went, by share ID. */
+  wsMail: Record<string, string>;
   route: Route;
   today: TodayData | null;
   /** Activity's tasks, or an agent page's, for the current filters. */
@@ -186,6 +223,8 @@ export interface SettingsState {
   passkeys: PasskeyView[] | null;
   /** Whether this Portico has passwords to change. */
   passwords: boolean;
+  workspaces: boolean;
+  handleForm: { handle: string; error: string } | null;
   acctOpen: boolean;
   add: AddState | null;
   reconnecting: boolean;

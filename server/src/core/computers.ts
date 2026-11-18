@@ -159,6 +159,8 @@ export interface ComputersDeps {
   db: Database;
   changes: Changes;
   activity?: Activity;
+  /** With workspaces, a computer's name is unique among its owner's computers, not across everyone. */
+  namesPerOwner?: boolean;
   now?: () => Date;
   newId?: () => string;
   log?: (msg: string, fields: Record<string, unknown>) => void;
@@ -172,6 +174,7 @@ export class Computers {
   private readonly db: Database;
   private readonly changes: Changes;
   private readonly activity: Activity | undefined;
+  private readonly namesPerOwner: boolean;
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
@@ -181,6 +184,7 @@ export class Computers {
     this.db = deps.db;
     this.changes = deps.changes;
     this.activity = deps.activity;
+    this.namesPerOwner = deps.namesPerOwner ?? false;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.log = deps.log ?? (() => {});
@@ -649,7 +653,10 @@ export class Computers {
    * window isn't free, so addresses on that computer can't start reaching this one.
    */
   private freeName(base: string, ownerId: string): string {
-    const taken = (name: string) => this.byName(name) !== null || releasedByOther(this.db, "computer", name, ownerId, this.now());
+    const taken = (name: string) =>
+      this.namesPerOwner
+        ? this.db.query("SELECT 1 FROM computers WHERE owner_id = $ownerId AND name = $name").get({ ownerId, name }) !== null
+        : this.byName(name) !== null || releasedByOther(this.db, "computer", name, ownerId, this.now());
     let name = base;
     for (let n = 2; taken(name); n++) {
       if (n > MAX_DEDUPE) throw new PorticoError("rate_limited", `Too many computers named ${base}. Remove some first.`);

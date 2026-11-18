@@ -31,6 +31,7 @@ function hostedConfig(): HostedConfig {
     pluginSource: null,
     webhooksAllowPrivate: false,
     files: null,
+    mail: null,
     descopeProjectId: PROJECT,
   };
 }
@@ -152,6 +153,19 @@ describe("checking a Descope token", () => {
     for (const junk of [undefined, 7, "", "a.b", "a.b.c", "x".repeat(9000)]) {
       expect(await refused(descope.accountFor(junk))).toBe("unauthorized");
     }
+  });
+
+  test("the email address counts only when the token says the address was verified", async () => {
+    const clock = testClock();
+    const key = await keyPair("k1");
+    const descope = new Descope(PROJECT, { now: clock.now, fetchKeys: async () => [key.jwk] });
+    const base = { iss: `https://api.descope.com/${PROJECT}`, sub: "U2abc", exp: clock.now().getTime() / 1000 + 600, drn: "DS" };
+    expect(await descope.account(await key.token(base))).toEqual({ id: "U2abc", email: null, name: null });
+    expect(await descope.account(await key.token({ ...base, email: "ada@example.com", name: "Ada" }))).toEqual({ id: "U2abc", email: null, name: "Ada" });
+    expect(await descope.account(await key.token({ ...base, email: "ada@example.com", email_verified: false }))).toMatchObject({ email: null });
+    expect(await descope.account(await key.token({ ...base, email: "ada@example.com", email_verified: true }))).toMatchObject({ email: "ada@example.com" });
+    expect(await descope.account(await key.token({ ...base, email: "ada@example.com", verifiedEmail: "true" }))).toMatchObject({ email: "ada@example.com" });
+    expect(await descope.account(await key.token({ ...base, email: 7, email_verified: true }))).toMatchObject({ email: null });
   });
 
   test("a new key is picked up, and unknown keys don't make Portico fetch more than once a minute", async () => {

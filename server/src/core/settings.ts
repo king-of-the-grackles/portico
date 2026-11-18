@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { requestOrigin } from "./request-origin";
 import type { PorticoConfig } from "./types";
 
 type Key = "public_url" | "setup_done_at";
@@ -21,9 +22,12 @@ export class Settings {
       .run({ key, value });
   }
 
-  /** PORTICO_PUBLIC_URL when set, else the address confirmed at setup, else this computer's own address. */
+  /**
+   * The address the request came to, where Portico answers at several; else PORTICO_PUBLIC_URL when set, else the
+   * address confirmed at setup, else this computer's own address.
+   */
   publicUrl(): string {
-    return this.config.publicUrl ?? this.get("public_url") ?? `http://localhost:${this.config.port}`;
+    return requestOrigin() ?? this.config.publicUrl ?? this.get("public_url") ?? `http://localhost:${this.config.port}`;
   }
 
   /** Until setup is done, Portico and joining stay closed. */

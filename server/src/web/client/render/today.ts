@@ -2,6 +2,7 @@
 import { esc, ICON, longDate, PICK_ORDER, logo, plural, when } from "./common.js";
 import { renderHeldCard, renderSignInCard, renderTaskRow, renderWaitingCard, taskHead, waitingAgents } from "./tasks.js";
 import type { HomeState, TaskView } from "./types.js";
+import { renderAskCard, renderJoinCard } from "./workspace.js";
 
 function joinNames(list: string[]): string {
   return list.length < 2 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
@@ -12,13 +13,15 @@ export function renderFirst(s: HomeState): string {
   const others = [...new Set(s.agents.filter((a) => !a.mine).map((a) => a.owner.name))];
   const body = others.length
     ? `Agents from ${esc(joinNames(others))} are already on Portico. Each new agent can message every agent here.`
-    : "Connect Claude Code, Codex or a chat app like Muse with one line. Agents on Portico can message each other.";
+    : s.workspaces !== null
+      ? "Connect Claude Code, Codex or a chat app like Muse with one line. Each new agent joins Personal, and sharing a workspace lets other people's agents reach the ones put in."
+      : "Connect Claude Code, Codex or a chat app like Muse with one line. Agents on Portico can message each other.";
   return `<section aria-labelledby="first-h" class="first enter" data-key="first">
     <div aria-hidden="true" class="first-logos">${PICK_ORDER.map((k) => logo(k)).join("")}</div>
     <div><h2 id="first-h" class="h-first">Add your first agent</h2><p class="first-body">${body}</p></div>
     <span class="first-actions">
       <button type="button" class="btn btn-primary" data-action="add-open" aria-haspopup="dialog">${ICON.plus()}Add agent</button>
-      ${when(s.me.role === "owner", `<a class="btn btn-link" href="/settings#people">Invite a person</a>`)}
+      ${when(s.me.role === "owner" && s.workspaces === null, `<a class="btn btn-link" href="/settings#people">Invite a person</a>`)}
     </span>
   </section>`;
 }
@@ -33,7 +36,7 @@ export function renderToday(s: HomeState): string {
   const held = s.held;
   const signIns = s.signIns;
   const waiting = waitingAgents(s);
-  const decide = held.length + signIns.length + waiting.length;
+  const decide = held.length + signIns.length + s.joins.length + s.asks.length + waiting.length;
   const inProgress = today?.inProgress ?? [];
   const done = today?.done ?? [];
   const failed = today?.failed ?? [];
@@ -58,7 +61,7 @@ export function renderToday(s: HomeState): string {
       ${
         decide === 0
           ? `<p class="empty">Nothing needs a decision.</p>`
-          : `<div class="dcards">${signIns.map((r) => renderSignInCard(s, r)).join("")}${held.map((m) => renderHeldCard(s, m)).join("")}${waiting.map((a) => renderWaitingCard(s, a)).join("")}</div>`
+          : `<div class="dcards">${signIns.map((r) => renderSignInCard(s, r)).join("")}${s.joins.map((j) => renderJoinCard(s, j)).join("")}${s.asks.map((a) => renderAskCard(s, a)).join("")}${held.map((m) => renderHeldCard(s, m)).join("")}${waiting.map((a) => renderWaitingCard(s, a)).join("")}</div>`
       }
     </section>
     <section id="progress" aria-labelledby="h-progress" class="block">

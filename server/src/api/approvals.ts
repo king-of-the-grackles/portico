@@ -4,6 +4,7 @@ import { readJson } from "../agent-api/rest";
 import { type PersonEnv, currentPerson } from "./context";
 import { pendingSignIns, signInRoutes } from "./sign-ins";
 import { personViews } from "./views";
+import { workspaceApprovals } from "./workspaces";
 
 /**
  * /api/approvals: what waits for the signed-in person. Held messages to agents the person manages, and app agents'
@@ -15,7 +16,7 @@ export function approvalRoutes(core: Core): Hono<PersonEnv> {
   route.get("/", (c) => {
     const me = currentPerson(c);
     const views = personViews(core, me);
-    return c.json({ held: core.approvals.heldFor(me.id).map(views.held), signIns: pendingSignIns(core, me) });
+    return c.json({ held: core.approvals.heldFor(me.id).map(views.held), signIns: pendingSignIns(core, me), ...workspaceApprovals(core, me) });
   });
 
   route.post("/held/:messageId", async (c) => {

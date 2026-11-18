@@ -15,6 +15,7 @@ import { type JsonRpcRequest, parseRequest, rpcError, rpcResult } from "./jsonrp
 import { jsonBodyLimit } from "./limits";
 import { getAgentTask, listAgentTasks, TASK_FILTERS } from "./tasks";
 import { type AgentViews, UNTRUSTED_PROFILES } from "./views";
+import { runWorkspaceTool, WORKSPACE_TOOL_NAMES, type WorkspaceToolDeps, workspaceTools } from "./workspace-tools";
 
 /** The versions a client picks with initialize. */
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -249,6 +250,7 @@ export interface McpDeps {
   wakeUrls: WakeUrls;
   views: AgentViews;
   resolver: Resolver;
+  workspaceTools: WorkspaceToolDeps;
 }
 
 /** For apps and connectors, when the message will reach the receiver: Portico can't start their turns, so they wait. */
@@ -276,7 +278,7 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
   switch (name) {
     case "list_agents":
       agents.checkedIn(agent);
-      return json({ agents: agents.entries(agent.id).map(views.entry), note: UNTRUSTED_PROFILES });
+      return json({ agents: agents.entriesFor(agent).map((e) => views.entry(e, agent)), note: UNTRUSTED_PROFILES });
     case "send_message": {
       await deps.files.settle(agent, args.attachments);
       const { message, delivery, note } = messages.send(agent, {
@@ -290,7 +292,7 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
         attachments: args.attachments,
       });
       agents.checkedIn(agent);
-      const content = json({ message: views.message(message), delivery });
+      const content = json({ message: views.message(message, agent), delivery });
       if (note) content.push({ type: "text", text: note });
       // Not for a held message (a person decides within days) or an offline session: waiting would only cost turns.
       if (!agents.isPush(agent) && (delivery === "pushed" || delivery === "queued")) content.push({ type: "text", text: WAIT_HINT });
@@ -319,12 +321,12 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
       const inbox = messages.inbox(agent);
       const lines: string[] = [inbox.messages.length ? `Messages (${inbox.messages.length}):` : "No new messages."];
       if (waitMs > 0 && !inbox.messages.length && !inbox.updates.length) lines.push(KEEP_WAITING);
-      for (const m of inbox.messages) lines.push("---", views.delivery(m).framed_message);
+      for (const m of inbox.messages) lines.push("---", views.delivery(m, agent).framed_message);
       if (inbox.updates.length) {
         lines.push("", `What happened to sent messages (${inbox.updates.length}):`);
-        for (const m of inbox.updates) lines.push(views.update(m).framed_message);
+        for (const m of inbox.updates) lines.push(views.update(m, agent).framed_message);
       }
-      const data = { messages: inbox.messages.map(views.delivery), updates: inbox.updates.map(views.update) };
+      const data = { messages: inbox.messages.map((m) => views.delivery(m, agent)), updates: inbox.updates.map((m) => views.update(m, agent)) };
       return [
         { type: "text", text: lines.join("\n") },
         { type: "text", text: JSON.stringify(data, null, 2) },
@@ -352,6 +354,10 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
       return json({ wake: { host: wake.host } });
     }
     default:
+      if (WORKSPACE_TOOL_NAMES.includes(name)) {
+        agents.checkedIn(agent);
+        return json(runWorkspaceTool(deps.workspaceTools, agent, name, args));
+      }
       throw new PorticoError("bad_request", "Unknown tool.");
   }
 }
@@ -528,7 +534,7 @@ function loggedMethod(method: string): string {
 /** POST /mcp: Streamable HTTP without a server-to-client stream, for the initialize-based versions and 2026-07-28. */
 export function mcpRoutes(deps: McpDeps): Hono {
   const mcp = new Hono();
-  const tools = appTools();
+  const tools = deps.workspaceTools.workspaces.enabled ? [...appTools(), ...workspaceTools()] : appTools();
   // tools/call requests in flight, by agent and JSON-RPC ID, so notifications/cancelled can stop a waiting check_inbox.
   // Some clients cancel without closing the request, and a wait that went on would pick up messages nobody reads.
   const inFlight = new Map<string, AbortController>();

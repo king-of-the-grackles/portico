@@ -17,6 +17,22 @@ export interface Person {
   inviteId: string | null;
   createdAt: string;
   approvedAt: string | null;
+  /** The prefix other people's agents address this person's agents by (`robert/muse`). Null until the person picks one. */
+  handle: string | null;
+  /** The verified email of the person's sign-in, where Portico knows one. */
+  email: string | null;
+}
+
+/** Personal holds only its owner's agents and can't be shared. Shared bridges to other people's agents. */
+export type WorkspaceKind = "personal" | "shared";
+
+/** A list of people and agents. Two agents reach each other only while both are in one workspace. */
+export interface Workspace {
+  id: string;
+  name: string;
+  kind: WorkspaceKind;
+  ownerId: string;
+  createdAt: string;
 }
 
 /** A computer that joined with a join line. Its sessions' addresses end in `@<name>`. */
@@ -106,6 +122,8 @@ export interface Thread {
   startedBy: string;
   createdAt: string;
   lastMessageAt: string;
+  /** The workspace the two agents share that the thread runs through, set by Portico. Null where there are none. */
+  workspaceId: string | null;
 }
 
 export interface Message {
@@ -148,6 +166,14 @@ export type Notice =
   | { kind: "message_expired"; message: Message }
   | { kind: "message_delivered"; message: Message };
 
+/** Sending email through Resend: the API key, the sender, and the secret that signs Resend's webhooks. */
+export interface MailConfig {
+  apiKey: string;
+  /** Such as `Portico <invites@mail.portico.example>`. */
+  from: string;
+  webhookSecret: string | null;
+}
+
 /** An S3-compatible bucket for files (Tigris on Fly, say). */
 export interface BucketConfig {
   bucket: string;
@@ -173,6 +199,31 @@ export interface CentralSignIn {
   joined(accountId: string): void;
 }
 
+/** An account with the outside sign-in service, as a checked sign-in token names it. */
+export interface Account {
+  id: string;
+  /** The account's verified email address, when the token carries one. */
+  email: string | null;
+  name: string | null;
+}
+
+/**
+ * Hosted Portico with one database: people sign in with the outside service at Portico's own address, and the first
+ * sign-in makes the person. No passwords, passkeys, setup link or invites.
+ */
+export interface AccountSignIn {
+  /** The sign-in service's project, shown on the sign-in page. */
+  projectId: string;
+  /** The account a sign-in token belongs to, or `unauthorized`. */
+  account(token: unknown): Promise<Account>;
+  /** The one address people sign in at. */
+  homeUrl: string;
+  /** Every address this Portico answers at, the home address included. */
+  addresses(): string[];
+  /** The domain the sign-in cookie is set for, so every address shares one sign-in. Null: this host only. */
+  cookieDomain: string | null;
+}
+
 export interface PorticoConfig {
   port: number;
   /** ":memory:" in tests. */
@@ -190,6 +241,14 @@ export interface PorticoConfig {
    * development only; otherwise Portico posts only to public https:// addresses.
    */
   webhooksAllowPrivate: boolean;
+  /**
+   * Workspaces on: agents reach each other only through a workspace both are in, other people's agents are addressed
+   * as `<handle>/<agent>`, and a person reads only conversations of the person's own agents. Off (self-hosted Portico):
+   * one open network, where every agent reaches every other.
+   */
+  workspaces: boolean;
   /** Where files live: a bucket when one is configured, otherwise `files` in the data folder. */
   files: BucketConfig | null;
+  /** Emails share links when set. Null: Share gives the link only. */
+  mail: MailConfig | null;
 }

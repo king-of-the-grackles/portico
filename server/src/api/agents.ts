@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import type { Core } from "../core/core";
 import { readJson } from "../agent-api/rest";
 import { PorticoError } from "../core/errors";
@@ -32,6 +32,8 @@ export interface AgentPageData {
 export function agentPageData(core: Core, me: Person, id: string): AgentPageData {
   const { agents, approvals } = core;
   const agent = agents.require(id);
+  // An agent in no workspace of the person's answers the same as one that doesn't exist.
+  if (core.workspaces.visibleAgents(me.id)?.has(agent.id) === false) throw new PorticoError("not_found", "No such agent.");
   const views = personViews(core, me);
   const mine = agent.ownerId === me.id;
   const allowList = mine ? approvals.allowListFor(me.id, agent.id).map(views.allowEntry) : null;
@@ -71,12 +73,23 @@ export function agentPageData(core: Core, me: Person, id: string): AgentPageData
 export function agentRoutes(core: Core): Hono<PersonEnv> {
   const { agents, approvals } = core;
   const route = new Hono<PersonEnv>();
+  const unseen: MiddlewareHandler<PersonEnv> = async (c, next) => {
+    const me = c.get("person");
+    const visible = me ? core.workspaces.visibleAgents(me.id) : null;
+    const id = c.req.param("id");
+    if (me && visible && id && !visible.has(id)) return c.json({ error: "not_found", message: "No such agent." }, 404);
+    await next();
+  };
 
   route.get("/", (c) => {
     const me = currentPerson(c);
     const views = personViews(core, me);
     return c.json({ agents: agentsInOrder(agents, me).map(views.agent) });
   });
+
+  // With workspaces, an agent in none of the person's workspaces answers like one that isn't there, on every route.
+  route.use("/:id/*", unseen);
+  route.use("/:id", unseen);
 
   route.get("/:id", (c) => c.json(agentPageData(core, currentPerson(c), c.req.param("id"))));
 

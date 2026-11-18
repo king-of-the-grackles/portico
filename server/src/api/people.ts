@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import type { Core } from "../core/core";
 import type { Person } from "../core/types";
 import { PorticoError } from "../core/errors";
@@ -31,12 +31,14 @@ export function inviteView(invite: Invite, link: string | null = null): InviteVi
 export function peopleListing(core: Core, me: Person): { people: PeopleEntry[]; invites: InviteView[]; claims: ClaimView[] } {
   const { people, settings } = core;
   const views = personViews(core, me);
-  const isOwner = me.role === "owner";
+  // With workspaces, invites and claims give way to sharing a workspace, and the list is the people the person shares one with.
+  const isOwner = me.role === "owner" && !core.workspaces.enabled;
+  const visible = core.workspaces.visiblePeople(me.id);
   const link = (secret: string | null) => (secret ? `${settings.publicUrl()}/invite#${secret}` : null);
   return {
     people: people
       .list()
-      .filter((p) => p.status === "active")
+      .filter((p) => p.status === "active" && (visible === null || visible.has(p.id)))
       .map((p) => ({ ...views.person(p), joinedAt: p.approvedAt ?? p.createdAt })),
     invites: isOwner ? people.openInvites().map((invite) => inviteView(invite, link(people.inviteSecret(invite.id)))) : [],
     claims: isOwner ? people.claims().map(claimView) : [],
@@ -61,6 +63,16 @@ export function peopleRoutes(core: Core): Hono<PersonEnv> {
   const inviteLink = (secret: string | null) => (secret ? `${settings.publicUrl()}/invite#${secret}` : null);
 
   route.get("/people", (c) => c.json(peopleListing(core, currentPerson(c))));
+
+  // With workspaces nobody runs the whole Portico: people come in by sharing a workspace and leave one the same way.
+  if (core.workspaces.enabled) {
+    const gone = (c: Context) => c.json({ error: "not_found", message: "This Portico shares workspaces in place of invites." }, 404);
+    route.all("/invites", gone);
+    route.all("/invites/*", gone);
+    route.all("/claims/*", gone);
+    route.delete("/people/:id", gone);
+    return route;
+  }
 
   route.post("/invites", async (c) => {
     const me = currentOwner(c);

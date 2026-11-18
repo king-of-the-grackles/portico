@@ -1,5 +1,6 @@
 import type { ActivityEntry, ActivityKind } from "../core/activity";
 import type { Agents, Run } from "../core/agents";
+import type { Core } from "../core/core";
 import type { Approvals } from "../core/approvals";
 import type { Files } from "../core/files";
 import type { Messages } from "../core/messages";
@@ -24,6 +25,8 @@ import type {
 export interface PersonRef {
   id: string;
   name: string;
+  /** With workspaces: what goes in front of the person's agents' names for everyone else. */
+  handle?: string | null;
 }
 
 export interface PersonView extends PersonRef {
@@ -31,6 +34,8 @@ export interface PersonView extends PersonRef {
   status: PersonStatus;
   isMe: boolean;
   agentCount: number;
+  /** The signed-in person's own verified address, where sign-in is by account. Never anyone else's. */
+  email?: string | null;
 }
 
 export interface AgentRef {
@@ -238,7 +243,7 @@ export function personViews(deps: ViewDeps, me: Person) {
   const personRef = (id: string): PersonRef => {
     if (!peopleById.has(id)) peopleById.set(id, people.get(id));
     const person = peopleById.get(id);
-    return { id, name: person?.name ?? "" };
+    return { id, name: person?.name ?? "", ...(person?.handle ? { handle: person.handle } : {}) };
   };
   const refs = new Map<string, AgentRef>();
   const agentRef = (id: string): AgentRef => {
@@ -246,14 +251,14 @@ export function personViews(deps: ViewDeps, me: Person) {
     if (known) return known;
     const agent = agents.get(id);
     const ref: AgentRef = agent
-      ? { id, display: agents.display(agent), label: agents.label(agent), kind: agent.kind }
+      ? { id, display: agents.nameFor(agent, me.id), label: agents.label(agent), kind: agent.kind }
       : { id, display: id, label: id, kind: "other" };
     refs.set(id, ref);
     return ref;
   };
 
   const agent = (a: Agent): AgentView => {
-    const entry = agents.entry(a);
+    const entry = agents.entryFor(a, me.id);
     return {
       id: a.id,
       name: a.name,
@@ -332,7 +337,7 @@ export function personViews(deps: ViewDeps, me: Person) {
   const threadAgent = (id: string): ThreadAgent => {
     const agent = agents.get(id);
     return agent
-      ? { id, display: agents.display(agent), label: agents.label(agent), kind: agent.kind, owner: personRef(agent.ownerId) }
+      ? { id, display: agents.nameFor(agent, me.id), label: agents.label(agent), kind: agent.kind, owner: personRef(agent.ownerId) }
       : { id, display: id, label: id, kind: "other", owner: personRef("") };
   };
 
@@ -364,6 +369,8 @@ export function personViews(deps: ViewDeps, me: Person) {
     status: p.status,
     isMe: p.id === me.id,
     agentCount: agents.ownedBy(p.id).length,
+    ...(p.handle ? { handle: p.handle } : {}),
+    ...(p.id === me.id && p.email ? { email: p.email } : {}),
   });
 
   const allowEntry = (entry: { senderId: string; addedBy: string; addedAt: string }): AllowEntry => ({
@@ -435,16 +442,23 @@ export function personViews(deps: ViewDeps, me: Person) {
 
 export type PersonViews = ReturnType<typeof personViews>;
 
-/** The owner sees every thread. A member sees only threads with at least one of the member's own agents. */
-export function canSeeThread(agents: Agents, me: Person, thread: Thread): boolean {
-  if (me.role === "owner") return true;
+/**
+ * The owner sees every thread. A member sees only threads with at least one of the member's own agents. With workspaces,
+ * that holds for everyone: a person reads a thread only when one of the person's own agents is in it.
+ */
+export function canSeeThread(core: Pick<Core, "agents" | "workspaces">, me: Person, thread: Thread): boolean {
+  const { agents } = core;
+  if (core.workspaces.seesEverything(me)) return true;
   const mine = new Set(agents.ownedBy(me.id).map((a) => a.id));
   return mine.has(thread.aId) || mine.has(thread.bId);
 }
 
-/** Every agent, the signed-in person's first, then by owner, then as the agent list orders them. */
+/**
+ * Every agent the person sees, the signed-in person's first, then by owner, then as the agent list orders them. With
+ * workspaces, only agents in a workspace the person is in.
+ */
 export function agentsInOrder(agents: Agents, me: Person): Agent[] {
-  const entries = agents.entries();
+  const entries = agents.entriesForPerson(me.id);
   return [
     ...entries.filter((e) => e.agent.ownerId === me.id),
     ...entries.filter((e) => e.agent.ownerId !== me.id),

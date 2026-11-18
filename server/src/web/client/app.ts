@@ -9,6 +9,12 @@ import type {
   ActivityView,
   AddState,
   AgentKind,
+  AskView,
+  JoinView,
+  ShareView,
+  WorkspaceForm,
+  WorkspacePageData,
+  WorkspaceView,
   AgentPageData,
   AgentView,
   ClaimView,
@@ -466,6 +472,8 @@ const ROUTES: [RegExp, (m: RegExpExecArray) => Route][] = [
   [/^\/$/, () => ({ page: "today" })],
   [/^\/activity\/?$/, () => ({ page: "activity" })],
   [/^\/a\/([^/]+)\/?$/, (m) => ({ page: "agent", id: decodeURIComponent(m[1]!) })],
+  [/^\/w\/([^/]+)\/?$/, (m) => ({ page: "workspace", id: decodeURIComponent(m[1]!) })],
+  [/^\/agents\/?$/, () => ({ page: "agents" })],
 ];
 
 function routeOf(path: string): Route {
@@ -477,7 +485,18 @@ function routeOf(path: string): Route {
 }
 
 function pathOf(route: Route): string {
-  return route.page === "today" ? "/" : route.page === "activity" ? "/activity" : `/a/${encodeURIComponent(route.id)}`;
+  switch (route.page) {
+    case "today":
+      return "/";
+    case "activity":
+      return "/activity";
+    case "agents":
+      return "/agents";
+    case "workspace":
+      return `/w/${encodeURIComponent(route.id)}`;
+    case "agent":
+      return `/a/${encodeURIComponent(route.id)}`;
+  }
 }
 
 function query(params: Record<string, string | null | undefined>): string {
@@ -505,8 +524,26 @@ function startHome(root: HTMLElement, data: HomeData): void {
   // -- fetching: each loader drops its answer if the page moved on meanwhile --
   const loadAgents = async () => page.set({ agents: (await api<{ agents: AgentView[] }>("GET", "/api/agents")).agents });
   const loadApprovals = async () => {
-    const r = await api<{ held: HeldCard[]; signIns: SignInView[] }>("GET", "/api/approvals");
-    page.set({ held: r.held, signIns: r.signIns });
+    const r = await api<{ held: HeldCard[]; signIns: SignInView[]; joins?: JoinView[]; asks?: AskView[] }>("GET", "/api/approvals");
+    page.set({ held: r.held, signIns: r.signIns, joins: r.joins ?? [], asks: r.asks ?? [] });
+  };
+  const loadWorkspaces = async () => {
+    if (s().workspaces === null) return;
+    page.set({ workspaces: (await api<{ workspaces: WorkspaceView[] }>("GET", "/api/workspaces")).workspaces });
+  };
+  const loadWorkspacePage = async () => {
+    const route = s().route;
+    if (route.page !== "workspace") return;
+    try {
+      const workspacePage = await api<WorkspacePageData>("GET", `/api/workspaces/${encodeURIComponent(route.id)}`);
+      const now = s().route;
+      if (now.page === "workspace" && now.id === route.id) page.set({ workspacePage });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        go("/");
+        note("That workspace isn't there any more.");
+      } else throw err;
+    }
   };
   const loadMe = async () => page.set({ me: (await api<{ person: PersonView }>("GET", "/api/me")).person });
 
@@ -519,7 +556,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
   /** The tasks for the page: Activity's filters, or the agent's own tasks. `more` adds the next page. */
   const loadTasks = async (more = false) => {
     const route = s().route;
-    if (route.page === "today") return;
+    if (route.page === "today" || route.page === "agents") return;
     const f = s().filter;
     const shown = s().tasks;
     const before = more && shown?.tasks.length ? shown.tasks[shown.tasks.length - 1]!.startedAt : null;
@@ -527,8 +564,9 @@ function startHome(root: HTMLElement, data: HomeData): void {
     const limit = !more && shown && shown.tasks.length > 50 ? String(shown.tasks.length) : null;
     const path = `/api/tasks${query({
       outcome: f.outcome,
-      agent: route.page === "agent" ? route.id : f.agent,
-      project: route.page === "agent" ? null : f.project,
+      agent: route.page === "agent" ? route.id : route.page === "workspace" ? null : f.agent,
+      project: route.page === "activity" ? f.project : null,
+      workspace: route.page === "workspace" ? route.id : null,
       before,
       limit,
     })}`;
@@ -539,7 +577,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
       const list = await api<TaskListData>("GET", path);
       if (ticket !== taskTickets) return;
       const now = s().route;
-      if (now.page !== route.page || (now.page === "agent" && route.page === "agent" && now.id !== route.id)) return;
+      if (pathOf(now) !== pathOf(route)) return;
       if (more) {
         const current = s().tasks;
         page.set({ tasks: { ...list, tasks: [...(current?.tasks ?? []), ...list.tasks] } });
@@ -588,9 +626,10 @@ function startHome(root: HTMLElement, data: HomeData): void {
     const route = s().route;
     const jobs: Promise<unknown>[] = [];
     if (route.page === "today") jobs.push(loadToday());
-    else jobs.push(loadTasks());
+    else if (route.page !== "agents") jobs.push(loadTasks());
     if (route.page === "activity") jobs.push(loadEvents());
     if (route.page === "agent") jobs.push(loadAgentPage());
+    if (route.page === "workspace") jobs.push(loadWorkspacePage());
     for (const id of Object.keys(s().openTasks)) jobs.push(loadTask(id));
     return settle(jobs);
   };
@@ -605,9 +644,12 @@ function startHome(root: HTMLElement, data: HomeData): void {
     if (t.has("approvals")) jobs.push(loadApprovals());
     if (t.has("me")) jobs.push(loadMe());
     const route = s().route;
+    if (t.has("workspaces") || t.has("people") || t.has("approvals")) jobs.push(loadWorkspaces());
+    if (t.has("workspaces")) jobs.push(loadAgents());
+    if (route.page === "workspace" && (t.has("workspaces") || t.has("people"))) jobs.push(loadWorkspacePage());
     const tasksChanged = t.has("threads") || t.has("approvals");
     if (route.page === "today" && (tasksChanged || t.has("agents"))) jobs.push(loadToday());
-    if (route.page !== "today" && tasksChanged) jobs.push(loadTasks());
+    if (route.page !== "today" && route.page !== "agents" && tasksChanged) jobs.push(loadTasks());
     if (route.page === "activity" && (t.has("activity") || t.has("agents"))) jobs.push(loadEvents());
     if (route.page === "agent" && (tasksChanged || t.has("agents") || t.has("activity"))) jobs.push(loadAgentPage());
     if (tasksChanged) for (const id of Object.keys(s().openTasks)) jobs.push(loadTask(id));
@@ -628,6 +670,10 @@ function startHome(root: HTMLElement, data: HomeData): void {
       wakeEdit: null,
       saved: false,
       confirmRemove: false,
+      wsForm: same ? s().wsForm : null,
+      wsConfirm: null,
+      peopleOpen: same ? s().peopleOpen : false,
+      workspacePage: route.page === "workspace" && s().workspacePage?.workspace.id === route.id ? s().workspacePage : null,
       notice: same ? s().notice : null,
       ...(same
         ? {}
@@ -720,6 +766,201 @@ function startHome(root: HTMLElement, data: HomeData): void {
       note(`${request.name} joined.`);
     } catch (err) {
       fail(err);
+    } finally {
+      page.set({ busy: null });
+    }
+  };
+
+  // -- workspaces --
+  const pageWorkspace = (): WorkspaceView | null => {
+    const route = s().route;
+    if (route.page !== "workspace") return null;
+    return s().workspacePage?.workspace.id === route.id ? s().workspacePage!.workspace : (s().workspaces?.find((w) => w.id === route.id) ?? null);
+  };
+  const formError = (err: unknown) => {
+    const form = s().wsForm;
+    if (form) page.set({ wsForm: { ...form, error: failure(err) } });
+  };
+  /** Runs one workspace change, then reloads what shows the workspaces. */
+  const wsRun = async (busy: string, job: () => Promise<void>, onError: (err: unknown) => void = fail) => {
+    if (s().busy) return;
+    page.set({ busy });
+    try {
+      await job();
+      await settle([loadWorkspaces(), loadAgents(), loadWorkspacePage()]);
+    } catch (err) {
+      onError(err);
+    } finally {
+      page.set({ busy: null });
+    }
+  };
+
+  const openNewWorkspace = (thenShare: boolean) => {
+    const first = s().me.name.trim().split(/\s+/)[0] ?? "";
+    const route = s().route;
+    // The form shows on the Agents page and on a workspace's own page.
+    if (route.page !== "workspace" && route.page !== "agents") go("/agents");
+    page.set({ wsForm: { kind: "new", name: thenShare && first ? `${first}'s shared workspace` : "", agentIds: [], thenShare, error: "" }, navOpen: false });
+  };
+
+  const createWorkspace = () => {
+    const form = s().wsForm;
+    if (form?.kind !== "new") return;
+    if (!form.name.trim()) return page.set({ wsForm: { ...form, error: "Give the workspace a name." } });
+    void wsRun(
+      "ws-form",
+      async () => {
+        const { workspace } = await api<{ workspace: WorkspaceView }>("POST", "/api/workspaces", { name: form.name, agentIds: form.agentIds });
+        page.set({ wsForm: null });
+        await loadWorkspaces();
+        go(`/w/${workspace.id}`);
+        if (form.thenShare) page.set({ wsForm: { kind: "share", email: "", error: "" } });
+        else note(`${workspace.name} created.`, true);
+      },
+      formError,
+    );
+  };
+
+  const createShare = () => {
+    const form = s().wsForm;
+    const w = pageWorkspace();
+    if (form?.kind !== "share" || !w) return;
+    void wsRun(
+      "ws-form",
+      async () => {
+        const { share } = await api<{ share: ShareView }>("POST", `/api/workspaces/${encodeURIComponent(w.id)}/shares`, { email: form.email.trim() || undefined });
+        page.set({ wsForm: null, wsMail: share.mail ? { ...s().wsMail, [share.id]: share.mail } : s().wsMail });
+        note(share.email && share.mail === "sent" ? `Share link emailed to ${share.email}.` : "Share link made. Copy the link below and send it.", true);
+      },
+      formError,
+    );
+  };
+
+  const renameWorkspace = () => {
+    const form = s().wsForm;
+    const w = pageWorkspace();
+    if (form?.kind !== "rename" || !w) return;
+    void wsRun(
+      "ws-form",
+      async () => {
+        await api("PATCH", `/api/workspaces/${encodeURIComponent(w.id)}`, { name: form.name });
+        page.set({ wsForm: null });
+      },
+      formError,
+    );
+  };
+
+  const addWorkspaceAgents = () => {
+    const form = s().wsForm;
+    const w = pageWorkspace();
+    if (form?.kind !== "agents" || !w) return;
+    void wsRun(
+      "ws-form",
+      async () => {
+        for (const id of form.agentIds) await api("PUT", `/api/workspaces/${encodeURIComponent(w.id)}/agents/${encodeURIComponent(id)}`);
+        page.set({ wsForm: null });
+      },
+      formError,
+    );
+  };
+
+  const setWorkspaceAgent = (workspaceId: string, agentId: string, on: boolean, busy: string) =>
+    wsRun(busy, async () => {
+      await api(on ? "PUT" : "DELETE", `/api/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`);
+    });
+
+  const removeWorkspacePerson = (personId: string) => {
+    const w = pageWorkspace();
+    if (!w) return;
+    const leaving = personId === s().me.id;
+    const person = w.people.find((p) => p.id === personId);
+    void wsRun("ws-confirm", async () => {
+      await api("DELETE", `/api/workspaces/${encodeURIComponent(w.id)}/people/${encodeURIComponent(personId)}`);
+      page.set({ wsConfirm: null });
+      if (leaving) {
+        await loadWorkspaces();
+        go("/");
+        note(`Left ${w.name}.`);
+      } else note(`${person?.name ?? "The person"} removed from ${w.name}.`);
+    });
+  };
+
+  const deleteWorkspace = () => {
+    const w = pageWorkspace();
+    if (!w) return;
+    void wsRun("ws-confirm", async () => {
+      await api("DELETE", `/api/workspaces/${encodeURIComponent(w.id)}`);
+      page.set({ wsConfirm: null });
+      await loadWorkspaces();
+      go("/");
+      note(`${w.name} deleted.`);
+    });
+  };
+
+  const endShare = (id: string) =>
+    wsRun("ws-confirm", async () => {
+      await api("DELETE", `/api/shares/${encodeURIComponent(id)}`);
+      page.set({ wsConfirm: null });
+      note("Share link ended.");
+    });
+
+  const mailShare = async (id: string) => {
+    if (s().busy) return;
+    page.set({ busy: `ws-mail:${id}` });
+    try {
+      const { share } = await api<{ share: ShareView }>("POST", `/api/shares/${encodeURIComponent(id)}/mail`);
+      if (share.mail) page.set({ wsMail: { ...s().wsMail, [id]: share.mail } });
+      await settle([loadWorkspacePage()]);
+    } catch (err) {
+      fail(err);
+    } finally {
+      page.set({ busy: null });
+    }
+  };
+
+  const copyShare = async (id: string) => {
+    const link = s().workspacePage?.shares.find((share) => share.id === id)?.link;
+    if (!link) return;
+    if (await copyText(link, `share-${id}`)) {
+      page.set({ wsCopied: { ...s().wsCopied, [id]: true } });
+      setTimeout(() => page.set({ wsCopied: { ...s().wsCopied, [id]: false } }), 2000);
+    }
+  };
+
+  const decideJoin = async (id: string, decision: string) => {
+    const join = s().joins.find((j) => j.id === id);
+    if (!join || s().busy) return;
+    page.set({ busy: `join:${id}` });
+    try {
+      await api("POST", `/api/approvals/joins/${encodeURIComponent(id)}`, { decision });
+      page.set({ joins: s().joins.filter((j) => j.id !== id) });
+      note(decision === "approve" ? `${join.agent.label} is in ${join.workspace.name} now.` : `${join.agent.label} wasn't let into ${join.workspace.name}.`, decision === "approve");
+      refresh(["approvals", "workspaces", "agents"]);
+    } catch (err) {
+      fail(err);
+      refresh(["approvals"]);
+    } finally {
+      page.set({ busy: null });
+    }
+  };
+
+  const decideAsk = async (id: string, decision: string) => {
+    const ask = s().asks.find((a) => a.id === id);
+    if (!ask || s().busy) return;
+    page.set({ busy: `ask:${id}` });
+    try {
+      const answer = await api<{ share: ShareView | null }>("POST", `/api/approvals/asks/${encodeURIComponent(id)}`, { decision });
+      page.set({ asks: s().asks.filter((a) => a.id !== id) });
+      if (decision !== "approve") note(`Not allowed. ${ask.agent.label} sees the answer.`);
+      else if (ask.kind === "share") {
+        if (answer?.share?.mail) page.set({ wsMail: { ...s().wsMail, [answer.share.id]: answer.share.mail } });
+        go(`/w/${ask.workspace.id}`);
+        note(answer?.share?.mail === "sent" ? `Share link emailed to ${ask.email}.` : `Share link made for ${ask.workspace.name}. ${ask.agent.label} has the link too.`, true);
+      } else note(`${ask.person?.name ?? "The person"} removed from ${ask.workspace.name}.`, true);
+      refresh(["approvals", "workspaces", "agents"]);
+    } catch (err) {
+      fail(err);
+      refresh(["approvals"]);
     } finally {
       page.set({ busy: null });
     }
@@ -833,6 +1074,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
       else if (s().navOpen) page.set({ navOpen: false });
       else if (s().edit) page.set({ edit: null });
       else if (s().wakeEdit) page.set({ wakeEdit: null });
+      else if (s().wsForm) page.set({ wsForm: null });
+      else if (s().wsConfirm) page.set({ wsConfirm: null });
     },
     input(name, value) {
       const edit = s().edit;
@@ -841,6 +1084,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
       else if (name === "wake-url" && s().wakeEdit) page.set({ wakeEdit: { ...s().wakeEdit!, url: value, error: "" } });
       else if (name === "wake-key" && s().wakeEdit) page.set({ wakeEdit: { ...s().wakeEdit!, key: value, error: "" } });
       else if (name === "add-req-name") add.setName(value);
+      else if (name === "ws-name" && (s().wsForm?.kind === "new" || s().wsForm?.kind === "rename")) page.set({ wsForm: { ...s().wsForm!, name: value, error: "" } as WorkspaceForm });
+      else if (name === "ws-email" && s().wsForm?.kind === "share") page.set({ wsForm: { ...s().wsForm!, email: value, error: "" } as WorkspaceForm });
       else if (name === "filter-agent") setFilter({ agent: value || null });
       else if (name === "filter-project") setFilter({ project: value || null });
     },
@@ -848,10 +1093,65 @@ function startHome(root: HTMLElement, data: HomeData): void {
       if (name === "agent-save") void saveEdit();
       else if (name === "wake-save") void saveWake();
       else if (name === "add-approve") void add.decide("approve");
+      else if (name === "ws-create") createWorkspace();
+      else if (name === "ws-share") createShare();
+      else if (name === "ws-rename") renameWorkspace();
+      else if (name === "ws-agents") addWorkspaceAgents();
     },
     action(name, el, event) {
       const id = el.dataset.id ?? "";
       switch (name) {
+        case "ws-new-open":
+          return openNewWorkspace(false);
+        case "ws-form-cancel":
+          return page.set({ wsForm: null });
+        case "ws-tick": {
+          const form = s().wsForm;
+          if (form?.kind !== "new" && form?.kind !== "agents") return;
+          const agentIds = form.agentIds.includes(id) ? form.agentIds.filter((x) => x !== id) : [...form.agentIds, id];
+          return page.set({ wsForm: { ...form, agentIds, error: "" } });
+        }
+        case "ws-share-open": {
+          const w = pageWorkspace();
+          if (!w) return;
+          // Personal can't be shared: sharing from there starts a shared workspace first.
+          if (w.kind === "personal") return openNewWorkspace(true);
+          return page.set({ wsForm: { kind: "share", email: "", error: "" } });
+        }
+        case "ws-people-toggle":
+          return page.set({ peopleOpen: !s().peopleOpen });
+        case "ws-agents-open":
+          return page.set({ wsForm: { kind: "agents", agentIds: [], error: "" } });
+        case "ws-rename-open":
+          return page.set({ wsForm: { kind: "rename", name: pageWorkspace()?.name ?? "", error: "" } });
+        case "ws-agent-remove": {
+          const w = pageWorkspace();
+          if (w) void setWorkspaceAgent(w.id, id, false, `ws-agent:${id}`);
+          return;
+        }
+        case "ws-toggle": {
+          const workspaceId = el.dataset.ws ?? "";
+          void setWorkspaceAgent(workspaceId, id, el.getAttribute("aria-checked") !== "true", `ws-tick:${workspaceId}:${id}`);
+          return;
+        }
+        case "ws-confirm":
+          return page.set({ wsConfirm: id });
+        case "ws-confirm-cancel":
+          return page.set({ wsConfirm: null });
+        case "ws-person-remove":
+          return removeWorkspacePerson(id);
+        case "ws-delete":
+          return deleteWorkspace();
+        case "ws-share-end":
+          return void endShare(id);
+        case "ws-share-mail":
+          return void mailShare(id);
+        case "ws-share-copy":
+          return void copyShare(id);
+        case "join-decide":
+          return void decideJoin(id, el.dataset.decision ?? "deny");
+        case "ask-decide":
+          return void decideAsk(id, el.dataset.decision ?? "deny");
         case "go": {
           // A modified click opens a new tab, as any link does.
           const mouse = event as MouseEvent;
@@ -1091,6 +1391,21 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
     );
   };
 
+  const saveHandle = () => {
+    const form = s().handleForm;
+    if (!form) return;
+    const handle = form.handle.trim().toLowerCase();
+    if (!handle) return page.set({ handleForm: { ...form, error: "Enter a handle." } });
+    void run(
+      "handle",
+      async () => {
+        const r = await api<{ person?: PersonView } | null>("PATCH", "/api/me", { handle });
+        page.set({ handleForm: null, me: r?.person ?? { ...s().me, handle } });
+      },
+      (message) => page.set({ handleForm: { ...form, error: message } }),
+    );
+  };
+
   const savePassword = () => {
     const form = s().passwordForm;
     if (!form) return;
@@ -1146,6 +1461,7 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
     input(name, value) {
       if (name === "invite-name" && s().invite) page.set({ invite: { name: value, error: "" } });
       else if (name === "name-field" && s().nameForm) page.set({ nameForm: { name: value, error: "" } });
+      else if (name === "handle-field" && s().handleForm) page.set({ handleForm: { handle: value, error: "" } });
       else if (name === "pw-current" && s().passwordForm) page.set({ passwordForm: { ...s().passwordForm!, current: value, error: "" } });
       else if (name === "pw-next" && s().passwordForm) page.set({ passwordForm: { ...s().passwordForm!, next: value, error: "" } });
       else if (name === "pk-name" && s().passkeyForm) page.set({ passkeyForm: { ...s().passkeyForm!, name: value, error: "" } });
@@ -1155,6 +1471,7 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
     form(name) {
       if (name === "invite-create") createInvite();
       else if (name === "name-save") saveName();
+      else if (name === "handle-save") saveHandle();
       else if (name === "password-save") savePassword();
       else if (name === "passkey-add") addPasskey();
       else if (name === "add-approve") void add.decide("approve");
@@ -1266,6 +1583,10 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
           return page.set({ nameForm: { name: s().me.name, error: "" } });
         case "name-cancel":
           return page.set({ nameForm: null });
+        case "handle-open":
+          return page.set({ handleForm: { handle: s().me.handle ?? "", error: "" } });
+        case "handle-cancel":
+          return page.set({ handleForm: null });
         case "password-open":
           return page.set({ passwordForm: { current: "", next: "", error: "" }, passwordChanged: false });
         case "password-cancel":

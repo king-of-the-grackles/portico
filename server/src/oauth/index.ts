@@ -180,7 +180,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     return { request: { state, challenge, resource } };
   };
 
-  route.get("/oauth/authorize", loadPerson(core.accounts), async (c) => {
+  route.get("/oauth/authorize", loadPerson(core), async (c) => {
     if (!core.settings.setupDone()) return notSetUpPage(c);
     const fields = c.req.query() as Fields;
     if (fields.response_type === undefined) fields.response_type = "code";
@@ -206,7 +206,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
   });
 
   // The consent form: from the page's own script as JSON (answered with `next`), or as a plain form post (redirected).
-  route.post("/oauth/authorize", loadPerson(core.accounts), jsonBodyLimit(), async (c) => {
+  route.post("/oauth/authorize", loadPerson(core), jsonBodyLimit(), async (c) => {
     if (!core.settings.setupDone()) throw setupRequired();
     if (!sameOrigin(c, base())) throw new PorticoError("not_allowed", "Requests from other sites aren't accepted.");
     const person = currentPerson(c);

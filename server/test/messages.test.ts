@@ -70,7 +70,7 @@ describe("sending", () => {
     expect(errorCode(() => p.messages.send(muse, { replyTo: ask.id, subject: "On it", text: "x", done: "no" }))).toBe("bad_request");
     const update = p.messages.send(muse, { replyTo: ask.id, subject: "On it", text: "Checking fares.", done: false }).message;
     expect(update.final).toBe(false);
-    const framed = agentViews(p.agents, p.people, p.files, () => p.settings.publicUrl()).delivery(p.messages.inbox(grok).messages[0]!).framed_message;
+    const framed = agentViews(p.agents, p.people, p.files, p.workspaces, () => p.settings.publicUrl()).delivery(p.messages.inbox(grok).messages[0]!, grok).framed_message;
     expect(framed).toContain('done="false"');
     expect(framed).toContain("still working, and the final answer comes later");
     expect(p.messages.send(muse, { replyTo: ask.id, subject: "Booked", text: "UA 1234" }).message.final).toBe(true);
@@ -215,7 +215,7 @@ describe("holds", () => {
     expect(p.messages.inbox(muse).messages).toEqual([]);
     const { updates } = p.messages.inbox(grok);
     expect(updates.map((m) => [m.subject, m.status])).toEqual([["s", "expired"]]);
-    expect(agentViews(p.agents, p.people, p.files, () => p.settings.publicUrl()).update(updates[0]!).framed_message).toContain("expired before `muse` picked the message up");
+    expect(agentViews(p.agents, p.people, p.files, p.workspaces, () => p.settings.publicUrl()).update(updates[0]!, grok).framed_message).toContain("expired before `muse` picked the message up");
     expect(p.messages.inbox(grok).updates).toEqual([]);
   });
 });

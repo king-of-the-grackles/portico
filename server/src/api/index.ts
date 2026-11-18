@@ -4,6 +4,7 @@ import { handleError } from "../agent-api/rest";
 import { jsonBodyLimit } from "../agent-api/limits";
 import type { Core } from "../core/core";
 import { accountRoutes } from "./account";
+import { accountSignInRoutes } from "./account-sign-in";
 import { agentRoutes } from "./agents";
 import { approvalRoutes } from "./approvals";
 import { computerRoutes } from "./computers";
@@ -17,6 +18,7 @@ import { sessionRoutes } from "./session";
 import { setupRoutes } from "./setup";
 import { threadRoutes } from "./threads";
 import { taskRoutes } from "./tasks";
+import { workspaceRoutes } from "./workspaces";
 
 /** Paths under /api that answer before setup is done: setup itself. */
 const OPEN_BEFORE_SETUP = /^\/api\/setup(\/|$)/;
@@ -72,21 +74,22 @@ export function personApi(core: Core, opts: { heartbeatMs?: number } = {}): Hono
   const api = new Hono<PersonEnv>();
   api.use("*", requireSetupDone(core));
   api.use("*", requireSameOrigin(core));
-  if (core.central) {
+  if (core.central || core.accountSignIn) {
     api.use("*", async (c, next) => {
-      if (OFF_WITH_CENTRAL.test(c.req.path) || (c.req.path === "/api/session" && c.req.method === "POST")) {
+      if (OFF_WITH_CENTRAL.test(c.req.path) || (core.central && c.req.path === "/api/session" && c.req.method === "POST")) {
         return c.json({ error: "not_found", message: "This workspace signs people in at the Sign in page." }, 404);
       }
       await next();
     });
   }
   api.use("*", jsonBodyLimit());
-  api.use("*", loadPerson(core.accounts));
+  api.use("*", loadPerson(core));
   api.use("*", async (c, next) => {
     await next();
     c.header("Cache-Control", "no-store");
   });
 
+  if (core.accountSignIn) api.route("/", accountSignInRoutes(core, core.accountSignIn));
   api.route("/setup", setupRoutes(core));
   api.route("/session", sessionRoutes(core));
   api.route("/me", meRoutes(core));
@@ -94,6 +97,7 @@ export function personApi(core: Core, opts: { heartbeatMs?: number } = {}): Hono
   api.route("/passkeys", passkeyRoutes(core));
   api.route("/", peopleRoutes(core));
   api.route("/agents", agentRoutes(core));
+  api.route("/", workspaceRoutes(core));
   api.route("/approvals", approvalRoutes(core));
   api.route("/threads", threadRoutes(core));
   api.route("/", taskRoutes(core));

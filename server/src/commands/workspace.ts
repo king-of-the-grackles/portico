@@ -1,9 +1,71 @@
 import { resolve } from "node:path";
 import { ConfigError, type HostedConfig, hostedEnv } from "../config";
 import { PorticoError } from "../core/errors";
+import { createMain, migrateToMain, previewMigration, readMain } from "../hosted/main";
 import { Hosted } from "../hosted/router";
 import type { CliIo } from "./io";
 import { SETUP_LINK_LINE } from "./serve";
+
+const UNITE_USAGE = "Usage: portico workspace unite <name> [--remove <person>]... [--confirm <name>] | portico workspace unite --empty";
+
+/**
+ * `portico workspace unite`: moves hosted Portico from a database per workspace to one database. With a workspace's
+ * name, says what the move would do; with --confirm repeating the name, makes the one database as a copy of that
+ * workspace's, which stays untouched. `--remove` names a person to leave out, with their agents and conversations.
+ * `--empty` starts the one database with nothing in it. The server takes the one database up at its next start.
+ */
+function uniteCommand(config: HostedConfig, args: string[], io: CliIo): number {
+  if (args.length === 1 && args[0] === "--empty") {
+    createMain(config);
+    io.out("Made an empty database for every account. Restart portico serve to use it.");
+    return 0;
+  }
+  const [name, ...rest] = args;
+  const remove: string[] = [];
+  let confirm: string | null = null;
+  for (let i = 0; i < rest.length; i += 2) {
+    const value = rest[i + 1];
+    if (value === undefined || (rest[i] !== "--remove" && rest[i] !== "--confirm")) {
+      io.err(UNITE_USAGE);
+      return 1;
+    }
+    if (rest[i] === "--remove") remove.push(value);
+    else confirm = value;
+  }
+  if (name === undefined || name.startsWith("--")) {
+    io.err(UNITE_USAGE);
+    return 1;
+  }
+  if (readMain(config)) {
+    io.err("This Portico already keeps one database. Nothing is changed.");
+    return 1;
+  }
+  const slug = name.trim().toLowerCase();
+  const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+  const holds = (r: { people: number; agents: number; threads: number; messages: number }) =>
+    `${plural(r.people, "person", "people")}, ${plural(r.agents, "agent")}, ${plural(r.threads, "conversation")} and ${plural(r.messages, "message")}`;
+  if (confirm === null) {
+    const preview = previewMigration(config, slug, remove);
+    io.out(`${slug} holds ${holds(preview)}. Nothing is changed yet.`);
+    for (const gone of preview.removed) {
+      io.out(`  Removing ${gone.person} also removes ${plural(gone.agents, "agent")}, ${plural(gone.threads, "conversation")} and ${plural(gone.messages, "message")}.`);
+    }
+    io.out("  The one database is made as a copy. The workspace's own files stay as they are, for going back.");
+    io.out("  Stop or pause portico serve first: what arrives after the copy is not in the copy.");
+    io.out(`  portico workspace unite ${slug}${remove.map((person) => ` --remove "${person}"`).join("")} --confirm ${slug}`);
+    return 0;
+  }
+  if (confirm.trim().toLowerCase() !== slug) {
+    io.err(`--confirm must repeat the workspace's name, ${slug}. Nothing is changed.`);
+    return 1;
+  }
+  const result = migrateToMain(config, slug, remove);
+  io.out(`Made the one database from ${slug}: ${holds(result)}.`);
+  for (const gone of result.removed) io.out(`  Removed ${gone.person} with ${plural(gone.agents, "agent")} and ${plural(gone.threads, "conversation")}.`);
+  io.out(`  Agents keep their tokens and the address ${config.baseUrl.replace("://", `://${slug}.`)}. Everyone signs in again at ${config.baseUrl}.`);
+  io.out("  Restart portico serve to use the one database. To go back, move the data folder's main folder aside and restart.");
+  return 0;
+}
 
 const USAGE = "Usage: portico workspace create <name> | portico workspace import <name> <folder> | portico workspace link <name> <person> | portico workspace remove <name> [--confirm <name>] | portico workspace list";
 
@@ -28,6 +90,19 @@ export async function workspaceCommand(args: string[], io: CliIo): Promise<numbe
     return 1;
   }
   const [action, name, ...rest] = args;
+  if (action === "unite") {
+    try {
+      return uniteCommand(config, args.slice(1), io);
+    } catch (err) {
+      if (!(err instanceof PorticoError)) throw err;
+      io.err(err.message);
+      return 1;
+    }
+  }
+  if (readMain(config)) {
+    io.err("This Portico keeps one database for every account, so there are no workspaces to make, link or remove here.");
+    return 1;
+  }
   const removing = action === "remove" && (rest.length === 0 || (rest.length === 2 && rest[0] === "--confirm"));
   const wanted = action === "create" ? 1 : action === "import" || action === "link" ? 2 : action === "list" ? 0 : -1;
   if (name === undefined ? action !== "list" || args.length !== 1 : !removing && args.length - 1 !== wanted) {

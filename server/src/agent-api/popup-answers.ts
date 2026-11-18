@@ -48,7 +48,7 @@ export function popupAnswerRoutes(deps: PopupAnswerDeps): Hono<AgentEnv> {
     try {
       const message = deps.approvals.decide(agent.ownerId, messageId, body.decision);
       log("info", "popup_answered", { message_id: messageId, agent_id: agent.id, decision: body.decision });
-      return c.json({ message: deps.views.message(message) });
+      return c.json({ message: deps.views.message(message, agent) });
     } catch (err) {
       // Decided a moment ago, in the browser or another pop-up, before the desk heard of it.
       if (err instanceof PorticoError && err.code === "wrong_status") refused("decided");

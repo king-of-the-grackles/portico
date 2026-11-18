@@ -7,27 +7,13 @@ import { sameOrigin } from "../api";
 import { sessionCookieOptions } from "../api/context";
 import { jsonObject } from "../api/session";
 import { log } from "../log";
+import { DESCOPE_SCRIPT, SIGN_IN_CSP } from "../web/account";
 import { assetRoutes } from "../web/assets";
 import { narrowPage, safeNext } from "../web/layout";
 import { MAX_WORKSPACES_PER_ACCOUNT, type Hosted } from "./router";
 
 /** The base domain's own sign-in cookie. Set for the base domain only, so no workspace address ever receives it. */
 const ACCOUNT_COOKIE = "portico_base";
-
-/** The Descope sign-in component, pinned to one version. */
-const DESCOPE_SCRIPT = "https://descopecdn.com/npm/@descope/web-component@4.7.3/dist/index.js";
-
-/**
- * The sign-in page loads Descope's component, which fetches the sign-in screens and talks to Descope. Nothing else on
- * the base domain, and no page of any workspace, allows a script from outside Portico.
- */
-const SIGN_IN_CSP =
-  "default-src 'none'; script-src 'self' https://descopecdn.com https://static.descope.com; " +
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-  "font-src https://fonts.gstatic.com https://static.descope.com https://descopecdn.com data:; " +
-  "img-src 'self' data: https:; " +
-  "connect-src 'self' https://api.descope.com https://static.descope.com https://descopecdn.com; " +
-  "form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
 type SiteEnv = { Variables: { account: string | null } };
 

@@ -2,11 +2,12 @@
 // state in plain words, Add agent, and Settings. On phones it opens over the page. Pure: state in, HTML out.
 import { agentState, esc, HOMEMARK, ICON, kindInfo, logo, monogram, pav, personColor, when } from "./common.js";
 import { waitingAgents } from "./tasks.js";
-import type { AgentView, HomeState, SignInView } from "./types.js";
+import type { AgentView, HomeState, SignInView, WorkspaceView } from "./types.js";
+import { initials } from "./workspace.js";
 
 /** What needs a decision: held messages, sign-in requests, and coding agents with a question. */
 export function decisionCount(s: HomeState): number {
-  return s.held.length + s.signIns.length + waitingAgents(s).length;
+  return s.held.length + s.signIns.length + s.joins.length + s.asks.length + waitingAgents(s).length;
 }
 
 function agentLink(s: HomeState, a: AgentView): string {
@@ -27,21 +28,14 @@ function signInLink(r: SignInView): string {
   </a></li>`;
 }
 
-export function renderNav(s: HomeState): string {
-  const count = decisionCount(s);
+/** Without workspaces: every agent, the signed-in person's first. */
+function agentsNav(s: HomeState): string {
   const mine = s.agents.filter((a) => a.mine);
   const others = s.agents.filter((a) => !a.mine);
   const running = mine.filter((a) => agentState(a, s.now).online);
   const quiet = mine.filter((a) => !agentState(a, s.now).online);
   const owners = [...new Map(others.map((a) => [a.owner.id, a.owner])).values()];
-  const page = s.route.page;
-  return `<nav aria-label="Main" class="nav${when(s.navOpen, " is-open")}" id="nav" data-key="nav">
-    <div class="nav-top">${HOMEMARK}<span class="nav-brand">Portico</span><button type="button" class="icon-btn phone-only" aria-label="Close" data-action="nav-close">${ICON.close()}</button></div>
-    <ul class="nav-pages">
-      <li><a class="npage" href="/" data-action="go" data-href="/"${when(page === "today", ` aria-current="page"`)}>Today${when(count > 0, `<span class="badge tnum">${count}<span class="sr"> waiting for a decision</span></span>`)}</a></li>
-      <li><a class="npage" href="/activity" data-action="go" data-href="/activity"${when(page === "activity", ` aria-current="page"`)}>Activity</a></li>
-    </ul>
-    <div class="nav-agents">
+  return `<div class="nav-agents">
       <h2 class="nav-h">Agents</h2>
       <ul class="nav-list">
         ${running.map((a) => agentLink(s, a)).join("")}
@@ -62,7 +56,40 @@ export function renderNav(s: HomeState): string {
         .join("")}</ul>`,
         )
         .join("")}
-    </div>
+    </div>`;
+}
+
+/** With workspaces: Personal first, then each shared one with the other people's initials and a dot when something waits. */
+function workspacesNav(s: HomeState): string {
+  const route = s.route;
+  const row = (w: WorkspaceView) => {
+    const href = `/w/${encodeURIComponent(w.id)}`;
+    const who = initials(w, s.me.id);
+    const current = route.page === "workspace" && route.id === w.id;
+    return `<li data-key="nw-${esc(w.id)}"><a class="npage" href="${href}" data-action="go" data-href="${href}"${when(current, ` aria-current="page"`)}><span class="nrow-name">${esc(w.name)}</span>${when(who, `<span class="nws-who" aria-label="With ${esc(w.people.filter((p) => p.id !== s.me.id).map((p) => p.name).join(", "))}">${esc(who)}</span>`)}${when(w.needs, `<span class="ndot"><span class="sr">Something here needs a decision</span></span>`)}</a></li>`;
+  };
+  return `<div class="nav-agents">
+      <h2 class="nav-h">Workspaces</h2>
+      <ul class="nav-list">
+        ${(s.workspaces ?? []).map(row).join("")}
+        <li><button type="button" class="npage npage-add" data-action="ws-new-open">${ICON.plus()}New workspace</button></li>
+      </ul>
+      <ul class="nav-pages">
+        <li><a class="npage" href="/agents" data-action="go" data-href="/agents"${when(route.page === "agents", ` aria-current="page"`)}>Agents</a></li>
+      </ul>
+    </div>`;
+}
+
+export function renderNav(s: HomeState): string {
+  const count = decisionCount(s);
+  const page = s.route.page;
+  return `<nav aria-label="Main" class="nav${when(s.navOpen, " is-open")}" id="nav" data-key="nav">
+    <div class="nav-top">${HOMEMARK}<span class="nav-brand">Portico</span><button type="button" class="icon-btn phone-only" aria-label="Close" data-action="nav-close">${ICON.close()}</button></div>
+    <ul class="nav-pages">
+      <li><a class="npage" href="/" data-action="go" data-href="/"${when(page === "today", ` aria-current="page"`)}>${s.workspaces === null ? "Today" : "Home"}${when(count > 0, `<span class="badge tnum">${count}<span class="sr"> waiting for a decision</span></span>`)}</a></li>
+      <li><a class="npage" href="/activity" data-action="go" data-href="/activity"${when(page === "activity", ` aria-current="page"`)}>Activity</a></li>
+    </ul>
+    ${s.workspaces === null ? agentsNav(s) : workspacesNav(s)}
     <div class="nav-foot">
       <a class="npage" href="/settings">${ICON.gear()}Settings</a>
       <div class="nav-acct">
@@ -70,8 +97,8 @@ export function renderNav(s: HomeState): string {
         ${when(
           s.acctOpen,
           `<div role="menu" aria-label="Account" class="menu menu-up enter" data-key="acct-menu">
-          <div class="menu-head">${s.me.role === "owner" ? `Signed in as ${esc(s.me.name)}, owner` : `Signed in as ${esc(s.me.name)}`}</div>
-          ${when(s.me.role === "owner", `<a role="menuitem" class="menuitem" href="/settings#people">${ICON.userPlus()}Invite a person</a>`)}
+          <div class="menu-head">${s.me.role === "owner" && s.workspaces === null ? `Signed in as ${esc(s.me.name)}, owner` : `Signed in as ${esc(s.me.name)}`}</div>
+          ${when(s.me.role === "owner" && s.workspaces === null, `<a role="menuitem" class="menuitem" href="/settings#people">${ICON.userPlus()}Invite a person</a>`)}
           <button type="button" role="menuitem" class="menuitem menuitem-danger" data-action="sign-out">${ICON.signOut()}Sign out</button>
         </div>`,
         )}

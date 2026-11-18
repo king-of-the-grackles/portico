@@ -204,6 +204,8 @@ export interface TaskFilter {
   agentId?: string;
   /** Only tasks with one of these agents: a project's agents. */
   anyOf?: string[];
+  /** Only tasks in conversations that run through this workspace. */
+  workspaceId?: string;
   /** Only tasks with this outcome, or one of these. */
   outcome?: TaskOutcome | readonly TaskOutcome[];
   /** Only tasks started before this time: the next page. */
@@ -287,6 +289,10 @@ export class Tasks {
     if (filter.agentId) {
       clauses.push("(from_id = $agentId OR to_id = $agentId)");
       bindings.agentId = filter.agentId;
+    }
+    if (filter.workspaceId) {
+      clauses.push("thread_id IN (SELECT id FROM threads WHERE workspace_id = $workspaceId)");
+      bindings.workspaceId = filter.workspaceId;
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     // Every message of a conversation is between the same two agents, so filtering messages keeps whole tasks.

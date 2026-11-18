@@ -1,7 +1,13 @@
 import type { Database } from "bun:sqlite";
 
 /** One step from a schema version to the next. It runs inside a transaction; db.ts sets the version. */
-export type Migration = (db: Database) => void;
+export type Migration = ((db: Database) => void) & {
+  /**
+   * The migration rebuilds a table other tables refer to. It runs with foreign keys off, so dropping the old table
+   * deletes nothing by cascade; db.ts still checks every foreign key before the migration commits.
+   */
+  rebuilds?: true;
+};
 
 const newId = "lower(hex(randomblob(16)))";
 
@@ -242,5 +248,181 @@ const outsideAccounts: Migration = (db) => {
   db.run("CREATE UNIQUE INDEX people_external_id ON people (external_id) WHERE external_id IS NOT NULL");
 };
 
+/**
+ * 108: workspaces, handles and email. A workspace is a list of people and agents: each person's personal one holds only
+ * that person's agents, and a shared one bridges to other people's. Two agents reach each other only while both are in
+ * one workspace (core/workspaces.ts). A thread records the workspace it runs through. A person's handle is the prefix
+ * other people's agents address that person's agents by; `handle_key` is the handle with look-alike characters folded,
+ * so two handles that read the same can't both exist, and a handle let go stays held back. An app's or connector's name
+ * is now unique among its owner's agents; where Portico has no workspaces, the code keeps names unique across everyone.
+ */
+const workspaces: Migration = (db) => {
+  db.run("ALTER TABLE people ADD COLUMN handle TEXT");
+  db.run("ALTER TABLE people ADD COLUMN handle_key TEXT");
+  db.run("ALTER TABLE people ADD COLUMN email TEXT");
+  db.run("CREATE UNIQUE INDEX people_handle ON people (handle) WHERE handle IS NOT NULL");
+  db.run("CREATE UNIQUE INDEX people_handle_key ON people (handle_key) WHERE handle_key IS NOT NULL");
+  db.run(`CREATE TABLE released_handles (
+    handle_key TEXT PRIMARY KEY,
+    handle TEXT NOT NULL,
+    person_id TEXT NOT NULL,
+    released_at TEXT NOT NULL
+  )`);
+  db.run(`CREATE TABLE workspaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('personal', 'shared')),
+    owner_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
+  )`);
+  db.run("CREATE UNIQUE INDEX workspaces_personal ON workspaces (owner_id) WHERE kind = 'personal'");
+  db.run(`CREATE TABLE workspace_people (
+    workspace_id TEXT NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
+    person_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, person_id)
+  )`);
+  db.run("CREATE INDEX workspace_people_person ON workspace_people (person_id)");
+  db.run(`CREATE TABLE workspace_agents (
+    workspace_id TEXT NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, agent_id)
+  )`);
+  db.run("CREATE INDEX workspace_agents_agent ON workspace_agents (agent_id)");
+  db.run("ALTER TABLE threads ADD COLUMN workspace_id TEXT REFERENCES workspaces (id) ON DELETE SET NULL");
+  db.run("DROP INDEX agents_app_name");
+  db.run("CREATE UNIQUE INDEX agents_app_name ON agents (owner_id, name) WHERE computer_id IS NULL");
+};
+
+/** Replaces a table with one of a new shape, keeping every row and index. Only inside a `rebuilds` migration. */
+function rebuild(db: Database, table: string, columns: string[], create: string, dropIndexes: string[] = []): void {
+  const indexes = (
+    db.query("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = $table AND sql IS NOT NULL").all({ table }) as {
+      name: string;
+      sql: string;
+    }[]
+  ).filter((index) => !dropIndexes.includes(index.name));
+  db.run(`CREATE TABLE ${table}_new (${create})`);
+  db.run(`INSERT INTO ${table}_new (${columns.join(", ")}) SELECT ${columns.join(", ")} FROM ${table}`);
+  db.run(`DROP TABLE ${table}`);
+  db.run(`ALTER TABLE ${table}_new RENAME TO ${table}`);
+  for (const index of indexes) db.run(index.sql);
+}
+
+/**
+ * 109: many accounts in one database. A person's name is what other people read, so two people can share one; the
+ * handle is what tells people apart. A computer's name is unique among its owner's computers. Where Portico has no
+ * workspaces, the code keeps both unique across everyone, as before.
+ */
+const manyAccounts: Migration = (db) => {
+  rebuild(
+    db,
+    "people",
+    ["id", "name", "role", "status", "password_hash", "invite_id", "created_at", "approved_at", "external_id", "handle", "handle_key", "email"],
+    `id TEXT PRIMARY KEY,
+    name TEXT NOT NULL COLLATE NOCASE,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+    status TEXT NOT NULL CHECK (status IN ('active', 'pending')),
+    password_hash TEXT NOT NULL,
+    invite_id TEXT,
+    created_at TEXT NOT NULL,
+    approved_at TEXT,
+    external_id TEXT,
+    handle TEXT,
+    handle_key TEXT,
+    email TEXT`,
+  );
+  db.run("CREATE INDEX people_name ON people (name)");
+  rebuild(
+    db,
+    "computers",
+    ["id", "owner_id", "name", "token_hash", "created_at", "last_seen_at"],
+    `id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT`,
+  );
+  db.run("CREATE UNIQUE INDEX computers_owner_name ON computers (owner_id, name)");
+  db.run("CREATE INDEX computers_name ON computers (name)");
+};
+manyAccounts.rebuilds = true;
+
+/**
+ * 110: sharing a workspace. A share is a link for one person: whoever first confirms with it claims it, and a share
+ * sent by email can be claimed only by that address. A share request is an agent asking to come in with a link: the
+ * agent shows its 4-digit code and a person confirms in the browser, so the link alone lets no agent in. A workspace
+ * ask is an agent asking, for its owner, to let someone in or take someone out; the owner confirms. `share_mails`
+ * records each email sent for a share, and `mail_blocks` the addresses that bounced, complained or opted out.
+ */
+const sharing: Migration = (db) => {
+  db.run(`CREATE TABLE shares (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
+    created_by TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
+    secret_hash TEXT NOT NULL UNIQUE,
+    secret_box TEXT NOT NULL,
+    email TEXT,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    claimed_by TEXT REFERENCES people (id) ON DELETE SET NULL,
+    claimed_at TEXT,
+    revoked_at TEXT
+  )`);
+  db.run("CREATE INDEX shares_workspace ON shares (workspace_id)");
+  db.run(`CREATE TABLE share_requests (
+    id TEXT PRIMARY KEY,
+    share_id TEXT NOT NULL REFERENCES shares (id) ON DELETE CASCADE,
+    agent_id TEXT REFERENCES agents (id) ON DELETE CASCADE,
+    name TEXT,
+    kind TEXT,
+    code TEXT NOT NULL,
+    poll_hash TEXT UNIQUE,
+    tries INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by TEXT,
+    issued_at TEXT
+  )`);
+  db.run("CREATE INDEX share_requests_share ON share_requests (share_id)");
+  db.run("CREATE INDEX share_requests_agent ON share_requests (agent_id)");
+  db.run(`CREATE TABLE workspace_asks (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
+    person_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
+    workspace_id TEXT NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('share', 'remove_person')),
+    detail TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
+    result TEXT,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    decided_at TEXT
+  )`);
+  db.run("CREATE INDEX workspace_asks_person ON workspace_asks (person_id, status)");
+  db.run(`CREATE TABLE share_mails (
+    id TEXT PRIMARY KEY,
+    share_id TEXT NOT NULL REFERENCES shares (id) ON DELETE CASCADE,
+    workspace_id TEXT NOT NULL,
+    sent_by TEXT NOT NULL,
+    email TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    sent_at TEXT NOT NULL,
+    UNIQUE (share_id, number)
+  )`);
+  db.run("CREATE INDEX share_mails_by ON share_mails (sent_by, sent_at)");
+  db.run("CREATE INDEX share_mails_workspace ON share_mails (workspace_id, sent_at)");
+  db.run(`CREATE TABLE mail_blocks (
+    email TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    at TEXT NOT NULL
+  )`);
+};
+
 /** Every change since the first schema (version 100), oldest first: the first is version 101. Never edit a shipped one. */
-export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks, wakes, releasedNames, messageFiles, outsideAccounts];
+export const MIGRATIONS: readonly Migration[] = [folderAgents, tasksAndActivity, agentTasks, wakes, releasedNames, messageFiles, outsideAccounts, workspaces, manyAccounts, sharing];

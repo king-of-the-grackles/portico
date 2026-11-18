@@ -18,13 +18,14 @@ Commands:
   join '<line>'     Join this computer to Portico with a join line from Add agent.
   leave             Take this computer off Portico and undo the join.
   workspace create <name> | import <name> <folder> | link <name> <person> |
-            remove <name> | list
+            remove <name> | list | unite <name>
                     Hosted Portico only (PORTICO_HOSTED_DOMAIN): make a workspace and print
                     the workspace's setup link, make one from a single Portico's data
                     folder (portico.db and signing.key), print a one-use link that moves a
                     person from a password to sign-in on the base domain, remove a
-                    workspace for good (asks for --confirm <name> first), or list the
-                    workspaces.
+                    workspace for good (asks for --confirm <name> first), list the
+                    workspaces, or move to one database for every account, made as a
+                    copy of one workspace (unite; asks for --confirm <name> first).
   help              Show this message.
 `;
 

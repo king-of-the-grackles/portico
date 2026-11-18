@@ -3,7 +3,7 @@ import type { Core } from "../core/core";
 import { isLocalUrl } from "../core/settings";
 import type { PorticoConfig } from "../core/types";
 import { SchemaMismatchError } from "../db";
-import { startHosted, startServer } from "../server";
+import { startHold, startHosted, startServer } from "../server";
 import type { CliIo } from "./io";
 
 export const SETUP_LINK_LINE = "Open this link in a browser to set up Portico. The link works once and expires in 1 hour.";
@@ -43,8 +43,11 @@ export function startupProblem(err: unknown, config: Pick<PorticoConfig, "port" 
 
 function serveHosted(hosted: HostedConfig, io: CliIo): number | "running" {
   try {
-    const running = startHosted(hosted);
-    io.out(`Hosted Portico at ${hosted.baseUrl}. Make a workspace with: portico workspace create <name>`);
+    // PORTICO_HOLD: answer the health check and nothing else, with every database closed.
+    const holding = /^(1|true|yes)$/i.test(io.env.PORTICO_HOLD?.trim() ?? "");
+    const running = holding ? startHold(hosted.port) : startHosted(hosted);
+    if (holding) io.out("Portico is holding: nothing is served and no database is open. Unset PORTICO_HOLD to serve again.");
+    else io.out(`Hosted Portico at ${hosted.baseUrl}.`);
     const shutdown = () => {
       running.stop();
       process.exit(0);

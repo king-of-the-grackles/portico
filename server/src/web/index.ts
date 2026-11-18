@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { type PersonEnv, loadPerson } from "../api/context";
 import type { Core } from "../core/core";
+import { accountPages } from "./account";
 import { assetRoutes } from "./assets";
 import { centralPages } from "./central";
 import { codexBridgeRoutes } from "./codex-bridge";
@@ -8,8 +9,10 @@ import { homePage } from "./home";
 import { invitePage } from "./invite";
 import { joinPage } from "./join-page";
 import { notSetUpPage } from "./layout";
+import { mailPages } from "./mail";
 import { settingsPage } from "./settings";
 import { setupPage } from "./setup";
+import { sharePages } from "./share";
 import { signInPage } from "./sign-in";
 
 /** Pages that answer before setup is done. */
@@ -27,15 +30,18 @@ export function webRoutes(core: Core): Hono<PersonEnv> {
     if (page && !core.settings.setupDone() && !OPEN_BEFORE_SETUP.has(c.req.path)) return notSetUpPage(c);
     await next();
   });
-  web.use("*", loadPerson(core.accounts));
+  web.use("*", loadPerson(core));
   // A hosted workspace signs people in on the base domain: no setup link and no password page.
-  if (core.central) web.route("/", centralPages(core, core.central));
+  if (core.accountSignIn) web.route("/", accountPages(core, core.accountSignIn));
+  else if (core.central) web.route("/", centralPages(core, core.central));
   else {
     web.route("/", setupPage(core));
     web.route("/", signInPage(core));
   }
-  web.route("/", invitePage(core));
+  if (!core.workspaces.enabled) web.route("/", invitePage(core));
   web.route("/", joinPage(core));
+  web.route("/", sharePages(core));
+  web.route("/", mailPages(core));
   web.route("/", settingsPage(core));
   web.route("/", homePage(core));
   return web;

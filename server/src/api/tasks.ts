@@ -15,9 +15,12 @@ import {
   type TaskView,
 } from "./views";
 
-/** The agents whose tasks and activity the person sees: everyone's for the owner (null), a member's own otherwise. */
+/**
+ * The agents whose tasks and activity the person sees: everyone's for the owner (null), a member's own otherwise. With
+ * workspaces, always the person's own: a conversation is read by the people whose agents are in it.
+ */
 export function visibleAgents(core: Core, me: Person): string[] | null {
-  return me.role === "owner" ? null : core.agents.ownedBy(me.id).map((a) => a.id);
+  return core.workspaces.seesEverything(me) ? null : core.agents.ownedBy(me.id).map((a) => a.id);
 }
 
 function sees(visible: string[] | null, task: Task): boolean {
@@ -94,6 +97,8 @@ export interface TaskQuery {
   outcome?: string | null;
   before?: string | null;
   limit?: number;
+  /** Only conversations that run through this workspace. */
+  workspace?: string | null;
 }
 
 /** A page of tasks for the person, filtered by agent, project and outcome, with every outcome's count. */
@@ -113,6 +118,7 @@ export function taskListData(core: Core, me: Person, query: TaskQuery): TaskList
     visible,
     agentId: query.agent || undefined,
     anyOf,
+    workspaceId: query.workspace || undefined,
     outcome: (query.outcome as TaskOutcome | null) || undefined,
     before: timeParam(query.before ?? undefined) ?? undefined,
     limit: query.limit !== undefined && Number.isFinite(query.limit) ? query.limit : 50,
@@ -141,6 +147,7 @@ export function taskRoutes(core: Core): Hono<PersonEnv> {
       taskListData(core, me, {
         agent: c.req.query("agent"),
         project: c.req.query("project"),
+        workspace: c.req.query("workspace"),
         outcome: c.req.query("outcome"),
         before: c.req.query("before"),
         limit,

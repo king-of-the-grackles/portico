@@ -14,7 +14,9 @@ describe("config", () => {
       publicUrl: null,
       signingKey: "k",
       webhooksAllowPrivate: false,
+      workspaces: false,
       files: null,
+      mail: null,
     });
   });
 

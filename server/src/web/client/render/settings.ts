@@ -68,7 +68,20 @@ function renderInviteForm(s: SettingsState): string {
   </form>`;
 }
 
+/** With workspaces: the people who share one with the signed-in person. Coming and going happens on each workspace's page. */
+function renderSharedPeople(s: SettingsState): string {
+  const people = s.people ?? [];
+  const row = (p: PersonRow) =>
+    `<li class="srow" data-key="p-${esc(p.id)}">${avatar(p)}<span class="row-text"><strong>${esc(p.name)}${when(p.isMe, " (signed in)")}</strong><span class="row-help">${p.handle ? `<code>${esc(p.handle)}</code> ` : ""}${agentsLine(p.agentCount)}</span></span></li>`;
+  return `<section id="people" aria-labelledby="people-h" class="ssection">
+    <div class="sec-head"><h2 id="people-h" class="h-settings">People</h2></div>
+    <p class="sec-help">Everyone who shares a workspace with ${esc(s.me.name)}. Sharing a workspace, leaving one and removing someone all happen on the workspace's own page.</p>
+    <ul class="rows card-list">${people.map(row).join("")}</ul>
+  </section>`;
+}
+
 export function renderPeople(s: SettingsState): string {
+  if (s.workspaces) return renderSharedPeople(s);
   const owner = s.me.role === "owner";
   const people = s.people ?? [];
   const sorted = [...people.filter((p) => p.role === "owner"), ...people.filter((p) => p.role !== "owner")];
@@ -139,6 +152,18 @@ export function renderAccount(s: SettingsState): string {
         <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="name-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "name", " disabled")}>Save</button></span>
       </form></li>`
     : `<li class="srow" data-key="acct-name"><span class="row-text"><strong>Name</strong><span class="row-help">${esc(s.me.name)}</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="name-open">Change name</button></span></li>`;
+  const handleRow = !s.workspaces
+    ? ""
+    : s.handleForm
+      ? `<li class="srow srow-stack" data-key="acct-handle"><form class="sform-inline" data-form="handle-save" novalidate>
+        <label for="acct-handle" class="lbl">Handle</label>
+        <input id="acct-handle" class="field field-narrow${when(s.handleForm.error, " is-invalid")}" value="${esc(s.handleForm.handle)}" data-input="handle-field" aria-describedby="acct-handle-help" aria-invalid="${Boolean(s.handleForm.error)}" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="20" data-autofocus>
+        <span id="acct-handle-help" class="help">3 to 20 lowercase letters, digits and hyphens. Other people's agents have to use the new handle from then on, and the old one stays held back from everyone else.</span>
+        ${when(s.handleForm.error, `<span role="alert" class="field-error">${esc(s.handleForm.error)}</span>`)}
+        <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="handle-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "handle", " disabled")}>Save handle</button></span>
+      </form></li>`
+      : `<li class="srow" data-key="acct-handle"><span class="row-text"><strong>Handle</strong><span class="row-help"><code>${esc(s.me.handle ?? "")}</code> Goes in front of an agent's name for other people's agents, as in <code>${esc(s.me.handle ?? "")}/muse</code>.</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="handle-open">Change handle</button></span></li>`;
+  const emailRow = s.me.email ? `<li class="srow" data-key="acct-email"><span class="row-text"><strong>Email</strong><span class="row-help">${esc(s.me.email)}. The address signed in with. A share link sent by email works only for this address.</span></span></li>` : "";
   const pw = s.passwordForm;
   const passwordRow = pw
     ? `<li class="srow srow-stack" data-key="acct-password"><form class="sform-inline" data-form="password-save" novalidate>
@@ -183,6 +208,8 @@ export function renderAccount(s: SettingsState): string {
     ${when(s.accountError, `<p role="alert" class="field-error mb12">${esc(s.accountError)}</p>`)}
     <ul class="rows card-list">
       ${nameRow}
+      ${handleRow}
+      ${emailRow}
       ${when(s.passwords, passwordRow)}
       ${passkeys}
       <li class="srow" data-key="acct-signout"><span class="row-text"><strong>Sign out</strong><span class="row-help">Ends the Portico session in this browser.</span></span><span class="actions"><button type="button" class="btn btn-text" data-action="sign-out">${ICON.signOut()}Sign out</button></span></li>
@@ -224,6 +251,7 @@ export function settingsState(data: {
   computers: ComputerView[] | null;
   passkeys: PasskeyView[] | null;
   passwords?: boolean;
+  workspaces?: boolean;
   now: number;
 }): SettingsState {
   return {
@@ -237,6 +265,8 @@ export function settingsState(data: {
     computers: data.computers,
     passkeys: data.passkeys,
     passwords: data.passwords ?? true,
+    workspaces: data.workspaces ?? false,
+    handleForm: null,
     acctOpen: false,
     add: null,
     reconnecting: false,

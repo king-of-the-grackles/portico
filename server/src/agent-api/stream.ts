@@ -20,6 +20,8 @@ export interface HelloEvent {
   name: string;
   /** The computer's name for a session, otherwise null. */
   computer: string | null;
+  /** This Portico has workspaces: the plugin then offers the workspace tools. Absent otherwise. */
+  workspaces?: true;
 }
 
 export interface StreamConnection {
@@ -222,7 +224,7 @@ export class AgentStreams {
 }
 
 export function helloFor(agents: Agents, agent: Agent): HelloEvent {
-  return { address: agents.address(agent), name: agents.display(agent), computer: agent.computer };
+  return { address: agents.address(agent), name: agents.display(agent), computer: agent.computer, ...(agents.hasWorkspaces ? { workspaces: true as const } : {}) };
 }
 
 /** Below the server's 60-second idle timeout, so quiet streams stay open through proxies. */

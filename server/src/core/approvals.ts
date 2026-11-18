@@ -113,6 +113,10 @@ export class Approvals {
       throw new PorticoError("not_allowed", "Only the person who manages the recipient can decide this message.");
     }
     if (held.status !== "held") throw new PorticoError("wrong_status", `The message is already ${held.status}.`);
+    // The two agents stopped sharing a workspace while the message waited: the message can be turned down, not let through.
+    if (choice !== "deny" && !this.agents.reaches(held.fromId, held.toId)) {
+      throw new PorticoError("wrong_status", "The sender no longer shares a workspace with this agent, so the message can only be turned down.");
+    }
     const at = this.now().toISOString();
     const decided = this.db.transaction(() => {
       const ids =

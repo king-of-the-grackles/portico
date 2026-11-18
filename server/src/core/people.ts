@@ -5,6 +5,7 @@ import { DAY_MS, LIMITS } from "./limits";
 import { namesOwnedBy, releaseNames } from "./released-names";
 import { hashSecret, LINK_SECRET, newLinkSecret, seal, unseal } from "./tokens";
 import type { Person, PersonStatus, Role } from "./types";
+import { slugify } from "./words";
 
 export type InviteStatus = "open" | "claimed" | "revoked" | "expired";
 
@@ -54,6 +55,8 @@ interface PersonRow {
   invite_id: string | null;
   created_at: string;
   approved_at: string | null;
+  handle: string | null;
+  email: string | null;
 }
 
 function toPerson(row: PersonRow): Person {
@@ -65,7 +68,53 @@ function toPerson(row: PersonRow): Person {
     inviteId: row.invite_id,
     createdAt: row.created_at,
     approvedAt: row.approved_at,
+    handle: row.handle,
+    email: row.email,
   };
+}
+
+export const HANDLE_MIN = 3;
+export const HANDLE_MAX = 20;
+const HANDLE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** Words a handle can't be: they read as Portico itself, a role, or a part of an address. */
+const RESERVED_HANDLES = [
+  "about", "account", "admin", "agent", "agents", "all", "anyone", "api", "app", "billing", "blog", "docs", "everyone",
+  "help", "home", "invite", "invites", "join", "mail", "me", "member", "members", "new", "none", "null", "owner",
+  "personal", "portico", "root", "security", "self", "settings", "share", "shared", "sign-in", "status", "support",
+  "system", "team", "undefined", "workspace", "workspaces", "www",
+];
+
+/**
+ * A handle with look-alikes folded together: hyphens dropped, 0 read as o, 1 and i as l, rn as m, vv as w. Two handles
+ * with one key read the same at a glance, so only one of them can exist.
+ */
+export function handleKey(handle: string): string {
+  return handle.replace(/-/g, "").replace(/0/g, "o").replace(/[1i]/g, "l").replace(/rn/g, "m").replace(/vv/g, "w");
+}
+
+const RESERVED_KEYS = new Set(RESERVED_HANDLES.map(handleKey));
+
+/** A handle as typed: lowercase letters, digits and single hyphens, 3 to 20 characters, and not a reserved word. */
+export function checkHandle(value: unknown): string {
+  const handle = typeof value === "string" ? value.trim() : "";
+  if (!HANDLE.test(handle) || handle.length < HANDLE_MIN || handle.length > HANDLE_MAX) {
+    throw new PorticoError(
+      "bad_request",
+      `A handle uses lowercase letters, digits and single hyphens, ${HANDLE_MIN} to ${HANDLE_MAX} characters.`,
+    );
+  }
+  if (RESERVED_KEYS.has(handleKey(handle))) throw new PorticoError("conflict", `The handle ${handle} is reserved.`);
+  return handle;
+}
+
+/** An email address as given: trimmed and lowercased. Portico stores what the sign-in service verified. */
+export function cleanEmail(value: unknown): string {
+  const email = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    throw new PorticoError("bad_request", "Enter an email address.");
+  }
+  return email;
 }
 
 export const MAX_PERSON_NAME = 60;
@@ -86,6 +135,7 @@ export interface PeopleDeps {
   changes: Changes;
   /** Seals open invites' secrets, so their links can be copied again. */
   signingKey: string;
+  sharedNames?: boolean;
   now?: () => Date;
   newId?: () => string;
 }
@@ -103,11 +153,14 @@ export class People {
   private readonly newId: () => string;
 
   private readonly signingKey: string;
+  /** With workspaces, two people can have one name: the handle tells people apart. */
+  private readonly sharedNames: boolean;
 
   constructor(deps: PeopleDeps) {
     this.db = deps.db;
     this.changes = deps.changes;
     this.signingKey = deps.signingKey;
+    this.sharedNames = deps.sharedNames ?? false;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
   }
@@ -123,7 +176,7 @@ export class People {
     externalId?: string | null;
   }): Person {
     const name = cleanPersonName(input.name);
-    if (this.byName(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
+    if (!this.sharedNames && this.byName(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
     if (input.role === "owner" && this.owner()) throw new PorticoError("conflict", "Portico already has an owner.");
     const externalId = input.externalId ?? null;
     if (externalId !== null && this.byExternalId(externalId)) {
@@ -138,13 +191,25 @@ export class People {
       inviteId: input.inviteId ?? null,
       createdAt: at,
       approvedAt: input.status === "active" ? at : null,
+      handle: null,
+      email: null,
     };
     this.db
       .query(
         `INSERT INTO people (id, name, role, status, password_hash, invite_id, created_at, approved_at, external_id)
          VALUES ($id, $name, $role, $status, $passwordHash, $inviteId, $createdAt, $approvedAt, $externalId)`,
       )
-      .run({ ...person, passwordHash: input.passwordHash, externalId });
+      .run({
+        id: person.id,
+        name: person.name,
+        role: person.role,
+        status: person.status,
+        inviteId: person.inviteId,
+        createdAt: person.createdAt,
+        approvedAt: person.approvedAt,
+        passwordHash: input.passwordHash,
+        externalId,
+      });
     this.changes.emit("people");
     return person;
   }
@@ -188,7 +253,7 @@ export class People {
   rename(id: string, raw: string): Person {
     const name = cleanPersonName(raw);
     const taken = this.byName(name);
-    if (taken && taken.id !== id) throw new PorticoError("conflict", `The name ${name} is already in use.`);
+    if (!this.sharedNames && taken && taken.id !== id) throw new PorticoError("conflict", `The name ${name} is already in use.`);
     this.db.query("UPDATE people SET name = $name WHERE id = $id").run({ id, name });
     this.changes.emit("people", "agents", "me");
     return this.require(id);
@@ -198,6 +263,85 @@ export class People {
   setExternalId(id: string, externalId: string): void {
     this.db.query("UPDATE people SET external_id = $externalId WHERE id = $id").run({ id, externalId });
     this.changes.emit("people");
+  }
+
+  // ---- handles ----
+
+  byHandle(handle: string): Person | null {
+    const row = this.db.query("SELECT * FROM people WHERE handle = $handle").get({ handle }) as PersonRow | null;
+    return row ? toPerson(row) : null;
+  }
+
+  /**
+   * Whether the person can take the handle: well formed, not reserved, and reading unlike every handle someone else has
+   * or let go. A handle let go stays held back for good, so an address that reached one person never reaches another.
+   */
+  handleFree(raw: unknown, personId: string | null = null): boolean {
+    try {
+      this.requireHandleFree(checkHandle(raw), personId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Sets the person's handle: the first, or a deliberate change. The old handle is held back, though the same person
+   * can take it up again.
+   */
+  setHandle(id: string, raw: unknown): Person {
+    const person = this.require(id);
+    const handle = checkHandle(raw);
+    if (handle === person.handle) return person;
+    this.requireHandleFree(handle, id);
+    const at = this.iso();
+    this.db.transaction(() => {
+      if (person.handle !== null) {
+        this.db
+          .query(
+            `INSERT INTO released_handles (handle_key, handle, person_id, released_at) VALUES ($key, $handle, $id, $at)
+             ON CONFLICT (handle_key) DO UPDATE SET handle = $handle, released_at = $at`,
+          )
+          .run({ key: handleKey(person.handle), handle: person.handle, id, at });
+      }
+      this.db.query("DELETE FROM released_handles WHERE handle_key = $key AND person_id = $id").run({ key: handleKey(handle), id });
+      this.db.query("UPDATE people SET handle = $handle, handle_key = $key WHERE id = $id").run({ id, handle, key: handleKey(handle) });
+    })();
+    this.changes.emit("people", "agents", "me");
+    return this.require(id);
+  }
+
+  /** A free handle near the seed (a name, or the part of an email before the @): `robert`, then `robert-2`, `robert-3`. */
+  suggestHandle(seed: string, personId: string | null = null): string {
+    let base = slugify(seed, "person").slice(0, HANDLE_MAX - 4).replace(/-+$/, "");
+    if (base.length < HANDLE_MIN) base = `${base}-person`;
+    if (this.handleFree(base, personId)) return base;
+    for (let n = 2; n < 1000; n++) {
+      if (this.handleFree(`${base}-${n}`, personId)) return `${base}-${n}`;
+    }
+    throw new PorticoError("conflict", "No free handle near that name. Type one.");
+  }
+
+  /** Stores the email the sign-in service verified for the person. */
+  setEmail(id: string, raw: unknown): Person {
+    this.db.query("UPDATE people SET email = $email WHERE id = $id").run({ id, email: cleanEmail(raw) });
+    this.changes.emit("people", "me");
+    return this.require(id);
+  }
+
+  clearEmail(id: string): Person {
+    this.db.query("UPDATE people SET email = NULL WHERE id = $id").run({ id });
+    this.changes.emit("people", "me");
+    return this.require(id);
+  }
+
+  private requireHandleFree(handle: string, personId: string | null): void {
+    const key = handleKey(handle);
+    const other = personId ?? "";
+    const taken =
+      this.db.query("SELECT 1 FROM people WHERE handle_key = $key AND id != $other").get({ key, other }) !== null ||
+      this.db.query("SELECT 1 FROM released_handles WHERE handle_key = $key AND person_id != $other").get({ key, other }) !== null;
+    if (taken) throw new PorticoError("conflict", `The handle ${handle} is taken, or reads too much like one that is.`);
   }
 
   setPasswordHash(id: string, passwordHash: string): void {

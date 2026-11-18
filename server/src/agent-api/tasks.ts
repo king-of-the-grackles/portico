@@ -68,7 +68,7 @@ export function agentTaskView(views: AgentViews, agent: Agent, t: Task): AgentTa
     id: t.id,
     subject: t.subject,
     direction: sent ? "sent" : "received",
-    with: views.nameOf(sent ? t.toId : t.fromId),
+    with: views.nameOf(sent ? t.toId : t.fromId, agent),
     outcome: t.outcome,
     reason: t.reason,
     started_at: t.startedAt,
@@ -154,7 +154,7 @@ export async function getAgentTask(
   for (const messageId of found.messageIds) {
     const m = deps.messages.get(messageId);
     if (!m) continue;
-    const { text, subject, thread_id: _thread, expires_at: _expires, attachments: _files, ...rest } = deps.views.message(m);
+    const { text, subject, thread_id: _thread, expires_at: _expires, attachments: _files, ...rest } = deps.views.message(m, agent);
     if (m.fromId !== agent.id && !letThrough(m)) {
       messages.push({ ...rest, done: m.final, withheld: true });
       continue;
@@ -162,7 +162,7 @@ export async function getAgentTask(
     const files = await withLinks(m.id);
     const attachments = files.length > 0 ? { attachments: files } : {};
     if (m.fromId === agent.id) messages.push({ ...rest, subject, done: m.final, text, ...attachments });
-    else messages.push({ ...rest, subject, done: m.final, framed_message: deps.views.delivery(m).framed_message, ...attachments });
+    else messages.push({ ...rest, subject, done: m.final, framed_message: deps.views.delivery(m, agent).framed_message, ...attachments });
   }
   return { task: agentTaskView(deps.views, agent, found.task), messages };
 }

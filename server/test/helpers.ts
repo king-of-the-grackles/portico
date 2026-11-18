@@ -36,6 +36,8 @@ export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfi
     publicUrl: PUBLIC_URL,
     signingKey: "a".repeat(64),
     webhooksAllowPrivate: false,
+    workspaces: false,
+    mail: null,
     files: null,
     ...overrides,
   };
@@ -93,6 +95,8 @@ export function makePortico(
     newNonce?: () => string;
     webhooks?: FakeWebhooks;
     fileStore?: FileStore;
+    /** Where share emails go: a fake's `post`. */
+    mailPost?: FakeWebhooks["post"];
   } = {},
 ): TestPortico {
   const clock = testClock();
@@ -108,6 +112,8 @@ export function makePortico(
     // A folder of its own per Portico, made only when a test writes a file.
     fileStore: opts.fileStore ?? new FolderStore(join(tmpdir(), `portico-test-files-${process.pid}-${++stores}`)),
     webhookPost: opts.webhooks?.post,
+    // Never the network: a test without a fake gets an email that didn't go out.
+    mailPost: opts.mailPost ?? (async () => ({ status: null, error: "no_mail_in_tests" })),
     schedule: opts.webhooks?.schedule,
   });
   if (opts.setup !== false) portico.settings.set("setup_done_at", T0.toISOString());

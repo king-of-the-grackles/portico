@@ -6,6 +6,7 @@ import { LOOP_LIMIT, LOOP_WINDOW_MS, loopGuardRetryAt } from "./guards";
 import type { InboxWaits } from "./inbox-waits";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
 import { letThrough } from "./tasks";
+import type { Workspaces } from "./workspaces";
 import type { Agent, Decision, DeliveryTier, Message, MessageStatus, Notice, Thread } from "./types";
 
 interface MessageRow {
@@ -38,6 +39,7 @@ interface ThreadRow {
   started_by: string;
   created_at: string;
   last_message_at: string;
+  workspace_id: string | null;
 }
 
 function toMessage(row: MessageRow): Message {
@@ -73,6 +75,7 @@ function toThread(row: ThreadRow): Thread {
     startedBy: row.started_by,
     createdAt: row.created_at,
     lastMessageAt: row.last_message_at,
+    workspaceId: row.workspace_id,
   };
 }
 
@@ -150,6 +153,8 @@ export interface MessageFiles {
 export interface MessagesDeps {
   db: Database;
   agents: Agents;
+  /** The reach rule: a message goes only between two agents in one workspace. */
+  workspaces: Workspaces;
   /** Whether the receiver always allows messages from the sender. */
   alwaysAllows: (agentId: string, senderId: string) => boolean;
   changes: Changes;
@@ -167,6 +172,7 @@ export interface MessagesDeps {
 export class Messages {
   private readonly db: Database;
   private readonly agents: Agents;
+  private readonly workspaces: Workspaces;
   private readonly alwaysAllows: (agentId: string, senderId: string) => boolean;
   private readonly changes: Changes;
   private readonly waits: InboxWaits;
@@ -181,6 +187,7 @@ export class Messages {
   constructor(deps: MessagesDeps) {
     this.db = deps.db;
     this.agents = deps.agents;
+    this.workspaces = deps.workspaces;
     this.alwaysAllows = deps.alwaysAllows;
     this.changes = deps.changes;
     this.waits = deps.waits;
@@ -197,6 +204,10 @@ export class Messages {
    * limit, the hourly limit and the loop guard. A reply with done: false says more is coming. A message with a key the
    * sender used before isn't sent again: the first one comes back. Attachments are file IDs: finished uploads of the
    * sender's own, or files the sender received.
+   *
+   * With workspaces, the two agents must be in one workspace now. A name (`to`) finds only agents the sender reaches;
+   * a reply (`reply_to`) to an agent the sender no longer reaches is refused, so a conversation between two agents that
+   * stopped sharing a workspace stays readable and takes nothing new. The thread records the workspace it runs through.
    */
   send(
     caller: Agent,
@@ -282,11 +293,20 @@ export class Messages {
       throw new PorticoError("bad_request", "done: false marks a reply as an update with more to come, so reply_to is required.");
     }
     if (receiver.id === caller.id) throw new PorticoError("bad_request", "An agent can't send a message to itself.");
+    if (!this.workspaces.reach(caller.id, receiver.id)) {
+      throw new PorticoError(
+        "not_allowed",
+        `${this.agents.nameFor(receiver, caller.ownerId)} no longer shares a workspace with this agent, so the ` +
+          "conversation is read-only. list_agents shows who can be reached now.",
+      );
+    }
     this.requireBudget(caller, receiver);
 
     const at = this.iso();
     const message = this.db.transaction(() => {
-      const thread = this.threadBetween(caller.id, receiver.id) ?? this.startThread(caller.id, receiver.id, at);
+      const before = this.threadBetween(caller.id, receiver.id);
+      const workspaceId = this.workspaces.stamp(caller.id, receiver.id, before?.workspaceId ?? null);
+      const thread = before ?? this.startThread(caller.id, receiver.id, at, workspaceId);
       const held =
         receiver.approvalRequired &&
         !this.alwaysAllows(receiver.id, caller.id) &&
@@ -316,7 +336,9 @@ export class Messages {
       };
       this.insert(m);
       if (fileIds.length > 0) this.files!.attach(id, fileIds);
-      this.db.query("UPDATE threads SET last_message_at = $at WHERE id = $id").run({ id: thread.id, at });
+      this.db
+        .query("UPDATE threads SET last_message_at = $at, workspace_id = $workspaceId WHERE id = $id")
+        .run({ id: thread.id, at, workspaceId });
       return m;
     })();
 
@@ -326,8 +348,8 @@ export class Messages {
     this.changes.emit(...(message.status === "held" ? (["threads", "approvals"] as const) : (["threads"] as const)));
     const note =
       delivery === "held"
-        ? `Held: ${this.agents.display(receiver)} requires approval for new conversations. Replies (reply_to) in a ` +
-          `conversation ${this.agents.display(receiver)} wrote in during the last ${LIMITS.replyWindowHours} hours aren't ` +
+        ? `Held: ${this.agents.nameFor(receiver, caller.ownerId)} requires approval for new conversations. Replies (reply_to) in a ` +
+          `conversation ${this.agents.nameFor(receiver, caller.ownerId)} wrote in during the last ${LIMITS.replyWindowHours} hours aren't ` +
           `held. A person decides within ${LIMITS.messageExpiryHours / 24} days; check_inbox reports whether the message ` +
           "was delivered, declined or expired."
         : null;
@@ -683,19 +705,19 @@ export class Messages {
       const retryMinute = new Date(Math.ceil(Date.parse(retryAt) / MINUTE_MS) * MINUTE_MS).toISOString();
       throw new PorticoError(
         "rate_limited",
-        `Loop guard: ${LOOP_LIMIT} messages between ${this.agents.display(caller)} and ${this.agents.display(receiver)} ` +
+        `Loop guard: ${LOOP_LIMIT} messages between ${this.agents.display(caller)} and ${this.agents.nameFor(receiver, caller.ownerId)} ` +
           `in 10 minutes. Try again after ${retryMinute.slice(0, 16).replace("T", " ")} UTC.`,
       );
     }
   }
 
-  private startThread(x: string, y: string, at: string): Thread {
+  private startThread(x: string, y: string, at: string, workspaceId: string | null): Thread {
     const [a, b] = x < y ? [x, y] : [y, x];
-    const thread: Thread = { id: this.newId(), aId: a, bId: b, startedBy: x, createdAt: at, lastMessageAt: at };
+    const thread: Thread = { id: this.newId(), aId: a, bId: b, startedBy: x, createdAt: at, lastMessageAt: at, workspaceId };
     this.db
       .query(
-        `INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at)
-         VALUES ($id, $aId, $bId, $startedBy, $createdAt, $lastMessageAt)`,
+        `INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at, workspace_id)
+         VALUES ($id, $aId, $bId, $startedBy, $createdAt, $lastMessageAt, $workspaceId)`,
       )
       .run({ ...thread });
     return thread;

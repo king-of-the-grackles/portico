@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { cleanPublicUrl } from "./core/settings";
-import type { BucketConfig, PorticoConfig } from "./core/types";
+import type { BucketConfig, MailConfig, PorticoConfig } from "./core/types";
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {
@@ -38,6 +38,7 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     }
   }
   const files = bucketConfig(env, problems);
+  const mail = mailConfig(env, problems, null);
   if (problems.length > 0) throw new ConfigError(problems);
   const dbPath = env.PORTICO_DB_PATH?.trim() || DEFAULT_DB_PATH;
   return {
@@ -48,8 +49,26 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     publicUrl,
     signingKey,
     webhooksAllowPrivate: env.PORTICO_WEBHOOKS_ALLOW_PRIVATE?.trim() === "1",
+    workspaces: false,
     files,
+    mail,
   };
+}
+
+/**
+ * Email through Resend, only when PORTICO_RESEND_API_KEY is set. PORTICO_MAIL_FROM names the sender, on a domain
+ * verified with Resend; hosted Portico defaults to invites@mail.<domain>. PORTICO_RESEND_WEBHOOK_SECRET is the signing
+ * secret of the Resend webhook that reports bounces and complaints to /api/mail/resend.
+ */
+function mailConfig(env: Env, problems: string[], defaultFrom: string | null): MailConfig | null {
+  const apiKey = env.PORTICO_RESEND_API_KEY?.trim();
+  if (!apiKey) return null;
+  const from = env.PORTICO_MAIL_FROM?.trim() || defaultFrom;
+  if (!from || !/^[^<>\r\n]*<?[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>?$/.test(from)) {
+    problems.push("PORTICO_MAIL_FROM must name the sender, such as Portico <invites@mail.portico.example>");
+    return null;
+  }
+  return { apiKey, from, webhookSecret: env.PORTICO_RESEND_WEBHOOK_SECRET?.trim() || null };
 }
 
 /**
@@ -90,6 +109,7 @@ export interface HostedConfig {
   pluginSource: string | null;
   webhooksAllowPrivate: boolean;
   files: BucketConfig | null;
+  mail: MailConfig | null;
   /** PORTICO_DESCOPE_PROJECT_ID: people sign in with Descope on the base domain. Null keeps each workspace's passwords. */
   descopeProjectId: string | null;
 }
@@ -105,12 +125,15 @@ export function hostedEnv(env: Env): HostedConfig | null {
   if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/.test(raw)) {
     throw new ConfigError([`PORTICO_HOSTED_DOMAIN "${raw}" must be a domain, such as portico.example, with no https:// and no path`]);
   }
-  const base = parseEnv({ ...env, PORTICO_PUBLIC_URL: undefined }, "");
+  const base = parseEnv({ ...env, PORTICO_PUBLIC_URL: undefined, PORTICO_RESEND_API_KEY: undefined }, "");
   const local = raw.split(":")[0] === "localhost";
   const descopeProjectId = env.PORTICO_DESCOPE_PROJECT_ID?.trim() || null;
   if (descopeProjectId !== null && !/^[A-Za-z0-9]{8,64}$/.test(descopeProjectId)) {
     throw new ConfigError(["PORTICO_DESCOPE_PROJECT_ID must be a Descope project ID: letters and digits only"]);
   }
+  const mailProblems: string[] = [];
+  const mail = mailConfig(env, mailProblems, `Portico <invites@mail.${raw.split(":")[0]}>`);
+  if (mailProblems.length > 0) throw new ConfigError(mailProblems);
   return {
     domain: raw,
     baseUrl: `${local ? "http" : "https"}://${raw}`,
@@ -119,6 +142,7 @@ export function hostedEnv(env: Env): HostedConfig | null {
     pluginSource: base.pluginSource,
     webhooksAllowPrivate: base.webhooksAllowPrivate,
     files: base.files,
+    mail,
     descopeProjectId,
   };
 }

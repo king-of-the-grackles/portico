@@ -16,7 +16,7 @@ export function threadRoutes(core: Core): Hono<PersonEnv> {
   route.get("/", (c) => {
     const me = currentPerson(c);
     const agentId = c.req.query("agent") || undefined;
-    const involving = me.role === "owner" ? undefined : agents.ownedBy(me.id).map((a) => a.id);
+    const involving = core.workspaces.seesEverything(me) ? undefined : agents.ownedBy(me.id).map((a) => a.id);
     const views = personViews(core, me);
     return c.json({ threads: messages.threads({ involving, agentId }).map(views.thread) });
   });
@@ -25,7 +25,7 @@ export function threadRoutes(core: Core): Hono<PersonEnv> {
     const me = currentPerson(c);
     const thread = messages.thread(c.req.param("id"));
     // A thread the person can't see answers the same as one that doesn't exist.
-    if (!thread || !canSeeThread(agents, me, thread)) throw new PorticoError("not_found", "No such thread.");
+    if (!thread || !canSeeThread(core, me, thread)) throw new PorticoError("not_found", "No such thread.");
     const limit = Number(c.req.query("limit"));
     return c.json(
       personViews(core, me).threadData(thread, {

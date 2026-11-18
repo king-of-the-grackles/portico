@@ -15,13 +15,16 @@ import { Files, type StoredFile } from "./core/files";
 import { fileSize } from "./core/framing";
 import { InboxWaits } from "./core/inbox-waits";
 import type { Core } from "./core/core";
+import { ShareMail } from "./core/mail";
 import { Messages } from "./core/messages";
 import { People } from "./core/people";
 import { Presence } from "./core/presence";
 import { Settings } from "./core/settings";
+import { Shares } from "./core/shares";
 import { Tasks } from "./core/tasks";
-import type { CentralSignIn, Message, Notice, PorticoConfig } from "./core/types";
+import type { AccountSignIn, CentralSignIn, Message, Notice, PorticoConfig } from "./core/types";
 import { WakeUrls } from "./core/wake-urls";
+import { Workspaces } from "./core/workspaces";
 import { safePost, type WebhookPost } from "./core/webhooks";
 import { Desk } from "./desk";
 import { errorName, log } from "./log";
@@ -38,10 +41,14 @@ export interface PorticoOptions {
   onNotice?: (notice: Notice) => void;
   /** Where wake URLs and event callbacks are posted; tests pass a fake. */
   webhookPost?: WebhookPost;
+  /** Where share emails are posted; tests pass a fake. */
+  mailPost?: WebhookPost;
   /** Where files' bytes live; by default the configured bucket, or the data folder. */
   fileStore?: FileStore;
   /** Hosted Portico: people sign in on the base domain, and this Portico takes no passwords. */
   central?: CentralSignIn;
+  /** Hosted Portico with one database: people sign in with an outside account at this Portico's own address. */
+  accountSignIn?: AccountSignIn;
   /** When webhook retries run; tests run them by hand. */
   schedule?: (fn: () => void, ms: number) => void;
 }
@@ -81,14 +88,16 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
 
   // Its own IDs: activity rows never shift the IDs tests expect for everything else.
   const activity = new Activity({ db, changes, now });
-  const people = new People({ db, changes, signingKey: config.signingKey, now, newId });
+  const people = new People({ db, changes, signingKey: config.signingKey, sharedNames: config.workspaces, now, newId });
   const accounts = new Accounts({ db, people, now, newId });
-  const computers = new Computers({ db, changes, activity, now, newId, log: logInfo });
+  const workspaces = new Workspaces({ db, enabled: config.workspaces, changes, now, newId, log: logInfo });
+  const computers = new Computers({ db, changes, activity, namesPerOwner: config.workspaces, now, newId, log: logInfo });
   const agents: Agents = new Agents({
     db,
     computers,
     presence,
     changes,
+    workspaces,
     activity,
     now,
     newId,
@@ -137,7 +146,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     const sender = agents.get(m.fromId);
     if (!receiver || !sender) return;
     const waiting = messages.unreadCount(receiver.id);
-    const info = { agentName: agents.display(receiver), messageId: m.id, from: agents.display(sender), waiting };
+    const info = { agentName: agents.display(receiver), messageId: m.id, from: agents.nameFor(sender, receiver.ownerId), waiting };
     wakeUrls.kick(receiver.id, { ...info, lastCheckIn: presence.lastCheckIn(receiver.id) });
     events.deliver(receiver.id, info);
   };
@@ -156,7 +165,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         desk.open({
           messageId: m.id,
           ownerId: receiver.ownerId,
-          from: agents.display(sender),
+          from: agents.nameFor(sender, receiver.ownerId),
           to: agents.display(receiver),
           subject: m.subject,
           text: m.text + attachedLine(files.of(m.id)),
@@ -192,6 +201,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     store: opts.fileStore ?? fileStoreFor(config),
     agents,
     message: (id) => messages.get(id),
+    seesEverything: (person) => workspaces.seesEverything(person),
     publicUrl: () => settings.publicUrl(),
     signingKey: config.signingKey,
     now,
@@ -201,6 +211,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const messages: Messages = new Messages({
     db,
     agents,
+    workspaces,
     alwaysAllows: (agentId, senderId) => allowList.has(agentId, senderId),
     changes,
     waits: inboxWaits,
@@ -211,6 +222,19 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     log: logInfo,
   });
   const tasks = new Tasks({ db, now });
+  const mail = new ShareMail({
+    db,
+    config: config.mail,
+    signingKey: config.signingKey,
+    publicUrl: () => settings.publicUrl(),
+    post: opts.mailPost ?? safePost({ timeoutMs: 10_000 }),
+    now,
+    newId,
+    log: logInfo,
+  });
+  // What an agent asks about a workspace is answered only in a signed-in browser, never in a pop-up: a pop-up's answer
+  // comes from the person's computer, which is where the asking agent runs.
+  const shares = new Shares({ db, workspaces, agents, people, changes, signingKey: config.signingKey, now, newId, log: logInfo });
   const approvals = new Approvals({ db, agents, messages, people, allowList, changes, activity, now, notify, log: logInfo });
 
   const core: Core = {
@@ -220,6 +244,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     changes,
     people,
     accounts,
+    workspaces,
+    shares,
+    mail,
     computers,
     agents,
     messages,
@@ -235,6 +262,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     wakeUrls,
     events,
     central: opts.central ?? null,
+    accountSignIn: opts.accountSignIn ?? null,
     now,
     newId,
   };
@@ -275,6 +303,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       sweep("computers_minute", () => computers.sweepMinute());
       sweep("oauth_clients", () => computers.sweepUnusedClients());
       sweep("sign_in_limits", () => accounts.sweepLimiters());
+      sweep("share_requests", () => shares.sweepMinute());
     },
     sweepDaily() {
       sweep("history", () => messages.prune());
@@ -283,6 +312,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       sweep("web_sessions", () => accounts.sweep());
       sweep("people", () => people.sweep());
       sweep("computers", () => computers.sweep());
+      sweep("shares", () => shares.sweep());
+      sweep("share_mails", () => mail.sweep());
     },
   };
 }

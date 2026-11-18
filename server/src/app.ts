@@ -11,6 +11,7 @@ import { computerApi } from "./computer-api";
 import { fileRoutes } from "./file-api";
 import type { Core } from "./core/core";
 import { oauthRoutes } from "./oauth";
+import { shareRequestApi } from "./share-api";
 import { signInRequestApi } from "./sign-in-api";
 import { webRoutes } from "./web";
 import { narrowPage } from "./web/layout";
@@ -25,8 +26,9 @@ import { MAX_BODY_BYTES } from "./core/limits";
 export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono {
   const app = new Hono();
   const resolver = makeResolver(core.agents, core.computers, () => core.settings.publicUrl());
-  const views = agentViews(core.agents, core.people, core.files, () => core.settings.publicUrl());
+  const views = agentViews(core.agents, core.people, core.files, core.workspaces, () => core.settings.publicUrl());
   const { agents, messages, files } = core;
+  const toolDeps = { agents, people: core.people, workspaces: core.workspaces, shares: core.shares, publicUrl: () => core.settings.publicUrl() };
 
   // The server's own backstop rises to the file limit when uploads come through Portico. Everything but the upload
   // route keeps the backstop there was before.
@@ -42,12 +44,21 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
   app.route("/api/agent/approvals", popupAnswerRoutes({ approvals: core.approvals, desk: core.desk, views, resolver }));
   app.route(
     "/api/agent",
-    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, views, resolver, changes: core.changes, now: core.now }),
+    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, views, resolver, changes: core.changes, now: core.now, workspaceTools: toolDeps }),
   );
   app.route("/files", fileRoutes(core));
   app.route("/api/computer", computerApi(core));
   app.route("/api/sign-in-requests", signInRequestApi(core));
-  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, views, resolver }));
+  if (core.workspaces.enabled) app.route("/api/share-requests", shareRequestApi(core));
+  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, views, resolver, workspaceTools: toolDeps }));
+  // Resend reports bounces and complaints here. The signature is the only credential; the body is read as sent.
+  app.post("/api/mail/resend", async (c) => {
+    const ok = core.mail.webhook(
+      { id: c.req.header("svix-id"), timestamp: c.req.header("svix-timestamp"), signature: c.req.header("svix-signature") },
+      await c.req.text(),
+    );
+    return ok ? c.json({ ok: true }) : c.json({ error: "unauthorized", message: "The signature doesn't check out." }, 401);
+  });
   app.route("/", oauthRoutes(core));
   app.route("/api", personApi(core, opts));
   app.route("/", webRoutes(core));

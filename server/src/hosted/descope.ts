@@ -1,9 +1,17 @@
 import { PorticoError } from "../core/errors";
+import type { Account } from "../core/types";
 
 /** Says whose account a sign-in token belongs to. Hosted Portico uses Descope; tests pass their own. */
 export interface AccountCheck {
   /** The account's ID, or `unauthorized` for a token that doesn't check out. */
   accountFor(token: unknown): Promise<string>;
+  /** The account with what else the token says about it. Optional: a check without it names the account only. */
+  account?(token: unknown): Promise<Account>;
+}
+
+/** The whole account from any check: one that names only the ID has no email or name to give. */
+export async function accountFrom(check: AccountCheck, token: unknown): Promise<Account> {
+  return check.account ? check.account(token) : { id: await check.accountFor(token), email: null, name: null };
 }
 
 export interface DescopeOptions {
@@ -65,6 +73,14 @@ export class Descope implements AccountCheck {
   }
 
   async accountFor(token: unknown): Promise<string> {
+    return (await this.account(token)).id;
+  }
+
+  /**
+   * The account, with the email address and name when the project's token template adds them. An email address counts
+   * only when Descope says the address was verified.
+   */
+  async account(token: unknown): Promise<Account> {
     if (typeof token !== "string" || token.length > MAX_TOKEN_CHARS) throw refused();
     const parts = token.split(".");
     if (parts.length !== 3) throw refused();
@@ -90,7 +106,11 @@ export class Descope implements AccountCheck {
     // "DS" marks a session token. A refresh token ("DSR") lives for weeks and is never sent to Portico.
     if (drn !== "DS") throw refused();
     if (typeof sub !== "string" || sub === "" || sub.length > MAX_ACCOUNT_CHARS) throw refused();
-    return sub;
+    const text = (value: unknown) => (typeof value === "string" && value.trim() !== "" && value.length <= 320 ? value.trim() : null);
+    // A token template writes the claim as true or as the text "true", under either name.
+    const yes = (value: unknown) => value === true || value === "true";
+    const verified = yes(claims.email_verified) || yes(claims.verifiedEmail);
+    return { id: sub, email: verified ? text(claims.email) : null, name: text(claims.name) };
   }
 
   /**

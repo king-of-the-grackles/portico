@@ -192,7 +192,10 @@ export class Hosted {
       publicUrl: this.url(workspace),
       signingKey: ensureSigningKey(dataDir),
       webhooksAllowPrivate: this.config.webhooksAllowPrivate,
+      workspaces: false,
       files: this.config.files,
+      // A workspace of its own shares nothing by link, so nothing is emailed.
+      mail: null,
     };
   }
 

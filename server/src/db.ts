@@ -264,12 +264,19 @@ export function prepare(
   const brokenBefore = (db.query("PRAGMA foreign_key_check").all() as unknown[]).length;
   for (let next = version + 1; next <= latest; next++) {
     const migration = migrations[next - BASE_VERSION - 1]!;
-    db.transaction(() => {
-      migration(db);
-      const broken = (db.query("PRAGMA foreign_key_check").all() as unknown[]).length;
-      if (broken > brokenBefore) throw new Error(`migration to version ${next} broke ${broken - brokenBefore} foreign keys`);
-      db.run(`PRAGMA user_version = ${next}`);
-    })();
+    // The pragma does nothing inside a transaction, so it is set around the migration's own.
+    const keys = (db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys;
+    if (migration.rebuilds) db.run("PRAGMA foreign_keys = OFF");
+    try {
+      db.transaction(() => {
+        migration(db);
+        const broken = (db.query("PRAGMA foreign_key_check").all() as unknown[]).length;
+        if (broken > brokenBefore) throw new Error(`migration to version ${next} broke ${broken - brokenBefore} foreign keys`);
+        db.run(`PRAGMA user_version = ${next}`);
+      })();
+    } finally {
+      if (migration.rebuilds) db.run(`PRAGMA foreign_keys = ${keys ? "ON" : "OFF"}`);
+    }
     opts.log?.("db_migrated", { version: next });
   }
 }

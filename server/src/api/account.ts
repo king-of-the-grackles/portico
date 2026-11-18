@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import { setCookie } from "hono/cookie";
-import { SESSION_COOKIE } from "../core/accounts";
 import type { Core } from "../core/core";
-import { type PersonEnv, currentPerson, sessionCookieOptions } from "./context";
+import { type PersonEnv, currentPerson, sessionCookie, sessionCookieName } from "./context";
 import { jsonObject } from "./session";
 import { personViews } from "./views";
 
@@ -16,7 +15,15 @@ export function accountRoutes(core: Core): Hono<PersonEnv> {
   route.patch("/", async (c) => {
     const me = currentPerson(c);
     const body = await jsonObject(c);
-    const person = core.people.rename(me.id, body.name as string);
+    // The name, the handle (with workspaces), or both. A new handle holds the old one back from everyone else.
+    const person = core.db.transaction(() => {
+      let changed = body.name === undefined ? me : core.people.rename(me.id, body.name as string);
+      if (body.handle !== undefined && core.workspaces.enabled) {
+        changed = core.people.setHandle(me.id, typeof body.handle === "string" ? body.handle.trim().toLowerCase() : body.handle);
+        core.changes.emit("agents", "people", "me");
+      }
+      return changed;
+    })();
     return c.json({ person: personViews(core, person).person(person) });
   });
 
@@ -24,7 +31,7 @@ export function accountRoutes(core: Core): Hono<PersonEnv> {
     const me = currentPerson(c);
     const body = await jsonObject(c);
     const { token, expiresAt } = await core.accounts.changePassword(me.id, { current: body.current, next: body.next });
-    setCookie(c, SESSION_COOKIE, token, sessionCookieOptions(core.settings.publicUrl(), expiresAt));
+    setCookie(c, sessionCookieName(core), token, sessionCookie(core, expiresAt));
     core.changes.emit("me");
     return c.body(null, 204);
   });
