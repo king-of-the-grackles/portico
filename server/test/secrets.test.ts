@@ -621,6 +621,37 @@ describe("what a start replaces doesn't stay readable in the files", () => {
     expect(found(dir, old)).toEqual([]);
   });
 
+  test("a database already encrypted before rewriting existed, with a plain remnant in free space, is clean after one start", async () => {
+    // A start that encrypts everything, as that earlier Portico's did.
+    const { dir, old } = await oldFolder();
+    shut((await restart(dir)).p);
+    // What that earlier Portico left: no mark that the file was ever rewritten, and the old key's bytes in free pages.
+    const raw = new Database(join(dir, "portico.db"), { strict: true });
+    raw.run("PRAGMA secure_delete = OFF");
+    raw.run("DELETE FROM settings WHERE key IN ('scrubbed_at', 'scrub_pending')");
+    leaveBehind(raw, old.wakeKey);
+    raw.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    raw.close();
+    expect(found(dir, old)).toEqual(["wakeKey"]);
+
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    const { p, hooks, muse } = await restart(dir);
+    // No pass had a row to change: the missing mark alone brought the rewrite.
+    expect(lines.some((line) => line.includes("stored_secrets_checked") || line.includes("stored_link_secrets_checked"))).toBe(false);
+    expect(lines.some((line) => line.includes("database_scrubbed") && line.includes("first_start_with_scrubbing"))).toBe(true);
+    expect(found(dir, old)).toEqual([]);
+    send(p, muse, "grok");
+    await flush();
+    expect(hooks.sent.find((req) => req.url === HOOK)!.headers.authorization).toBe(`Bearer ${WAKE_KEY}`);
+    shut(p);
+    expect(found(dir, old)).toEqual([]);
+    // Once is enough: the mark is there now.
+    lines.length = 0;
+    shut((await restart(dir)).p);
+    expect(lines.some((line) => line.includes("database_scrubbed"))).toBe(false);
+  });
+
   test("a rewrite that didn't happen is tried again at the next start", async () => {
     const { dir, old } = await oldFolder();
     // The passes ran and the server stopped before the rewrite: the note they left is still there.
