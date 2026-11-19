@@ -15,6 +15,9 @@ import {
   addAppAgent,
   answerConsent,
   askToJoin,
+  finishJoin,
+  joinCodeOn,
+  submitJoinCode,
   pollJoin,
   addComputer,
   addMember,
@@ -128,8 +131,7 @@ describe("owner recovery", () => {
   }
 
   const askAgent = (p: P, name: string) => askToJoin(p, { kind: "agent", name });
-  const allow = async (p: P, cookie: string, asked: { id: string; code: string }) =>
-    expect((await answerConsent(p, cookie, asked.id, { decision: "approve", code: asked.code })).status).toBe(200);
+  const allow = async (p: P, cookie: string, asked: { id: string }) => expect((await answerConsent(p, cookie, asked.id, { decision: "approve" })).status).toBe(200);
   const poll = (p: P, asked: { id: string; poll_secret: string }) => pollJoin(p, asked);
 
   /** A connector's consent, given with the cookie: a new connector agent and a code for it, not yet exchanged. */
@@ -177,16 +179,16 @@ describe("owner recovery", () => {
     const maya = await addMember(p);
     const stolen = signIn(p, chris);
     const computerAsked = await askToJoin(p, { kind: "computer", name: "chris-macbook" });
-    await allow(p, stolen, computerAsked);
-    const joined = (await poll(p, computerAsked)) as { token: string };
-    // A computer the stolen session allowed, whose token nobody fetched yet.
+    const joined = (await finishJoin(p, stolen, computerAsked)) as { token: string };
+    // A computer the stolen session allowed, whose code nobody handed in yet: the thief read the code on the page.
     const unfetched = await askToJoin(p, { kind: "computer", name: "second" });
     await allow(p, stolen, unfetched);
+    const unfetchedCode = (await joinCodeOn(p, stolen, unfetched.id))!;
     const issued = await askAgent(p, "helper");
-    await allow(p, stolen, issued);
-    const appToken = (await poll(p, issued)).token as string;
+    const appToken = (await finishJoin(p, stolen, issued)).token as string;
     const approved = await askAgent(p, "helper-two");
     await allow(p, stolen, approved);
+    const approvedCode = (await joinCodeOn(p, stolen, approved.id))!;
     // What an agent of the owner's asked, still waiting on the consent page.
     const shared = p.workspaces.create(chris.id, "Launch");
     const waiting = p.consents.ask(p.agents.byAddress("helper")!, "share", shared.id);
@@ -214,9 +216,13 @@ describe("owner recovery", () => {
       error: "invalid_grant",
     });
     expect(await json(exchange(unexchanged))).toMatchObject({ error: "invalid_grant" });
-    // A join allowed before the recovery never hands over its token; what the owner's agents asked stops waiting.
-    expect(await poll(p, unfetched)).toEqual({ status: "approved", computer: { id: expect.any(String), name: "second" } });
-    expect(await poll(p, approved)).toEqual({ status: "approved", agent: { name: "helper-two" } });
+    // A join allowed before the recovery never joins, even with the code the thief read; what the owner's agents asked stops waiting.
+    expect((await submitJoinCode(p, unfetched, unfetchedCode)).status).toBe(409);
+    expect((await submitJoinCode(p, approved, approvedCode)).status).toBe(409);
+    expect(await poll(p, unfetched)).toEqual({ status: "expired" });
+    expect(await poll(p, approved)).toEqual({ status: "expired" });
+    expect(p.computers.list(chris.id).map((c) => c.name)).toEqual(["chris-macbook"]);
+    expect(p.agents.ownedBy(chris.id).some((a) => a.name === "helper-two")).toBe(false);
     expect(p.consents.get(waiting.id)?.status).toBe("expired");
     expect(p.consents.waitingFor(chris.id)).toEqual([]);
     // The member's credentials still work.

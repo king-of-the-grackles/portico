@@ -56,6 +56,8 @@ export function recordWords(entry: ActivityEntry, names: RecordNames): string | 
         ? `A message from ${other} to ${agent} was held for the sender's own person.`
         : d.for === "first_contact"
           ? `A first message from ${other} to ${agent} was held for a decision.`
+          : d.for === "new_agent"
+            ? `The first message from ${other}, newly joined, to ${agent} was held for a decision.`
           : `A message from ${other} to ${agent} was held for a decision.`;
     case "decision":
       return `${by} ${d.decision === "deny" ? "turned down" : d.decision === "always_allow" ? "allowed, for good," : "allowed"} a held message from ${other} to ${agent}.`;

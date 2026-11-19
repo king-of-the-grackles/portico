@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync,
 import { join } from "node:path";
 import { folderId, readComputerFile, writeComputerFile } from "../src/computer";
 import { CommandError } from "../src/computer-api";
-import { defaultComputerName, joinComputer, type JoinDeps, JoinWaiting, parseServerAddress, pendingJoinPath } from "../src/join";
+import { CODE_QUESTION, defaultComputerName, joinComputer, type JoinDeps, JoinWaiting, parseServerAddress, pendingJoinPath, WrongCode } from "../src/join";
 import { contractPortico, fakePortico, tempDir } from "./helpers";
 
 const servers: { stop: () => void }[] = [];
@@ -11,20 +11,29 @@ afterEach(() => {
   for (const server of servers.splice(0)) server.stop();
 });
 
+/** The Portico the test's person looks at: the code on its page is what that person types at the prompt. */
+let current: ReturnType<typeof contractPortico> | null = null;
+
 function portico(person: Parameters<typeof contractPortico>[0] = "allow") {
   const server = contractPortico(person);
   servers.push(server);
+  current = server;
   return server;
 }
 
 const configPath = () => join(tempDir(), "computer.json");
 const hostname = () => "MacBook-Pro.local";
 
-/** What a join needs from outside, with the printed lines kept and no real waiting between polls. */
+/**
+ * What a join needs from outside, with the printed lines kept and no real waiting between polls. As in a terminal: the
+ * person types the code the page shows. `noPrompt` is an agent's shell, where nothing can be typed.
+ */
 function deps(path: string, over: Partial<JoinDeps> = {}): JoinDeps & { lines: string[] } {
   const lines: string[] = [];
-  return { configPath: path, hostname, out: (line) => lines.push(line), pollMs: 1, lines, ...over };
+  const server = current;
+  return { configPath: path, hostname, out: (line) => lines.push(line), pollMs: 1, lines, readCode: async () => server?.typeCode() ?? null, ...over };
 }
+const noPrompt = { readCode: undefined };
 
 async function commandError(promise: Promise<unknown>): Promise<CommandError> {
   const err = await promise.then(
@@ -61,26 +70,29 @@ describe("parseServerAddress", () => {
 });
 
 describe("joinComputer", () => {
-  test("asks with the hostname-based name, prints the link and the code, polls until Allow, then writes computer.json with mode 600", async () => {
+  test("asks with the hostname-based name, prints the link, takes the code at the prompt, then writes computer.json with mode 600", async () => {
     const server = portico();
     const path = configPath();
-    const d = deps(path);
+    const asked: string[] = [];
+    const d = deps(path, { readCode: async (question) => (asked.push(question), server.typeCode()) });
     const joined = await joinComputer({ address: server.url, client: "claude-code" }, d);
     expect(joined).toEqual({ url: server.url, computer: "macbook-pro", path, unsynced: [], already: false });
     expect(server.requests[0]).toEqual({ method: "POST", path: "/api/join", token: null, body: { kind: "computer", name: "macbook-pro", client: "claude-code" } });
-    expect(server.requests[1]).toMatchObject({ method: "GET", path: "/api/join/r1", token: expect.stringMatching(/^ps_/) });
-    // The lines a person acts on: the page, the code, and when the code runs out. Nothing else is printed here.
+    // The code goes to Portico with the poll secret, and nowhere else.
+    expect(server.requests[1]).toEqual({ method: "POST", path: "/api/join/r1/code", token: expect.stringMatching(/^ps_/), body: { code: "4821" } });
+    expect(asked).toEqual([CODE_QUESTION]);
+    // The lines a person acts on: the page, what to do there, and when the request runs out. Never a code: Portico sends none.
     expect(d.lines).toEqual([
       "A person allows this computer on one Portico page:",
-      `  1. Open ${server.url}/c/r1 in a browser and sign in.`,
-      "  2. Type the code 4821 there and press Allow.",
-      expect.stringMatching(/^The code runs out at \d{4}-\d\d-\d\dT[\d:.]+Z\. Type the code only on that page\.$/),
+      `  1. Open ${server.url}/c/r1 in a browser, sign in and press Allow.`,
+      "  2. The page then shows a 4-digit code. Type that code here, and nowhere else.",
+      expect.stringMatching(/^The request runs out at \d{4}-\d\d-\d\dT[\d:.]+Z\.$/),
     ]);
     expect(readComputerFile(path)).toEqual({ url: server.url, computer: "macbook-pro", token: expect.stringMatching(/^pc_/), off: [] });
     expect(statSync(path).mode & 0o777).toBe(0o600);
     // The poll secret is kept only while the join waits.
     expect(existsSync(pendingJoinPath(path))).toBe(false);
-    expect(d.lines.join("\n")).not.toMatch(/ps_|pc_/);
+    expect(d.lines.join("\n")).not.toMatch(/ps_|pc_|4821/);
   });
 
   test("the name Portico answers with is the one written", async () => {
@@ -90,57 +102,111 @@ describe("joinComputer", () => {
     expect([first.computer, second.computer]).toEqual(["studio", "studio-2"]);
   });
 
-  test("the wait can end before the person answers: the request is kept, and the next run picks the same link and code up", async () => {
+  test("a wrong code at the prompt says so and asks again; too many close the request", async () => {
+    const server = portico();
+    const path = configPath();
+    const typed = ["0000", "48 21"];
+    const d = deps(path, { readCode: async () => typed.shift() ?? null });
+    expect((await joinComputer({ address: server.url }, d)).computer).toBe("macbook-pro");
+    expect(d.lines[4]).toBe("That code doesn't match the one Portico's page shows. 4 tries are left.");
+    // Something that isn't 4 digits never leaves the computer.
+    const other = configPath();
+    const odd = ["abcd", "123", ""];
+    const waiting = await joinComputer({ address: server.url }, deps(other, { readCode: async () => odd.shift() ?? null })).catch((err: unknown) => err);
+    expect(waiting).toBeInstanceOf(JoinWaiting);
+    expect(server.requests.filter((r) => r.path === "/api/join/r2/code")).toEqual([]);
+    // Five wrong codes: the request is closed, and the waiting join is forgotten.
+    const guesses = deps(other, { readCode: async () => "0000" });
+    const err = await commandError(joinComputer({ address: server.url }, guesses));
+    expect(err).not.toBeInstanceOf(WrongCode);
+    expect(err.message).toBe("The join wasn't allowed on Portico, or too many wrong codes closed the request. Nothing was written. Run the join again for a fresh link.");
+    expect(server.requests.filter((r) => r.path === "/api/join/r2/code")).toHaveLength(5);
+    expect(existsSync(pendingJoinPath(other))).toBe(false);
+    expect(existsSync(other)).toBe(false);
+  });
+
+  test("with no prompt, the first call prints the link and waits for Allow; a second call hands the code in", async () => {
     const server = portico("wait");
     const path = configPath();
-    const first = deps(path);
+    const first = deps(path, noPrompt);
     const waiting = await joinComputer({ address: server.url, waitSeconds: 0 }, first).then(
       () => null,
       (err: unknown) => err,
     );
     expect(waiting).toBeInstanceOf(JoinWaiting);
+    expect((waiting as JoinWaiting).allowed).toBe(false);
     expect(existsSync(path)).toBe(false);
     const pending = pendingJoinPath(path);
     expect(statSync(pending).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(pending, "utf8"))).toMatchObject({ url: server.url, id: "r1", code: "4821", link: `${server.url}/c/r1` });
+    // What waits on disk: the request and its poll secret. No code: only the person has one.
+    expect(JSON.parse(readFileSync(pending, "utf8"))).toEqual({ url: server.url, id: "r1", pollSecret: expect.stringMatching(/^ps_/), link: `${server.url}/c/r1`, expiresAt: expect.any(String) });
+    // A code before anyone pressed Allow: told so, and the join keeps waiting.
+    const early = await commandError(joinComputer({ code: "4821" }, deps(path, noPrompt)));
+    expect(early.message).toBe(`Nobody has pressed Allow yet. Open ${server.url}/c/r1 in a browser, sign in and press Allow: the page then shows the code.`);
+    expect(existsSync(pending)).toBe(true);
 
+    // The person presses Allow: the same command sees that, prints the same link, and says how the code comes in.
     server.state.person = "allow";
-    const second = deps(path);
-    const joined = await joinComputer({ address: server.url, waitSeconds: 100 }, second);
-    expect(joined.computer).toBe("macbook-pro");
-    // No second request was made, and the person saw the same link and code both times.
-    expect(server.requests.filter((r) => r.method === "POST")).toHaveLength(1);
+    const second = deps(path, noPrompt);
+    const allowed = await joinComputer({ address: server.url, waitSeconds: 100 }, second).catch((err: unknown) => err);
+    expect(allowed).toBeInstanceOf(JoinWaiting);
+    expect((allowed as JoinWaiting).allowed).toBe(true);
+    expect(server.requests.filter((r) => r.method === "POST" && r.path === "/api/join")).toHaveLength(1);
     expect(second.lines).toEqual(first.lines);
+    expect(existsSync(path)).toBe(false);
+
+    // The second call: a wrong code keeps the join waiting, the right one finishes it, with no address needed.
+    const wrong = await commandError(joinComputer({ code: "0000" }, deps(path, noPrompt)));
+    expect(wrong).toBeInstanceOf(WrongCode);
+    expect(wrong.message).toBe("That code doesn't match the one Portico's page shows. 4 tries are left.");
+    expect(existsSync(pending)).toBe(true);
+    const third = deps(path, noPrompt);
+    const joined = await joinComputer({ code: "4821" }, third);
+    expect(joined).toEqual({ url: server.url, computer: "macbook-pro", path, unsynced: [], already: false });
+    expect(third.lines).toEqual([]);
+    expect(readComputerFile(path)?.token).toMatch(/^pc_/);
     expect(existsSync(pending)).toBe(false);
+    // With nothing waiting, or a join waiting for another Portico, a code has nowhere to go.
+    for (const opts of [{ code: "4821" }, { code: "4821", address: "https://other.example.com" }]) {
+      expect((await commandError(joinComputer(opts, deps(configPath(), noPrompt)))).message).toBe(
+        "No join waits for a code here. Run the join with the Portico server's address first: that prints the link to open.",
+      );
+    }
   });
 
-  test("a code that ran out: the join says so, and running again asks for a fresh link and code in place of the old request", async () => {
+  test("a request that ran out: the join says so, and running again asks for a fresh link in place of the old request", async () => {
     const server = portico("late");
     const path = configPath();
-    const err = await commandError(joinComputer({ address: server.url }, deps(path)));
-    expect(err.message).toBe("The code ran out before anyone allowed the join. Run the command again for a fresh link and code.");
+    const err = await commandError(joinComputer({ address: server.url }, deps(path, noPrompt)));
+    expect(err.message).toBe("The request ran out before the join was finished. Run the join again for a fresh link.");
     expect(existsSync(path)).toBe(false);
     expect(existsSync(pendingJoinPath(path))).toBe(false);
 
     // A request still on file whose time has passed is replaced, not left waiting beside the new one.
     server.state.person = "wait";
     let clock = Date.now();
-    await joinComputer({ address: server.url, waitSeconds: 0 }, deps(path, { now: () => clock })).catch(() => {});
+    await joinComputer({ address: server.url, waitSeconds: 0 }, deps(path, { now: () => clock, ...noPrompt })).catch(() => {});
     clock += 16 * 60_000;
+    // The old code is no use by then either.
+    expect((await commandError(joinComputer({ code: "4822" }, deps(path, { now: () => clock, ...noPrompt })))).message).toBe(
+      "The request ran out before the join was finished. Run the join again for a fresh link.",
+    );
+    await joinComputer({ address: server.url, waitSeconds: 0 }, deps(path, noPrompt)).catch(() => {});
+    clock = Date.now() + 16 * 60_000;
     server.state.person = "allow";
     const fresh = deps(path, { now: () => clock });
     const joined = await joinComputer({ address: server.url }, fresh);
     expect(joined.already).toBe(false);
-    const posts = server.requests.filter((r) => r.method === "POST");
-    expect(posts.at(-1)!.body).toMatchObject({ kind: "computer", replaces: { id: "r2", poll_secret: expect.stringMatching(/^ps_/) } });
-    expect(fresh.lines[1]).toBe(`  1. Open ${server.url}/c/r3 in a browser and sign in.`);
-    expect(server.asked.get("r2")!.closed).toBe(true);
+    const posts = server.requests.filter((r) => r.method === "POST" && r.path === "/api/join");
+    expect(posts.at(-1)!.body).toMatchObject({ kind: "computer", replaces: { id: "r3", poll_secret: expect.stringMatching(/^ps_/) } });
+    expect(fresh.lines[1]).toBe(`  1. Open ${server.url}/c/r4 in a browser, sign in and press Allow.`);
+    expect(server.asked.get("r3")!.closed).toBe(true);
   });
 
   test("a join the person turns down writes nothing", async () => {
     const server = portico("deny");
     const path = configPath();
-    const err = await commandError(joinComputer({ address: server.url }, deps(path)));
+    const err = await commandError(joinComputer({ address: server.url }, deps(path, noPrompt)));
     expect(err.message).toBe("The join wasn't allowed on Portico. Nothing was written.");
     expect(existsSync(path)).toBe(false);
     expect(existsSync(pendingJoinPath(path))).toBe(false);
@@ -157,6 +223,7 @@ describe("joinComputer", () => {
     expect(readFileSync(path, "utf8")).toBe(before);
     expect(server.requests.at(-1)).toMatchObject({ method: "GET", path: "/api/computer", token: expect.stringMatching(/^pc_/) });
     expect(server.requests.filter((r) => r.path === "/api/join")).toHaveLength(1);
+    expect(server.requests.filter((r) => r.path === "/api/join/r1/code")).toHaveLength(1);
 
     server.computers.clear();
     const err = await commandError(joinComputer({ address: server.url }, deps(path)));
@@ -191,15 +258,15 @@ describe("joinComputer", () => {
     const server = fakePortico(({ method, path }) => {
       const base = server.url;
       if (method === "POST" && path === "/api/join") {
-        return Response.json({ id: "r1", link: `${base}/c/r1`, code: "0042", poll_secret: "ps_x", expires_at: new Date(Date.now() + 60_000).toISOString() }, { status: 201 });
+        return Response.json({ id: "r1", link: `${base}/c/r1`, poll_secret: "ps_x", expires_at: new Date(Date.now() + 60_000).toISOString() }, { status: 201 });
       }
-      if (path === "/api/join/r1") return Response.json({ status: "approved", computer: { id: "c1", name: "macbook" }, token: "pc_new" });
+      if (path === "/api/join/r1/code") return Response.json({ status: "approved", computer: { id: "c1", name: "macbook" }, token: "pc_new" });
       return Response.json({ error: "internal", message: "Something went wrong." }, { status: 500 });
     });
     servers.push(server);
     const path = configPath();
     writeComputerFile(path, { url: server.url, computer: "macbook", token: "pc_old", off: ["/work/private"] });
-    const joined = await joinComputer({ address: server.url, replace: true }, deps(path));
+    const joined = await joinComputer({ address: server.url, replace: true }, deps(path, { readCode: async () => "0042" }));
     expect(joined.unsynced).toEqual(["/work/private"]);
     expect(readComputerFile(path)?.off).toEqual(["/work/private"]);
   });
@@ -228,21 +295,20 @@ describe("joinComputer", () => {
     expect(status.message).toBe("Portico at https://portico.example.com answered HTTP 502.");
 
     // The link is shown to a person, so anything but a consent page for this request is refused: another request's
-    // page, plain http to a remote host, credentials or a query in the address, a code that isn't four digits, or
-    // control characters.
+    // page, plain http to a remote host, credentials or a query in the address, or control characters.
     const ESC = String.fromCharCode(27);
     const expires = new Date(Date.now() + 60_000).toISOString();
     for (const answer of [
       { ok: true },
-      { id: "r1", link: "https://portico.example.com/c/r2", code: "1234", poll_secret: "ps_x", expires_at: expires },
-      { id: "r1", link: "https://portico.example.com/sign-in?next=/c/r1", code: "1234", poll_secret: "ps_x", expires_at: expires },
-      { id: "r1", link: "http://portico.example.com/c/r1", code: "1234", poll_secret: "ps_x", expires_at: expires },
-      { id: "r1", link: "https://u:p@portico.example.com/c/r1", code: "1234", poll_secret: "ps_x", expires_at: expires },
-      { id: "r1", link: "https://portico.example.com/c/r1?to=evil", code: "1234", poll_secret: "ps_x", expires_at: expires },
-      { id: "r1", link: "javascript:alert(1)//c/r1", code: "1234", poll_secret: "ps_x", expires_at: expires },
-      { id: "r1", link: "https://portico.example.com/c/r1", code: `12${ESC}[2J`, poll_secret: "ps_x", expires_at: expires },
-      { id: `r1${ESC}[31m`, link: `https://portico.example.com/c/r1${ESC}[31m`, code: "1234", poll_secret: "ps_x", expires_at: expires },
-      { id: "r1", link: "https://portico.example.com/c/r1", code: "1234", poll_secret: "ps_x", expires_at: "soon" },
+      { id: "r1", link: "https://portico.example.com/c/r2", poll_secret: "ps_x", expires_at: expires },
+      { id: "r1", link: "https://portico.example.com/sign-in?next=/c/r1", poll_secret: "ps_x", expires_at: expires },
+      { id: "r1", link: "http://portico.example.com/c/r1", poll_secret: "ps_x", expires_at: expires },
+      { id: "r1", link: "https://u:p@portico.example.com/c/r1", poll_secret: "ps_x", expires_at: expires },
+      { id: "r1", link: "https://portico.example.com/c/r1?to=evil", poll_secret: "ps_x", expires_at: expires },
+      { id: "r1", link: "javascript:alert(1)//c/r1", poll_secret: "ps_x", expires_at: expires },
+      { id: "r1", link: "https://portico.example.com/c/r1", poll_secret: "", expires_at: expires },
+      { id: `r1${ESC}[31m`, link: `https://portico.example.com/c/r1${ESC}[31m`, poll_secret: "ps_x", expires_at: expires },
+      { id: "r1", link: "https://portico.example.com/c/r1", poll_secret: "ps_x", expires_at: "soon" },
     ]) {
       const odd = deps(path, { fetch: (async () => Response.json(answer, { status: 201 })) as unknown as typeof fetch });
       const oddErr = await commandError(joinComputer({ address: "https://portico.example.com" }, odd));
@@ -266,9 +332,9 @@ describe("joinComputer", () => {
 
     const naming = (async (input: string | URL | Request) =>
       String(input).endsWith("/api/join")
-        ? Response.json({ id: "r1", link: "https://portico.example.com/c/r1", code: "1234", poll_secret: "ps_x", expires_at: new Date(Date.now() + 60_000).toISOString() }, { status: 201 })
+        ? Response.json({ id: "r1", link: "https://portico.example.com/c/r1", poll_secret: "ps_x", expires_at: new Date(Date.now() + 60_000).toISOString() }, { status: 201 })
         : Response.json({ status: "approved", computer: { id: "c1", name: `studio${ESC}[31m${NEL}` }, token: "pc_x" })) as unknown as typeof fetch;
-    const joined = await joinComputer({ address: "https://portico.example.com" }, deps(path, { fetch: naming }));
+    const joined = await joinComputer({ address: "https://portico.example.com" }, deps(path, { fetch: naming, readCode: async () => "1234" }));
     expect(joined.computer).toBe("studio[31m");
     expect(readComputerFile(path)?.computer).toBe("studio[31m");
   });

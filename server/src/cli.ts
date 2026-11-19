@@ -2,6 +2,7 @@
 import { doctorCommand } from "./commands/doctor";
 import type { CliIo } from "./commands/io";
 import { joinCommand } from "./commands/join";
+import { terminalCode } from "../../plugin-claude-code/src/join";
 import { leaveCommand } from "./commands/leave";
 import { serveCommand } from "./commands/serve";
 import { setupCommand } from "./commands/setup";
@@ -16,8 +17,9 @@ Commands:
   setup [--reset]   Print a one-time link that creates the owner account. With --reset,
                     print a new link. Not used with Descope sign-in.
   doctor            Check that Portico answers at the public URL and that setup is done.
-  join <address>    Ask to join this computer to a Portico server: prints a link and a code
-                    for a person to allow on one page, then waits.
+  join <address>    Ask to join this computer to a Portico server: prints a link for a person
+                    to allow on one page, then asks for the 4-digit code that page shows.
+                    Outside a terminal, join --code <4 digits> hands the code in.
   leave             Take this computer off Portico and undo the join.
   help              Show this message.
 `;
@@ -39,7 +41,7 @@ async function main(argv: string[]): Promise<number | "running"> {
     case "doctor":
       return doctorCommand(args, io);
     case "join":
-      return joinCommand(args, io);
+      return joinCommand(args, io, { readCode: terminalCode() });
     case "leave":
       return leaveCommand(args, io);
     case undefined:

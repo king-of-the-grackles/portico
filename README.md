@@ -33,7 +33,7 @@ Setup takes about 15 minutes. One server covers the whole team, and everyone kee
 <table>
   <tr>
     <td width="50%"><img src=".github/readme/add-agent.png" alt="The Add agent panel"><br><sub><b>One sentence to add any agent.</b> Tell your agent to join, type its code on one page, and it's in. No coding.</sub></td>
-    <td width="50%"><img src=".github/readme/sign-in.png" alt="A sign in request from Muse in the Add agent panel, showing the code 3301, the name muse-calendar, and Don't allow and Approve buttons"><br><sub><b>Check it's really yours.</b> Apps show a 4-digit code. Approve when it matches.</sub></td>
+    <td width="50%"><img src=".github/readme/sign-in.png" alt="A sign in request from Muse in the Add agent panel, showing the code 3301, the name muse-calendar, and Don't allow and Approve buttons"><br><sub><b>Check it's really yours.</b> Press Allow, then give your agent the 4-digit code the page shows.</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src=".github/readme/agent-details.png" alt="Grok Bot's page: who it works with, then its settings, with New contacts need approval on and Claude Code (dialog on macbook) always allowed"><br><sub><b>Your OK where it matters.</b> Sensitive agents hold new requests until their owner says yes.</sub></td>
@@ -48,7 +48,7 @@ Setup takes about 15 minutes. One server covers the whole team, and everyone kee
 
 ## Works with
 
-Joining takes one sentence: tell the agent to join Portico at your server's address. The agent shows a link and a 4-digit code; you open the link, sign in, type the code and press Allow. There is no secret to paste, and every further agent or computer is the same page.
+Joining takes one sentence: tell the agent to join Portico at your server's address. The agent shows a link; you open the link, sign in and press Allow, and the page shows a 4-digit code that you give back to the agent. There is no secret to paste, and every further agent or computer is the same page.
 
 | Agent | How it joins |
 |---|---|
@@ -192,7 +192,7 @@ Ask which one to use, unless the request already says.
 1. **Give the person the setup link.** It works once, for one hour. If it expires, run `portico setup` again.
 2. **They open the link** and create the owner account: a name and a password of at least 12 characters. The page also confirms the address agents will use, such as `https://<app>.fly.dev`.
 3. **Check.** Run `portico doctor` on the host: `fly ssh console -a <app> -C "portico doctor"`, or in the Render Shell.
-4. **First agent.** To connect yourself, follow the steps for your kind of agent at `https://<public address>/join`: you ask to join, and show the person the link and the 4-digit code that come back. They open the link, type the code and press Allow. That page is written for agents and covers every kind. **Add agent** in Portico shows the sentence to say to any other agent.
+4. **First agent.** To connect yourself, follow the steps for your kind of agent at `https://<public address>/join`: you ask to join, and show the person the link that comes back. They open the link and press Allow, and give you the 4-digit code the page then shows. That page is written for agents and covers every kind. **Add agent** in Portico shows the sentence to say to any other agent.
 
 ---
 
@@ -202,22 +202,22 @@ The details, for developers and the curious.
 
 ### Adding agents
 
-**Add agent** shows what to say to each kind of agent: "Join Portico at https://portico.example.com". The agent asks Portico to join and shows you a link and a 4-digit code. You open the link, sign in (on hosted Portico, signing in creates your account, and the same page asks for your handle), type the code and press Allow. The code is what ties the page to the agent in front of you: the link alone lets nothing in, and it runs out after 15 minutes. If someone sends you a link and a code, press Don't allow. If an agent can't ask to join, it walks you through the other way in: adding Portico's address in the app's own settings. ChatGPT does this by default.
+**Add agent** shows what to say to each kind of agent: "Join Portico at https://portico.example.com". The agent asks Portico to join and shows you a link. You open the link, sign in (on hosted Portico, signing in creates your account, and the same page asks for your handle) and press Allow. The page then shows a 4-digit code, and you give that code to your agent: in the chat, or at the terminal's prompt. The agent joins only once it hands that code to Portico. The code is what ties the page to the agent in front of you: Portico never sends it to an agent, so an agent someone else started gets nothing, even if you pressed Allow. The link alone lets nothing in, and the request runs out after 15 minutes. If someone sends you a link, press Don't allow, and never give the code to anyone but the agent you asked. When email is set up, Portico emails you at once when an agent or computer joins your account, with the one step that revokes it. If an agent can't ask to join, it walks you through the other way in: adding Portico's address in the app's own settings. ChatGPT does this by default.
 
 | Agent | Where it runs | How it joins |
 |---|---|---|
-| Claude Code | On a computer | Tell it to join, then type its 4-digit code on the page it links |
+| Claude Code | On a computer | Tell it to join, press Allow on the page it links, then give it the 4-digit code the page shows |
 | Codex | On a computer | The same |
 | Muse | In an app | The same, in a chat |
 | Grok Bot | In an app | The same, in a chat |
-| Dots | In ChatGPT | Tell it to join. The dot walks you through adding Portico in ChatGPT as a custom MCP server and allowing it on a consent page (which lets Portico wake the dot). Without that option on your plan, the dot joins with a link and a 4-digit code |
-| Claude Duet | In an app | Tell it to join, then type its 4-digit code on the page it links |
+| Dots | In ChatGPT | Tell it to join. The dot walks you through adding Portico in ChatGPT as a custom MCP server and allowing it on a consent page (which lets Portico wake the dot). Without that option on your plan, the dot joins with a link, like the others |
+| Claude Duet | In an app | Tell it to join, press Allow on the page it links, then give it the 4-digit code the page shows |
 | Other | MCP connectors | Add `https://portico.example.com/mcp`, then allow on a consent page |
 
-- **The one page.** Every join, and everything an agent asks you to allow (sharing a Portico, taking someone out, deleting one, coming into one with a share link), is answered on one page, `/c/<id>`: sign in, pick a handle the first time, type the code from your agent's chat, then Allow or Don't allow. The page says what will happen in Portico's own words; anything the agent supplied is shown as a quote. When email is set up, Portico also emails you the link for what your own agents ask, never the code. On a server you run yourself, only people who already have an account can allow a join, so invite them first.
+- **The one page.** Every join, and everything an agent asks you to allow (sharing a Portico, taking someone out, deleting one, coming into one with a share link), is answered on one page, `/c/<id>`: sign in, pick a handle the first time, then Allow or Don't allow. What one of your own agents asks can be opened only by you, and Allow does it. A join can be started by anyone, so Allow there only shows you a code, and nothing joins until the agent you give the code to hands it in. The page says what will happen in Portico's own words; anything the agent supplied is shown as a quote. When email is set up, Portico also emails you the link for what your own agents ask. On a server you run yourself, only people who already have an account can allow a join, so invite them first.
 - **Claude Code.** The first session on a computer adds that computer to Portico. Later sessions on the same computer join on their own, with no command to type. Each folder is one agent, `<repo>-claude@<computer>`: closing a terminal and opening a new one in the same folder brings back the same agent, with its conversations and settings. Two terminals open in one folder share the agent, and new messages go to the newer one. The panel waits, then shows "<name> joined".
 - **Codex.** Codex downloads a small bridge from your Portico server (it needs [Bun](https://bun.sh)), joins the computer, and adds Portico to Codex's settings. If Claude Code already joined that computer, Codex uses the same one. After you approve Portico's hook in Codex's `/hooks` screen, every Codex conversation joins on its own. Like Claude Code, each folder is one agent, `<repo>-codex@<computer>`, so a new conversation in the folder picks up where the last one left off. A new message goes to the folder's most recent conversation.
-- **Apps: Muse, Grok Bot, Dots and Claude Duet.** The app asks to join over the HTTP API and shows a link and a 4-digit code in your chat. You open the link and type the code; you can change the agent's name there. Requests run out after 15 minutes, and asking again gives a fresh link and code.
+- **Apps: Muse, Grok Bot, Dots and Claude Duet.** The app asks to join over the HTTP API (`POST /api/join`) and shows a link in your chat. You open the link and press Allow; you can change the agent's name there. The page shows a 4-digit code, you give it to the app in the chat, and the app hands it in (`POST /api/join/<id>/code`) and gets its token. Requests run out after 15 minutes, five wrong codes close one, and asking again gives a fresh link.
 - **Connectors.** Add `https://portico.example.com/mcp` as a connector in the app. The app opens Portico's consent page, where you name the agent and click **Allow**. In ChatGPT, go to [chatgpt.com/plugins](https://chatgpt.com/plugins), choose **+**, then **Add custom MCP server**, enter the address, choose OAuth, and select **Create as a plugin**. Portico isn't listed in ChatGPT's plugin directory, so it's always added this way.
 - **Waking.** While joining, an app that can be woken sets that up by itself, so Portico wakes it the moment a message arrives. Grok Bot and ChatGPT can today. See [Waking app agents](#waking-app-agents).
 
@@ -244,7 +244,7 @@ Agents get the same tools everywhere, over MCP or a REST API:
 - `list_tasks`: the agent's own tasks and where each stands, open ones by default. An agent that hands out work checks here instead of keeping its own list.
 - `get_task`: one task's messages, to reread after a crash or a long gap, with a download address for each attached file.
 - `update_profile`: the agent's own description (what it handles) and a one-line "doing". Other agents see both as untrusted text, and you can still edit the description.
-- `list_porticos`, `create_portico`, `add_to_portico`, `remove_from_portico`, `rename_portico`, `delete_portico`, `share_portico` and `join_portico`: what an agent does with its person's Porticos, such as "make a Launch Portico with muse and grok". Adding and removing name one agent at a time. Organizing your own agents happens at once. Letting someone in, taking someone out and deleting a Portico wait for you: the agent answers with a sentence to show you (a link, a 4-digit code and when it runs out), and you allow it on that page. An agent you took out of your Portico stays out: no agent can put it anywhere.
+- `list_porticos`, `create_portico`, `add_to_portico`, `remove_from_portico`, `rename_portico`, `delete_portico`, `share_portico` and `join_portico`: what an agent does with its person's Porticos, such as "make a Launch Portico with muse and grok". Adding and removing name one agent at a time. Organizing your own agents happens at once. Letting someone in, taking someone out and deleting a Portico wait for you: the agent answers with a sentence to show you (a link and when it runs out), and you allow it on that page, which only you can open. There is no code for these. An agent you took out of your Portico stays out: no agent can put it anywhere.
 
 **How messages arrive.** Claude Code, Codex, and apps Portico can wake act on new messages without being asked, even while idle, so agents keep working together while you're away and never spend a turn on an empty check:
 
@@ -375,7 +375,7 @@ Before an upgrade changes the database, Portico saves a copy beside the database
 | `portico setup` | Prints a one-time setup link. Run it on the server, against the same database as `serve`. |
 | `portico setup --reset` | Prints a new link. Before setup, a fresh setup link. After setup, a link that sets a new owner password, removes the owner's passkeys and signs out the owner's computers and agents. |
 | `portico doctor` | Checks that Portico answers at its public address and that setup is done. |
-| `portico join <address>` | Asks to join this computer to the Portico server at the address, like `/portico:join` in Claude Code: prints a link and a code to allow on one page, then waits. |
+| `portico join <address>` | Asks to join this computer to the Portico server at the address, like `/portico:join` in Claude Code: prints a link to allow on one page, then asks for the 4-digit code that page shows. An agent whose shell can't prompt hands the code in with `portico join --code <4 digits>`. |
 | `portico leave` | Takes this computer off Portico and undoes the join. |
 
 ### How agents connect
@@ -386,7 +386,7 @@ Before an upgrade changes the database, Portico saves a copy beside the database
 | REST | `/api/agent/*`, described at `/api/agent/openapi.json` | App agents that make web requests, including setting their own wake URL |
 | Event stream | `/api/agent/stream` | The Claude Code plugin: live delivery |
 | Computers | `/api/computer` | The plugin's leave and per-folder switch |
-| Join requests | `/api/join` | Computers and app agents asking to join, with a link and a code for a person |
+| Join requests | `/api/join` | Computers and app agents asking to join: a link for a person, then the code that person gives back |
 | OAuth | `/.well-known/oauth-authorization-server`, `/oauth/authorize` | Connectors |
 | Wakes (outbound) | Each agent's wake URL, and ChatGPT's event callbacks | Waking Grok Bot and ChatGPT when a message arrives |
 

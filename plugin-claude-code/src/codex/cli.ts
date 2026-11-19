@@ -5,8 +5,8 @@ import { dirname, resolve } from "node:path";
 import { computerConfigPath, ComputerFileError, readComputerFile, realFolder, removeComputerFile, writeFileAtomically } from "../computer";
 import { CommandError, withoutControls } from "../computer-api";
 import { notJoined, switchFolder } from "../folders";
-import { stillWaiting } from "../cli-run";
-import { joinComputer, JoinWaiting } from "../join";
+import { JOIN_USAGE, parseJoinArgs, stillWaiting } from "../cli-run";
+import { type JoinDeps, joinComputer, JoinWaiting } from "../join";
 import { findOnPath, removeFromCodex, tellPortico } from "../leave";
 import { codexHome, type Outcome, setServer, setStopHook } from "../codex-config";
 
@@ -31,9 +31,9 @@ export interface CodexCliDeps {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   pollMs?: number;
+  /** Asks for the join's code at a terminal. Set by the entry script when stdin is a terminal. */
+  readCode?: JoinDeps["readCode"];
 }
-
-const JOIN_USAGE = "join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>]";
 
 const USAGE = `Usage: bun portico-codex.js <command>
 
@@ -41,9 +41,10 @@ Without a command, this file is the MCP server Codex starts for each conversatio
 
 Commands:
   ${JOIN_USAGE}
-                  Ask the Portico server at the address to let this computer join: prints a link and a 4-digit code
-                  for a person to allow on one page (a computer that joined already skips that). Then adds Portico
-                  to Codex: an MCP server in config.toml and a Stop hook in hooks.json.
+                  Ask the Portico server at the address to let this computer join: prints a link for a person to
+                  allow on one page, which then shows a 4-digit code (a computer that joined already skips that).
+                  In a terminal the command asks for the code; anywhere else, join --code <4 digits> hands the code
+                  in. Then adds Portico to Codex: an MCP server in config.toml and a Stop hook in hooks.json.
   update          Download this file again from Portico.
   off [folder]    Keep new sessions in a folder (default: the current folder) off Portico.
   on [folder]     Let new sessions in a folder join Portico again.
@@ -113,37 +114,21 @@ function outcomeLine(outcome: Outcome, what: string, manual: string): string | n
 }
 
 async function join(args: string[], io: CodexCliIo, deps: CodexCliDeps): Promise<number> {
-  const words: string[] = [];
-  let name: string | undefined;
-  let replace = false;
-  let allow = true;
-  let waitSeconds: number | undefined;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (arg === "--replace") replace = true;
-    else if (arg === "--no-allow") allow = false;
-    else if (arg === "--name" || arg === "--wait") {
-      const value = args[++i];
-      if (value === undefined || value.startsWith("--")) return usageError(io, `${arg} needs a value.`, JOIN_USAGE);
-      if (arg === "--name") name = value;
-      else if (/^[0-9]{1,4}$/.test(value)) waitSeconds = Number(value);
-      else return usageError(io, "--wait takes a number of seconds.", JOIN_USAGE);
-    } else if (arg.startsWith("--")) return usageError(io, `Unknown option: ${arg}.`, JOIN_USAGE);
-    else words.push(arg);
-  }
-  const address = words.join(" ").trim();
-  if (!address) return usageError(io, "The Portico server's address is required.", JOIN_USAGE);
+  const parsed = parseJoinArgs(args);
+  if (typeof parsed === "string") return usageError(io, parsed, JOIN_USAGE);
+  const { name, replace, waitSeconds, code } = parsed;
+  const allow = !parsed.noAllow;
 
   const configPath = computerConfigPath(io.env);
   let joined;
   try {
     joined = await joinComputer(
-      { address, name, replace, client: "codex", waitSeconds },
-      { configPath, fetch: deps.fetch, hostname: deps.hostname, out: io.out, now: deps.now, sleep: deps.sleep, pollMs: deps.pollMs },
+      { address: parsed.address || undefined, name, replace, client: "codex", waitSeconds, code },
+      { configPath, fetch: deps.fetch, hostname: deps.hostname, out: io.out, now: deps.now, sleep: deps.sleep, pollMs: deps.pollMs, readCode: deps.readCode },
     );
   } catch (err) {
     if (!(err instanceof JoinWaiting)) throw err;
-    io.out(stillWaiting(err.expiresAt));
+    io.out(stillWaiting(err.expiresAt, err.allowed, `bun "${bridgeFile(deps)}"`));
     return 0;
   }
   if (joined.already) {

@@ -288,7 +288,6 @@ export async function callAs(
 export interface AskedToJoin {
   id: string;
   link: string;
-  code: string;
   poll_secret: string;
   expires_at: string;
   show: string;
@@ -306,6 +305,35 @@ export async function askToJoin(p: App, body: Record<string, unknown>, headers: 
 /** The asker's poll, with its poll secret. */
 export async function pollJoin(p: App, asked: Pick<AskedToJoin, "id" | "poll_secret">): Promise<Record<string, any>> {
   const res = await p.app.request(`/api/join/${asked.id}`, { headers: { authorization: `Bearer ${asked.poll_secret}` } });
+  return (await res.json()) as Record<string, any>;
+}
+
+/** The asker hands in the code its person read on the consent page, with its poll secret. */
+export async function submitJoinCode(p: App, asked: Pick<AskedToJoin, "id" | "poll_secret">, code: string): Promise<Response> {
+  return await p.app.request(`/api/join/${asked.id}/code`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${asked.poll_secret}`, "content-type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+}
+
+/** The code the consent page shows the signed-in person after Allow, read off the page as that person would, or null. */
+export async function joinCodeOn(p: App, cookie: string | null, id: string): Promise<string | null> {
+  const res = await p.app.request(`/c/${id}`, { headers: cookie ? { cookie } : {} });
+  return /<p class="join-code"[^>]*>([0-9]{4})<\/p>/.exec(await res.text())?.[1] ?? null;
+}
+
+/**
+ * A whole join, as its person and its asker do it: Allow on the page (with whatever else the form sends), the code
+ * read off the page, and the asker handing the code in. Returns the asker's answer: the token, once.
+ */
+export async function finishJoin(p: App, cookie: string, asked: Pick<AskedToJoin, "id" | "poll_secret">, form: Record<string, unknown> = {}): Promise<Record<string, any>> {
+  const allowed = await answerConsent(p, cookie, asked.id, { decision: "approve", ...form });
+  if (allowed.status !== 200) throw new Error(`Allow failed with ${allowed.status}: ${await allowed.text()}`);
+  const code = await joinCodeOn(p, cookie, asked.id);
+  if (!code) throw new Error("The page showed no code after Allow.");
+  const res = await submitJoinCode(p, asked, code);
+  if (res.status !== 200) throw new Error(`Handing in the code failed with ${res.status}: ${await res.text()}`);
   return (await res.json()) as Record<string, any>;
 }
 

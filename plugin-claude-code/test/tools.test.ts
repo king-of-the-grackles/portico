@@ -43,7 +43,9 @@ test("the plugin's Portico tools match Portico's exactly, and Portico runs them"
   const shared = data(await runTool(client, "share_portico", { portico: "Studio" }));
   expect(shared).toMatchObject({ status: "waiting_for_person", portico: { name: "Studio" } });
   expect(shared.show).toBe(
-    `Waiting for Chris: sharing the Studio Portico with one more person happens only once Chris opens ${shared.request.link} in a browser, signs in, types the code ${shared.request.code} and presses Allow. The code runs out at ${shared.request.expires_at}.`,
+    `Waiting for Chris: sharing the Studio Portico with one more person happens only once Chris opens ${shared.request.link} in a browser, signs in and presses Allow. Only Chris can open that page. The request runs out at ${shared.request.expires_at}.`,
+  );
+  expect(shared.request.code).toBeUndefined(
   );
   expect(shared.request.link).toMatch(/^https:\/\/portico\.example\.com\/c\//);
   expect(data(await runTool(client, "delete_portico", { portico: "Studio" })).show).toContain("deleting the Studio Portico");

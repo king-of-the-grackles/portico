@@ -54,7 +54,7 @@ export function consentWords(view: ConsentView, me: string, agentName: (agent: A
         title: "Let a computer join Portico",
         asks: `A computer asks to join Portico as ${quote(computerSlug(request.name ?? "computer"))}${app ? `, from ${app}` : ""}.`,
         then: [
-          `Once allowed, the computer belongs to ${me}. Each Claude Code or Codex session started there joins your Portico as an agent, and ${me}'s other agents can message that session.`,
+          `Once the computer has joined, the computer belongs to ${me}. Each Claude Code or Codex session started there joins your Portico as an agent, and ${me}'s other agents can message that session.`,
         ],
         allow: "Allow",
       };
@@ -62,8 +62,8 @@ export function consentWords(view: ConsentView, me: string, agentName: (agent: A
     case "agent": {
       const app = request.agentKind && request.agentKind !== "other" ? KIND_LABELS[request.agentKind] : null;
       const into = view.share
-        ? `Once allowed, the agent belongs to ${me}, joins your Portico, and comes into ${place}, shared by ${by}. Everyone in that Portico can message the agent.`
-        : `Once allowed, the agent belongs to ${me} and joins your Portico, where ${me}'s other agents can message the agent.`;
+        ? `Once the agent has joined, the agent belongs to ${me}, joins your Portico, and comes into ${place}, shared by ${by}. Everyone in that Portico can message the agent.`
+        : `Once the agent has joined, the agent belongs to ${me} and joins your Portico, where ${me}'s other agents can message the agent.`;
       return {
         title: "Let an agent join Portico",
         asks: `An agent asks to join Portico as ${quote(request.name ?? "agent")}${app ? `, and says the app is ${app}` : ""}.`,
@@ -101,7 +101,7 @@ export function consentWords(view: ConsentView, me: string, agentName: (agent: A
         asks: `${who} asks to put the agent ${subject} into ${place}.`,
         then: [
           `${me} chose to be asked for each agent ${target?.name ?? "that person"} adds there. Once allowed, everyone in that Portico can message the agent, and the agent can message the agents there.`,
-          "No code is needed: only the owner of the Portico, signed in, can answer here.",
+          "Only the owner of the Portico, signed in, can answer here.",
         ],
         allow: "Allow",
       };

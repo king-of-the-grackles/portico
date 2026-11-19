@@ -169,6 +169,7 @@ export function decideButtons(s: HomeState, m: HeldCard): string {
 function heldReason(s: HomeState, m: HeldCard): string {
   const parts: string[] = [];
   if (m.facts.heldFor === "outbound") return `${m.from.label} sends to other people's agents only once ${s.me.name} has seen each message. Nothing has reached ${m.to.label}.`;
+  if (m.facts.heldFor === "new_agent") return `${m.from.label} joined Portico lately, and this is the first message from ${m.from.label} to ${m.to.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
   if (m.facts.heldFor === "first_contact") parts.push(`${s.me.name} hasn't allowed messages from ${m.facts.managedBy.name}'s agents yet.`);
   if (m.facts.replyToRecipient) parts.push(`Follows a message from ${m.to.label}, but starts a new conversation.`);
   else if (m.facts.earlier.length === 0) parts.push(`First time ${m.from.label} has asked ${m.to.label} for anything, and new contacts need approval.`);
@@ -198,13 +199,13 @@ export function renderHeldCard(s: HomeState, m: HeldCard): string {
 
 /**
  * An agent asked the person for something only the person can allow. The answer is given on the consent page, with
- * the code from the agent's chat: this card only leads there.
+ * Allow or Don't allow: this card only leads there.
  */
 export function renderConsentCard(s: HomeState, r: ConsentCard): string {
   return `<article class="dcard" aria-labelledby="dq-${esc(r.id)}" data-key="dq-${esc(r.id)}">
     <div class="dcard-head"><div class="grow">
       <h3 id="dq-${esc(r.id)}" class="dcard-title">${esc(r.title)}</h3>
-      <p class="dcard-why tnum">${esc(r.asks)} The page asks for the 4-digit code the agent shows in the chat. ${expiresIn(r.expiresAt, s.now)}</p>
+      <p class="dcard-why tnum">${esc(r.asks)} ${expiresIn(r.expiresAt, s.now)}</p>
     </div></div>
     <div class="actions"><a class="btn btn-primary" href="${esc(r.link)}">Open the page</a></div>
   </article>`;

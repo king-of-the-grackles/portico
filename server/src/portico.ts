@@ -189,7 +189,13 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         }
         if (m.status === "held") {
           // The Portico's record says that a message was held, never what the message says.
-          activity.record("portico_held", { agentId: m.toId, otherId: m.fromId, workspaceId: m.workspaceId, detail: { for: m.heldFor ?? "approval" } });
+          activity.record("portico_held", {
+            agentId: m.toId,
+            otherId: m.fromId,
+            workspaceId: m.workspaceId,
+            subjectId: m.heldFor === "outbound" ? (agents.get(m.fromId)?.ownerId ?? null) : null,
+            detail: { for: m.heldFor ?? "approval" },
+          });
           mailHeld(m);
         }
         watchBurst(m);
@@ -278,7 +284,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     now,
     newId,
     log: logInfo,
-    // The person an agent asked is known, so Portico emails that person the page's link. Never the code.
+    // The person an agent asked is known, so Portico emails that person the page's link, which only that person can open.
     onAsked: (request) => {
       const person = request.personId ? people.get(request.personId) : null;
       const view = person ? consents.describe(person, request.id) : null;
@@ -292,11 +298,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
           link: `${settings.publicUrl()}/c/${request.id}`,
           after:
             request.kind === "admit_agent"
-              ? ["No code is needed: only the owner of the Portico, signed in, can answer on that page."]
-              : [
-                  "The page asks for the 4-digit code the agent shows in its chat. Portico never emails that code, so nothing happens without the chat.",
-                  "Didn't ask an agent for this? Open the page and choose Don't allow, or ignore this email.",
-                ],
+              ? ["Only the owner of the Portico, signed in, can answer on that page."]
+              : [`Only ${person.name}, signed in, can answer on that page.`, "Didn't ask an agent for this? Open the page and choose Don't allow, or ignore this email."],
           // The one-step stop that fits: the agent that asked, or for a request from someone else's agent, the Portico.
           stop:
             request.kind === "admit_agent" && request.workspaceId
@@ -322,7 +325,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     if (!receiver || !sender || !person) return;
     const from = quote(agents.addressFor(sender, person.id));
     const to = quote(agents.addressFor(receiver, person.id));
-    const why = outbound
+    const why = m.heldFor === "new_agent"
+      ? `A message from ${from} to ${to} is held: ${from} joined Portico lately, and this is that agent's first message to ${to}.`
+      : outbound
       ? `A message from ${from} to ${to} is held: ${person.name} asked to see what that agent sends to other people's agents first.`
       : m.heldFor === "first_contact"
         ? `A message from ${from} to ${to} is held: ${person.name} hasn't allowed messages from the agents of ${personWords(people.get(sender.ownerId) ?? person)} yet.`
@@ -335,7 +340,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         lines: [why, "To read the message and decide, open this page and sign in to Portico:"],
         link: `${settings.publicUrl()}/held/${m.id}`,
         after: [`The message waits ${LIMITS.messageExpiryHours / 24} days, then lapses.`],
-        stop: outbound
+        stop: outbound || m.heldFor === "new_agent"
           ? { line: "To stop that agent for good, revoke the agent in one step on the agent's page:", link: `${settings.publicUrl()}/a/${sender.id}` }
           : { line: "To stop the sender, take the sender's person out, or pause the Portico, in one step on the Portico's page:", link: porticoPage(m.workspaceId) },
       }),
@@ -398,6 +403,45 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       `${quote(agents.nameFor(caller, person.id))} had ${before + 1} sends refused within ${LIMITS.refusedMinutes} minutes. An agent that keeps trying may have been misled by something the agent read.`,
       { line: "To stop the agent, revoke the agent in one step on the agent's page:", link: page },
       page,
+    );
+  };
+
+  // ---- a new agent or computer on a person's account: the person is told at once, with the way to undo it ----
+
+  agents.onJoined = (agent) => {
+    const person = people.get(agent.ownerId);
+    if (!person || !mail.enabled) return;
+    const page = `${settings.publicUrl()}/a/${agent.id}`;
+    mailed(
+      "alert",
+      mail.notify("alert", `joined:${agent.id}`, person, {
+        subject: "A new agent joined Portico",
+        lines: [
+          `An agent named ${quote(agent.name)} joined Portico as one of ${person.name}'s agents just now, allowed in a browser signed in as ${person.name}. That agent can message ${person.name}'s other agents.`,
+          "The agent's page:",
+        ],
+        link: page,
+        after: [`Nobody at ${person.name}'s end asked an agent to join? Someone else may have sent the link and asked for the code that Portico's page showed.`],
+        stop: { line: "To stop the agent at once, revoke the agent in one step on that page:", link: page },
+      }),
+    );
+  };
+  computers.onJoined = (computer) => {
+    const person = people.get(computer.ownerId);
+    if (!person || !mail.enabled) return;
+    const page = `${settings.publicUrl()}/settings`;
+    mailed(
+      "alert",
+      mail.notify("alert", `joined:${computer.id}`, person, {
+        subject: "A new computer joined Portico",
+        lines: [
+          `A computer named ${quote(computer.name)} joined Portico on ${person.name}'s account just now, allowed in a browser signed in as ${person.name}. Each Claude Code or Codex session started there becomes one of ${person.name}'s agents.`,
+          "Settings lists the computers:",
+        ],
+        link: page,
+        after: [`Nobody at ${person.name}'s end asked a computer to join? Someone else may have sent the link and asked for the code that Portico's page showed.`],
+        stop: { line: "To stop the computer at once, remove the computer in one step in Settings:", link: page },
+      }),
     );
   };
 

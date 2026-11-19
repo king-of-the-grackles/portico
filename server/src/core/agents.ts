@@ -29,6 +29,7 @@ interface AgentRow {
   folder_id: string | null;
   approval_required: number;
   outbound_hold: number;
+  unproven: number;
   revoked_at: string | null;
   created_at: string;
   last_seen_at: string | null;
@@ -50,6 +51,7 @@ function toAgent(row: AgentRow): Agent {
     folderId: row.folder_id,
     approvalRequired: row.approval_required === 1,
     outboundHold: row.outbound_hold === 1,
+    unproven: row.unproven === 1,
     revokedAt: row.revoked_at,
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
@@ -995,7 +997,7 @@ export class Agents {
     );
   }
 
-  private insert(a: Omit<Agent, "computer" | "approvalRequired" | "outboundHold" | "revokedAt" | "doing" | "doingAt">): void {
+  private insert(a: Omit<Agent, "computer" | "approvalRequired" | "outboundHold" | "unproven" | "revokedAt" | "doing" | "doingAt">): void {
     this.db
       .query(
         `INSERT INTO agents (id, owner_id, name, kind, type, description, computer_id, folder, folder_id,
@@ -1016,8 +1018,28 @@ export class Agents {
         createdAt: a.createdAt,
         lastSeenAt: a.lastSeenAt,
       });
+    // A session on a computer whose join nobody vouched for starts unproven, like an app that joined that way.
+    if (a.computerId) this.db.query("UPDATE agents SET unproven = (SELECT unproven FROM computers WHERE id = $computerId) WHERE id = $id").run({ id: a.id, computerId: a.computerId });
     this.workspaces.agentCreated(a.id, a.ownerId);
   }
+
+  /** Marks an agent, or a computer and so each session started there, as joined without the person's "I started this myself". */
+  markUnproven(target: { agentId: string } | { computerId: string }): void {
+    if ("agentId" in target) this.db.query("UPDATE agents SET unproven = 1 WHERE id = $id").run({ id: target.agentId });
+    else this.db.query("UPDATE computers SET unproven = 1 WHERE id = $id").run({ id: target.computerId });
+  }
+
+  /** The person vouched for the agent: nothing more of it is held for being new. */
+  proven(agentId: string): void {
+    this.db.query("UPDATE agents SET unproven = 0 WHERE id = $id").run({ id: agentId });
+    this.changes.emit("agents");
+  }
+
+  /**
+   * Set by portico.ts, and called where a person allowed a join (the consent page, a connector's sign-in): a new app or
+   * connector is on the person's account, and the person is told at once.
+   */
+  onJoined: ((agent: Agent) => void) | null = null;
 
   private iso(offsetMs = 0): string {
     return new Date(this.now().getTime() + offsetMs).toISOString();

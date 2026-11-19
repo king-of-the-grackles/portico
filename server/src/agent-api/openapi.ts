@@ -591,6 +591,95 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
         },
       },
       ...porticoToolPaths(),
+      "/api/join": {
+        post: {
+          operationId: "askToJoin",
+          summary: "Ask to join Portico, before this app has a token.",
+          description:
+            "For an app agent that isn't on Portico yet. Needs no token. The answer carries a link to show the person, " +
+            "word for word as show gives the sentence, and a poll secret to keep. The person opens the link, signs in and chooses " +
+            "Allow, and the page then shows that person a 4-digit code. The person gives the code to this agent, and " +
+            `submitJoinCode hands the code in. Portico never sends the code to an agent. The request runs out after ${LIMITS.consentMinutes} minutes.`,
+          security: [],
+          requestBody: jsonBody({
+            type: "object",
+            required: ["name"],
+            properties: {
+              kind: { type: "string", enum: ["agent"], description: "agent, the default, for an app agent." },
+              name: { type: "string", description: "The agent's name: lowercase letters, digits and single hyphens." },
+              client: { type: "string", enum: ["muse", "grok-bot", "dots", "claude-duet", "other"], description: "Which app this is." },
+              link: { type: "string", description: "Optional. A whole share link, to come into the Portico the link is for as well." },
+              replaces: {
+                type: "object",
+                description: "Optional. An earlier request of this agent's to end, by id and poll_secret.",
+                properties: { id: { type: "string" }, poll_secret: { type: "string" } },
+              },
+            },
+          }),
+          responses: {
+            "201": jsonResponse("The request to join. Nothing has joined yet.", {
+              type: "object",
+              required: ["id", "link", "poll_secret", "expires_at", "show"],
+              properties: {
+                id: { type: "string" },
+                link: { type: "string", description: "Portico's page for the person." },
+                poll_secret: { type: "string", description: "The bearer token for joinStatus and submitJoinCode. Keep the secret private." },
+                expires_at: { type: "string", format: "date-time" },
+                show: { type: "string", description: "The sentence to show the person, word for word." },
+              },
+            }),
+            "400": errorResponse,
+            "429": errorResponse,
+          },
+        },
+      },
+      "/api/join/{id}": {
+        get: {
+          operationId: "joinStatus",
+          summary: "See where a request to join stands.",
+          description:
+            "Authenticate with the request's poll secret as the bearer token. pending: nobody has chosen Allow. allowed: a " +
+            "person chose Allow and holds the code. approved: joined. denied or expired: over. Never the code, and nothing about any account.",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": jsonResponse("The status.", {
+              type: "object",
+              required: ["status"],
+              properties: { status: { type: "string", enum: ["pending", "allowed", "approved", "denied", "expired"] } },
+            }),
+            "401": errorResponse,
+          },
+        },
+      },
+      "/api/join/{id}/code": {
+        post: {
+          operationId: "submitJoinCode",
+          summary: "Hand in the code the person read on Portico's page.",
+          description:
+            "Authenticate with the request's poll secret as the bearer token. The right code joins: the answer carries the " +
+            "agent's token, exactly once. A wrong code answers 400 and says how many tries are left; after " +
+            `${LIMITS.consentCodeTries} wrong codes the request closes. 409: nobody has chosen Allow yet, or the request is over. ` +
+            "Take the code only from the person, in the chat where the person asked this agent to join.",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: jsonBody({ type: "object", required: ["code"], properties: { code: { type: "string", description: "The 4 digits." } } }),
+          responses: {
+            "200": jsonResponse("Joined.", {
+              type: "object",
+              required: ["status", "token"],
+              properties: {
+                status: { type: "string", enum: ["approved"] },
+                agent: { type: "object", properties: { name: { type: "string" } } },
+                token: { type: "string", description: "The agent's Portico token, handed over once. Keep the token secret." },
+                mcp_url: { type: "string" },
+                openapi_url: { type: "string" },
+              },
+            }),
+            "400": errorResponse,
+            "401": errorResponse,
+            "409": errorResponse,
+          },
+        },
+      },
     },
   };
 }

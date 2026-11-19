@@ -104,11 +104,17 @@ describe("/join", () => {
     expect(html).toContain("claude plugin install portico@portico");
     expect(html).toContain(`/portico:join ${PUBLIC_URL}`);
     expect(html).toContain(`curl -sS -X POST ${PUBLIC_URL}/api/join `);
-    expect(html).toContain(`curl -sS ${PUBLIC_URL}/api/join/&lt;id&gt;`);
-    // No secret anywhere on the page: the agent asks, and a person allows the join on one page with a code.
+    expect(html).toContain(`<code>GET ${PUBLIC_URL}/api/join/&lt;id&gt;</code>`);
+    // No secret anywhere on the page: the agent asks, a person allows the join on one page, and gives the agent the code that page shows.
     expect(html).not.toContain("#&lt;secret&gt;");
     expect(visibleCopy(html)).toContain("The link alone lets nothing in");
-    expect(visibleCopy(html)).toContain(`the code works for ${LIMITS.consentMinutes} minutes`);
+    expect(visibleCopy(html)).toContain("Allow alone lets nothing in");
+    expect(visibleCopy(html)).toContain(`the request works for ${LIMITS.consentMinutes} minutes`);
+    expect(visibleCopy(html)).toContain("Portico never sends the code to an agent");
+    // The second call for an agent whose shell can't prompt, and the endpoint an app hands the code to.
+    expect(html).toContain("src/cli.ts&quot; join --code &lt;the 4 digits&gt;");
+    expect(html).toContain(`curl -sS -X POST ${PUBLIC_URL}/api/join/&lt;id&gt;/code `);
+    expect(html).not.toContain("a 4-digit <code>code</code>");
     expect(html).toContain(`${PUBLIC_URL}/api/agent/openapi.json`);
     expect(html).toContain("Notes for an AI agent reading this page");
     expect(html).not.toContain("Ask the person who runs the server for the source");
@@ -174,10 +180,16 @@ describe("error copy", () => {
     await collect(start({ kind: "agent", name: "muse", client: "claude-code" }));
     await collect(start({ kind: "agent", name: "muse", link: `${PUBLIC_URL}/share#${"x".repeat(22)}` }));
     await collect(p.app.request("/api/join/nope", { headers: { authorization: "Bearer ps_nope" } }));
+    // Handing in a code: before Allow, a wrong one, and once the request has closed.
+    const asked = (await (await start({ kind: "agent", name: "muse" })).json()) as { id: string; poll_secret: string };
+    const hand = () => p.app.request(`/api/join/${asked.id}/code`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${asked.poll_secret}` }, body: JSON.stringify({ code: "x" }) });
+    await collect(hand());
+    p.consents.decide((await p.people.byName("Chris"))!.id, asked.id, { decision: "approve" });
+    for (let i = 0; i < LIMITS.consentCodeTries + 1; i++) await collect(hand());
     await collect(callAs(p, { token: "pc_nope" }, "GET", "/api/computer"));
     const { computer } = addComputer(p, (await p.people.byName("Chris"))!, "studio");
     await collect(callPerson(p, member, "DELETE", `/api/computers/${computer.id}`));
-    expect(messages).toHaveLength(7);
+    expect(messages).toHaveLength(8 + LIMITS.consentCodeTries + 1);
     expect(copyProblems(messages.join(" | "))).toEqual([]);
   });
 });

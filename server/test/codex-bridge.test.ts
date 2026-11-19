@@ -31,7 +31,8 @@ describe("/join for Codex", () => {
     const html = await (await makePortico().app.request("/join")).text();
     expect(html).toContain(`curl -fsS ${PUBLIC_URL}/codex/portico-codex.js -o ~/.portico/portico-codex.js`);
     expect(html).toContain(`bun ~/.portico/portico-codex.js join ${PUBLIC_URL}`);
-    expect(html).toContain("prints a link and a 4-digit code");
+    expect(html).toContain("The command prints a link.");
+    expect(html).toContain("bun ~/.portico/portico-codex.js join --code &lt;the 4 digits&gt;");
     expect(html).toContain("open <code>/hooks</code> and approve the Portico Stop hook");
     expect(html).toContain("<h2>Muse, Grok Bot, Claude Duet and other app agents</h2>");
   });

@@ -21,9 +21,13 @@ afterEach(() => {
   for (const server of servers.splice(0)) server.stop();
 });
 
+/** The Portico the test's person looks at: the code on its page is what that person types at the prompt. */
+let current: ReturnType<typeof contractPortico> | null = null;
+
 function portico(person: Parameters<typeof contractPortico>[0] = "allow") {
   const server = contractPortico(person);
   servers.push(server);
+  current = server;
   return server;
 }
 
@@ -58,14 +62,18 @@ async function cli(argv: string[], opts: { path: string; cwd: string; deps?: Cli
       lines.push(line);
     },
   };
-  const code = await runCli(argv, io, { ...NO_CLAUDE, pollMs: 1, ...opts.deps });
+  // As in a terminal, once the person has pressed Allow: the code the page shows is typed at the prompt. Until then, and
+  // with `noPrompt`, the command runs as in an agent's shell.
+  const server = current;
+  const readCode = server?.state.person === "allow" ? () => server.typeCode() : undefined;
+  const code = await runCli(argv, io, { ...NO_CLAUDE, pollMs: 1, readCode, ...opts.deps });
   return { code, out, err, lines };
 }
 
 const settingsOf = (path: string) => join(dirname(dirname(path)), ".claude", "settings.json");
 
 describe("join", () => {
-  test("prints the link and the code for a person, then what was written and what happens next", async () => {
+  test("prints the link for a person, takes the code, then says what was written and what happens next", async () => {
     const server = portico();
     const { dir, path } = computerDir();
     const run = await cli(["join", server.url], { path, cwd: dir, deps: { hostname: () => "macbook.local" } });
@@ -73,9 +81,9 @@ describe("join", () => {
     expect(run.err).toEqual([]);
     expect(run.out.slice(0, 8)).toEqual([
       "A person allows this computer on one Portico page:",
-      `  1. Open ${server.url}/c/r1 in a browser and sign in.`,
-      "  2. Type the code 4821 there and press Allow.",
-      expect.stringMatching(/^The code runs out at .*\. Type the code only on that page\.$/),
+      `  1. Open ${server.url}/c/r1 in a browser, sign in and press Allow.`,
+      "  2. The page then shows a 4-digit code. Type that code here, and nowhere else.",
+      expect.stringMatching(/^The request runs out at .*\.$/),
       `Joined Portico at ${server.url} as computer "macbook".`,
       `Wrote ${path} (mode 600).`,
       "New Claude Code sessions on this computer join Portico automatically. Sessions already open join within a few seconds, or after a restart when the plugin was installed after the session started.",
@@ -85,6 +93,7 @@ describe("join", () => {
     expect(file.computer).toBe("macbook");
     expect(run.lines.join("\n")).not.toContain(file.token);
     expect(run.lines.join("\n")).not.toContain("ps_");
+    expect(run.lines.join("\n")).not.toContain("4821");
   });
 
   test("the address may come as the sentence a person says, with --name", async () => {
@@ -96,28 +105,43 @@ describe("join", () => {
     expect(server.requests[0]!.body).toEqual({ kind: "computer", name: "studio", client: "claude-code" });
     const missing = await cli(["join", server.url, "--name", "--replace"], { path, cwd: dir });
     expect(missing.code).toBe(1);
-    expect(missing.err).toEqual(["--name needs a value. Usage: join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>]"]);
+    expect(missing.err).toEqual(["--name needs a value. Usage: join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>] | join --code <4 digits> [--no-allow]"]);
     const wait = await cli(["join", server.url, "--wait", "soon"], { path, cwd: dir });
-    expect(wait.err).toEqual(["--wait takes a number of seconds. Usage: join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>]"]);
+    expect(wait.err).toEqual(["--wait takes a number of seconds. Usage: join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>] | join --code <4 digits> [--no-allow]"]);
   });
 
-  test("--wait 0 only asks: the link and the code, then the same command keeps waiting on the same request", async () => {
+  test("--wait 0 only asks and prints the link; join --code hands in the code the person read on the page", async () => {
     const server = portico("wait");
     const { dir, path } = computerDir();
-    const asked = await cli(["join", server.url, "--wait", "0"], { path, cwd: dir, deps: { hostname: () => "macbook" } });
+    const noPrompt = { hostname: () => "macbook", readCode: undefined, command: 'bun "/plugin/src/cli.ts"' };
+    const asked = await cli(["join", server.url, "--wait", "0"], { path, cwd: dir, deps: noPrompt });
     expect(asked.code).toBe(0);
     expect(asked.out).toHaveLength(5);
-    expect(asked.out[1]).toBe(`  1. Open ${server.url}/c/r1 in a browser and sign in.`);
-    expect(asked.out[4]).toMatch(/^Still waiting for a person to allow the join\. Run the same command again to keep waiting: the link and the code stay the same until /);
+    expect(asked.out[1]).toBe(`  1. Open ${server.url}/c/r1 in a browser, sign in and press Allow.`);
+    expect(asked.out[4]).toMatch(
+      /^Waiting for a person to press Allow on Portico's page, which then shows a 4-digit code\. To finish the join, run: bun "\/plugin\/src\/cli\.ts" join --code <the 4 digits>\. The request runs out at .*\.$/,
+    );
     expect(existsSync(path)).toBe(false);
     // Nothing is allowed in Claude Code's settings before the computer has joined.
     expect(existsSync(settingsOf(path))).toBe(false);
+    // A code handed in before Allow, a code that isn't 4 digits, and a wrong code: each says so and exits 1.
+    const early = await cli(["join", "--code", "4821"], { path, cwd: dir, deps: noPrompt });
+    expect([early.code, early.err[0]]).toEqual([1, `Nobody has pressed Allow yet. Open ${server.url}/c/r1 in a browser, sign in and press Allow: the page then shows the code.`]);
     server.state.person = "allow";
-    const done = await cli(["join", server.url, "--wait", "100"], { path, cwd: dir, deps: { hostname: () => "macbook" } });
-    expect(done.out.slice(0, 4)).toEqual(asked.out.slice(0, 4));
-    expect(done.out[4]).toBe(`Joined Portico at ${server.url} as computer "macbook".`);
-    expect(server.requests.filter((r) => r.method === "POST")).toHaveLength(1);
+    const odd = await cli(["join", "--code", "48211"], { path, cwd: dir, deps: noPrompt });
+    expect([odd.code, odd.err[0]]).toEqual([1, `--code takes the 4 digits Portico's page shows. Usage: ${"join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>] | join --code <4 digits> [--no-allow]"}`]);
+    const wrong = await cli(["join", "--code", "0000"], { path, cwd: dir, deps: noPrompt });
+    expect([wrong.code, wrong.err[0]]).toEqual([1, "That code doesn't match the one Portico's page shows. 4 tries are left."]);
+    // The same first call again, once Allow was pressed, says the code is showing and makes no new request.
+    const again = await cli(["join", server.url, "--wait", "100"], { path, cwd: dir, deps: noPrompt });
+    expect(again.out.slice(0, 4)).toEqual(asked.out.slice(0, 4));
+    expect(again.out[4]).toStartWith("Allow was pressed on Portico's page, which shows the 4-digit code now. To finish the join, run: ");
+    const done = await cli(["join", "--code", "4821"], { path, cwd: dir, deps: noPrompt });
+    expect(done.code).toBe(0);
+    expect(done.out[0]).toBe(`Joined Portico at ${server.url} as computer "macbook".`);
+    expect(server.requests.filter((r) => r.method === "POST" && r.path === "/api/join")).toHaveLength(1);
     expect(existsSync(settingsOf(path))).toBe(true);
+    for (const run of [asked, early, odd, wrong, again, done]) expect(run.lines.join("\n")).not.toMatch(/ps_|pc_/);
   });
 
   test("allows the Portico tools in Claude Code's settings once, and --no-allow skips it", async () => {
@@ -149,7 +173,7 @@ describe("join", () => {
     const again = await cli(["join", server.url], { path, cwd: dir });
     expect(again.code).toBe(0);
     expect(again.out[0]).toBe(`This computer is already on Portico at ${server.url} as computer "macbook". Nothing to allow.`);
-    expect(server.requests.filter((r) => r.method === "POST")).toHaveLength(1);
+    expect(server.requests.filter((r) => r.method === "POST" && r.path === "/api/join")).toHaveLength(1);
   });
 
   test("a settings file with invalid JSON is left alone, the rule to add by hand is printed, and the join still succeeds", async () => {
@@ -179,9 +203,9 @@ describe("join", () => {
     const { dir, path } = computerDir();
     const fetch = (async (input: string | URL | Request) =>
       String(input).endsWith("/api/join")
-        ? Response.json({ id: "r1", link: "https://portico.example.com/c/r1", code: "1234", poll_secret: "ps_x", expires_at: new Date(Date.now() + 60_000).toISOString() }, { status: 201 })
+        ? Response.json({ id: "r1", link: "https://portico.example.com/c/r1", poll_secret: "ps_x", expires_at: new Date(Date.now() + 60_000).toISOString() }, { status: 201 })
         : Response.json({ status: "approved", computer: { id: "c1", name: `studio${String.fromCharCode(27)}[2J` }, token: "pc_x" })) as unknown as typeof globalThis.fetch;
-    const run = await cli(["join", "https://portico.example.com"], { path, cwd: dir, deps: { fetch } });
+    const run = await cli(["join", "https://portico.example.com"], { path, cwd: dir, deps: { fetch, readCode: async () => "1234" } });
     expect(run.code).toBe(0);
     expect(run.out[4]).toBe('Joined Portico at https://portico.example.com as computer "studio[2J".');
     for (const line of run.lines) expect(line).not.toMatch(/\p{Cc}/u);
@@ -412,12 +436,18 @@ describe("copy", () => {
     ]) {
       runs.push(await cli(["join", line], { path: other.path, cwd: other.dir }));
     }
-    // The person turns the join down, lets the code run out, or hasn't answered when the wait ends.
+    // The person turns the join down, lets the request run out, or hasn't answered when the wait ends; then a code
+    // too early, a wrong one, Allow seen by the waiting command, and too many wrong codes.
     for (const person of ["deny", "late", "wait"] as const) {
       server.state.person = person;
       runs.push(await cli(["join", server.url, "--wait", "0"], { path: other.path, cwd: other.dir }));
     }
+    const noPrompt = { readCode: undefined };
+    runs.push(await cli(["join", "--code", "0000"], { path: other.path, cwd: other.dir, deps: noPrompt }));
     server.state.person = "allow";
+    runs.push(await cli(["join", server.url, "--wait", "0"], { path: other.path, cwd: other.dir, deps: noPrompt }));
+    for (let i = 0; i < 6; i++) runs.push(await cli(["join", "--code", "0000"], { path: other.path, cwd: other.dir, deps: noPrompt }));
+    runs.push(await cli(["join", "--code", "12"], { path: other.path, cwd: other.dir, deps: noPrompt }));
     const bare = (async () => new Response("", { status: 502 })) as unknown as typeof fetch;
     const odd = (async () => Response.json({}, { status: 201 })) as unknown as typeof fetch;
     for (const fetch of [bare, odd]) {

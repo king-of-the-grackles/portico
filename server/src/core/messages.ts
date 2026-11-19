@@ -855,7 +855,7 @@ export class Messages {
         db
           .query(
             `SELECT decision, decided_at FROM messages
-             WHERE from_id = $fromId AND to_id = $toId AND decision IS NOT NULL AND id != $exceptId
+             WHERE from_id = $fromId AND to_id = $toId AND decision IS NOT NULL AND id != $exceptId AND held_for IS NOT 'outbound'
              ORDER BY decided_at DESC LIMIT $limit`,
           )
           .all({ fromId, toId, exceptId, limit }) as { decision: Decision; decided_at: string }[]
@@ -943,10 +943,13 @@ export class Messages {
    */
   private arrivalHold(db: Database, caller: Agent, receiver: Agent, replyTo: string | null): HeldFor | null {
     const firstContact = caller.ownerId !== receiver.ownerId && !this.peopleAllowed(receiver.ownerId, caller.ownerId);
-    const approval = receiver.approvalRequired && !this.alwaysAllows(receiver.id, caller.id);
-    if (!firstContact && !approval) return null;
+    const allowed = this.alwaysAllows(receiver.id, caller.id);
+    // A newly joined agent nobody vouched for, writing to another agent of the same person: asked about once per pair.
+    const newAgent = caller.unproven && caller.ownerId === receiver.ownerId && !allowed;
+    const approval = receiver.approvalRequired && !allowed;
+    if (!firstContact && !approval && !newAgent) return null;
     if (replyTo !== null && this.receiverInConversation(db, replyTo, receiver.id)) return null;
-    return firstContact ? "first_contact" : "approval";
+    return firstContact ? "first_contact" : newAgent ? "new_agent" : "approval";
   }
 
   /** What a held send says: plainly that the message is held and for whom, never that it was delivered. */
@@ -959,6 +962,10 @@ export class Messages {
         `Held for ${person}: ${person} asked to see each message this agent sends to other people's agents first, and decides${where}. ` +
         `Once allowed, the message goes on to ${name}, whose own person may be asked too. ${outcome}`
       );
+    }
+    if (message.heldFor === "new_agent") {
+      const person = this.personName(caller.ownerId);
+      return `Held: this agent joined Portico lately, so ${person} is asked once before this agent's first message reaches ${name}. ${outcome}`;
     }
     if (message.heldFor === "first_contact") {
       const person = this.personName(receiver.ownerId);

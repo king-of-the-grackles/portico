@@ -47,7 +47,8 @@ Keep it that way: point it only at a deployment whose data may be thrown away, w
   `POST /api/session { token }` sets the `portico_session` cookie, exactly as the sign-in page does once Descope's
   component finishes. The suite checks that the sign-in pages load the component, but it does not type into it.
 - **Agents** (`lib/agent.ts`): `POST /api/join`, then the person allows the join on the real consent page in a browser
-  (handle the first time, the 4-digit code, Allow), then the agent polls for its token. `allowOnConsentPage` and
+  (`joinThroughPage`: a handle the first time, the code, Allow, the token). That helper handles both ways the code
+  can change hands, so a change to the join flow is made there and nowhere else. `allowOnConsentPage` and
   `decideHeld` are the two page helpers. `AgentClient` wraps the REST
   agent API: `call(tool, args)`, `send`, `inbox`, `receive(subject)`, `outcome(messageId)`, `task`, `upload`,
   `download`, and `raw` for checking refusals.

@@ -3,7 +3,7 @@
 //
 //   alice: probe, helper        bob: scout (comes into alice's shared Portico), owl
 import type { APIRequestContext, Browser, BrowserContext } from "@playwright/test";
-import { AgentClient, allowOnConsentPage, pollJoin, startJoin } from "./agent";
+import { AgentClient, allowOnConsentPage, joinThroughPage, startJoin } from "./agent";
 import { createUser } from "./descope";
 import { BASE_URL, nonce, runId } from "./env";
 import { newSession, personApi } from "./person";
@@ -124,9 +124,9 @@ export class World {
         return agent;
       }
       const join = await startJoin(name, opts.shareLink);
-      await allowOnConsentPage(await context!.newPage(), join, { handle });
+      const token = await joinThroughPage(await context!.newPage(), join, { handle });
       this.tookHandle(role);
-      return this.adopt(role, name, await pollJoin(join));
+      return this.adopt(role, name, token);
     } finally {
       await context?.close();
     }

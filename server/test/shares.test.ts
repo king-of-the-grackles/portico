@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { porticoTools } from "../src/agent-api/portico-tools";
 import type { Agent } from "../src/core/types";
-import { addAppAgent, addMember, addOwner, answerConsent, askToJoin, callAs, callPerson, copyProblems, DAY, errorCode, fakeAccounts, makePortico, MINUTE, pollJoin, signIn, type TestPortico, visibleCopy } from "./helpers";
+import { addAppAgent, addMember, addOwner, answerConsent, askToJoin, callAs, callPerson, copyProblems, DAY, errorCode, fakeAccounts, joinCodeOn, makePortico, MINUTE, pollJoin, signIn, submitJoinCode, type TestPortico, visibleCopy } from "./helpers";
 
 const on = () => makePortico();
 
@@ -24,9 +24,9 @@ async function world(p: TestPortico = on()) {
   return { p, chris, robert, maya, muse, grok, rmuse, dots, scout, launch, cookies };
 }
 
-/** Allows a request as the person does on the consent page: with the code the asking agent shows. */
+/** Allows what an agent of the person's asked, as the person does on the consent page: Allow, with no code. */
 const allow = (p: TestPortico, personId: string, id: string, extra: Record<string, unknown> = {}) =>
-  p.consents.decide(personId, id, { decision: "approve", code: p.consents.get(id)?.code, ...extra });
+  p.consents.decide(personId, id, { decision: "approve", ...extra });
 const deny = (p: TestPortico, personId: string, id: string) => p.consents.decide(personId, id, { decision: "deny" });
 
 const names = (p: TestPortico, viewer: Agent) => p.agents.entriesFor(viewer).map((e) => e.address);
@@ -94,7 +94,9 @@ describe("an agent on Portico comes in with a link", () => {
     const { p, chris, robert, muse, rmuse, launch } = await world();
     const { secret } = p.shares.create(chris.id, launch.id);
     const request = p.consents.enter(rmuse.agent, link(secret));
-    expect(request.code).toMatch(/^\d{4}$/);
+    // An agent the person already has asks with no code: only that person can open the page.
+    expect(request.code).toBeNull();
+    expect(request.personId).toBe(robert.id);
     expect(p.workspaces.hasPerson(launch.id, robert.id)).toBe(false);
     expect(p.workspaces.hasAgent(launch.id, rmuse.agent.id)).toBe(false);
     expect(names(p, muse.agent)).not.toContain("robert/muse");
@@ -208,8 +210,8 @@ describe("an agent on Portico comes in with a link", () => {
 });
 
 describe("an agent that isn't on Portico joins with a link", () => {
-  test("the agent asks with the link, the person types the code on the one page, and the token comes once", async () => {
-    const { p, chris, robert, muse, launch, cookies } = await world();
+  test("the agent asks with the link, the person allows on the one page, the agent hands in the code the page shows, and the token comes once", async () => {
+    const { p, chris, robert, muse, dots, launch, cookies } = await world();
     const { secret } = p.shares.create(chris.id, launch.id);
     const made = await askToJoin(p, { kind: "agent", name: "helper", client: "grok-bot", link: link(secret) });
     expect(made.link).toBe(`https://portico.example.com/c/${made.id}`);
@@ -217,42 +219,56 @@ describe("an agent that isn't on Portico joins with a link", () => {
     expect((await p.app.request(`/api/join/${made.id}`, { headers: { authorization: "Bearer nope" } })).status).toBe(401);
     expect(p.agents.ownedBy(robert.id)).toHaveLength(2);
 
-    // The page never shows the code: the person reads the code in the agent's chat.
     const page = await (await p.app.request(`/c/${made.id}`, { headers: { cookie: cookies.robert } })).text();
     expect(page).toContain("An agent asks to join Portico as “helper”, and says the app is Grok Bot.");
     expect(page).toContain("comes into the Portico “Launch”, shared by Chris (chris)");
-    expect(page).not.toContain(made.code);
+    expect(page).not.toContain('name="code"');
 
-    const wrong = await answerConsent(p, cookies.robert, made.id, { decision: "approve", code: made.code === "0000" ? "0001" : "0000" });
+    // Allow joins nothing and uses nothing up: the page shows Robert the code, and the share link still waits.
+    // Robert ticks dots to come in too: the tick is kept with the request until the code is handed in.
+    const allowed = await answerConsent(p, cookies.robert, made.id, { decision: "approve", name: "helper", agents: [dots.agent.id, "not-an-agent"] });
+    expect(await allowed.json()).toEqual({ status: "allowed", next: `/c/${made.id}` });
+    expect(p.agents.ownedBy(robert.id)).toHaveLength(2);
+    expect(p.workspaces.hasPerson(launch.id, robert.id)).toBe(false);
+    const code = (await joinCodeOn(p, cookies.robert, made.id))!;
+    // The page with the code is Robert's alone: Chris, who made the share link, sees what an unknown address shows.
+    expect(await joinCodeOn(p, cookies.chris, made.id)).toBeNull();
+    expect((await p.app.request(`/c/${made.id}`, { headers: { cookie: cookies.chris } })).status).toBe(404);
+    const wrong = await submitJoinCode(p, made, code === "0000" ? "0001" : "0000");
     expect(wrong.status).toBe(400);
     expect(p.agents.ownedBy(robert.id)).toHaveLength(2);
-    const right = await answerConsent(p, cookies.robert, made.id, { decision: "approve", code: made.code, name: "helper" });
+    const right = await submitJoinCode(p, made, code);
     expect(right.status).toBe(200);
-    expect(((await right.json()) as { next: string }).next).toBe(`/c/${made.id}`);
 
-    const first = await pollJoin(p, made);
+    const first = (await right.json()) as Record<string, any>;
     expect(first).toMatchObject({ status: "approved", agent: { name: "helper" }, mcp_url: "https://portico.example.com/mcp" });
-    expect((await pollJoin(p, made)).token).toBeUndefined();
+    expect(first.token).toMatch(/^pa_/);
+    expect(await pollJoin(p, made)).toEqual({ status: "approved", agent: { name: "helper" } });
     const helper = p.agents.ownedBy(robert.id).find((a) => a.name === "helper")!;
     expect(helper).toMatchObject({ kind: "grok-bot", type: "app" });
     expect(p.workspaces.hasAgent(launch.id, helper.id)).toBe(true);
+    expect(p.workspaces.agentsOf(launch.id, robert.id).sort()).toEqual([helper.id, dots.agent.id].sort());
     const list = (await (await callAs(p, { token: first.token }, "GET", "/api/agent/agents")).json()) as { agents: { name: string }[] };
     // The new agent reaches the workspace, and the other agents of the person who let the agent in.
     expect(list.agents.map((a) => a.name).sort()).toEqual(["chris/muse", "dots", "muse"]);
     expect(names(p, muse.agent)).toContain("robert/helper");
   });
 
-  test("a few wrong codes close the request, and a stranger with the request's address gets nowhere without the code", async () => {
+  test("a few wrong codes close the request, and a stranger who started it gets nowhere without the code", async () => {
     const { p, chris, maya, launch } = await world();
     const { secret } = p.shares.create(chris.id, launch.id);
-    const { request } = p.consents.startJoin({ kind: "agent", name: "helper", link: secret }, "test");
-    const wrong = request.code === "1111" ? "2222" : "1111";
-    for (let i = 0; i < 4; i++) expect(errorCode(() => p.consents.decide(maya.id, request.id, { decision: "approve", code: wrong }))).toBe("bad_request");
-    expect(errorCode(() => p.consents.decide(maya.id, request.id, { decision: "approve", code: wrong }))).toBe("wrong_status");
+    const { request, pollSecret } = p.consents.startJoin({ kind: "agent", name: "helper", link: secret }, "test");
+    expect(errorCode(() => p.consents.submitCode(request.id, pollSecret, "1111"))).toBe("wrong_status");
+    const { code } = p.consents.decide(maya.id, request.id, { decision: "approve" }).request;
+    const wrong = code === "1111" ? "2222" : "1111";
+    for (let i = 0; i < 4; i++) expect(errorCode(() => p.consents.submitCode(request.id, pollSecret, wrong))).toBe("bad_request");
+    expect(errorCode(() => p.consents.submitCode(request.id, pollSecret, wrong))).toBe("wrong_status");
     // Even the right code is too late now.
-    expect(errorCode(() => p.consents.decide(maya.id, request.id, { decision: "approve", code: request.code }))).toBe("wrong_status");
+    expect(errorCode(() => p.consents.submitCode(request.id, pollSecret, code))).toBe("wrong_status");
     expect(p.workspaces.hasPerson(launch.id, maya.id)).toBe(false);
     expect(p.agents.ownedBy(maya.id)).toHaveLength(1);
+    // The share link was never used: it still lets its person in.
+    expect(p.shares.usable(secret).claimedBy).toBeNull();
   });
 
   test("a bad name, a coding agent's kind and a dead link are refused or made safe", async () => {
@@ -456,25 +472,26 @@ describe("the Portico tools", () => {
     const { p, muse, rmuse, robert, launch, cookies } = await world();
     const asked = await tool(p, muse.token, "share_portico", { portico: "launch" });
     expect(asked.body).toMatchObject({ status: "waiting_for_person", portico: { id: launch.id, name: "Launch" }, request: { kind: "share", status: "pending", portico: { name: "Launch" } } });
-    const { id, code, link: page, expires_at: expiresAt } = asked.body.request;
+    const { id, link: page, expires_at: expiresAt } = asked.body.request;
     expect(page).toBe(`https://portico.example.com/c/${id}`);
-    expect(code).toMatch(/^\d{4}$/);
-    // The exact sentence to show: the link, the code and when the code runs out.
+    // No code anywhere: only Chris, signed in, can open the page.
+    expect(asked.body.request.code).toBeUndefined();
+    expect(JSON.stringify(asked.body)).not.toMatch(/\bcode\b/);
+    // The exact sentence to show: the link and when the request runs out.
     expect(asked.body.show).toBe(
-      `Waiting for Chris: sharing the Launch Portico with one more person happens only once Chris opens ${page} in a browser, signs in, types the code ${code} and presses Allow. The code runs out at ${expiresAt}.`,
+      `Waiting for Chris: sharing the Launch Portico with one more person happens only once Chris opens ${page} in a browser, signs in and presses Allow. Only Chris can open that page. The request runs out at ${expiresAt}.`,
     );
     expect(asked.body.request.share_link).toBeUndefined();
     // Asking again while the request waits answers the same one.
     expect((await tool(p, muse.token, "share_portico", { portico: "launch" })).body.request).toEqual(asked.body.request);
     const approvals = (await (await callPerson(p, cookies.chris, "GET", "/api/approvals")).json()) as { consents: { id: string; link: string }[] };
     expect(approvals.consents).toMatchObject([{ id, link: `/c/${id}`, kind: "share", title: "Share a Portico" }]);
-    // The dashboard never shows the code: the code is only in the agent's chat.
-    expect(JSON.stringify(approvals)).not.toContain(`"${code}"`);
-    // Someone else's cookie can't answer, and the link without the code admits nothing.
-    expect((await answerConsent(p, cookies.robert, id, { decision: "approve", code })).status).toBe(404);
-    expect((await answerConsent(p, cookies.chris, id, { decision: "approve" })).status).toBe(400);
+    // Someone else's cookie can't open or answer the page, and neither can a signed-out browser.
+    expect((await p.app.request(`/c/${id}`, { headers: { cookie: cookies.robert } })).status).toBe(404);
+    expect((await answerConsent(p, cookies.robert, id, { decision: "approve" })).status).toBe(404);
+    expect((await answerConsent(p, null, id, { decision: "approve" })).status).toBe(401);
     expect(p.shares.openFor(p.people.byHandle("chris")!.id, launch.id)).toEqual([]);
-    expect((await answerConsent(p, cookies.chris, id, { decision: "approve", code })).status).toBe(200);
+    expect((await answerConsent(p, cookies.chris, id, { decision: "approve" })).status).toBe(200);
     const after = await tool(p, muse.token, "list_porticos");
     const shared = after.body.waiting.find((r: any) => r.id === id);
     expect(shared.status).toBe("approved");
@@ -482,20 +499,20 @@ describe("the Portico tools", () => {
     expect(shared.share_link).toMatch(/^https:\/\/portico\.example\.com\/share#[A-Za-z0-9_-]+$/);
 
     const joining = await tool(p, rmuse.token, "join_portico", { link: shared.share_link });
-    expect(joining.body.request.code).toMatch(/^\d{4}$/);
+    expect(joining.body.request.code).toBeUndefined();
     expect(joining.body).toMatchObject({ status: "waiting_for_person", portico: { id: launch.id, name: "Launch" } });
     expect(joining.body.show).toBe(
-      `Waiting for Robert: this agent coming into the Launch Portico happens only once Robert opens https://portico.example.com/c/${joining.body.request.id} in a browser, signs in, types the code ${joining.body.request.code} and presses Allow. The code runs out at ${joining.body.request.expires_at}.`,
+      `Waiting for Robert: this agent coming into the Launch Portico happens only once Robert opens https://portico.example.com/c/${joining.body.request.id} in a browser, signs in and presses Allow. Only Robert can open that page. The request runs out at ${joining.body.request.expires_at}.`,
     );
-    expect((await tool(p, rmuse.token, "list_porticos")).body.waiting).toMatchObject([{ kind: "join", status: "pending", portico: { name: "Launch" }, code: joining.body.request.code }]);
+    expect((await tool(p, rmuse.token, "list_porticos")).body.waiting).toMatchObject([{ kind: "join", status: "pending", portico: { name: "Launch" }, link: `https://portico.example.com/c/${joining.body.request.id}` }]);
     const waiting = (await (await callPerson(p, cookies.robert, "GET", "/api/approvals")).json()) as { consents: { id: string }[] };
     expect(waiting.consents).toMatchObject([{ id: joining.body.request.id, kind: "enter", title: "Come into a Portico" }]);
-    expect((await answerConsent(p, cookies.chris, joining.body.request.id, { decision: "approve", code: joining.body.request.code })).status).toBe(404);
-    expect((await answerConsent(p, cookies.robert, joining.body.request.id, { decision: "approve", code: joining.body.request.code })).status).toBe(200);
+    expect((await answerConsent(p, cookies.chris, joining.body.request.id, { decision: "approve" })).status).toBe(404);
+    expect((await answerConsent(p, cookies.robert, joining.body.request.id, { decision: "approve" })).status).toBe(200);
     expect(p.workspaces.hasPerson(launch.id, robert.id)).toBe(true);
   });
 
-  test("a code that ran out: the same call gives a fresh link and code, and the old request is closed, not left waiting", async () => {
+  test("a request that ran out: the same call gives a fresh link, and the old request is closed, not left waiting", async () => {
     const { p, chris, muse } = await world();
     const first = (await tool(p, muse.token, "share_portico", { portico: "Launch", email: "dana@example.com" })).body.request;
     p.clock.advance(15 * MINUTE);
@@ -505,8 +522,8 @@ describe("the Portico tools", () => {
     expect(second.link).toBe(`https://portico.example.com/c/${second.id}`);
     expect(p.consents.waitingFor(chris.id).map((r) => r.id)).toEqual([second.id]);
     expect((p.db.query("SELECT status FROM consent_requests WHERE id = $id").get({ id: first.id }) as { status: string }).status).toBe("expired");
-    // The old code doesn't open the new request.
-    expect(errorCode(() => p.consents.decide(chris.id, first.id, { decision: "approve", code: first.code }))).toBe("wrong_status");
+    // The old request can't be allowed any more.
+    expect(errorCode(() => p.consents.decide(chris.id, first.id, { decision: "approve" }))).toBe("wrong_status");
     const waiting = (await tool(p, muse.token, "list_porticos")).body.waiting;
     expect(waiting.map((r: any) => [r.id, r.status])).toEqual([[second.id, "pending"], [first.id, "expired"]]);
   });
@@ -526,7 +543,7 @@ describe("the Portico tools", () => {
     expect(gone.body).toMatchObject({ status: "waiting_for_person", portico: { name: "Launch" }, request: { kind: "delete" } });
     expect(gone.body.show).toStartWith("Waiting for Chris: deleting the Launch Portico happens only once Chris opens ");
     expect(p.workspaces.get(launch.id)).not.toBeNull();
-    expect((await answerConsent(p, cookies.chris, gone.body.request.id, { decision: "approve", code: gone.body.request.code })).status).toBe(200);
+    expect((await answerConsent(p, cookies.chris, gone.body.request.id, { decision: "approve" })).status).toBe(200);
     expect(p.workspaces.get(launch.id)).toBeNull();
     expect(p.workspaces.forPerson(chris.id).map((w) => w.name)).toEqual(["Chris's Portico"]);
     // The page that allowed the delete still says what happened, and the request to take Robert out stopped waiting.
@@ -619,7 +636,11 @@ describe("workspaces for a signed-in person", () => {
     }
     const { request } = p.consents.startJoin({ kind: "agent", name: "helper", link: p.shares.create(chris.id, launch.id).secret }, "test");
     const confirm = await (await p.app.request(`/c/${request.id}`, { headers: { cookie: cookies.robert } })).text();
-    expect(confirm).toContain("Code the agent shows");
+    expect(confirm).toContain("After Allow, this page shows a 4-digit code.");
+    p.consents.decide(p.people.byHandle("robert")!.id, request.id, { decision: "approve" });
+    const coded = await (await p.app.request(`/c/${request.id}`, { headers: { cookie: cookies.robert } })).text();
+    expect(coded).toContain("Give this code to the agent");
+    expect(copyProblems(visibleCopy(coded))).toEqual([]);
     expect(copyProblems(visibleCopy(confirm))).toEqual([]);
     p.consents.enter(rmuse.agent, p.shares.create(chris.id, launch.id).secret);
     expect(copyProblems(visibleCopy(await (await p.app.request("/", { headers: { cookie: cookies.robert } })).text()))).toEqual([]);

@@ -303,11 +303,11 @@ describe("Today", () => {
     expect(text(render(state({ shownMessages: { "m-held": true } })))).toContain("The text");
   });
 
-  test("what an agent asked leads to the consent page, with no code and no answer here; a coding agent with a question points to its terminal", () => {
+  test("what an agent asked leads to the consent page, with no answer here; a coding agent with a question points to its terminal", () => {
     const html = render(state());
     const t = text(html);
     expect(t).toContain("Share a Portico");
-    expect(t).toContain("The agent “muse” asks to share the Portico “Launch” with one more person. The page asks for the 4-digit code the agent shows in the chat. Expires in 8 min.");
+    expect(t).toContain("The agent “muse” asks to share the Portico “Launch” with one more person. Expires in 8 min.");
     expect(html).toContain('<a class="btn btn-primary" href="/c/s1">Open the page</a>');
     // A held message has its own page too.
     expect(html).toContain('href="/held/m-held"');
@@ -718,10 +718,10 @@ describe("the Add agent sheet", () => {
     expect(html).toContain('value="https://portico.example.com/mcp"');
     expect(html.match(/data-action="add-copy/g)).toHaveLength(4);
     for (const kind of ["claude-code", "codex", "muse", "grok-bot", "dots", "claude-duet"]) expect(html).toContain(`/assets/icons/${kind}.svg`);
-    // Nothing here is a credential: the agent asks, and the person allows the join on one page with a code.
+    // Nothing here is a credential: the agent asks, the person allows the join on one page and gives the agent the code the page shows.
     expect(html).not.toMatch(/join#|share#/);
     expect(t).not.toMatch(/join line|works once|expires/i);
-    expect(t).toContain("The agent then shows a link and a 4-digit code. Open the link, type the code and choose Allow");
+    expect(t).toContain("The agent then shows a link. Open the link and choose Allow: the page shows a 4-digit code. Give that code to the agent, and nowhere else");
     expect(t).not.toContain("Waiting for the agent to join");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });

@@ -5,7 +5,7 @@ import type { Approvals } from "../core/approvals";
 import type { Files } from "../core/files";
 import type { Messages } from "../core/messages";
 import type { People } from "../core/people";
-import type { Task, TaskOutcome, TaskReason, TaskStepKind } from "../core/tasks";
+import { neverSent, type Task, type TaskOutcome, type TaskReason, type TaskStepKind } from "../core/tasks";
 import type { Workspaces } from "../core/workspaces";
 import type {
   Agent,
@@ -373,12 +373,12 @@ export function personViews(deps: ViewDeps, me: Person) {
   };
 
   /** A message held on its way out is its sender's person's to see first: the other side reads it once it is let go. */
-  const notYetSent = (m: Pick<Message, "status" | "heldFor" | "fromId">): boolean =>
-    m.status === "held" && m.heldFor === "outbound" && agents.get(m.fromId)?.ownerId !== me.id;
+  const notYetSent = (m: Pick<Message, "status" | "heldFor" | "fromId">): boolean => neverSent(m) && agents.get(m.fromId)?.ownerId !== me.id;
 
   const thread = (t: Thread): ThreadView => {
     const found = messages.threadSummary(t);
-    const summary = found.last && notYetSent(found.last) ? { ...found, last: null } : found;
+    // The one filter for what the receiving side may read: used here, for a thread's page, and by the task route.
+    const summary = found.last && notYetSent(found.last) ? { ...found, last: null, count: Math.max(0, found.count - 1), held: Math.max(0, found.held - (found.last.status === "held" ? 1 : 0)) } : found;
     return {
       id: t.id,
       ...place(t.workspaceId, t.aId, t.bId),

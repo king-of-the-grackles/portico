@@ -7,7 +7,7 @@ import { codexHome } from "./codex-config";
 import { ComputerFileError, computerConfigPath, readComputerFile, realFolder } from "./computer";
 import { CommandError } from "./computer-api";
 import { notJoined, switchFolder } from "./folders";
-import { joinComputer, JoinWaiting } from "./join";
+import { type JoinDeps, joinComputer, JoinWaiting } from "./join";
 import { findOnPath, leaveComputer, type LeaveDeps } from "./leave";
 
 /** What a command needs from the outside world, so tests can run commands without a real process. */
@@ -26,18 +26,23 @@ export interface CliDeps extends Pick<LeaveDeps, "findClaude" | "uninstall"> {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   pollMs?: number;
+  /** Asks for the join's code at a terminal. Set by the entry scripts when stdin is a terminal (`terminalCode`). */
+  readCode?: JoinDeps["readCode"];
+  /** How this command line is started, for the line that names the second call. Default: `bun src/cli.ts`. */
+  command?: string;
 }
 
-const JOIN_USAGE = "join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>]";
-const JOIN_OPTIONS = ["--name", "--replace", "--no-allow", "--wait"];
+export const JOIN_USAGE = "join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>] | join --code <4 digits> [--no-allow]";
+const JOIN_OPTIONS = ["--name", "--replace", "--no-allow", "--wait", "--code"];
 
 const USAGE = `Usage: bun src/cli.ts <command>
 
 Commands:
   ${JOIN_USAGE}
-                  Ask the Portico server at the address to let this computer join. Prints a link and a 4-digit code:
-                  a person opens the link, signs in, types the code and presses Allow. Then writes the computer file
-                  and allows the Portico tools in Claude Code. --wait 0 only asks; the same command again keeps waiting.
+                  Ask the Portico server at the address to let this computer join. Prints a link: a person opens the
+                  link, signs in and presses Allow, and the page then shows a 4-digit code. In a terminal the command
+                  asks for that code; anywhere else, join --code <4 digits> hands the code in. Then writes the computer
+                  file and allows the Portico tools in Claude Code. --wait 0 only asks and prints the link.
   off [folder]    Keep new sessions in a folder (default: the current folder) off Portico.
   on [folder]     Let new sessions in a folder join Portico again.
   leave           Take this computer off Portico: remove the computer there, the computer file and the settings rule, and uninstall the plugin.
@@ -84,51 +89,74 @@ function usageError(io: CliIo, problem: string, usage: string): number {
   return 1;
 }
 
-/** What a join that still waits says: nothing is wrong, and the same command picks the request up again. */
-export function stillWaiting(expiresAt: string): string {
-  return `Still waiting for a person to allow the join. Run the same command again to keep waiting: the link and the code stay the same until ${expiresAt}.`;
+/**
+ * What a join that still waits says: nothing is wrong, and the code finishes it. `command` is how this command line is
+ * started, such as `portico` or `bun src/cli.ts`.
+ */
+export function stillWaiting(expiresAt: string, allowed: boolean, command: string): string {
+  return (
+    `${allowed ? "Allow was pressed on Portico's page, which shows the 4-digit code now." : "Waiting for a person to press Allow on Portico's page, which then shows a 4-digit code."} ` +
+    `To finish the join, run: ${command} join --code <the 4 digits>. The request runs out at ${expiresAt}.`
+  );
+}
+
+export interface JoinArgs {
+  address: string;
+  name?: string;
+  replace: boolean;
+  noAllow: boolean;
+  waitSeconds?: number;
+  code?: string;
 }
 
 /**
- * The words that aren't options are joined with spaces into the address: the slash command passes the address as one
- * quoted argument, while a person may type "Join Portico at https://…".
+ * The join command's words. The ones that aren't options are joined with spaces into the address: the slash command
+ * passes the address as one quoted argument, while a person may type "Join Portico at https://…". Returns the problem
+ * as a string when the words don't fit.
  */
-async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
+export function parseJoinArgs(args: string[]): JoinArgs | string {
   const words: string[] = [];
-  let name: string | undefined;
-  let replace = false;
-  let noAllow = false;
-  let waitSeconds: number | undefined;
+  const parsed: JoinArgs = { address: "", replace: false, noAllow: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--replace") {
-      replace = true;
+      parsed.replace = true;
     } else if (arg === "--no-allow") {
-      noAllow = true;
-    } else if (arg === "--name" || arg === "--wait") {
+      parsed.noAllow = true;
+    } else if (arg === "--name" || arg === "--wait" || arg === "--code") {
       const value = args[++i];
-      if (value === undefined || JOIN_OPTIONS.includes(value)) return usageError(io, `${arg} needs a value.`, JOIN_USAGE);
-      if (arg === "--name") name = value;
-      else if (/^[0-9]{1,4}$/.test(value)) waitSeconds = Number(value);
-      else return usageError(io, "--wait takes a number of seconds.", JOIN_USAGE);
+      if (value === undefined || JOIN_OPTIONS.includes(value)) return `${arg} needs a value.`;
+      if (arg === "--name") parsed.name = value;
+      else if (arg === "--code") {
+        if (!/^[0-9]{4}$/.test(value)) return "--code takes the 4 digits Portico's page shows.";
+        parsed.code = value;
+      } else if (/^[0-9]{1,4}$/.test(value)) parsed.waitSeconds = Number(value);
+      else return "--wait takes a number of seconds.";
     } else if (arg.startsWith("--")) {
-      return usageError(io, `Unknown option: ${arg}.`, JOIN_USAGE);
+      return `Unknown option: ${arg}.`;
     } else {
       words.push(arg);
     }
   }
-  const address = words.join(" ").trim();
-  if (!address) return usageError(io, "The Portico server's address is required.", JOIN_USAGE);
+  parsed.address = words.join(" ").trim();
+  if (!parsed.address && parsed.code === undefined) return "The Portico server's address is required.";
+  return parsed;
+}
+
+async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
+  const parsed = parseJoinArgs(args);
+  if (typeof parsed === "string") return usageError(io, parsed, JOIN_USAGE);
+  const { name, replace, noAllow, waitSeconds, code } = parsed;
 
   let joined;
   try {
     joined = await joinComputer(
-      { address, name, replace, client: "claude-code", waitSeconds },
-      { configPath: computerConfigPath(io.env), fetch: deps.fetch, hostname: deps.hostname, out: io.out, now: deps.now, sleep: deps.sleep, pollMs: deps.pollMs },
+      { address: parsed.address || undefined, name, replace, client: "claude-code", waitSeconds, code },
+      { configPath: computerConfigPath(io.env), fetch: deps.fetch, hostname: deps.hostname, out: io.out, now: deps.now, sleep: deps.sleep, pollMs: deps.pollMs, readCode: deps.readCode },
     );
   } catch (err) {
     if (!(err instanceof JoinWaiting)) throw err;
-    io.out(stillWaiting(err.expiresAt));
+    io.out(stillWaiting(err.expiresAt, err.allowed, deps.command ?? "bun src/cli.ts"));
     return 0;
   }
   if (joined.already) {

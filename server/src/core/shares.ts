@@ -80,7 +80,7 @@ export interface SharesDeps {
 
 /**
  * Share links. The only way a person comes into someone else's workspace is a share link, confirmed on the consent
- * page by that person against a code the agent shows (core/consents.ts); `enter` here is the only caller of
+ * page by that person, signed in (core/consents.ts); `enter` here is the only caller of
  * `workspaces.admit`.
  */
 export class Shares {

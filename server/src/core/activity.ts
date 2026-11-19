@@ -144,10 +144,12 @@ export class Activity {
 
   /**
    * Newest first. With `agentIds`, only entries about those agents (as the agent or the other one), plus entries about
-   * no agent at all when `withUnattached` is set (a computer joining).
+   * no agent at all when `withUnattached` is set (a computer joining). With `forPerson` and `ownUnattached`, that person's own
+   * entries about no agent show too: the person's computer joining, a join the person turned down.
    */
-  list(filter: { agentIds?: string[]; withUnattached?: boolean; before?: string; limit?: number } = {}): ActivityEntry[] {
+  list(filter: { agentIds?: string[]; withUnattached?: boolean; before?: string; limit?: number; forPerson?: string; ownUnattached?: boolean } = {}): ActivityEntry[] {
     const clauses: string[] = [];
+    // A reader's list never says that a message of someone else's agent was held on its way out.
     const bindings: Record<string, string | number> = { limit: Math.min(Math.max(filter.limit ?? 100, 1), 500) };
     if (filter.agentIds) {
       const names = filter.agentIds.map((id, i) => {
@@ -155,7 +157,13 @@ export class Activity {
         return `$a${i}`;
       });
       const about = names.length > 0 ? `agent_id IN (${names.join(", ")}) OR other_id IN (${names.join(", ")})` : "0";
-      clauses.push(filter.withUnattached ? `(${about} OR (agent_id IS NULL AND other_id IS NULL))` : `(${about})`);
+      // What is about no agent at all (a computer joining, a join turned down) shows to the person it happened to.
+      const own = filter.forPerson && filter.ownUnattached ? " OR (agent_id IS NULL AND other_id IS NULL AND person_id IS $forPerson)" : "";
+      clauses.push(filter.withUnattached ? `(${about} OR (agent_id IS NULL AND other_id IS NULL))` : `(${about}${own})`);
+    }
+    if (filter.forPerson) {
+      clauses.push("(json_extract(detail, '$.for') IS NOT 'outbound' OR subject_id IS $forPerson)");
+      bindings.forPerson = filter.forPerson;
     }
     if (filter.before) {
       clauses.push("at < $before");
@@ -169,13 +177,15 @@ export class Activity {
 
   /**
    * One Portico's record, newest first: who came in and left, shares, holds, refused sends and pauses. With `after`,
-   * only the entries written after that one (its `seq`). An alert shows only to the person it is for (`forPerson`).
+   * only the entries written after that one (its `seq`). An alert shows only to the person it is for (`forPerson`),
+   * and so does anything about a message held on its way out: that is the sender's person's alone.
    */
   recordOf(workspaceId: string, opts: { forPerson?: string; after?: number; limit?: number } = {}): ActivityEntry[] {
     const rows = this.db
       .query(
         `SELECT * FROM activity WHERE workspace_id = $workspaceId AND seq > $after
            AND (kind NOT IN ('portico_burst', 'portico_refusals') OR subject_id IS $forPerson)
+           AND (json_extract(detail, '$.for') IS NOT 'outbound' OR subject_id IS $forPerson)
          ORDER BY at DESC, rowid DESC LIMIT $limit`,
       )
       .all({ workspaceId, after: opts.after ?? 0, forPerson: opts.forPerson ?? null, limit: Math.min(Math.max(opts.limit ?? 50, 1), 200) }) as ActivityRow[];

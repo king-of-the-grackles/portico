@@ -157,7 +157,7 @@ export function taskRoutes(core: Core): Hono<PersonEnv> {
   route.get("/tasks/:id", (c) => {
     const me = currentPerson(c);
     const views = personViews(core, me);
-    const found = core.tasks.get({ person: me.id }, c.req.param("id"));
+    const found = core.tasks.get({ person: me.id }, c.req.param("id"), visibleAgents(core, me));
     if (!found || !sees(visibleAgents(core, me), found.task)) throw new PorticoError("not_found", "No such task.");
     const within = { person: me.id, workspace: found.task.workspaceId };
     // A task or a reply still held on its way out is the sender's side's alone.
@@ -185,7 +185,7 @@ export function taskRoutes(core: Core): Hono<PersonEnv> {
     const before = timeParam(c.req.query("before")) ?? undefined;
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 100) || 100, 1), 300);
     const record = core.activity
-      .list({ agentIds: agentIds ?? undefined, withUnattached: !agent && visible === null, before, limit })
+      .list({ forPerson: me.id, agentIds: agentIds ?? undefined, withUnattached: !agent && visible === null, ownUnattached: !agent, before, limit })
       .map(views.activity);
     const sessions: ActivityView[] = core.agents.recentRuns(agentIds, { before, limit }).flatMap((run) => {
       const view = views.run(run);

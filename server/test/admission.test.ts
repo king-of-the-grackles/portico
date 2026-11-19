@@ -64,7 +64,7 @@ async function comeIn(w: Awaited<ReturnType<typeof world>>, agents: "self" | "as
   const { p, chris, robert, dots, launch } = w;
   const { share, secret } = p.shares.create(chris.id, launch.id, { agents });
   const request = p.consents.enter(dots.agent, secret);
-  p.consents.decide(robert.id, request.id, { decision: "approve", code: request.code, agents: bring });
+  p.consents.decide(robert.id, request.id, { decision: "approve", agents: bring });
   return share;
 }
 
@@ -94,7 +94,7 @@ describe("only the maker brings a new person in", () => {
     expect(visibleCopy(consent.html)).toContain("Chris is told who came in, and can take that person out in one step.");
     expect(copyProblems(visibleCopy(consent.html))).toEqual([]);
     expect(p.shares.openFor(chris.id, launch.id)).toEqual([]);
-    expect((await answerConsent(p, cookies.chris, asked.body.request.id, { decision: "approve", code: asked.body.request.code })).status).toBe(200);
+    expect((await answerConsent(p, cookies.chris, asked.body.request.id, { decision: "approve" })).status).toBe(200);
     expect(p.shares.openFor(chris.id, launch.id)).toMatchObject([{ agentsPolicy: "ask", createdBy: chris.id }]);
     // From the pages, the form's choice goes along, and "self" is the default.
     const made = await json(callPerson(p, cookies.chris, "POST", `/api/porticos/${launch.id}/shares`, {}));
@@ -114,7 +114,7 @@ describe("a share link works once, for one person", () => {
     expect(consent.html).toContain(`name="agents" data-list value="${scout.agent.id}">`);
     expect(consent.html).not.toContain(pilot.agent.id);
     expect(copyProblems(visibleCopy(consent.html))).toEqual([]);
-    const allowed = await answerConsent(p, cookies.robert, joining.body.request.id, { decision: "approve", code: joining.body.request.code, agents: [dots.agent.id, scout.agent.id] });
+    const allowed = await answerConsent(p, cookies.robert, joining.body.request.id, { decision: "approve", agents: [dots.agent.id, scout.agent.id] });
     expect(allowed.status).toBe(200);
     expect(p.workspaces.agentsOf(launch.id, robert.id).sort()).toEqual([dots.agent.id, scout.agent.id].sort());
     expect(p.shares.get(share.id)).toMatchObject({ claimedBy: robert.id });
@@ -144,30 +144,33 @@ describe("a share link works once, for one person", () => {
     const { secret } = p.shares.create(chris.id, launch.id);
     const first = p.consents.enter(dots.agent, secret);
     const second = p.consents.enter(pilot.agent, secret);
-    p.consents.decide(maya.id, second.id, { decision: "approve", code: second.code });
+    p.consents.decide(maya.id, second.id, { decision: "approve" });
     // The link is someone else's now, so Robert's request answers as one that was never there.
-    expect(errorCode(() => p.consents.decide(robert.id, first.id, { decision: "approve", code: first.code }))).toBe("not_found");
+    expect(errorCode(() => p.consents.decide(robert.id, first.id, { decision: "approve" }))).toBe("not_found");
     expect(p.workspaces.peopleIn(launch.id)).toEqual([chris.id, maya.id]);
   });
 });
 
 describe("adding more agents later", () => {
-  test("where the maker left it to the person: one page with a code when an agent asks, and direct from the pages", async () => {
+  test("where the maker left it to the person: one page, only that person's, when an agent asks, and direct from the pages", async () => {
     const w = await world();
     const { p, robert, dots, scout, launch, cookies } = w;
     await comeIn(w, "self");
     expect(p.workspaces.policyOf(launch.id, robert.id)).toBe("self");
     const asked = await tool(p, dots, "add_to_portico", { portico: "Launch", agent: "scout" });
     expect(asked.body.status).toBe("waiting_for_person");
-    expect(asked.body.show).toContain(`types the code ${asked.body.request.code} and presses Allow`);
+    expect(asked.body.show).toContain("signs in and presses Allow. Only Robert can open that page.");
+    expect(asked.body.request.code).toBeUndefined();
     expect(p.workspaces.hasAgent(launch.id, scout.agent.id)).toBe(false);
     const consent = await page(p, `/c/${asked.body.request.id}`, cookies.robert);
     expect(visibleCopy(consent.html)).toContain("The agent “dots” asks to put the agent “scout” into the Portico “Launch”.");
     expect(copyProblems(visibleCopy(consent.html))).toEqual([]);
-    // Nobody else answers, the maker included; the code is needed.
-    expect((await answerConsent(p, cookies.chris, asked.body.request.id, { decision: "approve", code: asked.body.request.code })).status).toBe(404);
-    expect((await answerConsent(p, cookies.robert, asked.body.request.id, { decision: "approve" })).status).toBe(400);
-    expect((await answerConsent(p, cookies.robert, asked.body.request.id, { decision: "approve", code: asked.body.request.code })).status).toBe(200);
+    expect(consent.html).not.toContain('name="code"');
+    // Nobody else opens or answers the page, the maker included; Robert's Allow needs no code.
+    expect((await page(p, `/c/${asked.body.request.id}`, cookies.chris)).status).toBe(404);
+    expect((await answerConsent(p, cookies.chris, asked.body.request.id, { decision: "approve" })).status).toBe(404);
+    expect(p.workspaces.hasAgent(launch.id, scout.agent.id)).toBe(false);
+    expect((await answerConsent(p, cookies.robert, asked.body.request.id, { decision: "approve" })).status).toBe(200);
     expect(p.workspaces.hasAgent(launch.id, scout.agent.id)).toBe(true);
     // From the pages it is one step.
     p.workspaces.removeAgent(robert.id, launch.id, scout.agent.id);
@@ -182,7 +185,7 @@ describe("adding more agents later", () => {
     expect(p.workspaces.hasAgent(launch.id, grok.agent.id)).toBe(true);
   });
 
-  test("where the maker chose to be asked: the request goes to the maker, with no code, and the agent comes in on the maker's Allow", async () => {
+  test("where the maker chose to be asked: the request goes to the maker, and the agent comes in on the maker's Allow", async () => {
     const hooks = fakeWebhooks();
     const w = await world(makePortico({ config: { mail: MAIL }, mailPost: hooks.post }));
     const { p, chris, robert, dots, scout, launch, cookies } = w;
@@ -215,7 +218,7 @@ describe("adding more agents later", () => {
     expect((await answerConsent(p, cookies.robert, asked.body.request.id, { decision: "approve" })).status).toBe(404);
     const consent = await page(p, `/c/${asked.body.request.id}`, cookies.chris);
     expect(consent.html).not.toContain('name="code"');
-    expect(visibleCopy(consent.html)).toContain("No code is needed: only the owner of the Portico, signed in, can answer here.");
+    expect(visibleCopy(consent.html)).toContain("Only the owner of the Portico, signed in, can answer here.");
     expect(copyProblems(visibleCopy(consent.html))).toEqual([]);
     expect((await answerConsent(p, cookies.chris, asked.body.request.id, { decision: "approve" })).status).toBe(200);
     expect(p.workspaces.hasAgent(launch.id, scout.agent.id)).toBe(true);

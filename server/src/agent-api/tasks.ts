@@ -5,7 +5,7 @@ import type { Agents } from "../core/agents";
 import type { Files } from "../core/files";
 import { PorticoError } from "../core/errors";
 import type { Messages } from "../core/messages";
-import { letThrough, TASK_OUTCOMES, type Task, type TaskOutcome, type TaskReason, type Tasks } from "../core/tasks";
+import { letThrough, neverSent, TASK_OUTCOMES, type Task, type TaskOutcome, type TaskReason, type Tasks } from "../core/tasks";
 import type { Agent, Message } from "../core/types";
 import type { AgentViews, FileOutView, MessageOutView } from "./views";
 
@@ -85,6 +85,7 @@ export function agentTaskView(views: AgentViews, agent: Agent, t: Task): AgentTa
 /** Whether the agent may see the task at all: it asked, or a person let the first message through to it. */
 function visibleTo(agent: Agent, t: Task): boolean {
   if (t.fromId === agent.id) return true;
+  if (t.outboundHeld) return false;
   return t.toId === agent.id && (t.heldAt === null || t.steps.some((s) => s.kind === "allowed"));
 }
 
@@ -135,8 +136,10 @@ export async function getAgentTask(
   if (typeof id !== "string" || id.trim() === "") throw new PorticoError("bad_request", "task must be a task or message ID.");
   // Looked for only in the workspaces this agent is or was in.
   const scope = { agent: agent.id };
-  const root = deps.tasks.rootOf(scope, id.trim());
-  const found = root ? deps.tasks.get(scope, root) : null;
+  // A message that never left the other side names no task for this agent.
+  const asked = deps.messages.get(scope, id.trim());
+  const root = asked && asked.fromId !== agent.id && neverSent(asked) ? null : deps.tasks.rootOf(scope, id.trim());
+  const found = root ? deps.tasks.get(scope, root, [agent.id]) : null;
   if (!found || !visibleTo(agent, found.task)) throw new PorticoError("not_found", "No such task among this agent's tasks.");
   deps.agents.checkedIn(agent);
   /** Each file with a fresh download address; a file Portico won't hand out says why instead. */
@@ -155,7 +158,8 @@ export async function getAgentTask(
   const messages: AgentTaskMessageView[] = [];
   for (const messageId of found.messageIds) {
     const m = deps.messages.get({ agent: agent.id, workspace: found.task.workspaceId }, messageId);
-    if (!m) continue;
+    // A message that never left its sender's side isn't there at all for the other agent.
+    if (!m || (m.fromId !== agent.id && neverSent(m))) continue;
     const { text, subject, thread_id: _thread, expires_at: _expires, attachments: _files, ...rest } = deps.views.message(m, agent);
     if (m.fromId !== agent.id && !letThrough(m)) {
       messages.push({ ...rest, done: m.final, withheld: true });

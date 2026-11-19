@@ -17,9 +17,9 @@ export const LIMITS = {
   historyDays: 30,
   /** Offline sessions leave the agents' list_agents after this; they stay on Portico. */
   sessionListHours: 24,
-  /** A consent request (a join, or what an agent asks its person to confirm) waits this long for the code. */
+  /** A consent request (a join, or what an agent asks its person to confirm) waits this long, from the asking to the end. */
   consentMinutes: 15,
-  /** Wrong codes a consent request takes before it closes. */
+  /** Wrong codes a joining computer or agent can hand in before its request closes. */
   consentCodeTries: 5,
   /** Consent requests one client address can start in 15 minutes, and have waiting at once: anyone can start one. */
   consentStartsPerClient: 10,

@@ -62,6 +62,9 @@ async function world(serverOwner: "alice" | "bob" = "alice") {
   const share = p.shares.create(alice.id, den.id, { email: "invited@zebra.example" });
   const asked = p.consents.ask(a1.agent, "delete", den.id);
   const removal = p.consents.ask(a1.agent, "remove_person", den.id, { person: "zara" });
+  // A join Alice allowed, whose code shows on her page and waits to be handed in.
+  const joining = p.consents.startJoin({ kind: "computer", name: "zebra-studio" }, "test").request;
+  const joinCode = p.consents.decide(alice.id, joining.id, { decision: "approve" }).request.code!;
   const { computer: box } = addComputer(p, alice, "zebra-box");
   const session = addSession(p, box, { repo: "zebra-repo", folderId: "9".repeat(64) });
   const invite = p.people.createInvite(p.people.owner()!.id, "Zebra invitee").invite;
@@ -96,6 +99,7 @@ async function world(serverOwner: "alice" | "bob" = "alice") {
     share: share.share.id,
     consent: asked.id,
     removal: removal.id,
+    allowedJoin: joining.id,
     computer: box.id,
     invite: invite.id,
     folder: "9".repeat(64),
@@ -108,7 +112,7 @@ async function world(serverOwner: "alice" | "bob" = "alice") {
   };
   /** Bob's own, to fill the other places of a path so the check for the swept place is reached. */
   const own: Record<string, string> = { portico: beta.id, agent: b1.agent.id, person: bob.id, message: mine.id, thread: mine.threadId, computer: bobBox.computer.id };
-  return { p, alice, zara, bob, b1, bobBox, cookie: signIn(p, bob), theirs, own, den };
+  return { p, alice, zara, bob, b1, bobBox, cookie: signIn(p, bob), theirs, own, den, joinCode };
 }
 
 type World = Awaited<ReturnType<typeof world>>;
@@ -271,7 +275,7 @@ describe("isolation sweep: routes", () => {
     for (const [path, ids] of [
       ["/p/", [w.theirs.portico, w.theirs.ownPortico]],
       ["/a/", [w.theirs.agent, w.theirs.aliceAgent, w.theirs.session]],
-      ["/c/", [w.theirs.consent, w.theirs.removal]],
+      ["/c/", [w.theirs.consent, w.theirs.removal, w.theirs.allowedJoin]],
       ["/held/", [w.theirs.heldMessage, w.theirs.message]],
     ] as const) {
       const unknown = await call(w, "GET", `${path}${UNKNOWN}`);
@@ -281,6 +285,19 @@ describe("isolation sweep: routes", () => {
         expect(page.body).not.toMatch(SECRET);
       }
     }
+    // The code of a join someone else allowed shows on that person's page and nowhere a stranger can look.
+    const mine = await callPerson(w.p, signIn(w.p, w.alice), "GET", `/c/${w.theirs.allowedJoin}`);
+    expect(await mine.text()).toContain(`>${w.joinCode}</p>`);
+    for (const cookie of [w.cookie, null]) {
+      for (const path of [`/c/${w.theirs.allowedJoin}`, "/", "/api/approvals", "/api/activity?events=1"]) {
+        expect(await (await callPerson(w.p, cookie, "GET", path)).text()).not.toContain(`>${w.joinCode}<`);
+      }
+    }
+    for (const path of [`/api/join/${w.theirs.allowedJoin}`, `/api/join/${w.theirs.allowedJoin}/code`]) {
+      const res = await w.p.app.request(path, { method: path.endsWith("/code") ? "POST" : "GET", headers: { authorization: `Bearer ${w.b1.token}`, "content-type": "application/json" }, body: path.endsWith("/code") ? JSON.stringify({ code: w.joinCode }) : undefined });
+      expect(res.status).toBe(401);
+    }
+    expect(w.p.computers.list(w.alice.id).map((computer) => computer.name)).toEqual(["zebra-box"]);
   });
 });
 

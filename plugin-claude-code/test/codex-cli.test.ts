@@ -5,7 +5,7 @@ import { copyProblems } from "../../server/test/helpers";
 import { readComputerFile, writeComputerFile } from "../src/computer";
 import { type CodexCliIo, runCodexCli } from "../src/codex/cli";
 import { STOP_HOOK } from "../src/codex-config";
-import { allowJoins, joinTestComputer, startPortico, type TestPortico, tempDir, computerNamed } from "./helpers";
+import { codeFromPage, joinTestComputer, startPortico, type TestPortico, tempDir, computerNamed } from "./helpers";
 
 let p: TestPortico | null = null;
 afterEach(() => {
@@ -34,7 +34,7 @@ async function cli(argv: string[], h: ReturnType<typeof home>) {
     out: (line) => out.push(line),
     err: (line) => err.push(line),
   };
-  // The person allows the join between two polls, as on the consent page.
+  // The person allows the join on the consent page and types the code that page shows at the prompt.
   const code = await runCodexCli(argv, io, {
     bridgePath: h.bridge,
     hostname: () => "Chris-MacBook.local",
@@ -42,7 +42,7 @@ async function cli(argv: string[], h: ReturnType<typeof home>) {
     pollMs: 1,
     // The test Portico runs on its own clock, which the code's time to run out is measured by.
     now: () => (p ? p.clock.now().getTime() : Date.now()),
-    sleep: async () => void (p && allowJoins(p)),
+    readCode: p ? codeFromPage(p) : undefined,
   });
   return { code, out, err };
 }
@@ -54,9 +54,9 @@ describe("the Codex bridge's join", () => {
     const { code, out, err } = await cli(["join", p.url], h);
     expect(err).toEqual([]);
     expect(code).toBe(0);
-    // The link and the code for the person come first, from the real server.
-    expect(out[1]).toMatch(/^  1\. Open https:\/\/portico\.example\.com\/c\/[A-Za-z0-9-]+ in a browser and sign in\.$/);
-    expect(out[2]).toMatch(/^  2\. Type the code \d{4} there and press Allow\.$/);
+    // The link for the person comes first, from the real server, and no code: the person reads that on the page.
+    expect(out[1]).toMatch(/^  1\. Open https:\/\/portico\.example\.com\/c\/[A-Za-z0-9-]+ in a browser, sign in and press Allow\.$/);
+    expect(out[2]).toBe("  2. The page then shows a 4-digit code. Type that code here, and nowhere else.");
     expect(readComputerFile(h.configPath)).toMatchObject({ url: p.url, computer: "chris-macbook", token: expect.stringMatching(/^pc_/) });
     expect(computerNamed(p, "chris-macbook")!.ownerId).toBe(p.owner.id);
     // The request says which coding agent asked, for the page the person reads.

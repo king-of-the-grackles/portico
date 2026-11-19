@@ -33,7 +33,8 @@ export interface Join {
   id: string;
   /** The consent page the person opens. */
   link: string;
-  code: string;
+  /** Only while the agent is the one that shows the code. */
+  code?: string;
   poll_secret: string;
   expires_at: string;
   show: string;
@@ -47,17 +48,39 @@ export async function startJoin(name: string, shareLink?: string): Promise<Join>
   return body;
 }
 
+const AFTER_ALLOW = /^(Allowed|Joined|Give this code to the agent)$/;
+
 /**
- * The consent page, as the signed-in person answers it: a handle the first time, the code, Allow. Works for a join
- * and for anything else an agent asks (share, come in with a link, delete).
+ * The consent page, as the signed-in person answers it: a handle the first time, the code when the page asks for one,
+ * Allow. Works for a join and for anything else an agent asks (share, come in with a link, delete). Returns the code
+ * the page shows after Allow, on a server where the person carries the code to the agent; null otherwise.
  */
-export async function allowOnConsentPage(page: Page, ask: { link: string; code: string }, opts: { handle?: string } = {}): Promise<void> {
+export async function allowOnConsentPage(page: Page, ask: { link: string; code?: string }, opts: { handle?: string } = {}): Promise<string | null> {
   await page.goto(ask.link);
   const handle = page.getByLabel("Handle");
   if (opts.handle && (await handle.count()) > 0) await handle.fill(opts.handle);
-  await page.getByLabel("Code the agent shows").fill(ask.code);
+  const code = page.getByLabel("Code the agent shows");
+  if (ask.code && (await code.count()) > 0) await code.fill(ask.code);
   await page.locator('button[name="decision"][value="approve"]').click();
-  await expect(page.getByRole("heading", { level: 1, name: "Allowed" })).toBeVisible();
+  const heading = page.getByRole("heading", { level: 1, name: AFTER_ALLOW });
+  await expect(heading).toBeVisible();
+  if ((await heading.innerText()).trim() !== "Give this code to the agent") return null;
+  const shown = (await page.locator(".join-code").innerText()).replace(/\D/g, "");
+  expect(shown, "the code the page shows after Allow").toMatch(/^\d{4}$/);
+  return shown;
+}
+
+/**
+ * A whole join, whichever way the server does the code. Today: the agent shows the code, the person types it on the
+ * page, and the agent's poll carries the token. Next: the person presses Allow, the page shows the code, and the agent
+ * hands it in with its poll secret. The one place to change when the join flow changes.
+ */
+export async function joinThroughPage(page: Page, join: Join, opts: { handle?: string } = {}): Promise<string> {
+  const shown = await allowOnConsentPage(page, join, opts);
+  if (shown === null) return pollJoin(join);
+  const { status, body } = await http("POST", `/api/join/${join.id}/code`, { token: join.poll_secret, body: { code: shown } });
+  if (status >= 400 || !body?.token) throw new ApiError(status, body, "POST /api/join/:id/code");
+  return body.token;
 }
 
 /** A held message's own page, /held/<id>, answered by the signed-in person with the button of that name. */

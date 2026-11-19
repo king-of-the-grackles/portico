@@ -197,6 +197,7 @@ export class Approvals {
         otherId: held.fromId,
         personId,
         workspaceId: held.workspaceId,
+        subjectId: held.heldFor === "outbound" ? personId : null,
         detail: { decision: choice, messageId: held.id, count: String(count), for: held.heldFor ?? "approval" },
       });
 
@@ -217,7 +218,15 @@ export class Approvals {
     const sender = this.agents.get(held.fromId);
     const receiver = this.agents.require(held.toId);
     let others: Message[] = [];
-    if (choice === "always_allow") {
+    // A new agent is asked about once for each of the person's other agents: either Allow settles this pair, and
+    // Always says the person vouches for the agent, so nothing more of it is held for being new.
+    if (held.heldFor === "new_agent" && choice !== "deny") {
+      this.allowList.add(held.toId, held.fromId, personId, at);
+      if (choice === "always_allow") {
+        this.agents.proven(held.fromId);
+        others = this.messages.heldFor(personId).filter((m) => m.id !== held.id && m.fromId === held.fromId && m.heldFor === "new_agent");
+      }
+    } else if (choice === "always_allow") {
       if (held.heldFor === "first_contact" && sender) {
         this.contacts.add(personId, sender.ownerId, at);
         // The agent's own switch still asks about each new sender: this one is answered too.

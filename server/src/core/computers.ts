@@ -104,6 +104,9 @@ export class Computers {
     return { computer, token };
   }
 
+  /** Set by portico.ts, and called where a person allowed a computer's join: the person is told at once. */
+  onJoined: ((computer: Computer) => void) | null = null;
+
   /** A new token for the computer, returned only here. The one before stops working. */
   issueToken(id: string): string {
     const token = newToken("pc_");

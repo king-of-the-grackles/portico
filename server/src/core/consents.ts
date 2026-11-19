@@ -6,6 +6,7 @@ import type { Changes } from "./changes";
 import { APP_KINDS, COMPUTER_KINDS, type Computers, signInCode } from "./computers";
 import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS, MINUTE_MS } from "./limits";
+import { requireUnreservedName } from "./names";
 import type { People } from "./people";
 import { cleanEmail } from "./people";
 import { DEAD_LINK, type Share, type Shares } from "./shares";
@@ -21,29 +22,34 @@ import { cleanAgentsPolicy, type Workspaces } from "./workspaces";
  * the workspace's owner, who chose to be asked for each agent that person adds.
  */
 export type ConsentKind = "computer" | "agent" | "enter" | "share" | "remove_person" | "delete" | "add_agent" | "admit_agent";
-export type ConsentStatus = "pending" | "approved" | "denied" | "expired";
-/** The kinds anyone can start, with no token: whoever signs in and types the code becomes the owner. */
+/**
+ * `allowed` is only for a join: a person pressed Allow and the page shows that person a code, but nothing has joined.
+ * The join happens (`approved`) once the asker hands that code back.
+ */
+export type ConsentStatus = "pending" | "allowed" | "approved" | "denied" | "expired";
+/** The kinds anyone can start, with no token: whoever signs in, presses Allow and gives the asker the code becomes the owner. */
 export type JoinKind = "computer" | "agent";
 /** The kinds an agent asks about a workspace of its person's. */
 export type AskKind = "share" | "remove_person" | "delete";
 
 export const isJoin = (kind: ConsentKind): kind is JoinKind => kind === "computer" || kind === "agent";
-/**
- * The kinds answered without a code. The code ties a page to the agent showing it in its person's chat; the owner of a
- * workspace answering about someone else's agent has no such chat, and only that owner, signed in, can open the page.
- */
-export const needsCode = (kind: ConsentKind): boolean => kind !== "admit_agent";
+/** The states in which a request still waits: for a person's answer, or (a join) for the code. */
+const OPEN = "status IN ('pending', 'allowed')";
 
 /** One thing waiting for a person's Allow on the consent page, `/c/<id>`. */
 export interface ConsentRequest {
   id: string;
   kind: ConsentKind;
   status: ConsentStatus;
-  /** Four digits the asking agent shows in its chat: typing them ties the page to that agent. */
-  code: string;
+  /**
+   * Only for a join, and only once a person pressed Allow: four digits the consent page shows that person, to hand to
+   * the computer or agent that asked. The asker never gets the code from Portico, so a join started by someone else
+   * ends with nothing unless the person hands that someone the code.
+   */
+  code: string | null;
   /** The agent asking (`enter` and the asks), or the app agent that was made (`agent`, once allowed). */
   agentId: string | null;
-  /** Who has to confirm, when that is known. Null for a join: whoever signs in and types the code. */
+  /** Who has to confirm, when that is known: only that person can open the page. Null for a join: whoever signs in. */
   personId: string | null;
   workspaceId: string | null;
   /** `enter`: the link used. `agent`: the link the new agent brought, when it brought one. */
@@ -55,18 +61,19 @@ export interface ConsentRequest {
   /**
    * `share`: the address to email the link to, or null, and the owner's choice for the person coming in.
    * `remove_person`: the person to take out. `add_agent` and `admit_agent`: the agent to put in; `admit_agent` also
-   * the person who asked (`personId`).
+   * the person who asked (`personId`). `agent` with a share link, once allowed: the person's own agents ticked to
+   * come in too (`bring`). A join, once allowed: whether the person ticked "started this join" (`mine`).
    */
-  detail: { email?: string | null; personId?: string; agents?: AgentsPolicy; agentId?: string };
+  detail: { email?: string | null; personId?: string; agents?: AgentsPolicy; agentId?: string; bring?: string[]; mine?: boolean };
   /** `share`, once allowed: the share that was made. */
   result: { shareId?: string } | null;
-  /** `computer`, once allowed: the computer that was made. */
+  /** `computer`, once joined: the computer that was made. */
   computerId: string | null;
   createdAt: string;
   expiresAt: string;
   decidedAt: string | null;
   decidedBy: string | null;
-  /** When the token was handed to a joining computer or agent, at its first poll after Allow. */
+  /** When the token was handed to a joining computer or agent: with the answer to the right code. */
   issuedAt: string | null;
 }
 
@@ -74,7 +81,7 @@ interface Row {
   id: string;
   kind: ConsentKind;
   status: ConsentStatus;
-  code: string;
+  code: string | null;
   tries: number;
   poll_hash: string | null;
   client: string | null;
@@ -139,15 +146,17 @@ export interface ConsentsDeps {
   log?: (msg: string, fields: Record<string, unknown>) => void;
   /** A request whose person is known was just made: the place to email that person the page's link. */
   onAsked?: (request: ConsentRequest) => void;
-  /** A request ended: the place to tell the agents that wait on its answer. */
+  /** A request ended: allowed (for a join, once it joined) or turned down. The place to tell the person what joined. */
   onDecided?: (request: ConsentRequest) => void;
 }
 
 /**
- * Consent requests: everything a person confirms on the one consent page. A request carries a 4-digit code that only
- * the asking agent shows, so the link alone lets nothing in; a few wrong codes close it, and it runs out after a few
- * minutes. Nothing changes until the person presses Allow, and then the change is made as that person, so every rule
- * for the person applies again.
+ * Consent requests: everything a person confirms on the one consent page. What an agent of a person's asks can be
+ * opened and answered only by that person, signed in, and takes no code. A join is started by a computer or agent that
+ * nobody owns yet, so its link can be sent to anyone: pressing Allow there joins nothing, and only shows the person a
+ * 4-digit code. The join happens once the asker hands that code back, so only an asker the person gave the code to
+ * gets in; a few wrong codes close the request, and it runs out after a few minutes. Every change is made as the
+ * person, so every rule for the person applies again.
  */
 export class Consents {
   private readonly db: Database;
@@ -184,10 +193,10 @@ export class Consents {
 
   /**
    * A computer or an app agent that isn't on Portico asks to join. Anyone can ask, so nothing here names an account:
-   * the computer or agent will belong to whoever signs in, opens the page and types the code. `client` is the address
-   * the request came from, which caps how many one client has waiting. With `link`, a new app agent also comes into
-   * the workspace a share link is for. `replaces` ends an earlier request of the same asker, so asking again for a
-   * fresh code leaves one request waiting, not two. The poll secret is returned only here.
+   * the computer or agent will belong to whoever signs in, presses Allow on the page and gives the asker the code the
+   * page then shows. `client` is the address the request came from, which caps how many one client has waiting. With
+   * `link`, a new app agent also comes into the workspace a share link is for. `replaces` ends an earlier request of
+   * the same asker, so asking again leaves one request waiting, not two. The poll secret is returned only here.
    */
   startJoin(
     input: { kind?: unknown; name?: unknown; client?: unknown; link?: unknown; replaces?: unknown },
@@ -213,7 +222,7 @@ export class Consents {
     this.replace(input.replaces);
     const now = this.iso();
     const waiting = (where: string, bindings: Record<string, string>) =>
-      (this.db.query(`SELECT COUNT(*) AS n FROM consent_requests WHERE status = 'pending' AND expires_at > $now AND person_id IS NULL AND ${where}`).get({ now, ...bindings }) as { n: number }).n;
+      (this.db.query(`SELECT COUNT(*) AS n FROM consent_requests WHERE ${OPEN} AND expires_at > $now AND person_id IS NULL AND ${where}`).get({ now, ...bindings }) as { n: number }).n;
     if (waiting("client = $client", { client }) >= LIMITS.consentWaitingPerClient || waiting("1 = 1", {}) >= LIMITS.consentWaitingJoins) {
       throw new PorticoError("rate_limited", "Too many requests to join are waiting. Finish one on Portico's page, or try again in a few minutes.");
     }
@@ -229,7 +238,7 @@ export class Consents {
     if (typeof id !== "string" || typeof secret !== "string") return;
     const row = this.row(id);
     if (!row?.poll_hash || !sameSecret(hashSecret(secret), row.poll_hash)) return;
-    this.db.query("UPDATE consent_requests SET status = 'expired' WHERE id = $id AND status = 'pending'").run({ id });
+    this.db.query(`UPDATE consent_requests SET status = 'expired' WHERE id = $id AND ${OPEN}`).run({ id });
   }
 
   /**
@@ -287,8 +296,8 @@ export class Consents {
 
   /**
    * An agent asks to put one of its person's agents into a workspace someone else owns. Where the person adds agents
-   * alone, the person confirms on the consent page with the code the asking agent shows. Where the owner chose to be
-   * asked, the request goes to the owner instead (`askOwner`).
+   * alone, the person confirms on the consent page. Where the owner chose to be asked, the request goes to the owner
+   * instead (`askOwner`).
    */
   askToAdd(agent: Agent, workspaceId: string, subject: Agent): ConsentRequest {
     const workspace = this.shares.sharedFor(agent.ownerId, workspaceId);
@@ -300,7 +309,7 @@ export class Consents {
 
   /**
    * A person in a workspace whose owner chose to be asked wants one more of the person's own agents in. The request
-   * waits for the owner, for days rather than minutes, and takes no code: nobody but the owner, signed in, can answer.
+   * waits for the owner, for days rather than minutes: nobody but the owner, signed in, can answer.
    * `asker` is the agent that asked, when one did.
    */
   askOwner(personId: string, workspaceId: string, subject: Agent, asker: Agent | null = null): ConsentRequest {
@@ -372,7 +381,7 @@ export class Consents {
       id: this.newId(),
       kind: input.kind,
       status: "pending",
-      code: signInCode(),
+      code: null,
       agentId: input.agentId ?? null,
       personId: input.personId ?? null,
       workspaceId: input.workspaceId,
@@ -390,13 +399,12 @@ export class Consents {
     };
     this.db
       .query(
-        `INSERT INTO consent_requests (id, kind, status, code, poll_hash, client, agent_id, person_id, workspace_id, share_id, name, agent_kind, detail, created_at, expires_at)
-         VALUES ($id, $kind, 'pending', $code, $pollHash, $client, $agentId, $personId, $workspaceId, $shareId, $name, $agentKind, $detail, $createdAt, $expiresAt)`,
+        `INSERT INTO consent_requests (id, kind, status, poll_hash, client, agent_id, person_id, workspace_id, share_id, name, agent_kind, detail, created_at, expires_at)
+         VALUES ($id, $kind, 'pending', $pollHash, $client, $agentId, $personId, $workspaceId, $shareId, $name, $agentKind, $detail, $createdAt, $expiresAt)`,
       )
       .run({
         id: request.id,
         kind: request.kind,
-        code: request.code,
         pollHash: input.pollSecret ? hashSecret(input.pollSecret) : null,
         client: input.client,
         agentId: request.agentId,
@@ -448,8 +456,9 @@ export class Consents {
   /**
    * The request as this person may see it on the consent page, or null, which looks the same as no request at all.
    * What an agent of someone's asked is only that person's to see. A join is nobody's yet, so anyone signed in who has
-   * its link may see it while it waits (it names no account), and afterwards only the person who answered it. A join
-   * that came with a share link is only for a person the link is for.
+   * its link may see it while it waits (it names no account), and afterwards only the person who answered it: the code
+   * is on this view, so nobody else ever reads it. A join that came with a share link is only for a person the link is
+   * for.
    */
   describe(viewer: Person, id: string): ConsentView | null {
     const request = this.get(id);
@@ -485,43 +494,39 @@ export class Consents {
   // ---- the person's answer ----
 
   /**
-   * The person's answer. Allow needs the code the asking agent shows: a wrong code counts, and the request closes
-   * after a few. Allowing does what was asked, as the person: a computer or app agent is made under the person, an
-   * agent comes into the shared workspace, or the workspace is shared, loses a person or is deleted. `name` renames a
-   * joining app agent. `handle` is for a person who has none yet: it is taken only once the code is right. `agents` is
-   * for a share link: the person's own agents that come in, any number, under the one Allow (by default the asking one).
+   * The person's answer. For what an agent of the person's asked, Allow does it at once, as the person: an agent comes
+   * into the shared workspace, or the workspace is shared, loses a person or is deleted. For a join, Allow joins
+   * nothing: it makes the code the page then shows the person, and the join waits for the asker to hand that code back
+   * (`submitCode`). `name` renames a joining app agent. `handle` is for a person who has none yet. `agents` is for a
+   * share link: the person's own agents that come in, any number, under the one Allow (by default the asking one).
+   * `mine` is the join page's tick, "I started this join myself": without it the new agent, or every session on the
+   * new computer, starts unproven, and its first message to each other agent of the person waits for the person.
+   * Don't allow also ends a join that was allowed and still waits for its code.
    */
-  decide(personId: string, id: string, input: { decision: unknown; code?: unknown; name?: unknown; handle?: unknown; agents?: unknown }): Decided {
+  decide(personId: string, id: string, input: { decision: unknown; name?: unknown; handle?: unknown; agents?: unknown; mine?: unknown }): Decided {
     const { decision } = input;
     if (decision !== "approve" && decision !== "deny") throw new PorticoError("bad_request", "decision must be approve or deny.");
     const person = this.people.require(personId);
     const found = this.describe(person, id);
     if (!found) throw new PorticoError("not_found", "No such request.");
     const { request, share } = found;
-    if (request.status !== "pending") {
-      throw new PorticoError("wrong_status", request.status === "expired" ? "This code ran out. Ask the agent for a new code." : `This request was already ${request.status === "approved" ? "allowed" : "turned down"}.`);
+    const awaitsCode = request.status === "allowed";
+    // Allow pressed twice changes nothing: the page shows the same code.
+    if (awaitsCode && decision === "approve") return { request, agent: null, computer: null, workspace: found.workspace, share: null };
+    if (request.status !== "pending" && !awaitsCode) {
+      throw new PorticoError("wrong_status", request.status === "expired" ? "This request ran out. Ask the agent to ask again." : `This request was already ${request.status === "approved" ? "allowed" : "turned down"}.`);
     }
     const at = this.iso();
     if (decision === "deny") {
-      this.db.query("UPDATE consent_requests SET status = 'denied', decided_at = $at, decided_by = $personId WHERE id = $id AND status = 'pending'").run({ id, at, personId });
+      this.db.query(`UPDATE consent_requests SET status = 'denied', code = NULL, decided_at = $at, decided_by = $personId WHERE id = $id AND ${OPEN}`).run({ id, at, personId });
       this.log("consent_decided", { request_id: id, kind: request.kind, decision });
       if (request.kind === "agent") this.activity?.record("sign_in_denied", { personId, detail: { name: request.name ?? "", kind: request.agentKind ?? "other" } });
       this.changes.emit("approvals");
-      const denied: ConsentRequest = { ...request, status: "denied", decidedAt: at, decidedBy: personId };
+      const denied: ConsentRequest = { ...request, status: "denied", code: null, decidedAt: at, decidedBy: personId };
       this.onDecided(denied);
       return { request: denied, agent: null, computer: null, workspace: found.workspace, share: null };
     }
     if (person.status !== "active") throw new PorticoError("not_allowed", "Waiting for the owner to approve this account.");
-    const typed = typeof input.code === "string" ? input.code.replace(/\s+/g, "") : "";
-    if (needsCode(request.kind) && !sameSecret(hashSecret(typed), hashSecret(request.code))) {
-      const { tries } = this.db.query("UPDATE consent_requests SET tries = tries + 1 WHERE id = $id RETURNING tries").get({ id }) as { tries: number };
-      if (tries >= LIMITS.consentCodeTries) {
-        this.db.query("UPDATE consent_requests SET status = 'denied', decided_at = $at WHERE id = $id").run({ id, at });
-        this.changes.emit("approvals");
-        throw new PorticoError("wrong_status", "Too many wrong codes. Ask the agent for a new code.");
-      }
-      throw new PorticoError("bad_request", "That code doesn't match the one the agent shows.");
-    }
     const wanted = typeof input.handle === "string" ? input.handle.trim().toLowerCase() : "";
     if (person.handle === null && wanted === "") throw new PorticoError("bad_request", "Pick a handle first.");
     // The person's own agents picked on the page to come in with a share link. Anything else named is ignored.
@@ -529,26 +534,43 @@ export class Consents {
     const picked = Array.isArray(input.agents)
       ? [...new Set(input.agents.filter((item): item is string => typeof item === "string"))].map((item) => pickable.get(item)).filter((a): a is Agent => a !== undefined)
       : null;
+    if (isJoin(request.kind)) {
+      // The name is settled here, where the person can still change it: the asker's call with the code can't.
+      let name = request.name;
+      if (request.kind === "agent") {
+        name = checkAgentName(input.name === undefined || input.name === null || input.name === "" ? request.name : input.name);
+        requireUnreservedName(name);
+        if (!this.agents.nameFree(name, person.id)) throw new PorticoError("conflict", `Another agent of ${person.name}'s is named ${name}, or reads the same at a glance. Pick another name.`);
+      }
+      const detail = { ...request.detail, mine: input.mine === true, ...(share ? { bring: (picked ?? []).map((a) => a.id) } : {}) };
+      const code = signInCode();
+      this.db.transaction(() => {
+        if (person.handle === null) {
+          this.people.setHandle(person.id, wanted);
+          this.workspaces.personal(person.id);
+        }
+        const changed = this.db
+          .query(
+            `UPDATE consent_requests SET status = 'allowed', code = $code, tries = 0, name = $name, detail = $detail, decided_at = $at, decided_by = $personId
+             WHERE id = $id AND status = 'pending'`,
+          )
+          .run({ id, code, name, detail: JSON.stringify(detail), at, personId }).changes;
+        if (changed === 0) throw new PorticoError("wrong_status", "This request was answered already.");
+      })();
+      this.log("consent_allowed", { request_id: id, kind: request.kind });
+      this.changes.emit("approvals", "people");
+      const allowed: ConsentRequest = { ...request, status: "allowed", code, name, detail, decidedAt: at, decidedBy: personId };
+      return { request: allowed, agent: null, computer: null, workspace: found.workspace, share: null };
+    }
     const done = this.db.transaction(() => {
       if (person.handle === null) {
         this.people.setHandle(person.id, wanted);
         this.workspaces.personal(person.id);
       }
-      let agent: Agent | null = request.agentId ? this.agents.get(request.agentId) : null;
-      let computer: Computer | null = null;
+      const agent: Agent | null = request.agentId ? this.agents.get(request.agentId) : null;
       let workspace = found.workspace;
       let made: Share | null = null;
       switch (request.kind) {
-        case "computer":
-          // The token made here is never handed out: the computer gets its own at its first poll.
-          computer = this.computers.create(person.id, request.name ?? "computer").computer;
-          break;
-        case "agent": {
-          const chosen = input.name === undefined || input.name === null || input.name === "" ? request.name : input.name;
-          agent = this.agents.create({ ownerId: person.id, name: chosen, kind: request.agentKind ?? "other", type: "app" });
-          if (share) workspace = this.shares.enter(share, person, [agent, ...(picked ?? [])]);
-          break;
-        }
         case "enter": {
           if (!agent || agent.ownerId !== person.id || !share) throw new PorticoError("not_found", "No such request.");
           const coming = picked ?? [agent];
@@ -583,13 +605,10 @@ export class Consents {
       }
       const result = made ? { shareId: made.id } : null;
       this.db
-        .query(
-          `UPDATE consent_requests SET status = 'approved', agent_id = $agentId, computer_id = $computerId, result = $result, decided_at = $at, decided_by = $personId
-           WHERE id = $id`,
-        )
-        .run({ id, agentId: agent?.id ?? null, computerId: computer?.id ?? null, result: result ? JSON.stringify(result) : null, at, personId });
-      const decided: ConsentRequest = { ...request, status: "approved", agentId: agent?.id ?? null, computerId: computer?.id ?? null, result, decidedAt: at, decidedBy: personId };
-      return { request: decided, agent, computer, workspace, share: made };
+        .query("UPDATE consent_requests SET status = 'approved', result = $result, decided_at = $at, decided_by = $personId WHERE id = $id")
+        .run({ id, result: result ? JSON.stringify(result) : null, at, personId });
+      const decided: ConsentRequest = { ...request, status: "approved", result, decidedAt: at, decidedBy: personId };
+      return { request: decided, agent, computer: null, workspace, share: made };
     })();
     this.log("consent_decided", { request_id: id, kind: request.kind, decision });
     this.changes.emit("approvals", "workspaces", "agents", "people", "computers");
@@ -597,38 +616,104 @@ export class Consents {
     return done;
   }
 
+  // ---- the asker's side of a join ----
+
   /**
-   * A joining computer's or agent's poll, with its poll secret. After the person allows the join, the first poll gets
-   * the token, exactly once; later polls see only the status. A missing or wrong secret answers the same as no request.
+   * The asker hands back the code its person read on the consent page, with its poll secret. The right code is what
+   * joins: the computer or app agent is made under the person who pressed Allow, and the token comes back here,
+   * exactly once. A wrong code counts, and the request closes after a few, so the code can't be guessed. Before a
+   * person pressed Allow there is no code, and nothing here says who that person is.
    */
-  poll(id: string, pollSecret: string | null): { request: ConsentRequest; agent: Agent | null; computer: Computer | null; token: string | null } {
+  submitCode(id: string, pollSecret: string | null, code: unknown): { request: ConsentRequest; agent: Agent | null; computer: Computer | null; token: string | null } {
+    const row = this.asker(id, pollSecret);
+    const request = this.toRequest(row);
+    if (request.status === "pending") throw new PorticoError("wrong_status", "Nobody has pressed Allow on Portico's page yet. The page shows the code after Allow.");
+    if (request.status !== "allowed" || request.code === null || request.decidedBy === null) {
+      throw new PorticoError(
+        "wrong_status",
+        request.status === "approved" ? "This request already joined." : request.status === "expired" ? "This request ran out. Ask to join again." : "This request was turned down or closed. Ask to join again.",
+      );
+    }
+    const at = this.iso();
+    const typed = typeof code === "string" ? code.replace(/\s+/g, "") : "";
+    if (!sameSecret(hashSecret(typed), hashSecret(request.code))) {
+      const { tries } = this.db.query("UPDATE consent_requests SET tries = tries + 1 WHERE id = $id RETURNING tries").get({ id }) as { tries: number };
+      const left = LIMITS.consentCodeTries - tries;
+      if (left <= 0) {
+        this.db.query("UPDATE consent_requests SET status = 'denied', code = NULL, decided_at = $at WHERE id = $id").run({ id, at });
+        this.changes.emit("approvals");
+        throw new PorticoError("wrong_status", "Too many wrong codes. This request is closed: ask to join again.");
+      }
+      throw new PorticoError("bad_request", `That code doesn't match the one Portico's page shows. ${left === 1 ? "1 try is" : `${left} tries are`} left.`);
+    }
+    const person = this.people.require(request.decidedBy);
+    if (person.status !== "active") throw new PorticoError("not_allowed", "The account that allowed this request can't take a new agent right now.");
+    const share = request.shareId ? this.shares.get(request.shareId) : null;
+    const done = this.db.transaction(() => {
+      let agent: Agent | null = null;
+      let computer: Computer | null = null;
+      if (request.kind === "computer") {
+        // The token made here is never handed out: the computer gets its own just below.
+        computer = this.computers.create(person.id, request.name ?? "computer").computer;
+      } else {
+        agent = this.agents.create({ ownerId: person.id, name: request.name, kind: request.agentKind ?? "other", type: "app" });
+        if (request.shareId) {
+          if (!share) throw new PorticoError("not_found", DEAD_LINK);
+          const ticked = new Set(request.detail.bring ?? []);
+          const more = this.agents.ownedBy(person.id).filter((a) => ticked.has(a.id) && a.revokedAt === null && !this.workspaces.hasAgent(share.workspaceId, a.id));
+          this.shares.enter(share, person, [agent, ...more]);
+        }
+      }
+      // Nobody vouched for the join: the newcomer's first message to each other agent of the person is asked about.
+      if (request.detail.mine !== true) this.agents.markUnproven(agent ? { agentId: agent.id } : { computerId: computer!.id });
+      const claimed = this.db
+        .query("UPDATE consent_requests SET status = 'approved', code = NULL, agent_id = $agentId, computer_id = $computerId, issued_at = $at WHERE id = $id AND status = 'allowed'")
+        .run({ id, agentId: agent?.id ?? null, computerId: computer?.id ?? null, at }).changes;
+      if (claimed === 0) throw new PorticoError("wrong_status", "This request already joined.");
+      const joined: ConsentRequest = { ...request, status: "approved", code: null, agentId: agent?.id ?? null, computerId: computer?.id ?? null, issuedAt: at };
+      return { request: joined, agent: agent ? this.agents.get(agent.id) : null, computer };
+    })();
+    let token: string;
+    if (done.computer) token = this.computers.issueToken(done.computer.id);
+    else {
+      token = this.agents.issueToken(done.agent!.id, "api");
+      this.agents.checkedIn(done.agent!);
+    }
+    this.log("consent_decided", { request_id: id, kind: request.kind, decision: "approve" });
+    this.log("consent_token_issued", { request_id: id, kind: request.kind });
+    this.changes.emit("approvals", "workspaces", "agents", "people", "computers");
+    this.onDecided(done.request);
+    // The person is told at once what joined the account, with the one step that undoes it.
+    if (done.agent) this.agents.onJoined?.(done.agent);
+    if (done.computer) this.computers.onJoined?.(done.computer);
+    return { ...done, token };
+  }
+
+  /**
+   * A joining computer's or agent's poll, with its poll secret: where the request stands, and nothing else. `allowed`
+   * says a person pressed Allow and holds the code; never the code, and never who. A missing or wrong secret answers
+   * the same as no request.
+   */
+  poll(id: string, pollSecret: string | null): { request: ConsentRequest; agent: Agent | null; computer: Computer | null } {
+    const request = this.toRequest(this.asker(id, pollSecret));
+    const agent = request.kind === "agent" && request.agentId ? this.agents.get(request.agentId) : null;
+    const computer = request.computerId ? this.computers.get(request.computerId) : null;
+    return { request, agent, computer };
+  }
+
+  private asker(id: string, pollSecret: string | null): Row {
     const row = this.row(id);
     if (!row || !row.poll_hash || !pollSecret || !sameSecret(hashSecret(pollSecret), row.poll_hash)) {
       throw new PorticoError("unauthorized", "Missing or wrong poll secret for this request.");
     }
-    const request = this.toRequest(row);
-    const agent = request.kind === "agent" && request.agentId ? this.agents.get(request.agentId) : null;
-    const computer = request.computerId ? this.computers.get(request.computerId) : null;
-    if (request.status !== "approved" || request.issuedAt || (!agent && !computer)) return { request, agent, computer, token: null };
-    const at = this.iso();
-    const claimed = this.db.query("UPDATE consent_requests SET issued_at = $at WHERE id = $id AND issued_at IS NULL").run({ id, at }).changes;
-    if (claimed === 0) return { request, agent, computer, token: null };
-    let token: string;
-    if (computer) token = this.computers.issueToken(computer.id);
-    else {
-      token = this.agents.issueToken(agent!.id, "api");
-      this.agents.checkedIn(agent!);
-    }
-    this.log("consent_token_issued", { request_id: id, kind: request.kind });
-    this.changes.emit("agents", "computers");
-    return { request: { ...request, issuedAt: at }, agent, computer, token };
+    return row;
   }
 
   // ---- sweeps ----
 
   /** Every minute: requests past their time are marked expired. Returns how many. */
   sweepMinute(): number {
-    const expired = this.db.query("UPDATE consent_requests SET status = 'expired' WHERE status = 'pending' AND expires_at <= $now").run({ now: this.iso() }).changes;
+    const expired = this.db.query(`UPDATE consent_requests SET status = 'expired', code = NULL WHERE ${OPEN} AND expires_at <= $now`).run({ now: this.iso() }).changes;
     if (expired > 0) this.changes.emit("approvals");
     return expired;
   }
@@ -645,12 +730,12 @@ export class Consents {
   }
 
   private toRequest(row: Row): ConsentRequest {
-    const late = row.status === "pending" && Date.parse(row.expires_at) <= this.now().getTime();
+    const late = (row.status === "pending" || row.status === "allowed") && Date.parse(row.expires_at) <= this.now().getTime();
     return {
       id: row.id,
       kind: row.kind,
       status: late ? "expired" : row.status,
-      code: row.code,
+      code: late ? null : row.code,
       agentId: row.agent_id,
       personId: row.person_id,
       workspaceId: row.workspace_id,

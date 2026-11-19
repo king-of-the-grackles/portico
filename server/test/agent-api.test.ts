@@ -328,7 +328,12 @@ describe("OpenAPI", () => {
     const doc = (await res.json()) as ReturnType<typeof openApiDocument>;
     expect(doc.servers).toEqual([{ url: PUBLIC_URL }]);
     for (const [path, operations] of Object.entries(doc.paths)) {
-      for (const method of Object.keys(operations)) {
+      for (const [method, operation] of Object.entries(operations)) {
+        // Asking to join is the one operation open to an app with no token yet.
+        if (Array.isArray((operation as { security?: unknown }).security)) {
+          expect(`${method} ${path}`).toBe("post /api/join");
+          continue;
+        }
         const status = (await p.app.request(path, { method: method.toUpperCase() })).status;
         expect(`${method} ${path} ${status}`).toBe(`${method} ${path} 401`);
       }

@@ -87,6 +87,7 @@ const DIRECTORY_SCHEMA = [
     owner_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
+    unproven INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     last_seen_at TEXT
   )`,
@@ -103,7 +104,9 @@ const DIRECTORY_SCHEMA = [
   )`,
 
   // One agent per folder and coding agent: each process start is a run in agent_runs. An app's or connector's name is
-  // unique among its owner's agents.
+  // unique among its owner's agents. `unproven` marks an agent (or, on a computer, every session started there) that
+  // joined on the consent page without its person saying "I started this myself": its first message to each of the
+  // person's other agents is held for the person, once.
   `CREATE TABLE agents (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
@@ -116,6 +119,7 @@ const DIRECTORY_SCHEMA = [
     folder_id TEXT,
     approval_required INTEGER NOT NULL DEFAULT 0,
     outbound_hold INTEGER NOT NULL DEFAULT 0,
+    unproven INTEGER NOT NULL DEFAULT 0,
     revoked_at TEXT,
     created_at TEXT NOT NULL,
     last_seen_at TEXT,
@@ -303,16 +307,17 @@ const DIRECTORY_SCHEMA = [
   `CREATE INDEX shares_workspace ON shares (workspace_id)`,
   // One table for everything a person confirms on the consent page, /c/<id>. `kind` says what is asked: `computer` and
   // `agent` are a new computer or app agent joining Portico, started by anyone, so they belong to whoever signs in and
-  // types the code; `enter` is an agent of the person's coming into a workspace with a share link; `share`,
+  // presses Allow, and join only once the asker hands back the code that page then shows; `enter` is an agent of the person's coming into a workspace with a share link; `share`,
   // `remove_person` and `delete` are what an agent asks its person to confirm about a workspace; `add_agent` is an agent
   // asking to put one of its person's agents into a workspace someone else owns; `admit_agent` is the same waiting
-  // for the workspace's owner, who chose to be asked (no code: only the owner, signed in, can answer). `person_id` is
-  // who has to confirm, when that is known (never for a join). `poll_hash` is for an asker with no token yet.
+  // for the workspace's owner, who chose to be asked. `person_id` is who has to confirm, when that is known (never for a
+  // join): only that person can open the page. `poll_hash` is for an asker with no token yet. A join goes from
+  // `pending` to `allowed` when a person presses Allow, which makes `code`; `tries` counts the asker's wrong codes.
   `CREATE TABLE consent_requests (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('computer', 'agent', 'enter', 'share', 'remove_person', 'delete', 'add_agent', 'admit_agent')),
-    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
-    code TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'allowed', 'approved', 'denied', 'expired')),
+    code TEXT,
     tries INTEGER NOT NULL DEFAULT 0,
     poll_hash TEXT UNIQUE,
     client TEXT,
@@ -398,7 +403,7 @@ const CONTENT_SCHEMA = [
   // `root_id` is the first message of the conversation (the reply_to chain): a task is every message with one root.
   // `final` is 0 for a reply that says more is coming. `send_key` is the sender's own key for the message. `held_for`
   // says whose decision a held message waits on and why: `outbound` is the sender's own person; `first_contact` and
-  // `approval` are the receiver's. `withdrawn` is a message that will never be delivered: its workspace was paused,
+  // `approval` are the receiver's, and so is `new_agent` (a newly joined agent of the same person). `withdrawn` is a message that will never be delivered: its workspace was paused,
   // or one of its two agents left the workspace or was revoked before the message was picked up.
   `CREATE TABLE messages (
     id TEXT PRIMARY KEY,
@@ -414,7 +419,7 @@ const CONTENT_SCHEMA = [
     send_key TEXT,
     status TEXT NOT NULL CHECK (status IN ('held', 'pending', 'delivered', 'declined', 'expired', 'withdrawn')),
     held_at TEXT,
-    held_for TEXT CHECK (held_for IN ('outbound', 'first_contact', 'approval')),
+    held_for TEXT CHECK (held_for IN ('outbound', 'first_contact', 'approval', 'new_agent')),
     decision TEXT,
     decided_by TEXT,
     decided_at TEXT,

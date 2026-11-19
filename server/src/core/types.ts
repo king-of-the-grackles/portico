@@ -81,6 +81,8 @@ export interface Agent {
   approvalRequired: boolean;
   /** "Ask me before this agent sends to other people's agents": each such message waits for the agent's own person first. */
   outboundHold: boolean;
+  /** Joined without its person saying "I started this myself": its first message to each of the person's other agents is held once. */
+  unproven: boolean;
   /** Set once the agent's person revoked it: its tokens are gone, it is in no Portico, and it can't come back. */
   revokedAt: string | null;
   createdAt: string;
@@ -135,8 +137,10 @@ export type MessageStatus = "held" | "pending" | "delivered" | "declined" | "exp
  * Whose decision a held message waits on, and why. `outbound`: the sender's own person, who asked to see what that
  * agent sends to other people's agents. `first_contact`: the receiver's person, who hasn't allowed the sender's person
  * yet. `approval`: the receiver's person, for an agent that takes messages only from senders on its own list.
+ * `new_agent`: the same person manages both, and the sender joined lately without that person saying "I started this
+ * myself": if a stranger talked the person into allowing the join, this is where the person sees it.
  */
-export type HeldFor = "outbound" | "first_contact" | "approval";
+export type HeldFor = "outbound" | "first_contact" | "approval" | "new_agent";
 export type Decision = "allow_once" | "always_allow" | "deny";
 export const DECISIONS: readonly Decision[] = ["allow_once", "always_allow", "deny"];
 

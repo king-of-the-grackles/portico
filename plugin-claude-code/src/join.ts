@@ -1,6 +1,7 @@
 // Runs before the plugin's dependencies are installed (the join command, and the server's `portico join`), so it imports
 // only node:* and the files beside it.
 import { chmodSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { hostname as systemHostname } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { type ComputerFile, ComputerFileError, readComputerFile, writeComputerFile, writeFileAtomically } from "./computer";
@@ -46,8 +47,8 @@ export function defaultComputerName(hostname: string): string {
 }
 
 export interface JoinOptions {
-  /** The Portico server's address. */
-  address: string;
+  /** The Portico server's address. With `code`, optional: the waiting join names its server. */
+  address?: string;
   /** The computer's proposed name. Defaults to the hostname. Portico slugs it and may add `-2`. */
   name?: string;
   /** Join again over an existing computer file, keeping its folders that are off. */
@@ -55,22 +56,32 @@ export interface JoinOptions {
   /** The coding agent joining, shown to the person on the page that allows the join. */
   client?: "claude-code" | "codex";
   /**
-   * How long to wait for the person, in seconds. Default: until the code runs out. 0 only asks and prints the link and
-   * code: running the command again keeps waiting on the same request.
+   * How long to wait for the person to press Allow, in seconds, when the code can't be asked for at a prompt. Default:
+   * until the request runs out. 0 only asks and prints the link.
    */
   waitSeconds?: number;
+  /**
+   * The second call: the 4-digit code the person read on Portico's page after Allow. Hands the code in for the join
+   * that waits in join.json, and finishes the join. Nothing new is asked.
+   */
+  code?: string;
 }
 
 export interface JoinDeps {
   configPath: string;
   fetch?: typeof fetch;
   hostname?: () => string;
-  /** Where the link and the code are printed, as soon as Portico answers. */
+  /** Where the link is printed, as soon as Portico answers. */
   out: (line: string) => void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** The gap between polls. */
   pollMs?: number;
+  /**
+   * Asks the person at a terminal for the code, and answers what was typed, or null when nothing can be read. Set
+   * only when the command runs in a terminal; without it the code comes in a second call (`code`).
+   */
+  readCode?: (question: string) => Promise<string | null>;
 }
 
 export interface Joined {
@@ -83,13 +94,12 @@ export interface Joined {
   already: boolean;
 }
 
-/** A join that was asked for and still waits for a person. Kept beside computer.json, mode 600, until it ends. */
+/** A join that was asked for and still waits for a person and the code. Kept beside computer.json, mode 600, until it ends. */
 interface PendingJoin {
   url: string;
   id: string;
   pollSecret: string;
   link: string;
-  code: string;
   expiresAt: string;
 }
 
@@ -101,44 +111,133 @@ export function pendingJoinPath(configPath: string): string {
 function readPending(path: string): PendingJoin | null {
   try {
     const data = JSON.parse(readFileSync(path, "utf8")) as Partial<PendingJoin>;
-    const ok = [data.url, data.id, data.pollSecret, data.link, data.code, data.expiresAt].every((value) => typeof value === "string" && value !== "");
+    const ok = [data.url, data.id, data.pollSecret, data.link, data.expiresAt].every((value) => typeof value === "string" && value !== "");
     return ok ? (data as PendingJoin) : null;
   } catch {
     return null;
   }
 }
 
-/** The lines a person acts on: the page to open, the code to type there, and when the code runs out. */
-export function joinInstructions(pending: Pick<PendingJoin, "link" | "code" | "expiresAt">): string[] {
+/**
+ * The lines a person acts on: the page to open, what to do there, and where the code the page shows goes. `atPrompt`:
+ * the command runs in a terminal and asks for the code itself; otherwise an agent runs the command and asks.
+ */
+export function joinInstructions(pending: Pick<PendingJoin, "link" | "expiresAt">, atPrompt = false): string[] {
   return [
     "A person allows this computer on one Portico page:",
-    `  1. Open ${pending.link} in a browser and sign in.`,
-    `  2. Type the code ${pending.code} there and press Allow.`,
-    `The code runs out at ${pending.expiresAt}. Type the code only on that page.`,
+    `  1. Open ${pending.link} in a browser, sign in and press Allow.`,
+    `  2. The page then shows a 4-digit code. ${atPrompt ? "Type that code here" : "Give that code to this agent"}, and nowhere else.`,
+    `The request runs out at ${pending.expiresAt}.`,
   ];
 }
 
-/** Still waiting for the person when the wait ran out: nothing is wrong, and the same command keeps waiting. */
+/** The question a terminal asks for the code. */
+export const CODE_QUESTION = "Code from the page: ";
+
+/** How the code is asked for in a terminal: one line read from the keyboard. Undefined when stdin isn't a terminal. */
+export function terminalCode(): JoinDeps["readCode"] {
+  if (!process.stdin.isTTY) return undefined;
+  return (question) =>
+    new Promise((done) => {
+      const lines = createInterface({ input: process.stdin, output: process.stdout });
+      let answered = false;
+      lines.question(question, (answer) => {
+        answered = true;
+        lines.close();
+        done(answer);
+      });
+      lines.on("close", () => {
+        if (!answered) done(null);
+      });
+    });
+}
+
+/** Still waiting for the person when the wait ran out: nothing is wrong, and the code finishes the join later. */
 export class JoinWaiting extends Error {
-  constructor(readonly expiresAt: string) {
-    super("Still waiting for a person to allow the join.");
+  /** `allowed`: a person pressed Allow, so the page shows the code now. */
+  constructor(
+    readonly expiresAt: string,
+    readonly allowed = false,
+  ) {
+    super("Still waiting for the code from Portico's page.");
     this.name = "JoinWaiting";
   }
 }
 
+/** The code didn't match: the person can read the page again and try once more, a few times. */
+export class WrongCode extends CommandError {
+  constructor(message: string) {
+    super(message);
+    this.name = "WrongCode";
+  }
+}
+
+const RAN_OUT = "The request ran out before the join was finished. Run the join again for a fresh link.";
+
 /**
- * Asks the Portico server to let this computer join, prints the link and the code a person allows the join with,
- * waits, and writes computer.json once the person has pressed Allow. No secret goes in: the computer belongs to
- * whoever signs in on that page and types the code. A request that still waits is picked up again by the next run;
- * one whose code ran out is replaced by a fresh one. A computer that joined the same server already needs nothing.
- * With replace, the folders that were off are switched off on Portico again, since the new computer starts with every
- * folder on. Throws CommandError (or ComputerFileError) when the join can't go ahead, JoinWaiting when the wait ran out.
+ * Asks the Portico server to let this computer join, prints the link a person allows the join with, and finishes the
+ * join with the 4-digit code that person reads on Portico's page after Allow: typed at a prompt when the command runs
+ * in a terminal, or passed in a second call (`code`) that picks up the join waiting in join.json. No secret goes in,
+ * and Portico never sends the code here: the computer belongs to whoever pressed Allow and handed this command the
+ * code. A request that still waits is picked up again by the next run; one that ran out is replaced by a fresh one. A
+ * computer that joined the same server already needs nothing. With replace, the folders that were off are switched off
+ * on Portico again, since the new computer starts with every folder on. Throws CommandError (or ComputerFileError)
+ * when the join can't go ahead, JoinWaiting while the code is still to come.
  */
 export async function joinComputer(opts: JoinOptions, deps: JoinDeps): Promise<Joined> {
-  const url = parseServerAddress(opts.address);
   const path = deps.configPath;
+  const pendingPath = pendingJoinPath(path);
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+  const forget = () => rmSync(pendingPath, { force: true });
+
+  /** Hands the code in. The right one finishes the join; a wrong one throws WrongCode while tries are left. */
+  const handIn = async (pending: PendingJoin, typed: string, existing: ComputerFile | null): Promise<Joined> => {
+    const code = typed.replace(/\s+/g, "");
+    if (!/^[0-9]{4}$/.test(code)) throw new WrongCode("The code is 4 digits, as Portico's page shows them.");
+    const { url } = pending;
+    const answer = await callPortico(url, "POST", `/api/join/${pending.id}/code`, { token: pending.pollSecret, body: { code }, fetch: deps.fetch });
+    if (answer.ok && answer.body?.status === "approved") {
+      const answered = (answer.body.computer as { name?: unknown } | undefined)?.name;
+      const computer = typeof answered === "string" ? withoutControls(answered) : "";
+      const token = answer.body.token;
+      forget();
+      if (!computer || typeof token !== "string" || !token) {
+        throw new CommandError(`Portico at ${url} finished the join but sent no token (the token is handed over once). Run the join again to ask anew.`);
+      }
+      return finish(url, computer, token, existing, path, deps);
+    }
+    if (answer.status === 400) throw new WrongCode(refusal(url, answer));
+    if (answer.status === 401) {
+      forget();
+      throw new CommandError(RAN_OUT);
+    }
+    if (answer.status === 409) {
+      // Nobody pressed Allow yet, or the request is over. The status says which.
+      const status = (await callPortico(url, "GET", `/api/join/${pending.id}`, { token: pending.pollSecret, fetch: deps.fetch })).body?.status;
+      if (status === "pending") throw new CommandError(`Nobody has pressed Allow yet. Open ${pending.link} in a browser, sign in and press Allow: the page then shows the code.`);
+      forget();
+      if (status === "denied") throw new CommandError("The join wasn't allowed on Portico, or too many wrong codes closed the request. Nothing was written. Run the join again for a fresh link.");
+      throw new CommandError(RAN_OUT);
+    }
+    throw new CommandError(refusal(url, answer));
+  };
+
+  if (opts.code !== undefined) {
+    const pending = readPending(pendingPath);
+    if (!pending || (opts.address !== undefined && parseServerAddress(opts.address) !== pending.url)) {
+      throw new CommandError("No join waits for a code here. Run the join with the Portico server's address first: that prints the link to open.");
+    }
+    if (Date.parse(pending.expiresAt) <= now()) {
+      forget();
+      throw new CommandError(RAN_OUT);
+    }
+    // The first call checked the computer file. A file that is still there is being replaced: its folders stay off.
+    return handIn(pending, opts.code, readExisting(path, true));
+  }
+
+  if (opts.address === undefined) throw new CommandError("No Portico address found. Pass the server's address, such as https://portico.example.com.");
+  const url = parseServerAddress(opts.address);
   const existing = readExisting(path, opts.replace === true);
   if (existing && !opts.replace && existing.url === url) {
     const answer = await callPortico(url, "GET", "/api/computer", { token: existing.token, fetch: deps.fetch });
@@ -156,7 +255,6 @@ export async function joinComputer(opts: JoinOptions, deps: JoinDeps): Promise<J
     );
   }
 
-  const pendingPath = pendingJoinPath(path);
   const earlier = readPending(pendingPath);
   let pending = earlier && earlier.url === url && Date.parse(earlier.expiresAt) > now() ? earlier : null;
   if (!pending) {
@@ -164,20 +262,13 @@ export async function joinComputer(opts: JoinOptions, deps: JoinDeps): Promise<J
     const replaces = earlier && earlier.url === url ? { id: earlier.id, poll_secret: earlier.pollSecret } : undefined;
     const answer = await callPortico(url, "POST", "/api/join", { body: { kind: "computer", name, client: opts.client, replaces }, fetch: deps.fetch });
     if (!answer.ok) throw new CommandError(refusal(url, answer));
-    const { id, link, code, poll_secret: pollSecret, expires_at: expiresAt } = answer.body ?? {};
+    const { id, link, poll_secret: pollSecret, expires_at: expiresAt } = answer.body ?? {};
     // The link is shown to a person, so it has to be a consent page for this request and nothing else: the server's
     // public address (which may differ from the one typed here, behind a proxy say), then /c/<id>.
     const page = typeof id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(id) ? consentPage(link, id) : null;
-    const fits =
-      page !== null &&
-      typeof code === "string" &&
-      /^[0-9]{4}$/.test(code) &&
-      typeof pollSecret === "string" &&
-      pollSecret !== "" &&
-      typeof expiresAt === "string" &&
-      !Number.isNaN(Date.parse(expiresAt));
+    const fits = page !== null && typeof pollSecret === "string" && pollSecret !== "" && typeof expiresAt === "string" && !Number.isNaN(Date.parse(expiresAt));
     if (!fits) throw new CommandError(`Portico at ${url} sent an answer that isn't a request to join. Nothing was written.`);
-    pending = { url, id: id as string, pollSecret: pollSecret as string, link: page!, code: code as string, expiresAt: new Date(Date.parse(expiresAt as string)).toISOString() };
+    pending = { url, id: id as string, pollSecret: pollSecret as string, link: page!, expiresAt: new Date(Date.parse(expiresAt as string)).toISOString() };
     try {
       // The same folder rules as computer.json: the poll secret is this computer's until the join ends.
       writeComputerFolder(path);
@@ -187,37 +278,42 @@ export async function joinComputer(opts: JoinOptions, deps: JoinDeps): Promise<J
       throw new CommandError(`${pendingPath} could not be written (${reason}), so the join can't be finished from here. Nothing changed on Portico.`);
     }
   }
-  for (const line of joinInstructions(pending)) deps.out(line);
+  for (const line of joinInstructions(pending, deps.readCode !== undefined)) deps.out(line);
 
   const expires = Date.parse(pending.expiresAt);
+  // In a terminal: the person types the code here, as soon as the page shows one.
+  if (deps.readCode) {
+    for (;;) {
+      const typed = await deps.readCode(CODE_QUESTION);
+      if (typed === null || typed.trim() === "") throw new JoinWaiting(pending.expiresAt);
+      try {
+        return await handIn(pending, typed, existing);
+      } catch (err) {
+        if (!(err instanceof WrongCode)) throw err;
+        deps.out(err.message);
+      }
+    }
+  }
+
+  // No prompt here (an agent's shell): wait for the person's Allow, then say how the code comes in.
   const until = opts.waitSeconds === undefined ? expires : Math.min(expires, now() + opts.waitSeconds * 1000);
-  const forget = () => rmSync(pendingPath, { force: true });
   for (;;) {
     const answer = await callPortico(url, "GET", `/api/join/${pending.id}`, { token: pending.pollSecret, fetch: deps.fetch });
     const status = answer.ok ? answer.body?.status : null;
-    if (status === "approved") {
-      const answered = (answer.body?.computer as { name?: unknown } | undefined)?.name;
-      const computer = typeof answered === "string" ? withoutControls(answered) : "";
-      const token = answer.body?.token;
-      forget();
-      if (!computer || typeof token !== "string" || !token) {
-        throw new CommandError(`Portico at ${url} allowed the join but sent no token (the token is handed over once). Run the command again to ask anew.`);
-      }
-      return finish(url, computer, token, existing, path, deps);
-    }
+    if (status === "allowed") throw new JoinWaiting(pending.expiresAt, true);
     if (status === "denied") {
       forget();
       throw new CommandError("The join wasn't allowed on Portico. Nothing was written.");
     }
-    if (status === "expired" || (!answer.ok && answer.status === 401)) {
+    if (status === "expired" || status === "approved" || (!answer.ok && answer.status === 401)) {
       forget();
-      throw new CommandError("The code ran out before anyone allowed the join. Run the command again for a fresh link and code.");
+      throw new CommandError(RAN_OUT);
     }
     if (!answer.ok && answer.status !== 429 && answer.status < 500) throw new CommandError(refusal(url, answer));
     if (now() >= until) {
       if (now() >= expires) {
         forget();
-        throw new CommandError("The code ran out before anyone allowed the join. Run the command again for a fresh link and code.");
+        throw new CommandError(RAN_OUT);
       }
       throw new JoinWaiting(pending.expiresAt);
     }

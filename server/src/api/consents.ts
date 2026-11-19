@@ -7,7 +7,7 @@ import { log } from "../log";
 import { type PersonEnv, currentPerson } from "./context";
 import { jsonObject } from "./session";
 
-/** Something an agent of the person's asked that waits on the consent page. The code is only in the agent's chat. */
+/** Something an agent of the person's asked that waits on the consent page. */
 export interface ConsentCard {
   id: string;
   kind: ConsentKind;
@@ -33,9 +33,10 @@ export function consentCards(core: Core, me: Person): ConsentCard[] {
 }
 
 /**
- * POST /api/consents/:id { decision, code?, name?, handle? }: the person's answer on the consent page. Allow needs the
- * code the asking agent shows. A person with no handle yet sends one along, taken only once the code is right. Answers
- * `{ status, next }`, where next is the same page, which then shows what happened.
+ * POST /api/consents/:id { decision, name?, handle?, agents? }: the person's answer on the consent page. A person with
+ * no handle yet sends one along. Answers `{ status, next }`, where next is the same page, which then shows what
+ * happened: for a join that was allowed (`status: "allowed"`), the code to give the computer or agent that asked. The
+ * code itself is never in this answer, only on that page.
  */
 export function consentRoutes(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
@@ -46,7 +47,7 @@ export function consentRoutes(core: Core): Hono<PersonEnv> {
     const id = c.req.param("id");
     // The page's ticks arrive as `agents`: one ID, or a list. Absent, the asking agent alone comes in.
     const agents = body.agents === undefined ? undefined : Array.isArray(body.agents) ? body.agents : [body.agents];
-    const { request, share } = core.consents.decide(me.id, id, { decision: body.decision, code: body.code, name: body.name, handle: body.handle, agents });
+    const { request, share } = core.consents.decide(me.id, id, { decision: body.decision, name: body.name, handle: body.handle, agents, mine: body.mine });
     log("info", "consent_answered", { request_id: request.id, kind: request.kind, status: request.status });
     // A share made for an address is emailed to that address now. Whatever happens to the email, the link works.
     if (share && share.email !== null) {

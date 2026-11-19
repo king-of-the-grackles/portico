@@ -36,7 +36,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "add_to_portico",
-    "description": "Put one agent of the person who manages this agent into a Portico that person is in. Everyone in the Portico can then message the agent. In a Portico that person made, the agent is in at once. In a Portico someone else made, the answer is waiting_for_person: that person allows the request on Portico's page with a 4-digit code, or, where the Portico's owner asked to allow each agent, the owner does (waiting_for_owner, with no code). An agent that person took out of that person's own Portico stays out: only the person puts such an agent anywhere, on Portico's pages.",
+    "description": "Put one agent of the person who manages this agent into a Portico that person is in. Everyone in the Portico can then message the agent. In a Portico that person made, the agent is in at once. In a Portico someone else made, the answer is waiting_for_person: that person allows the request on Portico's page, or, where the Portico's owner asked to allow each agent, the owner does (waiting_for_owner). An agent that person took out of that person's own Portico stays out: only the person puts such an agent anywhere, on Portico's pages.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -58,7 +58,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "remove_from_portico",
-    "description": "Take one agent, or one person, out of a Portico. With agent: one agent of the person who manages this agent leaves the Portico at once, and nobody reaches the agent through that Portico any more. With person: that person leaves with every agent that person has there, once the person who manages this agent allows that on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link and a 4-digit code. Only a Portico's owner removes someone else; anyone can leave. Give agent or person, not both.",
+    "description": "Take one agent, or one person, out of a Portico. With agent: one agent of the person who manages this agent leaves the Portico at once, and nobody reaches the agent through that Portico any more. With person: that person leaves with every agent that person has there, once the person who manages this agent allows that on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link, which only that person can open. Only a Portico's owner removes someone else; anyone can leave. Give agent or person, not both.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -105,7 +105,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "delete_portico",
-    "description": "Ask to delete a Portico. Only the Portico's owner can, and the person who manages this agent allows the request first on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link and a 4-digit code. Agents that reach each other only through that Portico then stop reaching each other, and the conversations there become read-only.",
+    "description": "Ask to delete a Portico. Only the Portico's owner can, and the person who manages this agent allows the request first on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link, which only that person can open. Agents that reach each other only through that Portico then stop reaching each other, and the conversations there become read-only.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -122,7 +122,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "share_portico",
-    "description": "Ask to share a Portico with one more person. Only the Portico's owner can, and the person who manages this agent allows the request first on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link and a 4-digit code. Calling again after the code ran out gives a fresh one. list_porticos then shows the request approved, with a share link that works once, within 7 days, for one person: that person hands the link to an agent. With email, Portico sends the link to that address, and only that address can use the link. The owner is told who came in.",
+    "description": "Ask to share a Portico with one more person. Only the Portico's owner can, and the person who manages this agent allows the request first on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link, which only that person can open. Calling again after the request ran out gives a fresh one. list_porticos then shows the request approved, with a share link that works once, within 7 days, for one person: that person hands the link to an agent. With email, Portico sends the link to that address, and only that address can use the link. The owner is told who came in.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -151,7 +151,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "join_portico",
-    "description": "Come into a Portico with a share link that someone sent to the person who manages this agent. The answer is waiting_for_person, with a sentence to show that carries the link to Portico's page and a 4-digit code: the person types the code there, and can tick more of that person's agents to bring in under the one Allow. Calling again after the code ran out gives a fresh one. The share link alone lets no agent in, and works once: afterwards add_to_portico puts more agents in.",
+    "description": "Come into a Portico with a share link that someone sent to the person who manages this agent. The answer is waiting_for_person, with a sentence to show that carries the link to Portico's page: only that person can open the page, and can tick more of that person's agents to bring in under the one Allow. Calling again after the request ran out gives a fresh one. The share link alone lets no agent in, and works once: afterwards add_to_portico puts more agents in.",
     "inputSchema": {
       "type": "object",
       "properties": {

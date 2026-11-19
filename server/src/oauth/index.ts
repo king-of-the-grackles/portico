@@ -230,6 +230,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
         core.workspaces.personal(person.id);
       }
       const agent = core.agents.create({ ownerId: person.id, name: fields.name, kind, type: "connector" });
+      core.agents.onJoined?.(agent);
       const code = store.issueCode({ clientId: client.clientId, agentId: agent.id, redirectUri, challenge: rest.request.challenge });
       return { agent, code };
     })();

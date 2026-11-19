@@ -376,7 +376,7 @@ export function renderAddSheet(add: AddState | null, ctx: { publicUrl: string; n
     .join("");
   const pick = `<div class="add-box">
     ${rows}
-    <p class="add-note">The agent then shows a link and a 4-digit code. Open the link, type the code and choose Allow: the agent joins Your Portico. A connector asks on a Portico page instead, with no code.</p>
+    <p class="add-note">The agent then shows a link. Open the link and choose Allow: the page shows a 4-digit code. Give that code to the agent, and nowhere else: the agent then joins Your Portico. A connector asks on a separate Portico page, with no code.</p>
     ${when(
       add.copied !== null,
       `<div role="status" class="waiting enter" data-key="add-waiting"><span class="dot dot-wait"></span><span>Waiting for the agent to join</span></div>`,

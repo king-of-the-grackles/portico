@@ -11,7 +11,12 @@ import {
   addOwner,
   askToJoin,
   callAs,
+  finishJoin,
+  joinCodeOn,
+  pollJoin,
+  submitJoinCode,
   callPerson,
+  copyProblems,
   errorCode,
   fakeAccounts,
   fakeBucket,
@@ -22,6 +27,7 @@ import {
   PUBLIC_URL,
   signIn,
   type TestPortico,
+  visibleCopy,
 } from "./helpers";
 
 const MAIL: MailConfig = { apiKey: "re_test", from: "Portico <notices@mail.portico.example>", webhookSecret: null };
@@ -130,7 +136,7 @@ describe("red team: instructions inside a message stay inside the untrusted fram
     }
   });
 
-  test("a message can't make Portico do anything: asking for a share, a removal or a delete only starts a request the person answers with a code", async () => {
+  test("a message can't make Portico do anything: asking for a share, a removal or a delete only starts a request that the person alone answers, signed in", async () => {
     const { p, chris, muse, launch } = await world();
     // What a misled agent would do with the tools it has.
     const results = [
@@ -141,11 +147,16 @@ describe("red team: instructions inside a message stay inside the untrusted fram
     for (const result of results) expect(result.status).toBe("waiting_for_person");
     expect(p.shares.openFor(chris.id, launch.id)).toEqual([]);
     expect(p.workspaces.peopleIn(launch.id)).toHaveLength(3);
-    // The agent can't answer its own request: there is no agent route for it, and the page needs Chris's browser and the code.
+    // The agent can't answer its own request: there is no agent route for it, the page needs Chris's browser, and the
+    // join API's code door has no key for a request that an agent on Portico made.
     for (const result of results) {
       const id = result.request.id as string;
-      expect((await callAs(p, muse, "POST", `/api/consents/${id}`, { decision: "approve", code: result.request.code })).status).toBe(401);
-      expect((await callAs(p, muse, "POST", `/api/agent/consents/${id}`, { decision: "approve", code: result.request.code })).status).toBe(404);
+      expect(result.request.code).toBeUndefined();
+      expect((await callAs(p, muse, "POST", `/api/consents/${id}`, { decision: "approve" })).status).toBe(401);
+      expect((await callAs(p, muse, "POST", `/api/agent/consents/${id}`, { decision: "approve" })).status).toBe(404);
+      expect((await callAs(p, muse, "POST", `/api/join/${id}/code`, { code: "0000" })).status).toBe(401);
+      expect((await callAs(p, muse, "GET", `/c/${id}`)).text()).resolves.toContain("Sign in to continue");
+      expect(p.consents.get(id)!.status).toBe("pending");
     }
     expect(p.workspaces.get(launch.id)).not.toBeNull();
   });
@@ -336,7 +347,7 @@ describe("red team: a reused share link and a leaked share link", () => {
     const { secret } = p.shares.create(chris.id, vault.id);
     const link = `${PUBLIC_URL}/share#${secret}`;
     const request = p.consents.enter(bot.agent, secret);
-    p.consents.decide(erin.id, request.id, { decision: "approve", code: request.code });
+    p.consents.decide(erin.id, request.id, { decision: "approve" });
     // Mallory got hold of the link afterwards.
     const dead = await answer(callAs(p, mal, "POST", "/api/agent/portico-tools/join_portico", { link: `${PUBLIC_URL}/share#${"B".repeat(43)}` }));
     expect(await answer(callAs(p, mal, "POST", "/api/agent/portico-tools/join_portico", { link }))).toBe(dead);
@@ -346,7 +357,7 @@ describe("red team: a reused share link and a leaked share link", () => {
     expect(p.workspaces.peopleIn(vault.id)).toHaveLength(3);
   });
 
-  test("a leaked link for an address is useless to any other account, and a leaked request needs the code from the agent's own chat", async () => {
+  test("a leaked link for an address is useless to any other account, and a leaked request of an owned agent opens for nobody but that agent's person", async () => {
     const p = makePortico({ accountCheck: fakeAccounts });
     const account = async (id: string, email: string, name: string, handle: string) => {
       const person = p.people.create({ name, role: "member", status: "active", passwordHash: "", externalId: id });
@@ -364,22 +375,29 @@ describe("red team: a reused share link and a leaked share link", () => {
     const { secret } = p.shares.create(chris.id, launch.id, { email: "dana@example.com" });
     // Wrong account: the same answer as a link that never existed, at every door.
     expect(errorCode(() => p.consents.enter(mal.agent, secret))).toBe("not_found");
-    // Dana starts the request; Mallory learns its address. Without Dana's sign-in the page is nothing; the code is never on it.
+    // Dana's agent starts the request; Mallory learns its address. The page is Dana's alone: no code guards it, because
+    // nobody else, signed in or not, can open or answer it.
     const request = p.consents.enter(pilot.agent, secret);
+    expect(request.code).toBeNull();
     const asMallory = signIn(p, mallory);
-    expect((await page(p, `/c/${request.id}`, asMallory)).status).toBe(404);
-    expect((await callPerson(p, asMallory, "POST", `/api/consents/${request.id}`, { decision: "approve", code: request.code })).status).toBe(404);
-    const asDana = signIn(p, dana);
-    expect((await page(p, `/c/${request.id}`, asDana)).html).not.toContain(request.code);
-    // Guessing the code closes the request after a few tries.
-    const guesses: number[] = [];
-    for (let i = 0; i < LIMITS.consentCodeTries + 1; i++) {
-      const wrong = request.code === "0000" ? "1111" : "0000";
-      guesses.push((await callPerson(p, asDana, "POST", `/api/consents/${request.id}`, { decision: "approve", code: wrong })).status);
+    const unknown = await page(p, "/c/no-such-request", asMallory);
+    const leaked = await page(p, `/c/${request.id}`, asMallory);
+    expect(leaked.status).toBe(404);
+    expect(leaked.html).toBe(unknown.html);
+    for (const decision of ["approve", "deny"]) {
+      expect((await callPerson(p, asMallory, "POST", `/api/consents/${request.id}`, { decision })).status).toBe(404);
+      expect((await callPerson(p, null, "POST", `/api/consents/${request.id}`, { decision })).status).toBe(401);
     }
-    expect(guesses).toEqual([400, 400, 400, 400, 409, 409]);
-    expect((await callPerson(p, asDana, "POST", `/api/consents/${request.id}`, { decision: "approve", code: request.code })).status).toBe(409);
+    // An owned agent's request has no poll secret, so the join API's doors don't open for it either.
+    expect((await p.app.request(`/api/join/${request.id}`, { headers: { authorization: "Bearer ps_guess" } })).status).toBe(401);
+    expect((await p.app.request(`/api/join/${request.id}/code`, { method: "POST", headers: { authorization: "Bearer ps_guess", "content-type": "application/json" }, body: '{"code":"0000"}' })).status).toBe(401);
+    expect(p.consents.get(request.id)!.status).toBe("pending");
     expect(p.workspaces.hasPerson(launch.id, dana.id)).toBe(false);
+    // Dana, signed in, allows with nothing to type.
+    const asDana = signIn(p, dana);
+    expect((await page(p, `/c/${request.id}`, asDana)).html).not.toContain('name="code"');
+    expect((await callPerson(p, asDana, "POST", `/api/consents/${request.id}`, { decision: "approve" })).status).toBe(200);
+    expect(p.workspaces.hasPerson(launch.id, dana.id)).toBe(true);
   });
 });
 
@@ -572,5 +590,176 @@ describe("red team: guessing IDs from another Portico", () => {
     const others = p.messages.send(pilot.agent, { to: "mallory/mal", subject: "Not for Chris", text: "private" }).message;
     expect((await callPerson(p, cookies.chris, "GET", `/api/threads/${others.threadId}`)).status).toBe(404);
     expect(await (await callPerson(p, cookies.chris, "GET", "/api/tasks?outcome=all")).text()).not.toContain("Not for Chris");
+  });
+});
+
+describe("red team: a stranger starts a join and sends the victim the link", () => {
+  test("the page warns in Portico's own words, above the buttons, and shows when the request started and what it calls itself, as quotes", async () => {
+    const { p, cookies } = await world();
+    const asked = await askToJoin(p, { kind: "agent", name: "helper", client: "muse" });
+    const { html } = await page(p, `/c/${asked.id}`, cookies.chris);
+    const copy = visibleCopy(html);
+    expect(copy).toContain("Only continue if Chris asked Chris's own agent to join Portico just now.");
+    expect(copy).toContain("After Allow, this page shows a 4-digit code. Whoever receives that code gets an agent on Chris's account, able to message Chris's other agents.");
+    expect(copy).toContain("If someone else sent this link, press Don't allow.");
+    expect(html.indexOf("Only continue if")).toBeLessThan(html.indexOf('name="decision"'));
+    expect(html).not.toContain('name="code"');
+    expect(html).toMatch(/<dt>Started<\/dt><dd><time datetime="2026-10-27T12:00:00.000Z"/);
+    expect(copy.replace(/\s+/g, " ")).toContain("Name asked for “helper”");
+    expect(copy.replace(/\s+/g, " ")).toContain("Says the app is “muse”");
+    expect(copy).toContain("open for 15 minutes");
+    expect(copyProblems(copy)).toEqual([]);
+    // A computer's page says what a computer brings; what an agent of the person's asks carries no such warning.
+    const computer = await askToJoin(p, { kind: "computer", name: "studio<b>" });
+    const computerPage = await page(p, `/c/${computer.id}`, cookies.chris);
+    expect(visibleCopy(computerPage.html)).toContain("gets a computer, and every agent started there, on Chris's account");
+    expect(computerPage.html).not.toContain("<b>");
+    // The request still runs out after 15 minutes, whatever was sent to whom.
+    p.clock.advance(LIMITS.consentMinutes * MINUTE + 1);
+    expect((await callPerson(p, cookies.chris, "POST", `/api/consents/${asked.id}`, { decision: "approve" })).status).toBe(409);
+  });
+
+  test("the victim presses Allow and the stranger never gets the code: nothing joins, no token, and nothing is said about the account", async () => {
+    const { p, chris, cookies } = await world();
+    const before = p.agents.ownedBy(chris.id).length;
+    const asked = await askToJoin(p, { kind: "agent", name: "helper" });
+    expect((asked as unknown as Record<string, unknown>).code).toBeUndefined();
+    expect((await callPerson(p, cookies.chris, "POST", `/api/consents/${asked.id}`, { decision: "approve" })).status).toBe(200);
+    // The stranger's poll: one word. The stranger's guesses: refused, counted, and the request closes.
+    expect(await pollJoin(p, asked)).toEqual({ status: "allowed" });
+    const code = (await joinCodeOn(p, cookies.chris, asked.id))!;
+    const statuses: number[] = [];
+    for (const guess of ["0000", "1111", "2222", "3333", "4444", "5555"].filter((g) => g !== code).slice(0, LIMITS.consentCodeTries)) {
+      const res = await submitJoinCode(p, asked, guess);
+      statuses.push(res.status);
+      const text = await res.text();
+      expect(text).not.toContain(code);
+      expect(text).not.toMatch(/chris|token|pa_/i);
+    }
+    expect(statuses).toEqual([400, 400, 400, 400, 409]);
+    expect((await submitJoinCode(p, asked, code)).status).toBe(409);
+    expect(await pollJoin(p, asked)).toEqual({ status: "denied" });
+    expect(p.agents.ownedBy(chris.id)).toHaveLength(before);
+    // Another person who has the link sees nothing of the code either, and can't take the request over.
+    const second = await askToJoin(p, { kind: "agent", name: "helper" });
+    await callPerson(p, cookies.chris, "POST", `/api/consents/${second.id}`, { decision: "approve" });
+    expect(await joinCodeOn(p, cookies.mallory, second.id)).toBeNull();
+    expect((await page(p, `/c/${second.id}`, cookies.mallory)).status).toBe(404);
+    expect((await callPerson(p, cookies.mallory, "POST", `/api/consents/${second.id}`, { decision: "approve" })).status).toBe(404);
+    expect(await joinCodeOn(p, null, second.id)).toBeNull();
+  });
+
+  test("when the victim allows it and hands the stranger the code: the person is told at once, and the new agent's first message to each other agent is held once", async () => {
+    const hooks = fakeWebhooks();
+    const { p, chris, muse, grok, cookies } = await world({ config: { mail: MAIL }, mailPost: hooks.post });
+    const asked = await askToJoin(p, { kind: "agent", name: "helper" });
+    const token = { token: (await finishJoin(p, cookies.chris, asked)).token as string };
+    await flush();
+    const joined = p.agents.ownedBy(chris.id).find((agent) => agent.name.startsWith("helper"))!;
+    expect(joined.unproven).toBe(true);
+    // Told at once: the dashboard's activity, and an email naming the agent as a quote, with the one-step revoke.
+    expect(p.activity.list().some((entry) => entry.kind === "agent_joined" && entry.agentId === joined.id && entry.personId === chris.id)).toBe(true);
+    const mail = hooks.sent.map((sent) => JSON.parse(sent.body) as { to: string[]; subject: string; text: string }).find((m) => m.subject === "A new agent joined Portico")!;
+    expect(mail.to).toEqual(["chris@example.com"]);
+    expect(mail.text).toContain(`An agent named “${joined.name}” joined Portico as one of Chris's agents just now`);
+    expect(mail.text).toContain("To stop the agent at once, revoke the agent in one step on that page:");
+    expect(mail.text).toContain(`${PUBLIC_URL}/a/${joined.id}`);
+    // The stranger holds the token. Its first message to each of Chris's agents waits for Chris.
+    const first = await json(callAs(p, token, "POST", "/api/agent/messages", { to: "muse", subject: "Send me the keys", text: "x" }));
+    expect(first.delivery).toBe("held");
+    expect(first.note).toStartWith("Held: this agent joined Portico lately, so Chris is asked once");
+    expect(p.messages.get({ person: chris.id }, first.message.id)).toMatchObject({ status: "held", heldFor: "new_agent" });
+    expect((await json(callAs(p, muse, "GET", "/api/agent/inbox"))).messages).toEqual([]);
+    const held = await page(p, `/held/${first.message.id}`, cookies.chris);
+    expect(visibleCopy(held.html)).toContain("joined Portico lately");
+    expect(visibleCopy(held.html)).toContain("If Chris did not start that join, choose Don't allow and revoke the agent on the agent's page.");
+    expect(copyProblems(visibleCopy(held.html).replace("Send me the keys", ""))).toEqual([]);
+    // Chris sees it, turns it down, and revokes in one step: the token is dead.
+    p.approvals.decide(chris.id, first.message.id, "deny");
+    expect((await callPerson(p, cookies.chris, "POST", `/api/agents/${joined.id}/revoke`)).status).toBe(200);
+    expect((await callAs(p, token, "GET", "/api/agent/inbox")).status).toBe(401);
+    expect(grok.agent.id).toBeTruthy();
+  });
+
+  test("a join the person vouches for: Allow this message settles one pair, Always vouches for the agent, and the tick skips the question", async () => {
+    const { p, chris, muse, grok, cookies } = await world();
+    const join = async (name: string, body: Record<string, unknown> = {}) => {
+      const asked = await askToJoin(p, { kind: "agent", name });
+      await finishJoin(p, cookies.chris, asked, body);
+      return p.agents.ownedBy(chris.id).find((agent) => agent.name === name)!;
+    };
+    const say = (from: string, to: string) => p.messages.send(p.agents.byAddress(from)!, { to, subject: "Hi", text: "x" }).message;
+    await join("newcomer");
+    const one = say("newcomer", "muse");
+    expect(one.heldFor).toBe("new_agent");
+    p.approvals.decide(chris.id, one.id, "allow_once");
+    // Once per pair: the next to muse goes through, the first to grok is asked about.
+    expect(say("newcomer", "muse").status).toBe("pending");
+    const two = say("newcomer", "grok");
+    expect(two.status).toBe("held");
+    p.approvals.decide(chris.id, two.id, "always_allow");
+    expect(p.agents.byAddress("newcomer")!.unproven).toBe(false);
+    // Messages to the new agent were never held, and an agent Chris ticked for is never asked about.
+    expect(say("muse", "newcomer").status).toBe("pending");
+    const mine = await join("trusted", { mine: true });
+    expect(mine.unproven).toBe(false);
+    expect(say("trusted", "muse").status).toBe("pending");
+    expect((await page(p, `/c/${(await askToJoin(p, { kind: "agent", name: "third" })).id}`, cookies.chris)).html).toContain('type="checkbox" name="mine"');
+    // A computer nobody vouched for: every session started there is unproven too.
+    const asked = await askToJoin(p, { kind: "computer", name: "studio" });
+    await finishJoin(p, cookies.chris, asked);
+    const computer = p.computers.list(chris.id).find((c) => c.name === "studio")!;
+    const session = p.agents.registerSession(computer, { key: "session-key-red", repo: "api", folderId: "c".repeat(64), client: "claude-code" }).agent;
+    expect(session.unproven).toBe(true);
+    expect(p.messages.send(session, { to: "muse", subject: "Hi", text: "x" }).message.heldFor).toBe("new_agent");
+    expect(grok.agent.id && muse.agent.id).toBeTruthy();
+  });
+});
+
+describe("red team: a message that never left its sender's side", () => {
+  test("held on its way out, or turned down there: the receiving person and agent see no subject, no text and no sign of it, anywhere", async () => {
+    const { p, chris, mallory, dana, muse, mal, cookies, launch } = await world();
+    acquaint(p, chris.id, mallory.id, dana.id);
+    // A conversation exists first, so the thread and a task are there for both sides.
+    const opener = p.messages.send(mal.agent, { to: "chris/muse", subject: "Opener", text: "hello" }).message;
+    p.messages.inbox(muse.agent);
+    const sender = p.agents.update(chris.id, muse.agent.id, { outboundHold: true });
+    const fresh = p.messages.send(sender, { to: "mallory/mal", subject: "NEVERSENT new", text: "NEVERSENT new text" }).message;
+    const reply = p.messages.send(sender, { replyTo: opener.id, subject: "NEVERSENT reply", text: "NEVERSENT reply text" }).message;
+    await flush();
+    const everything = async () => {
+      const seen: string[] = [];
+      for (const path of ["/api/threads", `/api/threads/${opener.threadId}`, "/api/tasks?outcome=all", "/api/tasks", `/api/tasks/${opener.id}`, "/api/today", "/api/approvals", "/api/activity?events=1", `/api/porticos/${launch.id}`, "/", "/activity", `/p/${launch.id}`, `/a/${mal.agent.id}`, `/a/${muse.agent.id}`]) {
+        seen.push(await (await callPerson(p, cookies.mallory, "GET", path)).text());
+      }
+      for (const path of ["/api/agent/inbox", "/api/agent/tasks?outcome=all", `/api/agent/tasks/${opener.id}`]) seen.push(await (await callAs(p, mal, "GET", path)).text());
+      seen.push(await (await callAs(p, mal, "POST", "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_task", arguments: { task: opener.id } } })).text());
+      return seen.join("\n");
+    };
+    const check = async () => {
+      const seen = await everything();
+      expect(seen).not.toContain("NEVERSENT");
+      expect(seen).not.toContain(fresh.id);
+      expect(seen).not.toContain(reply.id);
+      expect(seen).not.toContain("held for the sender's own person");
+      for (const id of [fresh.id, reply.id]) {
+        expect((await callPerson(p, cookies.mallory, "GET", `/api/tasks/${id}`)).status).toBe(404);
+        expect((await callPerson(p, cookies.mallory, "GET", `/held/${id}`)).status).toBe(404);
+        expect((await callPerson(p, cookies.mallory, "POST", `/api/approvals/held/${id}`, { decision: "allow_once" })).status).toBe(404);
+        expect((await callAs(p, mal, "GET", `/api/agent/tasks/${id}`)).status).toBe(404);
+        expect((await callAs(p, mal, "POST", "/api/agent/messages", { reply_to: id, subject: "s", text: "t" })).status).toBe(400);
+      }
+    };
+    await check();
+    // Turned down by the sender's own person: still nothing, for good.
+    p.approvals.decide(chris.id, fresh.id, "deny");
+    p.approvals.decide(chris.id, reply.id, "deny");
+    await check();
+    // The sender's side sees its own.
+    expect(await (await callPerson(p, cookies.chris, "GET", `/api/threads/${opener.threadId}`)).text()).toContain("NEVERSENT reply text");
+    // Let go, a message is an ordinary one.
+    const third = p.messages.send(sender, { to: "mallory/mal", subject: "Released", text: "now sent" }).message;
+    p.approvals.decide(chris.id, third.id, "allow_once");
+    expect(await (await callAs(p, mal, "GET", "/api/agent/inbox")).text()).toContain("now sent");
   });
 });

@@ -407,9 +407,8 @@ export class Accounts {
     this.db.query(`DELETE FROM agent_tokens WHERE agent_id IN (${ownerAgents})`).run(owner);
     this.db.query(`DELETE FROM oauth_codes WHERE used_at IS NULL AND agent_id IN (${ownerAgents})`).run(owner);
     this.db.query("UPDATE consent_requests SET status = 'expired' WHERE status = 'pending' AND person_id = $personId").run(owner);
-    this.db
-      .query("UPDATE consent_requests SET issued_at = $at WHERE status = 'approved' AND issued_at IS NULL AND decided_by = $personId")
-      .run({ ...owner, at: this.now().toISOString() });
+    // A join the owner's session allowed, still waiting for its code: the code dies, so nothing joins with it.
+    this.db.query("UPDATE consent_requests SET status = 'expired', code = NULL WHERE status = 'allowed' AND decided_by = $personId").run(owner);
   }
 
   /** The usable link with this secret. Throws not_found for an unknown one, wrong_status for one used or expired. */
