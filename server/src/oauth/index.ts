@@ -133,12 +133,10 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     if (counted && registrations.blocked(address)) {
       throw new OAuthProblem("temporarily_unavailable", "Too many client registrations. Try again later.", 429);
     }
-    // Room is made from the oldest unused clients, never from one made in the last few minutes: its person may be on
-    // the consent page. With no room left even so, registration waits.
+    // Room is made from the oldest unused clients, sparing one made in the last few minutes: its person may be on the
+    // consent page. Only when those alone fill the table does the oldest of them go, so registration never closes.
     store.evictUnused(MAX_UNUSED_CLIENTS - 1, SPARE_NEW_CLIENT_MS);
-    if (store.unusedClients() >= MAX_UNUSED_CLIENTS) {
-      throw new OAuthProblem("temporarily_unavailable", "Too many client registrations. Try again in a few minutes.", 429);
-    }
+    if (store.unusedClients() >= MAX_UNUSED_CLIENTS) store.evictUnused(MAX_UNUSED_CLIENTS - 1, 0);
     const client = store.register(body as Fields);
     if (counted) registrations.record(address);
     return c.json(

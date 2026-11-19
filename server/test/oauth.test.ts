@@ -245,18 +245,22 @@ describe("registration", () => {
       insert.run({ id: `flood-${i}`, at: p.now().toISOString() });
       p.clock.advance(1);
     }
-    // Clients made in the last minutes are never pushed out: with no older one to take, registration waits.
-    expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.1")).status).toBe(429);
-    expect(clientCount(p)).toBe(1001);
-    p.clock.advance(11 * MINUTE);
+    // An older unused client goes first: one made in the last minutes is spared while any older one remains.
+    insert.run({ id: "old-one", at: new Date(p.now().getTime() - 11 * MINUTE).toISOString() });
+    expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.1")).status).toBe(201);
+    const there = (id: string) => p.db.query("SELECT 1 FROM oauth_clients WHERE client_id = $id").get({ id }) !== null;
+    expect(there("old-one")).toBe(false);
+    expect(there("flood-0")).toBe(false); // 1001 unused before the call: one more had to go, the oldest young one
+    expect(there("flood-1")).toBe(true);
+    // With only young ones left, registration still never closes: the oldest of them makes room.
     const res = await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.1");
     expect(res.status).toBe(201);
     const fresh = (await json<{ client_id: string }>(res)).client_id;
     const has = (id: string) => p.db.query("SELECT 1 FROM oauth_clients WHERE client_id = $id").get({ id }) !== null;
     // 1000 unused are kept, and the one with a token besides.
     expect(clientCount(p)).toBe(1001);
-    expect(has("flood-0")).toBe(false);
-    expect(has("flood-1")).toBe(true);
+    expect(has("flood-1")).toBe(false);
+    expect(has("flood-2")).toBe(true);
     expect(has(fresh)).toBe(true);
     expect(has(clientId)).toBe(true);
     // An hour on, the minute sweep clears the unused ones.
