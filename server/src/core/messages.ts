@@ -803,13 +803,21 @@ export class Messages {
   /**
    * The sender's person allowed a message held on its way out. The message goes on to whatever the receiving side
    * requires: held again, now for the receiver's person, or pending. Null when the message isn't held any more.
+   * Checked here, for every caller: a message whose workspace no longer joins the two agents, or is paused or gone,
+   * can't go on, so it is withdrawn instead, and comes back with that status.
    */
   releaseOutbound(held: Pick<Message, "id" | "workspaceId">, personId: string, at: string): Message | null {
-    const content = this.content.find(held.workspaceId);
+    const content = this.content.stored(held.workspaceId);
     if (!content) return null;
-    return content.db.transaction(() => {
+    let withdrawn = false;
+    const after = content.db.transaction(() => {
       const now = this.getIn(content, held.id);
       if (!now || now.status !== "held" || now.heldFor !== "outbound") return null;
+      if (!this.workspaces.joins(now.workspaceId, now.fromId, now.toId)) {
+        content.db.query("UPDATE messages SET status = 'withdrawn', withdrawn_at = $at WHERE id = $id AND status = 'held'").run({ id: now.id, at });
+        withdrawn = true;
+        return this.getIn(content, held.id);
+      }
       const caller = this.agents.get(now.fromId);
       const receiver = this.agents.get(now.toId);
       const next = caller && receiver ? this.arrivalHold(content.db, caller, receiver, now.replyTo) : null;
@@ -823,6 +831,11 @@ export class Messages {
       }
       return this.getIn(content, held.id);
     })();
+    if (after && withdrawn) {
+      this.log("message_withdrawn", { message_id: after.id, workspace_id: after.workspaceId });
+      this.notify({ kind: "message_withdrawn", message: after });
+    }
+    return after;
   }
 
   /**

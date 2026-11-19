@@ -1038,6 +1038,62 @@ describe("red team: what a review found", () => {
     }
   });
 
+  test("12. vouching for a new agent never releases a message whose Portico no longer joins the two: the release itself withdraws it", async () => {
+    const { p, chris, mallory, dana, pilot, mal, launch, cookies } = await world();
+    acquaint(p, chris.id, dana.id, mallory.id);
+    const rogue = await unvouched(p, cookies.chris, chris.id);
+    p.workspaces.addAgent(chris.id, launch.id, rogue.agent().id);
+    const first = p.messages.send(rogue.agent(), { to: "dana/pilot", subject: "One", text: "x" }).message;
+    const second = p.messages.send(rogue.agent(), { to: "mallory/mal", subject: "Two", text: "x" }).message;
+    const third = p.messages.send(rogue.agent(), { to: "dana/pilot", subject: "Three", text: "x" }).message;
+    expect([first, second, third].map((m) => m.heldFor)).toEqual(["outbound", "outbound", "outbound"]);
+    // Mallory's agent is out of the Portico by the time Chris decides, with the held message still there (as after a
+    // stop between the directory and the content databases).
+    p.db.query("UPDATE workspace_agents SET left_at = $at WHERE workspace_id = $w AND agent_id = $a").run({ at: p.clock.now().toISOString(), w: launch.id, a: mal.agent.id });
+    expect(p.workspaces.joins(launch.id, rogue.agent().id, mal.agent.id)).toBe(false);
+    p.approvals.decide(chris.id, first.id, "always_allow");
+    const status = (id: string) => p.messages.get({ person: chris.id }, id)!.status;
+    expect([status(first.id), status(second.id), status(third.id)]).toEqual(["pending", "withdrawn", "pending"]);
+    expect((await json(callAs(p, mal, "GET", "/api/agent/inbox"))).messages).toEqual([]);
+    expect((await json(callAs(p, pilot, "GET", "/api/agent/inbox"))).messages.map((m: Body) => m.subject)).toEqual(["One", "Three"]);
+    // The sender is told once, as for any withdrawn message.
+    expect(p.messages.inbox(rogue.agent()).updates.filter((u) => u.id === second.id).map((u) => u.status)).toEqual(["withdrawn"]);
+    // The same holds for any caller of the release, and for a paused Portico.
+    p.agents.update(chris.id, rogue.agent().id, { outboundHold: true });
+    const fourth = p.messages.send(rogue.agent(), { to: "dana/pilot", subject: "Four", text: "x" }).message;
+    p.db.query("UPDATE workspaces SET paused_at = $at WHERE id = $id").run({ at: p.clock.now().toISOString(), id: launch.id });
+    expect(p.messages.releaseOutbound(fourth, chris.id, p.clock.now().toISOString())).toMatchObject({ status: "withdrawn" });
+    expect(p.messages.releaseOutbound(fourth, chris.id, p.clock.now().toISOString())).toBeNull();
+  });
+
+  test("13. with no proxy to believe, limits count the connection's own address, and a private one stays shared", async () => {
+    const from = (remote: string | null, headers: Record<string, string> = {}) =>
+      clientIp({ req: { header: (name: string) => headers[name.toLowerCase()], raw: {} }, env: remote === null ? undefined : { requestIP: () => ({ address: remote }) } } as never, {});
+    expect(from("203.0.113.9")).toBe("203.0.113.9");
+    // A header changes nothing here: the client wrote it.
+    expect(from("203.0.113.9", { "x-forwarded-for": "198.51.100.1", "fly-client-ip": "198.51.100.2" })).toBe("203.0.113.9");
+    expect(from("2001:db8:1:2:aaaa::1")).toBe("2001:db8:1:2::/64");
+    expect(from("::ffff:203.0.113.9")).toBe("203.0.113.9");
+    // This computer, the local network, or a proxy nobody named: one shared key, which the sign-in limiter never locks out.
+    for (const remote of ["127.0.0.1", "::1", "::ffff:127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.5", "169.254.1.1", "fd00::1", "fe80::1"]) expect(from(remote)).toBe("local");
+    expect(from("172.32.0.1")).toBe("172.32.0.1");
+    expect(from(null)).toBe("local");
+    // Through the app: two clients on a plain server each get their own count of waiting joins.
+    const { p } = await world();
+    const trusted = process.env.PORTICO_TRUST_FORWARDED_FOR;
+    delete process.env.PORTICO_TRUST_FORWARDED_FOR;
+    try {
+      const start = (remote: string) =>
+        p.app.fetch(new Request(`${PUBLIC_URL}/api/join`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.77" }, body: JSON.stringify({ kind: "agent", name: "helper" }) }), { requestIP: () => ({ address: remote }) });
+      const statuses: number[] = [];
+      for (let i = 0; i < LIMITS.consentWaitingPerClient + 1; i++) statuses.push((await start("203.0.113.9")).status);
+      expect(statuses).toEqual([...Array(LIMITS.consentWaitingPerClient).fill(201), 429]);
+      expect((await start("203.0.113.10")).status).toBe(201);
+    } finally {
+      process.env.PORTICO_TRUST_FORWARDED_FOR = trusted;
+    }
+  });
+
   test("11. a person's open page hears only the changes that concern that person, and stops when the sign-in ends", async () => {
     const { p, chris, mallory, muse, grok, cookies } = await world();
     const erin = p.people.setHandle((await addMember(p, "Erin")).id, "erin");

@@ -219,6 +219,8 @@ export class Approvals {
       if (!message) throw new PorticoError("wrong_status", "The message was decided a moment ago.");
       const released = [message, ...more.map((m) => this.messages.releaseOutbound(m, personId, at)).filter((m): m is Message => m !== null)];
       for (const m of released) {
+        // One that could no longer go was withdrawn by the release itself, which told its sender.
+        if (m.status === "withdrawn") continue;
         this.log("message_decided", { message_id: m.id, decision: choice, outbound: true });
         // Still held: now it waits on the receiver's person, who is told as for any held message.
         this.notify(m.status === "held" ? { kind: "message_sent", message: m } : { kind: "message_decided", message: m });
