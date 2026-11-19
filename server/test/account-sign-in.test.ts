@@ -130,6 +130,17 @@ describe("signing in with an account", () => {
 });
 
 describe("the name a person gives Portico goes back to the sign-in service", () => {
+
+  test("the handle page starts the name with what the sign-in gave, and empty when the sign-in gave only an address", async () => {
+    const { signIn, page } = start();
+    const field = async (cookie: string) => /id="wl-name"[^>]*value="([^"]*)"/.exec(await (await page("/welcome", cookie)).text())?.[1];
+    // Google gives a name: the field starts with it.
+    expect(await field((await signIn("account:acct-g:gia@example.com:Gia Rossi")).cookie)).toBe("Gia Rossi");
+    // An email sign-up gives none: the handle is suggested from the address, the name is left to the person.
+    const byEmail = await signIn("account:acct-e:emil.k@example.com:");
+    expect(await field(byEmail.cookie)).toBe("");
+    expect(await (await page("/welcome", byEmail.cookie)).text()).toContain('value="emil-k"');
+  });
   test("the welcome page and a later rename each write the name to the account; a failed write changes nothing here", async () => {
     const written: { accountId: string; name: string }[] = [];
     let fail = false;

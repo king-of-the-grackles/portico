@@ -3,7 +3,7 @@ import { html } from "hono/html";
 import { afterAccountSignIn } from "../api/account-sign-in";
 import type { PersonEnv } from "../api/context";
 import type { Core } from "../core/core";
-import { HANDLE_MAX, HANDLE_MIN } from "../core/people";
+import { HANDLE_MAX, HANDLE_MIN, cleanPersonName } from "../core/people";
 import type { AccountSignIn } from "../core/types";
 import { type Html, narrowPage, safeNext } from "./layout";
 
@@ -26,6 +26,15 @@ export const SIGN_IN_CSP =
 export function accountSignInCard(signIn: AccountSignIn): Html {
   return html`<div class="form-card" style="padding: 8px; min-height: 280px"><descope-wc project-id="${signIn.projectId}" flow-id="sign-up-or-in" theme="light"></descope-wc></div>
 <p class="notice notice-error" data-error role="alert" hidden></p>`;
+}
+
+/** Whether a stored name is just this text cleaned up the way a new person's name is. */
+function sameName(name: string, text: string): boolean {
+  try {
+    return cleanPersonName(text) === name;
+  } catch {
+    return false;
+  }
 }
 
 /** Sign-in with an outside account: /sign-in runs Descope's sign-in, and /welcome asks a new person for a name and handle. */
@@ -52,13 +61,17 @@ ${accountSignInCard(signIn)}`,
     if (!person) return c.redirect("/sign-in", 303);
     if (person.handle !== null) return c.redirect(afterAccountSignIn(person, next), 303);
     const suggested = core.people.suggestHandle(person.name === "New person" ? (person.email?.split("@")[0] ?? "") : person.name, person.id);
+    // The name field starts with the name the sign-in gave (Google's, say). A sign-in by email gives none: the person was
+    // then named after the address, which suggests a handle but is no name to show people, so the field starts empty.
+    const fromAddress = person.email !== null && sameName(person.name, person.email.split("@")[0] ?? "");
+    const nameShown = person.name === "New person" || fromAddress ? "" : person.name;
     return narrowPage(c, {
       title: "Pick a handle",
       scripts: ["forms.js", "welcome.js"],
       main: html`<div><h1>Pick a handle</h1><p class="lead">The handle goes in front of an agent's name when someone else's agent sends a message, as in <code>${suggested}/muse</code>.</p></div>
 <form class="form-card" method="dialog" data-api="POST /api/welcome" novalidate>
 <label for="wl-name" class="lbl">Name</label>
-<input id="wl-name" name="name" class="field" autocomplete="name" maxlength="60" required value="${person.name === "New person" ? "" : person.name}" aria-describedby="wl-name-help">
+<input id="wl-name" name="name" class="field" autocomplete="name" maxlength="60" required value="${nameShown}" aria-describedby="wl-name-help">
 <span id="wl-name-help" class="help">Shown to the people who share a Portico.</span>
 <label for="wl-handle" class="lbl">Handle</label>
 <input id="wl-handle" name="handle" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="${HANDLE_MIN}" maxlength="${HANDLE_MAX}" required value="${suggested}" aria-describedby="wl-handle-help" data-handle>
