@@ -8,9 +8,9 @@ import { accountSignInRoutes } from "./account-sign-in";
 import { agentRoutes } from "./agents";
 import { approvalRoutes } from "./approvals";
 import { computerRoutes } from "./computers";
+import { consentRoutes } from "./consents";
 import { type PersonEnv, loadPerson } from "./context";
 import { eventRoutes } from "./events";
-import { joinLineRoutes } from "./join-lines";
 import { meRoutes } from "./me";
 import { passkeyRoutes } from "./passkeys";
 import { peopleRoutes } from "./people";
@@ -67,7 +67,7 @@ export function requireSetupDone(core: Core): MiddlewareHandler {
 }
 
 /**
- * The person API, mounted at /api after the agent, computer and sign-in-request routes. JSON in and out, the browser's
+ * The person API, mounted at /api after the agent, computer and join routes. JSON in and out, the browser's
  * sign-in cookie, same-origin changes only. Each router checks who may call each route (see context.ts).
  */
 export function personApi(core: Core, opts: { heartbeatMs?: number } = {}): Hono<PersonEnv> {
@@ -101,7 +101,7 @@ export function personApi(core: Core, opts: { heartbeatMs?: number } = {}): Hono
   api.route("/approvals", approvalRoutes(core));
   api.route("/threads", threadRoutes(core));
   api.route("/", taskRoutes(core));
-  api.route("/join-lines", joinLineRoutes(core));
+  api.route("/consents", consentRoutes(core));
   api.route("/computers", computerRoutes(core));
   api.route("/events", eventRoutes(core, opts));
 

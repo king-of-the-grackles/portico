@@ -1,7 +1,7 @@
 import { errorName, log } from "../log";
 
 /** What changed, for people's pages: each page fetches again whatever it shows for these topics. */
-export const TOPICS = ["agents", "approvals", "threads", "people", "computers", "join-lines", "me", "activity", "workspaces"] as const;
+export const TOPICS = ["agents", "approvals", "threads", "people", "computers", "me", "activity", "workspaces"] as const;
 export type Topic = (typeof TOPICS)[number];
 
 /**

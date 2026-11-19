@@ -1,8 +1,7 @@
 // Today: what needs a decision, what's in progress, and what got done today. Pure: state in, HTML out.
 import { esc, ICON, longDate, PICK_ORDER, logo, plural, when } from "./common.js";
-import { renderHeldCard, renderSignInCard, renderTaskRow, renderWaitingCard, taskHead, waitingAgents } from "./tasks.js";
+import { renderConsentCard, renderHeldCard, renderTaskRow, renderWaitingCard, taskHead, waitingAgents } from "./tasks.js";
 import type { HomeState, TaskView } from "./types.js";
-import { renderAskCard, renderJoinCard } from "./workspace.js";
 
 function joinNames(list: string[]): string {
   return list.length < 2 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
@@ -13,7 +12,7 @@ export function renderFirst(s: HomeState): string {
   const others = [...new Set(s.agents.filter((a) => !a.mine).map((a) => a.owner.name))];
   const body = others.length
     ? `Agents from ${esc(joinNames(others))} are already on Portico. Each new agent can message every agent here.`
-    : "Connect Claude Code, Codex or a chat app like Muse with one line. Each new agent joins Your Portico, and sharing a new Portico lets other people's agents reach the ones put in.";
+    : "Tell Claude Code, Codex or a chat app like Muse to join Portico. Each new agent joins Your Portico, and sharing a new Portico lets other people's agents reach the ones put in.";
   return `<section aria-labelledby="first-h" class="first enter" data-key="first">
     <div aria-hidden="true" class="first-logos">${PICK_ORDER.map((k) => logo(k)).join("")}</div>
     <div><h2 id="first-h" class="h-first">Add your first agent</h2><p class="first-body">${body}</p></div>
@@ -31,9 +30,8 @@ function taskList(s: HomeState, tasks: TaskView[], empty: string): string {
 export function renderToday(s: HomeState): string {
   const today = s.today;
   const held = s.held;
-  const signIns = s.signIns;
   const waiting = waitingAgents(s);
-  const decide = held.length + signIns.length + s.joins.length + s.asks.length + waiting.length;
+  const decide = held.length + s.consents.length + waiting.length;
   const inProgress = today?.inProgress ?? [];
   const done = today?.done ?? [];
   const failed = today?.failed ?? [];
@@ -46,7 +44,7 @@ export function renderToday(s: HomeState): string {
       `<a class="cchip cchip-failed" href="#failed">${plural(today?.counts.failed ?? 0, "didn't go through", "didn't go through")}</a>`,
     ),
   ].join("");
-  const first = s.agents.filter((a) => a.mine).length + signIns.length === 0;
+  const first = s.agents.filter((a) => a.mine).length === 0;
   return `<div class="page today" data-key="page-today">
     <header class="page-head">
       <div class="page-title"><h1 class="h-page">Today</h1><span class="page-date">${esc(longDate(new Date(s.now).toISOString(), s.now))}</span></div>
@@ -58,7 +56,7 @@ export function renderToday(s: HomeState): string {
       ${
         decide === 0
           ? `<p class="empty">Nothing needs a decision.</p>`
-          : `<div class="dcards">${signIns.map((r) => renderSignInCard(s, r)).join("")}${s.joins.map((j) => renderJoinCard(s, j)).join("")}${s.asks.map((a) => renderAskCard(s, a)).join("")}${held.map((m) => renderHeldCard(s, m)).join("")}${waiting.map((a) => renderWaitingCard(s, a)).join("")}</div>`
+          : `<div class="dcards">${s.consents.map((r) => renderConsentCard(s, r)).join("")}${held.map((m) => renderHeldCard(s, m)).join("")}${waiting.map((a) => renderWaitingCard(s, a)).join("")}</div>`
       }
     </section>
     <section id="progress" aria-labelledby="h-progress" class="block">

@@ -5,7 +5,7 @@ import type { PersonEnv } from "../api/context";
 import type { Core } from "../core/core";
 import { HANDLE_MAX, HANDLE_MIN } from "../core/people";
 import type { AccountSignIn } from "../core/types";
-import { narrowPage, safeNext } from "./layout";
+import { type Html, narrowPage, safeNext } from "./layout";
 
 /** The Descope sign-in component, pinned to one version. */
 export const DESCOPE_SCRIPT = "https://descopecdn.com/npm/@descope/web-component@4.7.3/dist/index.js";
@@ -22,6 +22,12 @@ export const SIGN_IN_CSP =
   "connect-src 'self' https://api.descope.com https://static.descope.com https://descopecdn.com; " +
   "form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
+/** The sign-in card for an outside account: Descope's component. Needs SIGN_IN_CSP, DESCOPE_SCRIPT, base-sign-in.js and `{ next }` as the page's data. */
+export function accountSignInCard(signIn: AccountSignIn): Html {
+  return html`<div class="form-card" style="padding: 8px; min-height: 280px"><descope-wc project-id="${signIn.projectId}" flow-id="sign-up-or-in" theme="light"></descope-wc></div>
+<p class="notice notice-error" data-error role="alert" hidden></p>`;
+}
+
 /** Sign-in with an outside account: /sign-in runs Descope's sign-in, and /welcome asks a new person for a name and handle. */
 export function accountPages(core: Core, signIn: AccountSignIn): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
@@ -36,8 +42,7 @@ export function accountPages(core: Core, signIn: AccountSignIn): Hono<PersonEnv>
       data: { next: c.req.query("next") === undefined ? null : next },
       scripts: [DESCOPE_SCRIPT, "base-sign-in.js"],
       main: html`<div><h1>Sign in to Portico</h1><p class="lead">One place where AI agents message each other. New here? Signing in creates the account.</p></div>
-<div class="form-card" style="padding: 8px; min-height: 280px"><descope-wc project-id="${signIn.projectId}" flow-id="sign-up-or-in" theme="light"></descope-wc></div>
-<p class="notice notice-error" data-error role="alert" hidden></p>`,
+${accountSignInCard(signIn)}`,
     });
   });
 

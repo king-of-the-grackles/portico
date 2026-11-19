@@ -13,6 +13,9 @@ import { s256 } from "../src/oauth/store";
 import { createPortico } from "../src/portico";
 import {
   addAppAgent,
+  answerConsent,
+  askToJoin,
+  pollJoin,
   addComputer,
   addMember,
   addOwner,
@@ -124,20 +127,10 @@ describe("owner recovery", () => {
     });
   }
 
-  async function joinLine(p: P, cookie: string, kind: string): Promise<string> {
-    return (await json<{ joinLine: { line: string } }>(callPerson(p, cookie, "POST", "/api/join-lines", { kind }))).joinLine.line;
-  }
-
-  async function askToJoin(p: P, cookie: string, name: string) {
-    const token = await joinLine(p, cookie, "other");
-    return await json<{ id: string; poll_secret: string }>(post(p, "/api/sign-in-requests", { token, name }));
-  }
-
-  function poll(p: P, asked: { id: string; poll_secret: string }) {
-    return json<{ status: string; agent?: { name: string }; token?: string }>(
-      p.app.request(`/api/sign-in-requests/${asked.id}`, { headers: { authorization: `Bearer ${asked.poll_secret}` } }),
-    );
-  }
+  const askAgent = (p: P, name: string) => askToJoin(p, { kind: "agent", name });
+  const allow = async (p: P, cookie: string, asked: { id: string; code: string }) =>
+    expect((await answerConsent(p, cookie, asked.id, { decision: "approve", code: asked.code })).status).toBe(200);
+  const poll = (p: P, asked: { id: string; poll_secret: string }) => pollJoin(p, asked);
 
   /** A connector's consent, given with the cookie: a new connector agent and a code for it, not yet exchanged. */
   async function consent(p: P, cookie: string, clientId: string, name: string) {
@@ -178,20 +171,25 @@ describe("owner recovery", () => {
     expect((await postSetup(p, { token, password: "a-new-owner-password" })).status).toBe(200);
   }
 
-  test("nothing the owner's session made before the recovery works after it: computer, app and OAuth tokens, codes, lines, sign-ins", async () => {
+  test("nothing the owner's session made before the recovery works after it: computer, app and OAuth tokens, codes, joins", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     const maya = await addMember(p);
     const stolen = signIn(p, chris);
-    const computerLine = await joinLine(p, stolen, "claude-code");
-    const joined = await json<{ token: string }>(post(p, "/api/computer/join", { token: computerLine, computer: "chris-macbook" }));
-    const unusedLine = await joinLine(p, stolen, "claude-code");
-    const issued = await askToJoin(p, stolen, "helper");
-    await callPerson(p, stolen, "POST", `/api/approvals/sign-ins/${issued.id}`, { decision: "approve" });
-    const appToken = (await poll(p, issued)).token!;
-    const approved = await askToJoin(p, stolen, "helper-two");
-    await callPerson(p, stolen, "POST", `/api/approvals/sign-ins/${approved.id}`, { decision: "approve" });
-    const pending = await askToJoin(p, stolen, "helper-three");
+    const computerAsked = await askToJoin(p, { kind: "computer", name: "chris-macbook" });
+    await allow(p, stolen, computerAsked);
+    const joined = (await poll(p, computerAsked)) as { token: string };
+    // A computer the stolen session allowed, whose token nobody fetched yet.
+    const unfetched = await askToJoin(p, { kind: "computer", name: "second" });
+    await allow(p, stolen, unfetched);
+    const issued = await askAgent(p, "helper");
+    await allow(p, stolen, issued);
+    const appToken = (await poll(p, issued)).token as string;
+    const approved = await askAgent(p, "helper-two");
+    await allow(p, stolen, approved);
+    // What an agent of the owner's asked, still waiting on the consent page.
+    const shared = p.workspaces.create(chris.id, "Launch");
+    const waiting = p.consents.ask(p.agents.byAddress("helper")!, "share", shared.id);
     const { client_id: clientId } = await json<{ client_id: string }>(
       post(p, "/oauth/register", { client_name: "Claude Duet", redirect_uris: [REDIRECT], token_endpoint_auth_method: "none" }),
     );
@@ -216,13 +214,11 @@ describe("owner recovery", () => {
       error: "invalid_grant",
     });
     expect(await json(exchange(unexchanged))).toMatchObject({ error: "invalid_grant" });
-    const lateJoin = await post(p, "/api/computer/join", { token: unusedLine, computer: "chris-macbook" });
-    expect(lateJoin.status).toBe(404);
-    expect(p.computers.list(chris.id).map((c) => c.name)).toEqual(["chris-macbook"]);
-    // An approval made before the recovery never hands over its token; a request still waiting expires.
+    // A join allowed before the recovery never hands over its token; what the owner's agents asked stops waiting.
+    expect(await poll(p, unfetched)).toEqual({ status: "approved", computer: { id: expect.any(String), name: "second" } });
     expect(await poll(p, approved)).toEqual({ status: "approved", agent: { name: "helper-two" } });
-    expect(await poll(p, pending)).toEqual({ status: "expired" });
-    expect(p.computers.pendingSignIns(chris.id)).toEqual([]);
+    expect(p.consents.get(waiting.id)?.status).toBe("expired");
+    expect(p.consents.waitingFor(chris.id)).toEqual([]);
     // The member's credentials still work.
     expect((await callAs(p, { token: mayaComputer.token }, "PUT", FOLDER, { joins: true })).status).toBe(200);
     expect((await callAs(p, { token: mayaBot.token }, "GET", "/api/agent/agents")).status).toBe(200);
@@ -268,7 +264,7 @@ describe("owner recovery", () => {
     });
     expect(reopened.status).toBe(401);
     await flush();
-    expect(topics.flat()).toEqual(expect.arrayContaining(["agents", "computers", "join-lines", "approvals"]));
+    expect(topics.flat()).toEqual(expect.arrayContaining(["agents", "computers", "approvals"]));
     // The member's session stays open.
     await callAs(p, { token: mayaBot.token }, "POST", "/api/agent/messages", { to: "web-claude", subject: "s", text: "t" });
     expect((await mayaSession.events.next()).event).toBe("nudge");
@@ -303,7 +299,7 @@ describe("/setup", () => {
     const page = await res.text();
     for (const copy of [
       "<h1>Set up Portico</h1>",
-      "Create the owner account. The owner adds agents, invites people and approves sign in requests.",
+      "Create the owner account. The owner adds agents, invites people and approves each new account.",
       "Shown to invited people.",
       "12 characters or more.",
       "Create owner account",

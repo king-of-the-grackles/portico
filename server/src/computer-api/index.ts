@@ -8,8 +8,6 @@ import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
 import { defang } from "../core/framing";
 import type { Computer } from "../core/types";
-import { clientIp } from "../client-ip";
-import { limitedRedeem, WindowLimiter } from "./limiter";
 
 const FOLDER_ID = /^[a-f0-9]{64}$/;
 const MAX_FOLDER_NAME = 100;
@@ -31,32 +29,20 @@ function currentComputer(core: Core, c: Context): Computer {
 }
 
 /**
- * /api/computer: what a computer does with its own token. POST /join redeems a join line, POST /lines uses another
- * line on a computer that already joined, DELETE / leaves Portico, PUT /folders/:folderId sets a folder's switch.
- * snake_case JSON, like the agent API.
+ * /api/computer: what a computer does with its own token. GET / says which computer the token is, DELETE / leaves
+ * Portico, PUT /folders/:folderId sets a
+ * folder's switch. A computer gets its token by asking to join (/api/join). snake_case JSON, like the agent API.
  */
 export function computerApi(core: Core): Hono {
   const route = new Hono();
-  const limiter = new WindowLimiter(core.now);
 
   route.use("*", requireSetupDone(core));
   route.use("*", jsonBodyLimit());
 
-  // The join line is the credential: no token yet. Ten unknown lines in 15 minutes from one address close the route to that address for a while.
-  route.post("/join", async (c) => {
-    const body = (await readJson(c)) as { token?: unknown; computer?: unknown; client?: unknown } | null;
-    const { computer, token, joinLine } = limitedRedeem(limiter, clientIp(c), () =>
-      core.computers.redeem(body?.token, body?.computer, body?.client),
-    );
-    return c.json({ computer: { id: computer.id, name: computer.name }, token, kind: joinLine.kind }, 201);
-  });
-
-  // A join line used on a computer that already joined, e.g. Codex on a computer where Claude Code joined first.
-  route.post("/lines", async (c) => {
+  // Whether the token still works: `portico join` on a computer that joined already asks before saying so.
+  route.get("/", (c) => {
     const computer = currentComputer(core, c);
-    const body = (await readJson(c)) as { token?: unknown; client?: unknown } | null;
-    const joinLine = limitedRedeem(limiter, clientIp(c), () => core.computers.attach(computer, body?.token, body?.client));
-    return c.json({ computer: { id: computer.id, name: computer.name }, kind: joinLine.kind });
+    return c.json({ computer: { id: computer.id, name: computer.name } });
   });
 
   // `portico leave`: the computer, its sessions and its folders go, and the sessions' streams close.

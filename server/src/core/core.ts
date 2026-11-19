@@ -7,6 +7,7 @@ import type { Agents } from "./agents";
 import type { AllowList, Approvals } from "./approvals";
 import type { Changes } from "./changes";
 import type { Computers } from "./computers";
+import type { Consents } from "./consents";
 import type { Content } from "./content";
 import type { EventSubscriptions } from "./events";
 import type { Files } from "./files";
@@ -37,6 +38,8 @@ export interface Core {
   accounts: Accounts;
   workspaces: Workspaces;
   shares: Shares;
+  /** Everything a person confirms on the consent page: joins, and what agents ask their person. */
+  consents: Consents;
   mail: ShareMail;
   computers: Computers;
   agents: Agents;

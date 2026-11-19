@@ -20,13 +20,13 @@ export interface PorticoAnswer {
 }
 
 /**
- * One call to Portico's computer API: `/api/computer/*`, with the computer token when there is one. A redirect is
- * answered, not followed, so a token goes only to the Portico named in computer.json or the join line. Throws
+ * One call to Portico for a computer: `/api/computer/*` with the computer token, or `/api/join` while joining. A redirect is
+ * answered, not followed, so a token goes only to the Portico named in computer.json or in the join command. Throws
  * CommandError when Portico can't be reached; any HTTP answer is returned.
  */
 export async function callPortico(
   url: string,
-  method: "POST" | "PUT" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   opts: { token?: string; body?: unknown; fetch?: typeof fetch } = {},
 ): Promise<PorticoAnswer> {

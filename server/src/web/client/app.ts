@@ -9,8 +9,7 @@ import type {
   ActivityView,
   AddState,
   AgentKind,
-  AskView,
-  JoinView,
+  ConsentCard,
   ShareView,
   WorkspaceForm,
   WorkspacePageData,
@@ -23,14 +22,12 @@ import type {
   HomeData,
   HomeState,
   InviteView,
-  NewJoinLine,
   PasskeyView,
   PersonRow,
   PersonView,
   Route,
   SettingsData,
   SettingsState,
-  SignInView,
   TaskDetail,
   TaskListData,
   TodayData,
@@ -229,31 +226,13 @@ function connectStream(handlers: { changed(topics: string[]): void; down(isDown:
 
 // ---- the Add agent sheet, on both pages ----
 
-interface JoinLineDetail {
-  id: string;
-  expiresAt: string;
-  usedAt: string | null;
-  agent: { id: string } | null;
-  signIn: SignInView | null;
-}
-
 function emptyAdd(): AddState {
-  return {
-    line: null,
-    lineError: "",
-    copied: false,
-    stage: "pick",
-    signIn: null,
-    reqName: "",
-    reqError: "",
-    joined: null,
-    busy: false,
-  };
+  return { copied: null, stage: "pick", joined: null, joinedComputer: null };
 }
 
 class AddFlow<S extends Shared> {
   private known = new Set<string>();
-  private creating = false;
+  private knownComputers: Set<string> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private checking = false;
 
@@ -264,8 +243,9 @@ class AddFlow<S extends Shared> {
 
   open(): void {
     this.known = new Set(this.page.state.agents.map((a) => a.id));
+    this.knownComputers = null;
     this.page.set({ add: emptyAdd(), acctOpen: false } as Partial<S>);
-    void this.ensureLine();
+    void this.check();
     this.timer ??= setInterval(() => void this.check(), 4000);
   }
 
@@ -279,48 +259,25 @@ class AddFlow<S extends Shared> {
     return this.page.state.add;
   }
 
-  /** One line for any agent, made when the sheet opens. */
-  async ensureLine(): Promise<void> {
+  async copy(row: string): Promise<void> {
     const add = this.add;
-    if (!add || add.line || this.creating) return;
-    this.creating = true;
-    try {
-      const { joinLine } = await api<{ joinLine: NewJoinLine }>("POST", "/api/join-lines", {});
-      const now = this.add;
-      if (now) {
-        now.line = joinLine;
-        now.lineError = "";
-      }
-    } catch (err) {
-      if (this.add) this.add.lineError = failure(err);
-    } finally {
-      this.creating = false;
-      this.page.schedule();
-    }
-  }
-
-  async copy(): Promise<void> {
-    const add = this.add;
-    if (!add?.line) return;
-    await copyText(add.line.line, "add-line");
-    add.copied = true;
+    if (!add) return;
+    const field = document.getElementById(`add-${row}`);
+    if (!(field instanceof HTMLInputElement)) return;
+    await copyText(field.value, `add-${row}`);
+    add.copied = row;
     this.page.schedule();
     void this.check();
-  }
-
-  /** A used line can't be pasted again: drop it and make a fresh one. */
-  private freshLine(add: AddState): void {
-    add.line = null;
-    void this.ensureLine();
   }
 
   another(): void {
     const add = this.add;
     if (!add) return;
     this.known = new Set(this.page.state.agents.map((a) => a.id));
-    Object.assign(add, { stage: "pick", copied: false, joined: null, signIn: null, reqError: "" });
-    this.freshLine(add);
+    this.knownComputers = null;
+    Object.assign(add, emptyAdd());
     this.page.schedule();
+    void this.check();
   }
 
   done(): void {
@@ -329,93 +286,33 @@ class AddFlow<S extends Shared> {
     this.onDone(joined);
   }
 
-  setName(value: string): void {
-    if (!this.add) return;
-    this.add.reqName = value;
-    this.add.reqError = "";
-    this.page.schedule();
-  }
-
-  async decide(decision: "approve" | "deny"): Promise<void> {
-    const add = this.add;
-    if (!add?.signIn || add.busy) return;
-    const name = add.reqName.trim();
-    if (decision === "approve") {
-      const problem = nameProblem(name);
-      if (problem) {
-        add.reqError = problem;
-        this.page.schedule();
-        return;
-      }
-    }
-    add.busy = true;
-    this.page.schedule();
-    try {
-      const answer = await api<{ agent?: { id: string } } | null>("POST", `/api/approvals/sign-ins/${encodeURIComponent(add.signIn.id)}`, {
-        decision,
-        ...(decision === "approve" ? { name } : {}),
-      });
-      if (decision === "deny") {
-        Object.assign(add, { stage: "pick", copied: false, signIn: null, busy: false });
-        this.freshLine(add);
-      } else {
-        await this.check(answer?.agent?.id);
-      }
-    } catch (err) {
-      add.busy = false;
-      add.reqError = err instanceof ApiError && err.status === 409 ? "Name already in use." : failure(err);
-    }
-    this.page.schedule();
-  }
-
-  /** Looks for the agent the line brought in, or a sign-in request waiting on it. */
-  async check(agentId?: string): Promise<void> {
+  /**
+   * Looks for what joined since the sheet opened: a new agent of this person's, or a new computer, which has no agent
+   * until a session starts there. The join itself is allowed on the consent page, in another tab.
+   */
+  async check(): Promise<void> {
     const add = this.add;
     if (!add || add.stage === "joined" || this.checking) return;
     this.checking = true;
     try {
-      let id = agentId ?? null;
-      let signIn: SignInView | null = null;
-      const line = add.line;
-      if (!id && line) {
-        const { joinLine } = await api<{ joinLine: JoinLineDetail }>("GET", `/api/join-lines/${encodeURIComponent(line.id)}`);
-        id = joinLine.agent?.id ?? null;
-        signIn = joinLine.signIn;
+      const { agents } = await api<{ agents: AgentView[] }>("GET", "/api/agents");
+      this.page.state.agents = agents;
+      const fresh = agents.find((a) => a.mine && !this.known.has(a.id));
+      if (fresh) {
+        Object.assign(add, { stage: "joined", joined: fresh });
+        return;
       }
-      if (id) {
-        let agent = this.page.state.agents.find((a) => a.id === id);
-        if (!agent) {
-          const { agents } = await api<{ agents: AgentView[] }>("GET", "/api/agents");
-          this.page.state.agents = agents;
-          agent = agents.find((a) => a.id === id);
-        }
-        if (agent) this.joined(agent);
-      } else if (signIn?.status === "pending" && add.stage === "pick") {
-        Object.assign(add, { stage: "request", signIn, reqName: signIn.name, reqError: "" });
-      } else if (signIn && signIn.status !== "pending" && signIn.status !== "approved" && add.stage === "request") {
-        Object.assign(add, { stage: "pick", copied: false, signIn: null, busy: false });
-        this.freshLine(add);
-      } else if (add.copied && add.stage === "pick") {
-        // The agent may have guided the person to add Portico's address in the app's settings instead (ChatGPT does):
-        // a connector signs in on Portico's consent page, with no join line, so look for a new one of this person's.
-        const { agents } = await api<{ agents: AgentView[] }>("GET", "/api/agents");
-        this.page.state.agents = agents;
-        const fresh = agents.find((a) => a.mine && a.type === "connector" && !this.known.has(a.id));
-        if (fresh) this.joined(fresh);
-      }
+      const { computers } = await api<{ computers: ComputerView[] }>("GET", "/api/computers");
+      if (this.knownComputers === null) this.knownComputers = new Set(computers.map((c) => c.id));
+      const computer = computers.find((c) => !this.knownComputers!.has(c.id));
+      if (computer) Object.assign(add, { stage: "joined", joinedComputer: computer.name });
     } catch (err) {
-      // The line may be gone (expired) or the endpoint busy; the next check tries again.
+      // The next check tries again.
       if (err instanceof ApiError && err.status === 401) failure(err);
     } finally {
       this.checking = false;
       this.page.schedule();
     }
-  }
-
-  private joined(agent: AgentView): void {
-    const add = this.add;
-    if (!add) return;
-    Object.assign(add, { stage: "joined", joined: agent, busy: false, signIn: null });
   }
 }
 
@@ -524,8 +421,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
   // -- fetching: each loader drops its answer if the page moved on meanwhile --
   const loadAgents = async () => page.set({ agents: (await api<{ agents: AgentView[] }>("GET", "/api/agents")).agents });
   const loadApprovals = async () => {
-    const r = await api<{ held: HeldCard[]; signIns: SignInView[]; joins?: JoinView[]; asks?: AskView[] }>("GET", "/api/approvals");
-    page.set({ held: r.held, signIns: r.signIns, joins: r.joins ?? [], asks: r.asks ?? [] });
+    const r = await api<{ held: HeldCard[]; consents?: ConsentCard[] }>("GET", "/api/approvals");
+    page.set({ held: r.held, consents: r.consents ?? [] });
   };
   const loadWorkspaces = async () => {
     page.set({ workspaces: (await api<{ workspaces: WorkspaceView[] }>("GET", "/api/porticos")).workspaces });
@@ -652,7 +549,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     if (route.page === "activity" && (t.has("activity") || t.has("agents"))) jobs.push(loadEvents());
     if (route.page === "agent" && (tasksChanged || t.has("agents") || t.has("activity"))) jobs.push(loadAgentPage());
     if (tasksChanged) for (const id of Object.keys(s().openTasks)) jobs.push(loadTask(id));
-    if (s().add && (t.has("join-lines") || t.has("approvals") || t.has("agents"))) jobs.push(add.check());
+    if (s().add && (t.has("computers") || t.has("approvals") || t.has("agents"))) jobs.push(add.check());
     void settle(jobs);
   };
 
@@ -739,32 +636,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
     } catch (err) {
       fail(err);
       refresh(["approvals"]);
-    } finally {
-      page.set({ busy: null });
-    }
-  };
-
-  const decideSignIn = async (id: string, decision: "approve" | "deny") => {
-    const request = s().signIns.find((r) => r.id === id);
-    if (!request || s().busy) return;
-    page.set({ busy: `signin:${id}` });
-    try {
-      const answer = await api<{ agent?: { id: string } } | null>("POST", `/api/approvals/sign-ins/${encodeURIComponent(id)}`, {
-        decision,
-        ...(decision === "approve" ? { name: request.name } : {}),
-      });
-      page.set({ signIns: s().signIns.filter((r) => r.id !== id) });
-      if (decision === "deny") {
-        note(`${request.name} wasn't allowed to join.`);
-        return;
-      }
-      await loadAgents();
-      const agent =
-        s().agents.find((a) => a.id === answer?.agent?.id) ?? s().agents.find((a) => a.mine && a.name === request.name);
-      if (agent) go(`/a/${agent.id}`);
-      note(`${request.name} joined.`);
-    } catch (err) {
-      fail(err);
     } finally {
       page.set({ busy: null });
     }
@@ -924,48 +795,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
     }
   };
 
-  const decideJoin = async (id: string, decision: string) => {
-    const join = s().joins.find((j) => j.id === id);
-    if (!join || s().busy) return;
-    page.set({ busy: `join:${id}` });
-    try {
-      await api("POST", `/api/approvals/joins/${encodeURIComponent(id)}`, { decision });
-      page.set({ joins: s().joins.filter((j) => j.id !== id) });
-      note(decision === "approve" ? `${join.agent.label} is in ${join.workspace.phrase} now.` : `${join.agent.label} wasn't let into ${join.workspace.phrase}.`, decision === "approve");
-      refresh(["approvals", "workspaces", "agents"]);
-    } catch (err) {
-      fail(err);
-      refresh(["approvals"]);
-    } finally {
-      page.set({ busy: null });
-    }
-  };
-
-  const decideAsk = async (id: string, decision: string) => {
-    const ask = s().asks.find((a) => a.id === id);
-    if (!ask || s().busy) return;
-    page.set({ busy: `ask:${id}` });
-    try {
-      const answer = await api<{ share: ShareView | null }>("POST", `/api/approvals/asks/${encodeURIComponent(id)}`, { decision });
-      page.set({ asks: s().asks.filter((a) => a.id !== id) });
-      if (decision !== "approve") note(`Not allowed. ${ask.agent.label} sees the answer.`);
-      else if (ask.kind === "share") {
-        if (answer?.share?.mail) page.set({ wsMail: { ...s().wsMail, [answer.share.id]: answer.share.mail } });
-        go(`/p/${ask.workspace.id}`);
-        note(answer?.share?.mail === "sent" ? `Share link emailed to ${ask.email}.` : `Share link made for ${ask.workspace.phrase}. ${ask.agent.label} has the link too.`, true);
-      } else if (ask.kind === "delete") {
-        if (s().route.page === "workspace") go("/");
-        note(`Deleted ${ask.workspace.phrase}.`, true);
-      } else note(`${ask.person?.name ?? "The person"} removed from ${ask.workspace.phrase}.`, true);
-      refresh(["approvals", "workspaces", "agents"]);
-    } catch (err) {
-      fail(err);
-      refresh(["approvals"]);
-    } finally {
-      page.set({ busy: null });
-    }
-  };
-
   const saveEdit = async () => {
     const agent = pageAgent();
     const edit = s().edit;
@@ -1083,7 +912,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
       else if (name === "edit-desc" && edit) page.set({ edit: { ...edit, description: value.slice(0, 500) } });
       else if (name === "wake-url" && s().wakeEdit) page.set({ wakeEdit: { ...s().wakeEdit!, url: value, error: "" } });
       else if (name === "wake-key" && s().wakeEdit) page.set({ wakeEdit: { ...s().wakeEdit!, key: value, error: "" } });
-      else if (name === "add-req-name") add.setName(value);
       else if (name === "ws-name" && (s().wsForm?.kind === "new" || s().wsForm?.kind === "rename")) page.set({ wsForm: { ...s().wsForm!, name: value, error: "" } as WorkspaceForm });
       else if (name === "ws-email" && s().wsForm?.kind === "share") page.set({ wsForm: { ...s().wsForm!, email: value, error: "" } as WorkspaceForm });
       else if (name === "filter-agent") setFilter({ agent: value || null });
@@ -1092,7 +920,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
     form(name) {
       if (name === "agent-save") void saveEdit();
       else if (name === "wake-save") void saveWake();
-      else if (name === "add-approve") void add.decide("approve");
       else if (name === "ws-create") createWorkspace();
       else if (name === "ws-share") createShare();
       else if (name === "ws-rename") renameWorkspace();
@@ -1154,10 +981,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
           return void mailShare(id);
         case "ws-share-copy":
           return void copyShare(id);
-        case "join-decide":
-          return void decideJoin(id, el.dataset.decision ?? "deny");
-        case "ask-decide":
-          return void decideAsk(id, el.dataset.decision ?? "deny");
         case "go": {
           // A modified click opens a new tab, as any link does.
           const mouse = event as MouseEvent;
@@ -1181,9 +1004,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
         case "add-close":
           return add.close();
         case "add-copy":
-          return void add.copy();
-        case "add-deny":
-          return void add.decide("deny");
+          return void add.copy(id);
         case "add-another":
           return add.another();
         case "add-done":
@@ -1210,10 +1031,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
           return page.set({ settingsOpen: !s().settingsOpen, confirmRemove: false });
         case "decide":
           return void decide(id, el.dataset.decision as "allow_once" | "always_allow" | "deny");
-        case "signin-approve":
-          return void decideSignIn(id, "approve");
-        case "signin-deny":
-          return void decideSignIn(id, "deny");
         case "edit-start": {
           const agent = pageAgent();
           if (agent) page.set({ edit: { name: agent.name, description: agent.description, error: "" }, saved: false, settingsOpen: true });
@@ -1260,7 +1077,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     changed: refresh,
     down: (isDown) => page.set({ reconnecting: isDown }),
     back: () => {
-      refresh(["agents", "approvals", "me", "join-lines"]);
+      refresh(["agents", "approvals", "me"]);
       void loadPage();
     },
   });
@@ -1342,7 +1159,7 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
       void loadMe();
       void loadPasskeys();
     }
-    if (s().add && (t.has("join-lines") || t.has("approvals") || t.has("agents"))) void add.check();
+    if (s().add && (t.has("computers") || t.has("approvals") || t.has("agents"))) void add.check();
   };
 
   const run = async (busy: string, job: () => Promise<void>, onError: (message: string, err: unknown) => void) => {
@@ -1470,7 +1287,6 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
       else if (name === "pw-next" && s().passwordForm) page.set({ passwordForm: { ...s().passwordForm!, next: value, error: "" } });
       else if (name === "pk-name" && s().passkeyForm) page.set({ passkeyForm: { ...s().passkeyForm!, name: value, error: "" } });
       else if (name === "pk-current" && s().passkeyForm) page.set({ passkeyForm: { ...s().passkeyForm!, current: value, error: "" } });
-      else if (name === "add-req-name") add.setName(value);
     },
     form(name) {
       if (name === "invite-create") createInvite();
@@ -1478,7 +1294,6 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
       else if (name === "handle-save") saveHandle();
       else if (name === "password-save") savePassword();
       else if (name === "passkey-add") addPasskey();
-      else if (name === "add-approve") void add.decide("approve");
     },
     action(name, el) {
       const id = el.dataset.id ?? "";
@@ -1492,9 +1307,7 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
         case "add-close":
           return add.close();
         case "add-copy":
-          return void add.copy();
-        case "add-deny":
-          return void add.decide("deny");
+          return void add.copy(id);
         case "add-another":
           return add.another();
         case "add-done":

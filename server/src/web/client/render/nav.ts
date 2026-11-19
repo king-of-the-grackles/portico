@@ -5,9 +5,9 @@ import { waitingAgents } from "./tasks.js";
 import type { HomeState, WorkspaceView } from "./types.js";
 import { initials } from "./workspace.js";
 
-/** What needs a decision: held messages, sign-in requests, and coding agents with a question. */
+/** What needs a decision: held messages, what agents asked, and coding agents with a question. */
 export function decisionCount(s: HomeState): number {
-  return s.held.length + s.signIns.length + s.joins.length + s.asks.length + waitingAgents(s).length;
+  return s.held.length + s.consents.length + waitingAgents(s).length;
 }
 
 /** The Porticos: the person's own first, then each shared one with the other people's initials and a dot when something waits. */

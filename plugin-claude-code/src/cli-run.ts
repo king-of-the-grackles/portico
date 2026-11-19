@@ -7,7 +7,7 @@ import { codexHome } from "./codex-config";
 import { ComputerFileError, computerConfigPath, readComputerFile, realFolder } from "./computer";
 import { CommandError } from "./computer-api";
 import { notJoined, switchFolder } from "./folders";
-import { joinComputer } from "./join";
+import { joinComputer, JoinWaiting } from "./join";
 import { findOnPath, leaveComputer, type LeaveDeps } from "./leave";
 
 /** What a command needs from the outside world, so tests can run commands without a real process. */
@@ -22,16 +22,22 @@ export interface CliIo {
 export interface CliDeps extends Pick<LeaveDeps, "findClaude" | "uninstall"> {
   fetch?: typeof fetch;
   hostname?: () => string;
+  /** For the join's wait: the clock, the pause between polls, and the gap. */
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  pollMs?: number;
 }
 
-const JOIN_USAGE = "join <line> [--name <computer>] [--replace] [--no-allow]";
-const JOIN_OPTIONS = ["--name", "--replace", "--no-allow"];
+const JOIN_USAGE = "join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>]";
+const JOIN_OPTIONS = ["--name", "--replace", "--no-allow", "--wait"];
 
 const USAGE = `Usage: bun src/cli.ts <command>
 
 Commands:
   ${JOIN_USAGE}
-                  Join this computer to Portico with a join line, write the computer file, and allow the Portico tools in Claude Code.
+                  Ask the Portico server at the address to let this computer join. Prints a link and a 4-digit code:
+                  a person opens the link, signs in, types the code and presses Allow. Then writes the computer file
+                  and allows the Portico tools in Claude Code. --wait 0 only asks; the same command again keeps waiting.
   off [folder]    Keep new sessions in a folder (default: the current folder) off Portico.
   on [folder]     Let new sessions in a folder join Portico again.
   leave           Take this computer off Portico: remove the computer there, the computer file and the settings rule, and uninstall the plugin.
@@ -78,40 +84,55 @@ function usageError(io: CliIo, problem: string, usage: string): number {
   return 1;
 }
 
+/** What a join that still waits says: nothing is wrong, and the same command picks the request up again. */
+export function stillWaiting(expiresAt: string): string {
+  return `Still waiting for a person to allow the join. Run the same command again to keep waiting: the link and the code stay the same until ${expiresAt}.`;
+}
+
 /**
- * The words that aren't options are joined with spaces into the line: the slash command passes the line as one
- * quoted argument, while a shell user may pass several words.
+ * The words that aren't options are joined with spaces into the address: the slash command passes the address as one
+ * quoted argument, while a person may type "Join Portico at https://…".
  */
 async function join(args: string[], io: CliIo, deps: CliDeps): Promise<number> {
   const words: string[] = [];
   let name: string | undefined;
   let replace = false;
   let noAllow = false;
+  let waitSeconds: number | undefined;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--replace") {
       replace = true;
     } else if (arg === "--no-allow") {
       noAllow = true;
-    } else if (arg === "--name") {
+    } else if (arg === "--name" || arg === "--wait") {
       const value = args[++i];
       if (value === undefined || JOIN_OPTIONS.includes(value)) return usageError(io, `${arg} needs a value.`, JOIN_USAGE);
-      name = value;
+      if (arg === "--name") name = value;
+      else if (/^[0-9]{1,4}$/.test(value)) waitSeconds = Number(value);
+      else return usageError(io, "--wait takes a number of seconds.", JOIN_USAGE);
     } else if (arg.startsWith("--")) {
       return usageError(io, `Unknown option: ${arg}.`, JOIN_USAGE);
     } else {
       words.push(arg);
     }
   }
-  const line = words.join(" ").trim();
-  if (!line) return usageError(io, "A join line is required.", JOIN_USAGE);
+  const address = words.join(" ").trim();
+  if (!address) return usageError(io, "The Portico server's address is required.", JOIN_USAGE);
 
-  const joined = await joinComputer(
-    { line, name, replace, client: "claude-code" },
-    { configPath: computerConfigPath(io.env), fetch: deps.fetch, hostname: deps.hostname },
-  );
-  if (joined.attached) {
-    io.out(`This computer is already on Portico at ${joined.url} as computer "${joined.computer}". Used the line here.`);
+  let joined;
+  try {
+    joined = await joinComputer(
+      { address, name, replace, client: "claude-code", waitSeconds },
+      { configPath: computerConfigPath(io.env), fetch: deps.fetch, hostname: deps.hostname, out: io.out, now: deps.now, sleep: deps.sleep, pollMs: deps.pollMs },
+    );
+  } catch (err) {
+    if (!(err instanceof JoinWaiting)) throw err;
+    io.out(stillWaiting(err.expiresAt));
+    return 0;
+  }
+  if (joined.already) {
+    io.out(`This computer is already on Portico at ${joined.url} as computer "${joined.computer}". Nothing to allow.`);
   } else {
     io.out(`Joined Portico at ${joined.url} as computer "${joined.computer}".`);
     io.out(`Wrote ${joined.path} (mode 600).`);

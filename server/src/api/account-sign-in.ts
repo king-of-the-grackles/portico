@@ -9,10 +9,16 @@ import { safeNext } from "../web/layout";
 import { type PersonEnv, currentPerson } from "./context";
 import { jsonObject, startBrowserSession } from "./session";
 
-/** Where a browser goes after signing in: the page asked for, or first the welcome page for a person with no handle yet. */
+/** Pages that ask a new person for the handle themselves: the consent page and a connector's consent page. */
+const ASKS_FOR_HANDLE = /^\/(c\/[^/?]+|oauth\/authorize)\/?(\?|$)/;
+
+/**
+ * Where a browser goes after signing in: the page asked for, or first the welcome page for a person with no handle
+ * yet, unless the page asked for takes the handle itself.
+ */
 export function afterAccountSignIn(person: Person, next: unknown): string {
   const path = safeNext(next);
-  if (person.handle !== null) return path;
+  if (person.handle !== null || ASKS_FOR_HANDLE.test(path)) return path;
   return path === "/" ? "/welcome" : `/welcome?next=${encodeURIComponent(path)}`;
 }
 

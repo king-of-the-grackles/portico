@@ -1,5 +1,7 @@
 import type { Context } from "hono";
 import { html } from "hono/html";
+import { quote } from "../core/consent-words";
+import { HANDLE_MAX, HANDLE_MIN } from "../core/people";
 import type { AgentKind, Person } from "../core/types";
 import { CSP, HOMEMARK, narrowPage, sendPage, utcClock } from "../web/layout";
 import type { OAuthClient } from "./store";
@@ -28,6 +30,8 @@ export interface ConsentOptions {
   kind: AgentKind;
   requestedAt: Date;
   cancelUrl: string;
+  /** For a person with no handle yet: the one to offer. The page asks for the handle itself, like the consent page. */
+  suggestedHandle: string | null;
 }
 
 function initial(name: string): string {
@@ -51,7 +55,11 @@ function redirectHost(redirectUri: string): string {
   return url.protocol === "https:" || url.protocol === "http:" ? url.host : url.protocol.replace(/:$/, "");
 }
 
-/** The D2 board: "<client> wants to add an agent to Portico", a Name, a kind, then Cancel and Add agent. */
+/**
+ * A connector's consent page: the same family as the consent page at /c/<id>, with no code, since the app sent the
+ * signed-in person here itself. Portico's own words, the app's name as a quote, a handle the first time, a Name, a
+ * kind, then Don't allow and Allow.
+ */
 export async function consentPage(c: Context, o: ConsentOptions): Promise<Response> {
   const hidden = (name: string, value: string | null) =>
     value === null ? "" : html`<input type="hidden" name="${name}" value="${value}">`;
@@ -61,15 +69,22 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
     <div class="consent-head">
       <span class="logo logo-lg logo-tile" aria-hidden="true">${initial(o.client.name)}</span>
       <div>
-        <h1>${o.client.name} wants to add an agent to Portico</h1>
-        <p class="tnum consent-when">Requested at <time datetime="${o.requestedAt.toISOString()}" data-local-time>${utcClock(o.requestedAt)}</time>.</p>
-        <p class="consent-where">Approving sends access to <strong>${redirectHost(o.request.redirectUri)}</strong>. Any app can use the name ${o.client.name}: approve only when ${redirectHost(o.request.redirectUri)} belongs to the app being added.</p>
+        <h1>Let an agent join Portico</h1>
+        <p class="tnum consent-when">An app under the name ${quote(o.client.name)} asks to add an agent. Requested at <time datetime="${o.requestedAt.toISOString()}" data-local-time>${utcClock(o.requestedAt)}</time>.</p>
+        <p class="consent-where">Allowing sends access to <strong>${redirectHost(o.request.redirectUri)}</strong>. Any app can use the name ${quote(o.client.name)}: allow only when ${redirectHost(o.request.redirectUri)} belongs to the app being added.</p>
       </div>
     </div>
     <form method="post" action="/oauth/authorize" data-api="POST /oauth/authorize">
       ${hidden("client_id", o.request.clientId)}${hidden("redirect_uri", o.request.redirectUri)}${hidden("state", o.request.state)}
       ${hidden("code_challenge", o.request.challenge)}${hidden("code_challenge_method", "S256")}${hidden("resource", o.request.resource)}
-      <label for="c-name" class="lbl">Name</label>
+      ${
+        o.suggestedHandle === null
+          ? ""
+          : html`<label for="c-handle" class="lbl">Handle</label>
+      <input id="c-handle" name="handle" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="${HANDLE_MIN}" maxlength="${HANDLE_MAX}" required value="${o.suggestedHandle}" aria-describedby="c-handle-help" data-handle>
+      <span id="c-handle-help" class="help" data-handle-note aria-live="polite">${HANDLE_MIN} to ${HANDLE_MAX} lowercase letters, digits and hyphens. The handle goes in front of an agent's name for other people, as in ${o.suggestedHandle}/muse, and can be changed later in Settings.</span>`
+      }
+      <label for="c-name" class="lbl">Agent name</label>
       <input id="c-name" name="name" class="field" value="${o.name}" aria-describedby="c-name-help" required maxlength="40" autocomplete="off" autocapitalize="none" spellcheck="false">
       <span id="c-name-help" class="help">Other agents use this name when sending messages.</span>
       <fieldset class="kinds">
@@ -79,16 +94,16 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
             html`<label class="kind"><input type="radio" name="kind" value="${choice.kind}"${choice.kind === o.kind ? html` checked` : ""}>${choice.label}</label>`,
         )}
       </fieldset>
-      <p class="note">Once approved, this agent joins Your Portico: the agent can message the other agents there and get replies.</p>
+      <p class="note">Once allowed, the agent belongs to ${o.person.name} and joins Your Portico, where ${o.person.name}'s other agents can message the agent.</p>
       <p class="notice notice-error" data-error role="alert" hidden></p>
-      <span class="actions"><a class="btn btn-link" href="${o.cancelUrl}">Cancel</a><button type="submit" class="btn btn-primary">Add agent</button></span>
+      <span class="actions"><a class="btn btn-secondary" href="${o.cancelUrl}">Don't allow</a><button type="submit" class="btn btn-primary">Allow</button></span>
     </form>
   </div>
 </main>`;
   const res = await sendPage(c, {
-    title: "Add an agent",
+    title: "Let an agent join Portico",
     body,
-    scripts: ["forms.js", "local-time.js"],
+    scripts: o.suggestedHandle === null ? ["forms.js", "local-time.js"] : ["forms.js", "welcome.js", "local-time.js"],
     styles: ["onboarding.css"],
   });
   res.headers.set("Content-Security-Policy", consentCsp(o.request.redirectUri));

@@ -30,7 +30,7 @@ export const FOLDER_OFF_NOTE =
 export const JOINING_NOTE = "Portico hasn't registered this session yet. Try again in a few seconds.";
 
 /** What a tool call gets on a computer that hasn't joined Portico. */
-export const NOT_JOINED_NOTE = "This computer hasn't joined Portico. To join, paste a join line from Portico (Add agent › Claude Code).";
+export const NOT_JOINED_NOTE = "This computer hasn't joined Portico. To join, run /portico:join with the Portico server's address, such as /portico:join https://portico.example.com.";
 
 /** Posted into a session that joined while open: the computer joined Portico, and Portico registered the session. */
 export function joinedNotice(name: string): string {

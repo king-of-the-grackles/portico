@@ -9,6 +9,8 @@ import { Agents } from "./core/agents";
 import { AllowList, Approvals } from "./core/approvals";
 import { Changes } from "./core/changes";
 import { Computers } from "./core/computers";
+import { consentWords, quote } from "./core/consent-words";
+import { Consents } from "./core/consents";
 import { Content } from "./core/content";
 import { type AccountCheck, accountFrom, Descope } from "./core/descope";
 import { EventSubscriptions } from "./core/events";
@@ -16,6 +18,7 @@ import { type FileStore, fileStoreFor } from "./core/file-store";
 import { Files } from "./core/files";
 import { InboxWaits } from "./core/inbox-waits";
 import type { Core } from "./core/core";
+import { LIMITS } from "./core/limits";
 import { ShareMail } from "./core/mail";
 import { Messages } from "./core/messages";
 import { People } from "./core/people";
@@ -174,6 +177,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
           wake(m.toId);
           wakeApp(m);
         }
+        if (m.status === "held") mailHeld(m);
         return;
       }
       case "message_decided":
@@ -233,7 +237,61 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     log: logInfo,
   });
   // What an agent asks about a workspace is answered only in a signed-in browser.
-  const shares = new Shares({ db, workspaces, agents, people, changes, signingKey: config.signingKey, now, newId, log: logInfo });
+  const shares = new Shares({ db, workspaces, changes, signingKey: config.signingKey, now, newId, log: logInfo });
+  // Mail is extra: the page is always reached from the agent's chat or Portico's own pages, so a failed email only logs.
+  const mailed = (what: string, send: Promise<unknown>) => void send.catch((err) => log("error", "mail_failed", { what, error: errorName(err) }));
+  const consents = new Consents({
+    db,
+    workspaces,
+    shares,
+    agents,
+    people,
+    computers,
+    changes,
+    activity,
+    now,
+    newId,
+    log: logInfo,
+    // The person an agent asked is known, so Portico emails that person the page's link. Never the code.
+    onAsked: (request) => {
+      const person = request.personId ? people.get(request.personId) : null;
+      const view = person ? consents.describe(person, request.id) : null;
+      if (!mail.enabled || !person || !view) return;
+      const words = consentWords(view, person.name, (agent) => agents.nameFor(agent, person.id));
+      mailed(
+        "consent",
+        mail.notify("consent", request.id, person, {
+          subject: `${words.title}: an agent asks`,
+          lines: [words.asks, "To answer, open this page and sign in to Portico:"],
+          link: `${settings.publicUrl()}/c/${request.id}`,
+          after: [
+            "The page asks for the 4-digit code the agent shows in its chat. Portico never emails that code, so nothing happens without the chat.",
+            "Didn't ask an agent for this? Open the page and choose Don't allow, or ignore this email.",
+          ],
+        }),
+      );
+    },
+  });
+  // A held message's page is emailed to the person who decides. Never the subject or the text.
+  const mailHeld = (m: Message) => {
+    if (!mail.enabled) return;
+    const receiver = agents.get(m.toId);
+    const sender = agents.get(m.fromId);
+    const person = receiver ? people.get(receiver.ownerId) : null;
+    if (!receiver || !sender || !person) return;
+    mailed(
+      "held",
+      mail.notify("held", m.id, person, {
+        subject: "A message waits for a decision on Portico",
+        lines: [
+          `A message from ${quote(agents.addressFor(sender, person.id))} to ${quote(agents.nameFor(receiver, person.id))} is held: that agent takes messages only once ${person.name} allows each sender.`,
+          "To read the message and decide, open this page and sign in to Portico:",
+        ],
+        link: `${settings.publicUrl()}/held/${m.id}`,
+        after: [`The message waits ${LIMITS.messageExpiryHours / 24} days, then lapses.`],
+      }),
+    );
+  };
   const approvals = new Approvals({ agents, workspaces, messages, people, allowList, changes, activity, now, notify, log: logInfo });
 
   const accountSignIn: AccountSignIn | null = check
@@ -252,6 +310,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     accounts,
     workspaces,
     shares,
+    consents,
     mail,
     computers,
     agents,
@@ -328,10 +387,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       void sweepFiles();
       sweep("messages_expired", () => messages.expireDue().length);
       sweep("event_subscriptions", () => events.sweep());
-      sweep("computers_minute", () => computers.sweepMinute());
       sweep("oauth_clients", () => computers.sweepUnusedClients());
       sweep("sign_in_limits", () => accounts.sweepLimiters());
-      sweep("share_requests", () => shares.sweepMinute());
+      sweep("consent_requests", () => consents.sweepMinute());
     },
     sweepDaily() {
       sweep("history", () => messages.prune());
@@ -342,7 +400,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       sweep("people", () => people.sweep());
       sweep("computers", () => computers.sweep());
       sweep("shares", () => shares.sweep());
-      sweep("share_mails", () => mail.sweep());
+      sweep("consents", () => consents.sweep());
+      sweep("mails", () => mail.sweep());
     },
   };
 }

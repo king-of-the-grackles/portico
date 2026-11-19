@@ -8,7 +8,6 @@ import { leaveCommand } from "../src/commands/leave";
 import { copyProblems } from "./helpers";
 
 const CLI = join(import.meta.dir, "..", "src", "cli.ts");
-const TOKEN = "T4mWq8Zr2LpX6Kd1";
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -21,8 +20,11 @@ function tempHome(): string {
   return dir;
 }
 
-/** A stand-in for the computer API (built by the Onboarding track), following the shared contract. */
-function fakeComputerApi() {
+/**
+ * A stand-in for the join and computer APIs, following the shared contract: POST /api/join answers a link and a code,
+ * GET /api/join/:id is polled with the poll secret, and `decision` is what the person does on the page.
+ */
+function fakeComputerApi(decision: "approved" | "denied" = "approved") {
   const requests: { method: string; path: string; auth: string | null; body: unknown }[] = [];
   const server = Bun.serve({
     port: 0,
@@ -30,10 +32,15 @@ function fakeComputerApi() {
       const text = await req.text();
       const path = new URL(req.url).pathname;
       requests.push({ method: req.method, path, auth: req.headers.get("authorization"), body: text ? JSON.parse(text) : null });
-      if (req.method === "POST" && path === "/api/computer/join") {
-        const body = JSON.parse(text) as { token: string; computer: string };
-        if (body.token !== TOKEN) return Response.json({ error: "not_found", message: "The join line isn't valid any more." }, { status: 404 });
-        return Response.json({ computer: { id: "c1", name: body.computer }, token: "pc_computer-token" }, { status: 201 });
+      const base = new URL(req.url).origin;
+      if (req.method === "POST" && path === "/api/join") {
+        return Response.json({ id: "r1", link: `${base}/c/r1`, code: "4821", poll_secret: "ps_poll", expires_at: new Date(Date.now() + 600_000).toISOString(), show: "x" }, { status: 201 });
+      }
+      if (req.method === "GET" && path === "/api/join/r1") {
+        if (req.headers.get("authorization") !== "Bearer ps_poll") return Response.json({ error: "unauthorized", message: "Missing or wrong poll secret for this request." }, { status: 401 });
+        // The first poll finds the person still reading the page.
+        if (requests.filter((r) => r.path === path).length === 1) return Response.json({ status: "pending" });
+        return Response.json(decision === "approved" ? { status: "approved", computer: { id: "c1", name: "studio" }, token: "pc_computer-token" } : { status: "denied" });
       }
       if (req.method === "DELETE" && path === "/api/computer") return new Response(null, { status: 204 });
       return Response.json({ error: "not_found", message: "No such endpoint." }, { status: 404 });
@@ -60,15 +67,23 @@ function io(home: string) {
 }
 
 describe("portico join and portico leave", () => {
-  test("join redeems the line on Portico and writes the computer file; leave undoes it", async () => {
+  test("join asks Portico, prints the link and the code, waits for Allow and writes the computer file; leave undoes it", async () => {
     const api = fakeComputerApi();
     const home = tempHome();
     const { io: joinIo, lines: joined } = io(home);
-    expect(await joinCommand([`Join Portico: ${api.url}/join#${TOKEN}`, "--name", "studio"], joinIo)).toBe(0);
-    expect(joined[0]).toBe(`Joined Portico at ${api.url} as computer "studio".`);
-    expect(api.requests[0]).toEqual({ method: "POST", path: "/api/computer/join", auth: null, body: { token: TOKEN, computer: "studio", client: "claude-code" } });
+    expect(await joinCommand([api.url, "--name", "studio"], joinIo, { pollMs: 1 })).toBe(0);
+    expect(api.requests[0]).toEqual({ method: "POST", path: "/api/join", auth: null, body: { kind: "computer", name: "studio", client: "claude-code" } });
+    expect(joined.slice(0, 4)).toEqual([
+      "A person allows this computer on one Portico page:",
+      `  1. Open ${api.url}/c/r1 in a browser and sign in.`,
+      "  2. Type the code 4821 there and press Allow.",
+      expect.stringMatching(/^The code runs out at .*\. Type the code only on that page\.$/),
+    ]);
+    expect(joined[4]).toBe(`Joined Portico at ${api.url} as computer "studio".`);
     const path = join(home, ".portico", "computer.json");
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ url: api.url, computer: "studio", token: "pc_computer-token", off: [] });
+    // The waiting request's poll secret is gone once the join ends.
+    expect(existsSync(join(home, ".portico", "join.json"))).toBe(false);
     expect(JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"))).toEqual({
       permissions: { allow: ["mcp__plugin_portico_portico"] },
     });
@@ -83,13 +98,17 @@ describe("portico join and portico leave", () => {
     expect(left.at(-1)).toBe("This computer has left Portico.");
     for (const line of [...joined, ...left]) expect(copyProblems(line.replaceAll(home, "<home>"))).toEqual([]);
     expect([...joined, ...left].join("\n")).not.toContain("pc_computer-token");
+    expect([...joined, ...left].join("\n")).not.toContain("ps_poll");
   });
 
-  test("a refused join exits 1 with Portico's message", async () => {
-    const api = fakeComputerApi();
-    const { io: value, lines } = io(tempHome());
-    expect(await joinCommand([`${api.url}/join#AAAAAAAAAAAAAAAAAAAAAA`], value)).toBe(1);
-    expect(lines).toEqual(["The join line isn't valid any more."]);
+  test("a join the person turns down exits 1 and writes nothing", async () => {
+    const api = fakeComputerApi("denied");
+    const home = tempHome();
+    const { io: value, lines } = io(home);
+    expect(await joinCommand([`${api.url}/join`], value, { pollMs: 1 })).toBe(1);
+    expect(lines.at(-1)).toBe("The join wasn't allowed on Portico. Nothing was written.");
+    expect(existsSync(join(home, ".portico", "computer.json"))).toBe(false);
+    expect(existsSync(join(home, ".portico", "join.json"))).toBe(false);
   });
 
   test("the portico binary runs leave, and succeeds on a computer that never joined", async () => {

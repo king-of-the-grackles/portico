@@ -5,7 +5,8 @@ import { dirname, resolve } from "node:path";
 import { computerConfigPath, ComputerFileError, readComputerFile, realFolder, removeComputerFile, writeFileAtomically } from "../computer";
 import { CommandError, withoutControls } from "../computer-api";
 import { notJoined, switchFolder } from "../folders";
-import { joinComputer } from "../join";
+import { stillWaiting } from "../cli-run";
+import { joinComputer, JoinWaiting } from "../join";
 import { findOnPath, removeFromCodex, tellPortico } from "../leave";
 import { codexHome, type Outcome, setServer, setStopHook } from "../codex-config";
 
@@ -26,9 +27,13 @@ export interface CodexCliDeps {
   hostname?: () => string;
   /** Bun's path for Codex's config. Default: bun on the PATH, else the Bun running this. */
   findBun?: () => string;
+  /** For the join's wait: the clock, the pause between polls, and the gap. */
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  pollMs?: number;
 }
 
-const JOIN_USAGE = "join <line> [--name <computer>] [--replace] [--no-allow]";
+const JOIN_USAGE = "join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>]";
 
 const USAGE = `Usage: bun portico-codex.js <command>
 
@@ -36,8 +41,9 @@ Without a command, this file is the MCP server Codex starts for each conversatio
 
 Commands:
   ${JOIN_USAGE}
-                  Join this computer to Portico with a Codex join line (or use the line on a computer that already
-                  joined), then add Portico to Codex: an MCP server in config.toml and a Stop hook in hooks.json.
+                  Ask the Portico server at the address to let this computer join: prints a link and a 4-digit code
+                  for a person to allow on one page (a computer that joined already skips that). Then adds Portico
+                  to Codex: an MCP server in config.toml and a Stop hook in hooks.json.
   update          Download this file again from Portico.
   off [folder]    Keep new sessions in a folder (default: the current folder) off Portico.
   on [folder]     Let new sessions in a folder join Portico again.
@@ -111,24 +117,37 @@ async function join(args: string[], io: CodexCliIo, deps: CodexCliDeps): Promise
   let name: string | undefined;
   let replace = false;
   let allow = true;
+  let waitSeconds: number | undefined;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--replace") replace = true;
     else if (arg === "--no-allow") allow = false;
-    else if (arg === "--name") {
+    else if (arg === "--name" || arg === "--wait") {
       const value = args[++i];
       if (value === undefined || value.startsWith("--")) return usageError(io, `${arg} needs a value.`, JOIN_USAGE);
-      name = value;
+      if (arg === "--name") name = value;
+      else if (/^[0-9]{1,4}$/.test(value)) waitSeconds = Number(value);
+      else return usageError(io, "--wait takes a number of seconds.", JOIN_USAGE);
     } else if (arg.startsWith("--")) return usageError(io, `Unknown option: ${arg}.`, JOIN_USAGE);
     else words.push(arg);
   }
-  const line = words.join(" ").trim();
-  if (!line) return usageError(io, "A join line is required.", JOIN_USAGE);
+  const address = words.join(" ").trim();
+  if (!address) return usageError(io, "The Portico server's address is required.", JOIN_USAGE);
 
   const configPath = computerConfigPath(io.env);
-  const joined = await joinComputer({ line, name, replace, client: "codex" }, { configPath, fetch: deps.fetch, hostname: deps.hostname });
-  if (joined.attached) {
-    io.out(`This computer is already on Portico at ${joined.url} as computer "${withoutControls(joined.computer)}". Used the line here.`);
+  let joined;
+  try {
+    joined = await joinComputer(
+      { address, name, replace, client: "codex", waitSeconds },
+      { configPath, fetch: deps.fetch, hostname: deps.hostname, out: io.out, now: deps.now, sleep: deps.sleep, pollMs: deps.pollMs },
+    );
+  } catch (err) {
+    if (!(err instanceof JoinWaiting)) throw err;
+    io.out(stillWaiting(err.expiresAt));
+    return 0;
+  }
+  if (joined.already) {
+    io.out(`This computer is already on Portico at ${joined.url} as computer "${withoutControls(joined.computer)}". Nothing to allow.`);
   } else {
     io.out(`Joined Portico at ${joined.url} as computer "${joined.computer}".`);
     io.out(`Wrote ${joined.path} (mode 600).`);

@@ -10,8 +10,7 @@ import { computerApi } from "./computer-api";
 import { fileRoutes } from "./file-api";
 import type { Core } from "./core/core";
 import { oauthRoutes } from "./oauth";
-import { shareRequestApi } from "./share-api";
-import { signInRequestApi } from "./sign-in-api";
+import { joinApi } from "./join-api";
 import { webRoutes } from "./web";
 import { narrowPage } from "./web/layout";
 import { html } from "hono/html";
@@ -19,7 +18,7 @@ import { bodyLimit } from "hono/body-limit";
 import { MAX_BODY_BYTES } from "./core/limits";
 
 /**
- * Every surface over the core. Order matters: the agent, computer and sign-in-request routes answer before the person
+ * Every surface over the core. Order matters: the agent, computer and join routes answer before the person
  * API's catch-all middleware under /api, and pages come last.
  */
 export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono {
@@ -27,7 +26,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
   const resolver = makeResolver(core.agents, core.computers, () => core.settings.publicUrl());
   const views = agentViews(core.agents, core.people, core.files, core.workspaces, () => core.settings.publicUrl());
   const { agents, messages, files } = core;
-  const toolDeps = { agents, people: core.people, workspaces: core.workspaces, shares: core.shares, publicUrl: () => core.settings.publicUrl() };
+  const toolDeps = { agents, people: core.people, workspaces: core.workspaces, shares: core.shares, consents: core.consents, publicUrl: () => core.settings.publicUrl() };
 
   // The server's own backstop rises to the file limit when uploads come through Portico. Everything but the upload
   // route keeps the backstop there was before.
@@ -46,8 +45,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
   );
   app.route("/files", fileRoutes(core));
   app.route("/api/computer", computerApi(core));
-  app.route("/api/sign-in-requests", signInRequestApi(core));
-  app.route("/api/share-requests", shareRequestApi(core));
+  app.route("/api/join", joinApi(core));
   app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, views, resolver, porticoTools: toolDeps }));
   // Resend reports bounces and complaints here. The signature is the only credential; the body is read as sent.
   app.post("/api/mail/resend", async (c) => {

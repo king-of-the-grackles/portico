@@ -3,7 +3,7 @@ import { CONTENT_MIGRATIONS, DIRECTORY_MIGRATIONS, type Migration } from "./migr
 
 /**
  * The directory, `<data folder>/portico.db`: who is on Portico and who reaches whom. People, sign-ins, computers,
- * agents and their credentials, workspaces and who is in each, shares, Always allow, activity, wake and event settings,
+ * agents and their credentials, workspaces and who is in each, shares, what waits for a person's consent, Always allow, activity, wake and event settings,
  * and uploads waiting to be attached. No message subject or text: those live in each workspace's own content database.
  * Each module owns the queries for its own tables; this file only creates them.
  */
@@ -151,34 +151,6 @@ const DIRECTORY_SCHEMA = [
   )`,
   `CREATE INDEX agent_tokens_agent ON agent_tokens (agent_id)`,
 
-  `CREATE TABLE join_lines (
-    id TEXT PRIMARY KEY,
-    created_by TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    secret_hash TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    used_at TEXT,
-    computer_id TEXT REFERENCES computers (id) ON DELETE SET NULL,
-    agent_id TEXT REFERENCES agents (id) ON DELETE SET NULL
-  )`,
-
-  `CREATE TABLE sign_in_requests (
-    id TEXT PRIMARY KEY,
-    join_line_id TEXT NOT NULL REFERENCES join_lines (id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    name TEXT NOT NULL,
-    code TEXT NOT NULL,
-    poll_hash TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
-    agent_id TEXT REFERENCES agents (id) ON DELETE SET NULL,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    decided_at TEXT,
-    decided_by TEXT,
-    issued_at TEXT
-  )`,
-
   `CREATE TABLE oauth_clients (
     id TEXT PRIMARY KEY,
     client_id TEXT NOT NULL UNIQUE,
@@ -294,51 +266,54 @@ const DIRECTORY_SCHEMA = [
     revoked_at TEXT
   )`,
   `CREATE INDEX shares_workspace ON shares (workspace_id)`,
-  `CREATE TABLE share_requests (
+  // One table for everything a person confirms on the consent page, /c/<id>. `kind` says what is asked: `computer` and
+  // `agent` are a new computer or app agent joining Portico, started by anyone, so they belong to whoever signs in and
+  // types the code; `enter` is an agent of the person's coming into a workspace with a share link; `share`,
+  // `remove_person` and `delete` are what an agent asks its person to confirm about a workspace. `person_id` is who has
+  // to confirm, when that is known (never for a join). `poll_hash` is for an asker with no token yet.
+  `CREATE TABLE consent_requests (
     id TEXT PRIMARY KEY,
-    share_id TEXT NOT NULL REFERENCES shares (id) ON DELETE CASCADE,
-    agent_id TEXT REFERENCES agents (id) ON DELETE CASCADE,
-    name TEXT,
-    kind TEXT,
-    code TEXT NOT NULL,
-    poll_hash TEXT UNIQUE,
-    tries INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL CHECK (kind IN ('computer', 'agent', 'enter', 'share', 'remove_person', 'delete')),
     status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
+    code TEXT NOT NULL,
+    tries INTEGER NOT NULL DEFAULT 0,
+    poll_hash TEXT UNIQUE,
+    client TEXT,
+    agent_id TEXT REFERENCES agents (id) ON DELETE CASCADE,
+    person_id TEXT REFERENCES people (id) ON DELETE CASCADE,
+    workspace_id TEXT REFERENCES workspaces (id) ON DELETE CASCADE,
+    share_id TEXT REFERENCES shares (id) ON DELETE CASCADE,
+    name TEXT,
+    agent_kind TEXT,
+    detail TEXT NOT NULL DEFAULT '{}',
+    result TEXT,
+    computer_id TEXT REFERENCES computers (id) ON DELETE CASCADE,
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     decided_at TEXT,
-    decided_by TEXT,
+    decided_by TEXT REFERENCES people (id) ON DELETE CASCADE,
     issued_at TEXT
   )`,
-  `CREATE INDEX share_requests_share ON share_requests (share_id)`,
-  `CREATE INDEX share_requests_agent ON share_requests (agent_id)`,
-  `CREATE TABLE workspace_asks (
+  `CREATE INDEX consent_requests_person ON consent_requests (person_id, status)`,
+  `CREATE INDEX consent_requests_agent ON consent_requests (agent_id)`,
+  `CREATE INDEX consent_requests_client ON consent_requests (client, status)`,
+  // Every email Portico sent or tried: `kind` is `share` (a share link, `ref_id` the share), `consent` (a link to the
+  // consent page, `ref_id` the request) or `held` (a link to a held message's page, `ref_id` the message).
+  `CREATE TABLE mails (
     id TEXT PRIMARY KEY,
-    agent_id TEXT NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
-    person_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
-    workspace_id TEXT NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('share', 'remove_person', 'delete')),
-    detail TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
-    result TEXT,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    decided_at TEXT
-  )`,
-  `CREATE INDEX workspace_asks_person ON workspace_asks (person_id, status)`,
-  `CREATE TABLE share_mails (
-    id TEXT PRIMARY KEY,
-    share_id TEXT NOT NULL REFERENCES shares (id) ON DELETE CASCADE,
-    workspace_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('share', 'consent', 'held')),
+    ref_id TEXT NOT NULL,
+    workspace_id TEXT,
     sent_by TEXT NOT NULL,
     email TEXT NOT NULL,
     number INTEGER NOT NULL,
     status TEXT NOT NULL,
     sent_at TEXT NOT NULL,
-    UNIQUE (share_id, number)
+    UNIQUE (kind, ref_id, number)
   )`,
-  `CREATE INDEX share_mails_by ON share_mails (sent_by, sent_at)`,
-  `CREATE INDEX share_mails_workspace ON share_mails (workspace_id, sent_at)`,
+  `CREATE INDEX mails_by ON mails (sent_by, sent_at)`,
+  `CREATE INDEX mails_workspace ON mails (workspace_id, sent_at)`,
+  `CREATE INDEX mails_email ON mails (email, sent_at)`,
   `CREATE TABLE mail_blocks (
     email TEXT PRIMARY KEY,
     reason TEXT NOT NULL,

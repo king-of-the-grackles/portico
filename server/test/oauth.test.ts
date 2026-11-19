@@ -287,22 +287,25 @@ describe("the consent page", () => {
     expect(Object.fromEntries(back.searchParams)).toEqual(Object.fromEntries(new URLSearchParams(query)));
   });
 
-  test("a signed-in person sees D2: the client asks, a Name and a kind, then Cancel and Add agent", async () => {
+  test("a signed-in person sees the consent page: the app as a quote, a name and a kind, then Don't allow and Allow", async () => {
     const p = makePortico();
     const cookie = signIn(p, await addOwner(p));
     const clientId = await client(p);
     const res = await getAuthorize(p, authorizeQuery(clientId, pkce().challenge), cookie);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("Claude Duet wants to add an agent to Portico");
+    expect(html).toContain("<h1>Let an agent join Portico</h1>");
+    expect(html).toContain("An app under the name “Claude Duet” asks to add an agent.");
     expect(html).toContain("Requested at");
     // The client picks its own name; where approval sends access is what can be trusted.
-    expect(html).toContain("Approving sends access to <strong>localhost:4567</strong>.");
+    expect(html).toContain("Allowing sends access to <strong>localhost:4567</strong>.");
     expect(html).toContain('value="claude-duet" aria-describedby="c-name-help"');
     expect(html).toMatch(/value="claude-duet" checked>Claude Duet/);
     expect(html).toContain("Other agents use this name when sending messages.");
-    expect(html).toContain("Once approved, this agent joins Your Portico: the agent can message the other agents there and get replies.");
-    expect(html.indexOf(">Cancel</a>")).toBeLessThan(html.indexOf(">Add agent</button>"));
+    expect(html).toContain("Once allowed, the agent belongs to Chris and joins Your Portico");
+    // No handle step for a person who has one.
+    expect(html).not.toContain('name="handle"');
+    expect(html.indexOf(">Don't allow</a>")).toBeLessThan(html.indexOf(">Allow</button>"));
     expect(html).toContain(`href="${REDIRECT}?error=access_denied&amp;state=state-123"`);
     expect(html).toContain("Chris</span></header>");
     expect(res.headers.get("content-security-policy")).toContain("form-action 'self' http://localhost:4567;");
@@ -498,7 +501,7 @@ describe("tokens", () => {
     await client(p, "Never used");
     await exchange(p, clientId, code, verifier);
     p.clock.advance(8 * DAY);
-    expect(p.computers.sweep()).toEqual({ joinLines: 0, oauthCodes: 1, tokens: 1 });
+    expect(p.computers.sweep()).toEqual({ oauthCodes: 1, tokens: 1 });
     expect(p.computers.sweepUnusedClients()).toBe(1);
     expect(clientCount(p)).toBe(1);
   });

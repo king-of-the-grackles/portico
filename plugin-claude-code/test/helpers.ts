@@ -33,6 +33,16 @@ export function joinTestComputer(p: TestPortico, name = "macbook"): { token: str
   return { token, computer: computer.name, computerId: computer.id };
 }
 
+/**
+ * Stands in for the person on the consent page: allows every join that waits on this Portico, as its owner, with the
+ * code each request carries. Returns how many. Passed to a join as its `sleep`, the person answers between two polls.
+ */
+export function allowJoins(p: TestPortico): number {
+  const waiting = p.db.query("SELECT id, code FROM consent_requests WHERE status = 'pending' AND kind = 'computer'").all() as { id: string; code: string }[];
+  for (const request of waiting) p.consents.decide(p.owner.id, request.id, { decision: "approve", code: request.code });
+  return waiting.length;
+}
+
 /** The owner's computer with the name, or null. */
 export function computerNamed(p: TestPortico, name: string): Computer | null {
   return p.computers.list(p.owner.id).find((computer) => computer.name === name) ?? null;
@@ -229,33 +239,57 @@ export async function fakeInboxSocket(opts: { token?: string | null; settleMs?: 
 }
 
 /**
- * A stand-in for Portico's computer API, which another track builds, following the shared contract:
- * - `POST /api/computer/join { token, computer }` → 201 `{ computer: { id, name }, token }`, each join token once;
- * - `PUT /api/computer/folders/:folderId { joins, name }` → `{ folder: { folder_id, name, joins } }`;
- * - `DELETE /api/computer` → 204.
- * The last two need a computer token it gave out. `joinTokens` are the join lines' tokens it accepts.
+ * A stand-in for Portico's join and computer APIs, following the shared contract:
+ * - `POST /api/join { kind: "computer", name, client?, replaces? }` → 201 `{ id, link, code, poll_secret, expires_at, show }`;
+ * - `GET /api/join/:id` with the poll secret → `{ status }`, and once allowed `{ status, computer: { id, name }, token }`
+ *   with the token exactly once;
+ * - `GET /api/computer` → `{ computer }`; `PUT /api/computer/folders/:folderId { joins, name }` → `{ folder }`;
+ *   `DELETE /api/computer` → 204. These three need a computer token it gave out.
+ * `person` is what the person does on the consent page: "allow" (the default), "deny", "wait" (not yet) or "late"
+ * (the code ran out). Set it at any time.
  */
-export function contractPortico(joinTokens: string[] = []) {
-  const unused = new Set(joinTokens);
+export function contractPortico(person: "allow" | "deny" | "wait" | "late" = "allow") {
   const computers = new Map<string, string>(); // token → name
   const folders = new Map<string, { name: string; joins: boolean }>();
+  const asked = new Map<string, { name: string; pollSecret: string; issued: boolean; computer: string | null; closed: boolean }>();
   let made = 0;
+  const state = { person, minutes: 15 };
   const fake = fakePortico(({ method, path, body }) => {
     const request = fake.requests.at(-1)!;
     const json = (status: number, value: unknown) => Response.json(value, { status });
-    if (method === "POST" && path === "/api/computer/join") {
-      const { token, computer } = (body ?? {}) as { token?: string; computer?: string };
-      if (!token || !unused.delete(token)) {
-        return json(404, { error: "not_found", message: "The join line isn't valid any more. Ask for a new one." });
-      }
-      let name = computer ?? "computer";
-      const taken = new Set(computers.values());
-      for (let n = 2; taken.has(name); n++) name = `${computer}-${n}`;
-      const issued = `pc_token-${++made}-aaaaaaaaaaaaaaaaaaaaaaaa`;
-      computers.set(issued, name);
-      return json(201, { computer: { id: `c${made}`, name }, token: issued });
+    if (method === "POST" && path === "/api/join") {
+      const { kind, name, replaces } = (body ?? {}) as { kind?: string; name?: string; replaces?: { id: string; poll_secret: string } };
+      if (kind !== "computer") return json(400, { error: "bad_request", message: "kind must be computer or agent." });
+      const old = replaces ? asked.get(replaces.id) : undefined;
+      if (old && old.pollSecret === replaces!.poll_secret) old.closed = true;
+      const id = `r${asked.size + 1}`;
+      const pollSecret = `ps_poll-${id}-aaaaaaaaaaaaaaaaaaaa`;
+      asked.set(id, { name: name ?? "computer", pollSecret, issued: false, computer: null, closed: false });
+      const code = String(4820 + asked.size);
+      const link = `${fake.url}/c/${id}`;
+      return json(201, { id, link, code, poll_secret: pollSecret, expires_at: new Date(Date.now() + state.minutes * 60_000).toISOString(), show: `open ${link} and type ${code}` });
     }
-    if (!request.token || !computers.has(request.token)) return json(401, { error: "unauthorized", message: "Missing or invalid bearer token." });
+    const poll = /^\/api\/join\/([A-Za-z0-9_-]+)$/.exec(path);
+    if (method === "GET" && poll) {
+      const one = asked.get(poll[1]!);
+      if (!one || request.token !== one.pollSecret) return json(401, { error: "unauthorized", message: "Missing or wrong poll secret for this request." });
+      if (one.closed || state.person === "late") return json(200, { status: "expired" });
+      if (state.person === "wait") return json(200, { status: "pending" });
+      if (state.person === "deny") return json(200, { status: "denied" });
+      if (one.computer === null) {
+        let computer = one.name;
+        const taken = new Set(computers.values());
+        for (let n = 2; taken.has(computer); n++) computer = `${one.name}-${n}`;
+        one.computer = computer;
+      }
+      if (one.issued) return json(200, { status: "approved", computer: { id: poll[1], name: one.computer } });
+      one.issued = true;
+      const issued = `pc_token-${++made}-aaaaaaaaaaaaaaaaaaaaaaaa`;
+      computers.set(issued, one.computer);
+      return json(200, { status: "approved", computer: { id: poll[1], name: one.computer }, token: issued });
+    }
+    if (!request.token || !computers.has(request.token)) return json(401, { error: "unauthorized", message: "Missing or invalid computer token." });
+    if (method === "GET" && path === "/api/computer") return json(200, { computer: { id: "c", name: computers.get(request.token) } });
     const folder = /^\/api\/computer\/folders\/([a-f0-9]{64})$/.exec(path);
     if (method === "PUT" && folder) {
       const { joins, name } = body as { joins: boolean; name: string };
@@ -268,7 +302,7 @@ export function contractPortico(joinTokens: string[] = []) {
     }
     return json(404, { error: "not_found", message: "No such endpoint." });
   });
-  return { ...fake, computers, folders, addJoinToken: (token: string) => void unused.add(token) };
+  return { ...fake, computers, folders, asked, state };
 }
 
 /**

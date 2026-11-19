@@ -46,7 +46,7 @@ export interface Workspace {
   createdAt: string;
 }
 
-/** A computer that joined with a join line. Its sessions' addresses end in `@<name>`. */
+/** A computer a person let join Portico. Its sessions' addresses end in `@<name>`. */
 export interface Computer {
   id: string;
   ownerId: string;

@@ -5,8 +5,11 @@ import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
 import type { Person } from "../core/types";
 
-/** What a signed-in person without a handle may still open: the handle page and its calls, sign-in and sign-out. */
-const OPEN_WITHOUT_HANDLE = /^\/(welcome|sign-in|assets\/.*|api\/(session|welcome|handles\/check|me))\/?$/;
+/**
+ * What a signed-in person without a handle may still open: the handle page and its calls, sign-in and sign-out, and
+ * the consent pages, which ask for the handle themselves.
+ */
+const OPEN_WITHOUT_HANDLE = /^\/(welcome|sign-in|assets\/.*|c\/[^/]+|oauth\/authorize|api\/(session|welcome|handles\/check|me|consents\/[^/]+))\/?$/;
 
 /** Every person-API route sees who is signed in, or null. */
 export type PersonEnv = { Variables: { person: Person | null } };

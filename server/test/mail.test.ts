@@ -42,7 +42,7 @@ describe("emailing a share link", () => {
     expect(body.headers["List-Unsubscribe"]).toMatch(/^<https:\/\/portico\.example\.com\/mail\/stop\?t=/);
     expect(body.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
     // The key never reaches the database or the page.
-    expect(JSON.stringify(p.db.query("SELECT * FROM share_mails").all())).not.toContain("re_test_key");
+    expect(JSON.stringify(p.db.query("SELECT * FROM mails").all())).not.toContain("re_test_key");
   });
 
   test("without a key nothing is sent and Share gives the link only", async () => {
@@ -60,7 +60,7 @@ describe("emailing a share link", () => {
     expect(made.mail).toBe("failed");
     p.people.setEmail(robert.id, "robert@example.com");
     const rmuse = addAppAgent(p, robert, "muse");
-    expect(p.shares.requestForAgent(rmuse.agent, made.link).status).toBe("pending");
+    expect(p.consents.enter(rmuse.agent, made.link).status).toBe("pending");
   });
 
   test("one share's email goes out again at most twice, an hour apart", async () => {

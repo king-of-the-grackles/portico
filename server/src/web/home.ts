@@ -2,10 +2,10 @@ import { type Context, Hono } from "hono";
 import { html, raw } from "hono/html";
 import { agentPageData } from "../api/agents";
 import type { PersonEnv } from "../api/context";
-import { pendingSignIns } from "../api/sign-ins";
+import { consentCards } from "../api/consents";
 import { serverMidnight, taskListData, todayData } from "../api/tasks";
 import { agentsInOrder, personViews } from "../api/views";
-import { workspaceApprovals, workspacePageData, workspaceViews } from "../api/workspaces";
+import { workspacePageData, workspaceViews } from "../api/workspaces";
 import type { Core } from "../core/core";
 import type { Person } from "../core/types";
 import { homeState, renderHome } from "./client/render/home";
@@ -43,7 +43,7 @@ export function homeData(core: Core, me: Person, route: Route): HomeData {
     me: views.person(me),
     publicUrl: core.settings.publicUrl(),
     agents: agentsInOrder(core.agents, me).map(views.agent),
-    approvals: { held: core.approvals.heldFor(me.id).map(views.held), signIns: pendingSignIns(core, me), ...workspaceApprovals(core, me) },
+    approvals: { held: core.approvals.heldFor(me.id).map(views.held), consents: consentCards(core, me) },
     workspaces: workspaceViews(core, me).list(),
     workspacePage,
     route: resolved,
@@ -60,7 +60,7 @@ export function homeData(core: Core, me: Person, route: Route): HomeData {
   };
 }
 
-/** Today (/), Activity (/activity), each agent's page (/a/:agentId) and each Portico's (/p/:id). An old thread link (/c/:id) goes to Activity. */
+/** Today (/), Activity (/activity), each agent's page (/a/:agentId) and each Portico's (/p/:id). */
 export function homePage(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
   const page = (c: Context<PersonEnv>, open: Route) => {
@@ -95,6 +95,5 @@ export function homePage(core: Core): Hono<PersonEnv> {
   route.get("/a/:agentId", (c) => page(c, { page: "agent", id: c.req.param("agentId") }));
   route.get("/p/:workspaceId", (c) => page(c, { page: "workspace", id: c.req.param("workspaceId") }));
   route.get("/agents", (c) => page(c, { page: "agents" }));
-  route.get("/c/:threadId", (c) => (c.get("person") ? c.redirect("/activity", 303) : c.redirect(signInPath(c.req.url), 303)));
   return route;
 }

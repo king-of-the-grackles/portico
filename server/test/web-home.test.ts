@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { AgentPageData } from "../src/api/agents";
 import type { WorkspaceView } from "../src/api/workspaces";
 import type { TaskListData, TodayData } from "../src/api/tasks";
-import type { ActivityView, AgentView, HeldCard, MessageView, PersonView, SignInView, TaskView } from "../src/api/views";
+import type { ConsentCard } from "../src/api/consents";
+import type { ActivityView, AgentView, HeldCard, MessageView, PersonView, TaskView } from "../src/api/views";
 import { agentState, clock, dayHeading, duration, esc, expiresIn, longDate, renderAddSheet } from "../src/web/client/render/common";
 import { homeState, renderHome } from "../src/web/client/render/home";
 import { eventText } from "../src/web/client/render/activity";
@@ -115,7 +116,15 @@ const HELD: HeldCard = {
   ...message({ id: "m-held", from: grok, to: claude, subject: "Deploy the People export to staging", status: "held", deliveredAt: null, createdAt: at(11, 58), expiresAt: at(18, 0) }),
   facts: { managedBy: CHRIS, replyToRecipient: false, earlier: [] },
 };
-const SIGN_IN: SignInView = { id: "s1", kind: "muse", name: "muse-work", code: "4821", status: "pending", createdAt: at(11, 58), expiresAt: at(12, 8) };
+const ASKED: ConsentCard = {
+  id: "s1",
+  kind: "share",
+  title: "Share a Portico",
+  asks: "The agent “muse” asks to share the Portico “Launch” with one more person.",
+  link: "/c/s1",
+  workspaceId: "w-launch",
+  expiresAt: at(12, 8),
+};
 
 function task(o: Partial<TaskView> & { id: string; from: AgentView; to: AgentView }): TaskView {
   return {
@@ -195,7 +204,7 @@ const HELD_TASK = task({
 const TODAY: TodayData = {
   since: at(0, 0),
   counts: { decide: 3, inProgress: 1, done: 1, failed: 0 },
-  decisions: { held: [HELD], signIns: [SIGN_IN], waiting: [asking] },
+  decisions: { held: [HELD], consents: [ASKED], waiting: [asking] },
   inProgress: [OPEN],
   done: [REVIEW],
   failed: [],
@@ -227,7 +236,7 @@ function state(o: Partial<HomeState> = {}): HomeState {
     me: ME,
     publicUrl: "https://portico.example.com",
     agents: AGENTS,
-    approvals: { held: [HELD], signIns: [SIGN_IN], joins: [], asks: [] },
+    approvals: { held: [HELD], consents: [ASKED] },
     workspaces: [PERSONAL],
     workspacePage: null,
     route: { page: "today" },
@@ -288,11 +297,14 @@ describe("Today", () => {
     expect(text(render(state({ shownMessages: { "m-held": true } })))).toContain("The text");
   });
 
-  test("an app asking to join shows its code; a coding agent with a question points to its terminal", () => {
-    const t = text(render(state()));
-    expect(t).toContain("Muse wants to join Portico as muse-work");
-    expect(t).toContain("Approve only if Muse shows the code 4821 . Expires in 8 min.");
-    inOrder(t, "Don't allow", "Approve muse-work");
+  test("what an agent asked leads to the consent page, with no code and no answer here; a coding agent with a question points to its terminal", () => {
+    const html = render(state());
+    const t = text(html);
+    expect(t).toContain("Share a Portico");
+    expect(t).toContain("The agent “muse” asks to share the Portico “Launch” with one more person. The page asks for the 4-digit code the agent shows in the chat. Expires in 8 min.");
+    expect(html).toContain('<a class="btn btn-primary" href="/c/s1">Open the page</a>');
+    // A held message has its own page too.
+    expect(html).toContain('href="/held/m-held"');
     expect(t).toContain("Codex (portico) has a question");
     expect(t).toContain("Which migration path. Answer in the terminal on macbook.");
   });
@@ -312,11 +324,11 @@ describe("Today", () => {
     const empty: TodayData = {
       ...TODAY,
       counts: { decide: 0, inProgress: 0, done: 0, failed: 0 },
-      decisions: { held: [], signIns: [], waiting: [] },
+      decisions: { held: [], consents: [], waiting: [] },
       inProgress: [],
       done: [],
     };
-    const t = text(render(state({ today: empty, held: [], signIns: [], agents: [mayaDot] })));
+    const t = text(render(state({ today: empty, held: [], consents: [], agents: [mayaDot] })));
     expect(t).toContain("Nothing needs a decision.");
     expect(t).toContain("Nothing in progress.");
     expect(t).toContain("Nothing done yet today.");
@@ -603,7 +615,7 @@ function firstData(html: string): Record<string, any> {
 describe("the pages", () => {
   test("signed out, each page goes to sign in and comes back", async () => {
     const { p } = await setup();
-    for (const path of ["/", "/activity", "/a/a1", "/c/t1"]) {
+    for (const path of ["/", "/activity", "/a/a1"]) {
       const res = await p.app.request(path);
       expect(res.status).toBe(303);
       expect(res.headers.get("location")).toBe(path === "/" ? "/sign-in" : `/sign-in?next=${encodeURIComponent(path)}`);
@@ -639,8 +651,8 @@ describe("the pages", () => {
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
 
-  test("Activity and an agent's page carry their tasks; an unknown agent goes to Today; old thread links go to Activity", async () => {
-    const { p, owner, grokAgent, chrisOnly } = await setup();
+  test("Activity and an agent's page carry their tasks; an unknown agent goes to Today", async () => {
+    const { p, owner, grokAgent } = await setup();
     const api = async (path: string) => (await p.app.request(path, { headers: { cookie: owner } })).json();
     const activityHtml = await (await p.app.request("/activity", { headers: { cookie: owner } })).text();
     const activity = firstData(activityHtml);
@@ -657,8 +669,6 @@ describe("the pages", () => {
     expect(copyProblems(visibleCopy(agentHtml))).toEqual([]);
     const unknown = await p.app.request("/a/nobody", { headers: { cookie: owner } });
     expect(unknown.headers.get("location")).toBe("/");
-    const old = await p.app.request(`/c/${chrisOnly.threadId}`, { headers: { cookie: owner } });
-    expect(old.headers.get("location")).toBe("/activity");
   });
 
   test("a member sees the agents sharing a workspace, only tasks with the member's agents, and no invite link", async () => {
@@ -689,40 +699,35 @@ describe("the pages", () => {
 });
 
 describe("the Add agent sheet", () => {
-  const add = (over: Partial<AddState> = {}): AddState => ({
-    line: { id: "l-1", line: "Join Portico: https://portico.example.com/join#secret", expiresAt: "2026-10-28T12:00:00.000Z" },
-    lineError: "",
-    copied: false,
-    stage: "pick",
-    signIn: null,
-    reqName: "",
-    reqError: "",
-    joined: null,
-    busy: false,
-    ...over,
-  });
+  const add = (over: Partial<AddState> = {}): AddState => ({ copied: null, stage: "pick", joined: null, joinedComputer: null, ...over });
   const ctx = { publicUrl: "https://portico.example.com", now: Date.parse("2026-10-27T12:00:00.000Z") };
 
-  test("one join line for every agent: the kinds it works with, one Copy, and nothing to pick or set up", () => {
+  test("what to tell each kind of agent: Claude Code, Codex, an app agent and a connector, each with a Copy, and no secret", () => {
     const html = renderAddSheet(add(), ctx);
-    expect(html).not.toContain("Pick an agent");
-    expect(html).not.toContain('role="radio"');
-    expect(html).toContain('value="Join Portico: https://portico.example.com/join#secret"');
+    const t = text(html);
+    inOrder(t, "Claude Code", "Codex", "An app agent, such as Muse or Grok Bot", "A connector, such as ChatGPT or Claude Duet");
+    expect(html).toContain('value="Join Portico at https://portico.example.com. The steps for Claude Code are at https://portico.example.com/join"');
+    expect(html).toContain('value="Join Portico at https://portico.example.com. The steps for Codex are at https://portico.example.com/join"');
+    expect(html).toContain('value="Join Portico at https://portico.example.com. The steps for app agents are at https://portico.example.com/join"');
+    expect(html).toContain('value="https://portico.example.com/mcp"');
+    expect(html.match(/data-action="add-copy/g)).toHaveLength(4);
     for (const kind of ["claude-code", "codex", "muse", "grok-bot", "dots", "claude-duet"]) expect(html).toContain(`/assets/icons/${kind}.svg`);
-    expect(text(html)).toContain("Works with Claude Code, Codex, Muse, Grok Bot, Dots, Claude Duet and other agents.");
-    expect(text(html)).toContain("Give this line to the agent.");
-    expect(text(html)).toContain("Paste the line into a chat with the agent. The agent does the rest.");
-    expect(html.match(/data-action="add-copy/g)).toHaveLength(1);
-    // The other ways in live on /join, which the agent reads and helps with: the sheet has no link or second path.
-    expect(html).not.toContain('href="/join"');
-    expect(html).not.toContain("/mcp");
-    expect(text(html)).not.toMatch(/wak|webhook|server address|ChatGPT/i);
-    expect(text(html)).not.toContain("Waiting for the agent to connect");
-    expect(copyProblems(text(html))).toEqual([]);
+    // Nothing here is a credential: the agent asks, and the person allows the join on one page with a code.
+    expect(html).not.toMatch(/join#|share#/);
+    expect(t).not.toMatch(/join line|works once|expires/i);
+    expect(t).toContain("The agent then shows a link and a 4-digit code. Open the link, type the code and choose Allow");
+    expect(t).not.toContain("Waiting for the agent to join");
+    expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
 
-  test("waits once the line is copied, and Copy stays off until the line is made", () => {
-    expect(text(renderAddSheet(add({ copied: true }), ctx))).toContain("Waiting for the agent to connect");
-    expect(renderAddSheet(add({ line: null }), ctx)).toMatch(/data-action="add-copy" disabled/);
+  test("waits once a sentence is copied, then says what joined: an agent, or a computer with no session yet", () => {
+    const copied = renderAddSheet(add({ copied: "codex" }), ctx);
+    expect(text(copied)).toContain("Waiting for the agent to join");
+    expect(copied.match(/Copied/g)).toHaveLength(1);
+    const computer = text(renderAddSheet(add({ stage: "joined", joinedComputer: "macbook" }), ctx));
+    expect(computer).toContain("The computer macbook joined.");
+    expect(computer).toContain("Each Claude Code or Codex session started there shows up as an agent.");
+    expect(computer).not.toContain("Join Portico at");
+    expect(copyProblems(computer)).toEqual([]);
   });
 });

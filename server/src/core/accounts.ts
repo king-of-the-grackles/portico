@@ -383,28 +383,21 @@ export class Accounts {
 
   /**
    * Recovery's revocations beyond the browser: whatever the owner account made can carry the evicted party's access
-   * too. The owner's computers keep their rows but their tokens fail, so each joins again with a new line. Agents the
-   * owner manages lose their app, access and refresh tokens. Unused join lines and unexchanged OAuth codes go. Sign-in
-   * requests from the owner's lines never hand over a token: pending ones expire, and approved ones count as issued.
+   * too. The owner's computers keep their rows but their tokens fail, so each joins again. Agents the owner manages
+   * lose their app, access and refresh tokens. Unexchanged OAuth codes go. A join the owner allowed never hands over
+   * a token afterwards, and what the owner's agents asked stops waiting.
    * Call inside the recovery's transaction; the caller closes the agents' open streams once it commits.
    */
   private revokeOwnerCredentials(ownerId: string): void {
     const owner = { personId: ownerId };
     const ownerAgents = "SELECT id FROM agents WHERE owner_id = $personId";
-    const ownerLines = "SELECT id FROM join_lines WHERE created_by = $personId";
     this.db.query("UPDATE computers SET token_hash = 'revoked:' || id WHERE owner_id = $personId").run(owner);
     this.db.query(`DELETE FROM agent_tokens WHERE agent_id IN (${ownerAgents})`).run(owner);
     this.db.query(`DELETE FROM oauth_codes WHERE used_at IS NULL AND agent_id IN (${ownerAgents})`).run(owner);
+    this.db.query("UPDATE consent_requests SET status = 'expired' WHERE status = 'pending' AND person_id = $personId").run(owner);
     this.db
-      .query(`UPDATE sign_in_requests SET status = 'expired' WHERE status = 'pending' AND join_line_id IN (${ownerLines})`)
-      .run(owner);
-    this.db
-      .query(
-        `UPDATE sign_in_requests SET issued_at = $at
-         WHERE status = 'approved' AND issued_at IS NULL AND join_line_id IN (${ownerLines})`,
-      )
+      .query("UPDATE consent_requests SET issued_at = $at WHERE status = 'approved' AND issued_at IS NULL AND decided_by = $personId")
       .run({ ...owner, at: this.now().toISOString() });
-    this.db.query("DELETE FROM join_lines WHERE created_by = $personId AND used_at IS NULL").run(owner);
   }
 
   /** The usable link with this secret. Throws not_found for an unknown one, wrong_status for one used or expired. */

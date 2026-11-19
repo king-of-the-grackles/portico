@@ -141,5 +141,5 @@ test("a removed computer's session is told to join again", async () => {
   p.agents.forget(p.computers.remove(computerNamed(p, "macbook")!.id));
   await waitFor(() => sock.posts.length === 1, 3000);
   expect(sock.posts[0]!.content).toContain("Portico no longer accepts this computer's token");
-  expect(sock.posts[0]!.content).toContain("Join again with a new join line");
+  expect(sock.posts[0]!.content).toContain("Join again with /portico:join and the server's address");
 });

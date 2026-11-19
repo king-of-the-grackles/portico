@@ -264,6 +264,35 @@ export async function callAs(
   return await p.app.request(path, { method, headers, body: payload });
 }
 
+export interface AskedToJoin {
+  id: string;
+  link: string;
+  code: string;
+  poll_secret: string;
+  expires_at: string;
+  show: string;
+}
+
+type App = { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } };
+
+/** A computer or an app agent asks to join, as anyone can: POST /api/join with no credential. */
+export async function askToJoin(p: App, body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<AskedToJoin> {
+  const res = await p.app.request("/api/join", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+  if (res.status !== 201) throw new Error(`asking to join failed with ${res.status}: ${await res.text()}`);
+  return (await res.json()) as AskedToJoin;
+}
+
+/** The asker's poll, with its poll secret. */
+export async function pollJoin(p: App, asked: Pick<AskedToJoin, "id" | "poll_secret">): Promise<Record<string, any>> {
+  const res = await p.app.request(`/api/join/${asked.id}`, { headers: { authorization: `Bearer ${asked.poll_secret}` } });
+  return (await res.json()) as Record<string, any>;
+}
+
+/** The person's answer on the consent page: the form's POST. */
+export function answerConsent(p: App, cookie: string | null, id: string, body: Record<string, unknown>): Promise<Response> {
+  return callPerson(p, cookie, "POST", `/api/consents/${id}`, body);
+}
+
 /** Calls the person API as a signed-in browser would: the cookie, JSON, and the page's own Origin on changes. */
 export async function callPerson(
   p: { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } },

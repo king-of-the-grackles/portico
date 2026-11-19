@@ -17,17 +17,18 @@ export const LIMITS = {
   historyDays: 30,
   /** Offline sessions leave the agents' list_agents after this; they stay on Portico. */
   sessionListHours: 24,
-  joinLineHours: 24,
-  signInRequestMinutes: 10,
+  /** A consent request (a join, or what an agent asks its person to confirm) waits this long for the code. */
+  consentMinutes: 15,
+  /** Wrong codes a consent request takes before it closes. */
+  consentCodeTries: 5,
+  /** Consent requests one client address can start in 15 minutes, and have waiting at once: anyone can start one. */
+  consentStartsPerClient: 10,
+  consentWaitingPerClient: 5,
+  /** Joins waiting at once from every address together. */
+  consentWaitingJoins: 1000,
   inviteDays: 7,
   /** A share link lets one person into a workspace for this long. */
   shareDays: 7,
-  /** An agent's request to come in with a share link waits this long for the person. */
-  shareRequestMinutes: 15,
-  /** Wrong codes a share request takes before it closes. */
-  shareCodeTries: 5,
-  /** What an agent asks its owner to confirm (letting someone in, taking someone out) waits this long. */
-  workspaceAskHours: 24,
   setupLinkHours: 1,
   webSessionDays: 30,
   minPasswordChars: 12,

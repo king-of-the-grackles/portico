@@ -305,7 +305,7 @@ describe("notice text", () => {
       stopNotice({ reason: "rejected", status: 403, code: "not_allowed", message: "Only sessions on a computer open the live stream." }),
     ];
     expect(notices[0]).toContain("another connection took over");
-    expect(notices[1]).toContain("Join again with a new join line");
+    expect(notices[1]).toContain("Join again with /portico:join and the server's address");
     expect(notices[2]).toContain("(404)");
     expect(notices[3]).toContain("Only sessions on a computer open the live stream.");
     for (const notice of notices) expect(copyProblems(notice)).toEqual([]);

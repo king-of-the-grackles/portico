@@ -16,7 +16,8 @@ Commands:
   setup [--reset]   Print a one-time link that creates the owner account. With --reset,
                     print a new link. Not used with Descope sign-in.
   doctor            Check that Portico answers at the public URL and that setup is done.
-  join '<line>'     Join this computer to Portico with a join line from Add agent.
+  join <address>    Ask to join this computer to a Portico server: prints a link and a code
+                    for a person to allow on one page, then waits.
   leave             Take this computer off Portico and undo the join.
   help              Show this message.
 `;

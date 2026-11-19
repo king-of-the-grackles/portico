@@ -191,6 +191,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     const rest = checkRequest(fields);
     if ("problem" in rest) return badRequestPage(c, rest.problem);
     const person = c.get("person");
+    // After signing in the browser comes back to this same page, which asks a new person for the handle itself.
     if (!person) return c.redirect(`/sign-in?next=${encodeURIComponent(authorizeReturnPath(c.req.url))}`, 303);
     if (person.status !== "active") return waitingPage(c);
     const kind = guessKind(client.name);
@@ -202,6 +203,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
       kind,
       requestedAt: core.now(),
       cancelUrl: redirectWith(redirectUri, { error: "access_denied", state }),
+      suggestedHandle: person.handle === null ? core.people.suggestHandle(person.name === "New person" ? (person.email?.split("@")[0] ?? "") : person.name, person.id) : null,
     });
   });
 
@@ -220,7 +222,13 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     const kind = CONNECTOR_CHOICES.find((choice) => choice.kind === fields.kind)?.kind;
     if (!kind) throw new PorticoError("bad_request", "Pick Dots, Claude Duet or Other.");
     const { client, redirectUri } = checked;
+    const handle = typeof fields.handle === "string" ? fields.handle.trim().toLowerCase() : "";
+    if (person.handle === null && handle === "") throw new PorticoError("bad_request", "Pick a handle first.");
     const { agent, code } = core.db.transaction(() => {
+      if (person.handle === null) {
+        core.people.setHandle(person.id, handle);
+        core.workspaces.personal(person.id);
+      }
       const agent = core.agents.create({ ownerId: person.id, name: fields.name, kind, type: "connector" });
       const code = store.issueCode({ clientId: client.clientId, agentId: agent.id, redirectUri, challenge: rest.request.challenge });
       return { agent, code };

@@ -113,12 +113,12 @@ describe("approvals", () => {
   test("held cards carry the facts, and a decision delivers", async () => {
     const { p, owner, member, grok } = await setup();
     const held = p.messages.send(grok, { to: "muse", subject: "Add the doc link", text: "docs/billing-v2.md" }).message;
-    const list = await json<{ held: { id: string; subject: string; from: { display: string }; facts: { managedBy: { name: string } } }[]; signIns: unknown[] }>(
+    const list = await json<{ held: { id: string; subject: string; from: { display: string }; facts: { managedBy: { name: string } } }[]; consents: unknown[] }>(
       callPerson(p, owner, "GET", "/api/approvals"),
     );
     expect(list.held).toHaveLength(1);
     expect(list.held[0]).toMatchObject({ subject: "Add the doc link", from: { display: "grok" }, facts: { managedBy: { name: "Chris" } } });
-    expect(list.signIns).toEqual([]);
+    expect(list.consents).toEqual([]);
     expect(await json(callPerson(p, member, "GET", "/api/approvals"))).toMatchObject({ held: [] });
     // None of the member's agents is in the conversation, so the message answers the same as one that doesn't exist.
     expect((await callPerson(p, member, "POST", `/api/approvals/held/${held.id}`, { decision: "allow_once" })).status).toBe(404);

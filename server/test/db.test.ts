@@ -49,7 +49,7 @@ describe("the two kinds of database", () => {
   test("a new directory holds who is on Portico, at the current version, and no table for message content", () => {
     const db = openDb(":memory:");
     const tables = tablesOf(db);
-    for (const table of ["people", "agents", "workspaces", "workspace_agents", "always_allow", "activity", "uploads", "join_lines"]) {
+    for (const table of ["people", "agents", "workspaces", "workspace_agents", "always_allow", "activity", "uploads", "consent_requests", "mails"]) {
       expect(tables).toContain(table);
     }
     for (const table of ["threads", "messages", "message_files", "files", "released_names"]) expect(tables).not.toContain(table);

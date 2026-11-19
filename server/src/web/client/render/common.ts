@@ -335,54 +335,63 @@ export function renderReconnecting(on: boolean): string {
 
 // ---- the Add agent sheet ----
 
-/** Add agent: copy the one join line, wait, then the sign-in request (app agents) and "<name> joined". */
+/** What to tell each kind of agent, in the order Add agent lists them. */
+export function addRows(publicUrl: string): { id: string; kinds: AgentKind[]; title: string; say: string; text: string }[] {
+  const steps = `${publicUrl}/join`;
+  return [
+    { id: "claude-code", kinds: ["claude-code"], title: "Claude Code", say: "Say this in a Claude Code session:", text: `Join Portico at ${publicUrl}. The steps for Claude Code are at ${steps}` },
+    { id: "codex", kinds: ["codex"], title: "Codex", say: "Say this in a Codex conversation:", text: `Join Portico at ${publicUrl}. The steps for Codex are at ${steps}` },
+    {
+      id: "app",
+      kinds: ["muse", "grok-bot"],
+      title: "An app agent, such as Muse or Grok Bot",
+      say: "Say this in a chat with the agent:",
+      text: `Join Portico at ${publicUrl}. The steps for app agents are at ${steps}`,
+    },
+    {
+      id: "connector",
+      kinds: ["dots", "claude-duet"],
+      title: "A connector, such as ChatGPT or Claude Duet",
+      say: "Add this address in the app's settings for connectors or MCP servers:",
+      text: `${publicUrl}/mcp`,
+    },
+  ];
+}
+
+/** Add agent: what to tell the agent, then "<name> joined" once the person has allowed the join on Portico's page. */
 export function renderAddSheet(add: AddState | null, ctx: { publicUrl: string; now: number }): string {
   if (!add) return "";
-  const line = add.line?.line ?? "";
-  const shown = PICK_ORDER.filter((kind) => kind !== "other");
-  const lineBox = `<div class="add-box">
-    <div class="add-kinds">
-      <div aria-hidden="true" class="first-logos">${shown.map((kind) => logo(kind)).join("")}</div>
-      <p class="add-note">Works with ${esc(shown.map((kind) => KINDS[kind].label).join(", "))} and other agents.</p>
-    </div>
-    <p class="add-step">Give this line to the agent.</p>
-    <p class="add-note">Paste the line into a chat with the agent. The agent does the rest.</p>
-    <div class="copy-row">
-      <label for="add-line" class="sr">Join line</label>
-      <input id="add-line" class="line-field" readonly value="${esc(line)}">
-      <button type="button" class="btn btn-primary" data-action="add-copy"${when(!line, " disabled")}>${ICON.copy()}${add.copied ? "Copied" : "Copy"}</button>
-    </div>
-    ${when(add.lineError, `<span role="alert" class="field-error">${esc(add.lineError)}</span>`)}
-    <p class="add-note">Works once. Expires in 24 h.</p>
+  const rows = addRows(ctx.publicUrl)
+    .map(
+      (row) => `<div class="add-row" data-key="add-${row.id}">
+      <div class="req-head"><span aria-hidden="true" class="first-logos">${row.kinds.map((kind) => logo(kind)).join("")}</span><strong class="add-step">${esc(row.title)}</strong></div>
+      <p class="add-note">${esc(row.say)}</p>
+      <div class="copy-row">
+        <label for="add-${row.id}" class="sr">${esc(row.title)}</label>
+        <input id="add-${row.id}" class="line-field" readonly value="${esc(row.text)}">
+        <button type="button" class="btn btn-secondary" data-action="add-copy" data-id="${row.id}">${ICON.copy()}${add.copied === row.id ? "Copied" : "Copy"}</button>
+      </div>
+    </div>`,
+    )
+    .join("");
+  const pick = `<div class="add-box">
+    ${rows}
+    <p class="add-note">The agent then shows a link and a 4-digit code. Open the link, type the code and choose Allow: the agent joins Your Portico. A connector asks on a Portico page instead, with no code.</p>
     ${when(
-      add.stage === "pick" && add.copied,
-      `<div role="status" class="waiting enter" data-key="add-waiting"><span class="dot dot-wait"></span><span>Waiting for the agent to connect</span></div>`,
+      add.copied !== null,
+      `<div role="status" class="waiting enter" data-key="add-waiting"><span class="dot dot-wait"></span><span>Waiting for the agent to join</span></div>`,
     )}
   </div>`;
-  let request = "";
-  if (add.stage === "request" && add.signIn) {
-    const from = kindInfo(add.signIn.kind).label;
-    request = `<section aria-labelledby="req-h" class="req-card enter" data-key="add-request">
-      <div class="req-head">${logo(add.signIn.kind)}<div class="grow"><h3 id="req-h" class="req-title">Sign in request from ${esc(from)}</h3><span class="tnum req-exp">${expiresIn(add.signIn.expiresAt, ctx.now)}</span></div></div>
-      <div class="req-code"><span class="code-lbl">Code</span><strong class="tnum code-lg">${esc(add.signIn.code)}</strong></div>
-      <p class="req-match">Approve only if ${esc(from)} shows the same code.</p>
-      <form class="req-form" data-form="add-approve">
-        <label for="req-name" class="lbl">Name</label>
-        <input id="req-name" class="field${when(add.reqError, " is-invalid")}" name="name" value="${esc(add.reqName)}" data-input="add-req-name" aria-describedby="req-name-help" aria-invalid="${Boolean(add.reqError)}" autocomplete="off">
-        <span id="req-name-help" class="req-help">Other agents use this name when sending messages.</span>
-        ${when(add.reqError, `<span role="alert" class="field-error">${esc(add.reqError)}</span>`)}
-        <span class="actions"><button type="button" class="btn btn-text" data-action="add-deny"${when(add.busy, " disabled")}>Don't allow</button><button type="submit" class="btn btn-primary"${when(add.busy, " disabled")}>Approve</button></span>
-      </form>
-    </section>`;
-  }
   let joined = "";
-  if (add.stage === "joined" && add.joined) {
+  if (add.stage === "joined" && (add.joined || add.joinedComputer)) {
     const a = add.joined;
-    const sub = a.computer
-      ? `From ${esc(a.computer.name)}. Other ${esc(kindInfo(a.kind).label)} sessions started there join automatically.`
-      : `${esc(agentState(a, ctx.now).label)}.`;
+    const head = a
+      ? `${logo(a.kind, "logo-lg")}<div class="grow"><strong class="joined-title">${esc(a.display)} joined.</strong><span class="joined-sub">${
+          a.computer ? `From ${esc(a.computer.name)}. Other ${esc(kindInfo(a.kind).label)} sessions started there join automatically.` : `${esc(agentState(a, ctx.now).label)}.`
+        }</span></div>`
+      : `<div class="grow"><strong class="joined-title">The computer ${esc(add.joinedComputer ?? "")} joined.</strong><span class="joined-sub">Each Claude Code or Codex session started there shows up as an agent.</span></div>`;
     joined = `<div role="status" class="joined-card enter" data-key="add-joined">
-      <div class="req-head">${logo(a.kind, "logo-lg")}<div class="grow"><strong class="joined-title">${esc(a.display)} joined.</strong><span class="joined-sub">${sub}</span></div></div>
+      <div class="req-head">${head}</div>
       <span class="actions"><button type="button" class="btn btn-link" data-action="add-another">Add another agent</button><button type="button" class="btn btn-primary" data-action="add-done" data-autofocus>Done</button></span>
     </div>`;
   }
@@ -390,11 +399,10 @@ export function renderAddSheet(add: AddState | null, ctx: { publicUrl: string; n
   <button type="button" class="scrim" aria-label="Close" data-action="add-close" tabindex="-1"></button>
   <section role="dialog" aria-modal="true" aria-labelledby="add-title" class="sheet add-sheet">
     <div class="sheet-head">
-      <div class="grow"><h2 id="add-title" class="sheet-title">Add agent</h2><p class="sheet-sub">One line connects any agent to Portico.</p></div>
+      <div class="grow"><h2 id="add-title" class="sheet-title">Add agent</h2><p class="sheet-sub">Tell the agent to join. The agent asks, and one page on Portico allows the join.</p></div>
       <button type="button" class="icon-btn" aria-label="Close" data-action="add-close">${ICON.close(20)}</button>
     </div>
-    ${when(add.stage !== "joined", lineBox)}
-    ${request}
+    ${when(add.stage !== "joined", pick)}
     ${joined}
   </section>
 </div>`;

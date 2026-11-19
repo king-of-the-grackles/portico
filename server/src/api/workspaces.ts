@@ -1,12 +1,11 @@
 import { type Context, Hono } from "hono";
 import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
-import type { Share, ShareRequest, WorkspaceAsk } from "../core/shares";
-import type { AgentKind, Person, Workspace, WorkspaceKind } from "../core/types";
-import { log } from "../log";
+import type { Share } from "../core/shares";
+import type { Person, Workspace, WorkspaceKind } from "../core/types";
 import { type PersonEnv, currentPerson } from "./context";
 import { jsonObject } from "./session";
-import { type AgentRef, type PersonRef, personViews, porticoPhrase, porticoTitle } from "./views";
+import { type PersonRef, porticoPhrase, porticoTitle } from "./views";
 
 /** A Portico (a workspace, in this code) as the signed-in person sees it. */
 export interface WorkspaceView {
@@ -46,31 +45,8 @@ export interface ShareView {
   mails: number;
 }
 
-/** An agent of the person's asking to come into a workspace with a share link. */
-export interface JoinView {
-  id: string;
-  /** The code the agent shows in its chat. */
-  code: string;
-  agent: AgentRef;
-  workspace: { id: string; name: string; phrase: string };
-  sharedBy: PersonRef | null;
-  expiresAt: string;
-}
-
-/** Something an agent asked the person to confirm: sharing a workspace, taking a person out, or deleting it. */
-export interface AskView {
-  id: string;
-  kind: WorkspaceAsk["kind"];
-  agent: AgentRef;
-  workspace: { id: string; name: string; phrase: string };
-  email: string | null;
-  person: PersonRef | null;
-  expiresAt: string;
-}
-
 export function workspaceViews(core: Core, me: Person) {
-  const { workspaces, people, agents, shares, settings } = core;
-  const views = personViews(core, me);
+  const { workspaces, people, shares, settings } = core;
   const ref = (id: string): PersonRef => {
     const person = people.get(id);
     return { id, name: person?.name ?? "", ...(person?.handle ? { handle: person.handle } : {}) };
@@ -78,11 +54,7 @@ export function workspaceViews(core: Core, me: Person) {
   /** The workspaces where something waits for the person. */
   const needing = (): Set<string> => {
     const found = new Set<string>();
-    for (const ask of shares.asksFor(me.id)) found.add(ask.workspaceId);
-    for (const request of shares.pendingFor(me.id)) {
-      const share = shares.get(request.shareId);
-      if (share) found.add(share.workspaceId);
-    }
+    for (const request of core.consents.waitingFor(me.id)) if (request.workspaceId) found.add(request.workspaceId);
     // Each held message says which workspace it is in: the one whose content database holds the message.
     for (const message of core.approvals.heldFor(me.id)) found.add(message.workspaceId);
     return found;
@@ -114,25 +86,6 @@ export function workspaceViews(core: Core, me: Person) {
       ...(mail === null ? {} : { mail }),
     };
   };
-  const named = (id: string) => {
-    const w = workspaces.get(id);
-    return { id, name: w ? porticoTitle(w, me) : "", phrase: w ? porticoPhrase(w, me) : "a Portico" };
-  };
-  const join = (request: ShareRequest): JoinView | null => {
-    const s = shares.get(request.shareId);
-    const agent = request.agentId ? agents.get(request.agentId) : null;
-    if (!s || !agent) return null;
-    return { id: request.id, code: request.code, agent: views.agentRef(agent.id), workspace: named(s.workspaceId), sharedBy: ref(s.createdBy), expiresAt: request.expiresAt };
-  };
-  const ask = (a: WorkspaceAsk): AskView => ({
-    id: a.id,
-    kind: a.kind,
-    agent: views.agentRef(a.agentId),
-    workspace: named(a.workspaceId),
-    email: a.detail.email ?? null,
-    person: a.detail.personId ? ref(a.detail.personId) : null,
-    expiresAt: a.expiresAt,
-  });
   return {
     workspace,
     share,
@@ -142,15 +95,7 @@ export function workspaceViews(core: Core, me: Person) {
       const needs = needing();
       return workspaces.forPerson(me.id).map((w) => workspace(w, needs));
     },
-    joins: (): JoinView[] => shares.pendingFor(me.id).map(join).filter((view): view is JoinView => view !== null),
-    asks: (): AskView[] => shares.asksFor(me.id).map(ask),
   };
-}
-
-/** What waits for the person about workspaces: agents asking to come in, and what agents asked to be confirmed. */
-export function workspaceApprovals(core: Core, me: Person): { joins: JoinView[]; asks: AskView[] } {
-  const views = workspaceViews(core, me);
-  return { joins: views.joins(), asks: views.asks() };
 }
 
 /** What a workspace's page shows besides the workspace itself. */
@@ -180,8 +125,6 @@ export function workspacePageData(core: Core, me: Person, id: string): Workspace
  *   POST   /api/porticos/:id/shares { email? }   → { share }: a link for one person
  *   POST   /api/shares/:id/mail                    → { share }: the share's email again
  *   DELETE /api/shares/:id
- *   POST   /api/approvals/joins/:id { decision, code?, name? }
- *   POST   /api/approvals/asks/:id { decision }
  */
 export function workspaceRoutes(core: Core): Hono<PersonEnv> {
   const { workspaces, shares } = core;
@@ -258,33 +201,6 @@ export function workspaceRoutes(core: Core): Hono<PersonEnv> {
   route.delete("/shares/:id", (c) => {
     shares.revoke(currentPerson(c).id, c.req.param("id"));
     return c.body(null, 204);
-  });
-
-  route.post("/approvals/joins/:id", async (c) => {
-    const me = currentPerson(c);
-    const body = await jsonObject(c);
-    const { request, agent, workspace } = shares.decide(me.id, c.req.param("id"), { decision: body.decision, code: body.code, name: body.name });
-    log("info", "join_decided", { request_id: request.id, status: request.status });
-    return c.json({
-      status: request.status,
-      workspace: { id: workspace.id, name: workspace.name },
-      agent: agent ? personViews(core, me).agent(agent) : null,
-      // For the confirm page's form, which goes on to the Portico's page.
-      next: request.status === "approved" ? `/p/${workspace.id}` : "/",
-    });
-  });
-
-  route.post("/approvals/asks/:id", async (c) => {
-    const me = currentPerson(c);
-    const body = await jsonObject(c);
-    const ask = shares.decideAsk(me.id, c.req.param("id"), body.decision);
-    const share = ask.result?.shareId ? shares.get(ask.result.shareId) : null;
-    let mail: string | null = null;
-    if (share && share.email !== null) {
-      const secret = shares.secretFor(me.id, share.id);
-      mail = secret ? await core.mail.send(share, `${core.settings.publicUrl()}/share#${secret}`, me) : "failed";
-    }
-    return c.json({ status: ask.status, share: share ? workspaceViews(core, me).share(share, mail) : null });
   });
 
   return route;

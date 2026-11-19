@@ -40,9 +40,9 @@ describe("copy sweeps", () => {
     p.workspaces.removeAgent(w.robert.id, w.pair.id, w.dots.agent.id);
     p.messages.send(w.grok.agent, { replyTo: first.id, subject: "More", text: "x" });
     p.workspaces.removeAgent(w.chris.id, w.own.id, w.claude.agent.id);
-    p.shares.ask(w.grok.agent, "share", w.launch.id, { email: "erin@example.com" });
-    p.shares.ask(w.grok.agent, "delete", w.launch.id);
-    p.shares.ask(w.grok.agent, "remove_person", w.launch.id, { person: "dana" });
+    p.consents.ask(w.grok.agent, "share", w.launch.id, { email: "erin@example.com" });
+    p.consents.ask(w.grok.agent, "delete", w.launch.id);
+    p.consents.ask(w.grok.agent, "remove_person", w.launch.id, { person: "dana" });
     const cookie = signIn(p, w.chris);
     for (const path of ["/", "/agents", `/p/${w.own.id}`, `/p/${w.pair.id}`, `/p/${w.launch.id}`, `/a/${w.grok.agent.id}`, "/activity"]) {
       const res = await p.app.request(path, { headers: { cookie } });

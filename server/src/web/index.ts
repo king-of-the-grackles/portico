@@ -4,6 +4,7 @@ import type { Core } from "../core/core";
 import { accountPages } from "./account";
 import { assetRoutes } from "./assets";
 import { codexBridgeRoutes } from "./codex-bridge";
+import { consentPages } from "./consent";
 import { homePage } from "./home";
 import { invitePage } from "./invite";
 import { joinPage } from "./join-page";
@@ -39,6 +40,7 @@ export function webRoutes(core: Core): Hono<PersonEnv> {
   }
   web.route("/", joinPage(core));
   web.route("/", sharePages(core));
+  web.route("/", consentPages(core));
   web.route("/", mailPages(core));
   web.route("/", settingsPage(core));
   web.route("/", homePage(core));

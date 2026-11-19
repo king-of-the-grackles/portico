@@ -17,14 +17,14 @@ import type {
   PersonRef,
   PersonView,
   RunView,
-  SignInView,
   TaskView,
 } from "../../../api/views";
-import type { AskView, JoinView, ShareView, WorkspacePageData, WorkspaceView } from "../../../api/workspaces";
+import type { ConsentCard } from "../../../api/consents";
+import type { ShareView, WorkspacePageData, WorkspaceView } from "../../../api/workspaces";
 import type { TaskOutcome } from "../../../core/tasks";
 import type { AgentKind } from "../../../core/types";
 
-export type { AskView, JoinView, ShareView, WorkspacePageData, WorkspaceView };
+export type { ConsentCard, ShareView, WorkspacePageData, WorkspaceView };
 export type {
   ActivityView,
   AgentKind,
@@ -42,7 +42,6 @@ export type {
   PersonRef,
   PersonView,
   RunView,
-  SignInView,
   TaskListData,
   TaskOutcome,
   TaskView,
@@ -77,7 +76,7 @@ export interface HomeData {
   me: PersonView;
   publicUrl: string;
   agents: AgentView[];
-  approvals: { held: HeldCard[]; signIns: SignInView[]; joins: JoinView[]; asks: AskView[] };
+  approvals: { held: HeldCard[]; consents: ConsentCard[] };
   /** The person's Porticos, the person's own first. */
   workspaces: WorkspaceView[];
   workspacePage: WorkspacePageData | null;
@@ -105,26 +104,14 @@ export interface SettingsData {
   canInvite?: boolean;
 }
 
-/** A join line just made by POST /api/join-lines. The line carries the secret, so it lives only in the page's memory. */
-export interface NewJoinLine {
-  id: string;
-  line: string;
-  expiresAt: string;
-}
-
-/** The Add agent sheet. */
+/** The Add agent sheet: what to tell each kind of agent, then the agent or computer that joined. */
 export interface AddState {
-  /** The join line made when the sheet opened: one line works for every kind of agent. */
-  line: NewJoinLine | null;
-  lineError: string;
-  copied: boolean;
-  stage: "pick" | "request" | "joined";
-  /** The app agent's sign-in request that arrived on the line. */
-  signIn: SignInView | null;
-  reqName: string;
-  reqError: string;
+  /** The row whose text was copied last: `claude-code`, `codex`, `app` or `connector`. */
+  copied: string | null;
+  stage: "pick" | "joined";
   joined: AgentView | null;
-  busy: boolean;
+  /** A computer that joined, before any session there has started. */
+  joinedComputer: string | null;
 }
 
 export interface Notice {
@@ -164,9 +151,8 @@ export interface HomeState {
   publicUrl: string;
   agents: AgentView[];
   held: HeldCard[];
-  signIns: SignInView[];
-  joins: JoinView[];
-  asks: AskView[];
+  /** What the person's agents asked that waits on the consent page. */
+  consents: ConsentCard[];
   workspaces: WorkspaceView[];
   workspacePage: WorkspacePageData | null;
   wsForm: WorkspaceForm | null;

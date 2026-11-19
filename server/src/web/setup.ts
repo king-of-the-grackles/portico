@@ -48,7 +48,7 @@ export function setupPage(core: Core): Hono<PersonEnv> {
       scripts: ["forms.js"],
       main: html`<div>
   <h1>Set up Portico</h1>
-  <p class="lead">Create the owner account. The owner adds agents, invites people and approves sign in requests.</p>
+  <p class="lead">Create the owner account. The owner adds agents, invites people and approves each new account.</p>
 </div>
 <form class="form-card" data-api="POST /api/setup">
   <label for="setup-name" class="lbl">Name</label>

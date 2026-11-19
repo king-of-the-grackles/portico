@@ -42,7 +42,10 @@ test("the plugin's Portico tools match Portico's exactly, and Portico runs them"
   // A call that waits for the person says so, in a sentence to show.
   const shared = data(await runTool(client, "share_portico", { portico: "Studio" }));
   expect(shared).toMatchObject({ status: "waiting_for_person", portico: { name: "Studio" } });
-  expect(shared.show).toStartWith("Waiting for Chris: sharing the Studio Portico with one more person happens only once Chris confirms at ");
+  expect(shared.show).toBe(
+    `Waiting for Chris: sharing the Studio Portico with one more person happens only once Chris opens ${shared.request.link} in a browser, signs in, types the code ${shared.request.code} and presses Allow. The code runs out at ${shared.request.expires_at}.`,
+  );
+  expect(shared.request.link).toMatch(/^https:\/\/portico\.example\.com\/c\//);
   expect(data(await runTool(client, "delete_portico", { portico: "Studio" })).show).toContain("deleting the Studio Portico");
   const refused = await runTool(client, "share_portico", { portico: "nope" });
   expect(refused.isError).toBe(true);

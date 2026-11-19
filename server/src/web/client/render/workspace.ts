@@ -3,7 +3,7 @@
 // Pure: state in, HTML out.
 import { agentState, date, esc, expiresIn, ICON, kindInfo, logo, monogram, personColor, plural, when } from "./common.js";
 import { renderTaskRow, taskHead } from "./tasks.js";
-import type { AgentView, AskView, HomeState, JoinView, PersonRef, ShareView, WorkspaceForm, WorkspaceView } from "./types.js";
+import type { AgentView, HomeState, PersonRef, ShareView, WorkspaceForm, WorkspaceView } from "./types.js";
 
 /** The address other people's agents use for a person's agents: the handle, when the person has one. */
 function handleOf(p: PersonRef): string {
@@ -20,52 +20,6 @@ export function initials(w: WorkspaceView, meId: string): string {
     .filter((p) => p.id !== meId)
     .map((p) => Array.from(p.name.trim())[0]?.toUpperCase() ?? "")
     .join("");
-}
-
-// ---- cards on Today ----
-
-/** One of the person's agents holds a share link: compare the code with the one in its chat. */
-export function renderJoinCard(s: HomeState, j: JoinView): string {
-  const busy = s.busy === `join:${j.id}`;
-  const by = j.sharedBy ? `, shared by ${esc(j.sharedBy.name)}` : "";
-  return `<article class="dcard" aria-labelledby="dj-${esc(j.id)}" data-key="dj-${esc(j.id)}">
-    <div class="dcard-head">${logo(j.agent.kind, "", kindInfo(j.agent.kind).label)}<div class="grow">
-      <h3 id="dj-${esc(j.id)}" class="dcard-title">${esc(j.agent.label)} wants to come into ${esc(j.workspace.phrase)}${by}</h3>
-      <p class="dcard-why tnum">Allow only if ${esc(j.agent.label)} shows the code <strong class="code-inline">${esc(j.code)}</strong>. Everyone in ${esc(j.workspace.phrase)} can then message ${esc(j.agent.label)}. ${expiresIn(j.expiresAt, s.now)}</p>
-    </div></div>
-    <div class="actions">
-      <button type="button" class="btn btn-text" data-action="join-decide" data-id="${esc(j.id)}" data-decision="deny"${when(busy, " disabled")}>Don't allow</button>
-      <button type="button" class="btn btn-primary" data-action="join-decide" data-id="${esc(j.id)}" data-decision="approve"${when(busy, " disabled")}>Allow ${esc(j.agent.label)}</button>
-    </div>
-  </article>`;
-}
-
-/** An agent asked, for the person, to share a Portico, take someone out, or delete it. */
-export function renderAskCard(s: HomeState, a: AskView): string {
-  const busy = s.busy === `ask:${a.id}`;
-  const where = esc(a.workspace.phrase);
-  const title =
-    a.kind === "share"
-      ? `${esc(a.agent.label)} wants to share ${where}${a.email ? ` with ${esc(a.email)}` : " with one more person"}`
-      : a.kind === "delete"
-        ? `${esc(a.agent.label)} wants to delete ${where}`
-        : `${esc(a.agent.label)} wants to remove ${esc(a.person?.name ?? "a person")} from ${where}`;
-  const why =
-    a.kind === "share"
-      ? `Allowing makes a link that lets one more person, and that person's agents, into ${where}.${a.email ? ` Portico emails the link to ${esc(a.email)}.` : ""}`
-      : a.kind === "delete"
-        ? `Allowing deletes ${where}: agents that reach each other only through ${where} stop reaching each other, and the conversations there become read-only.`
-        : `Allowing takes ${esc(a.person?.name ?? "the person")} out of ${where}, with every agent ${esc(a.person?.name ?? "the person")} has there.`;
-  return `<article class="dcard" aria-labelledby="da-${esc(a.id)}" data-key="da-${esc(a.id)}">
-    <div class="dcard-head">${logo(a.agent.kind, "", kindInfo(a.agent.kind).label)}<div class="grow">
-      <h3 id="da-${esc(a.id)}" class="dcard-title">${title}</h3>
-      <p class="dcard-why tnum">${why} ${expiresIn(a.expiresAt, s.now)}</p>
-    </div></div>
-    <div class="actions">
-      <button type="button" class="btn btn-text" data-action="ask-decide" data-id="${esc(a.id)}" data-decision="deny"${when(busy, " disabled")}>Don't allow</button>
-      <button type="button" class="btn btn-primary" data-action="ask-decide" data-id="${esc(a.id)}" data-decision="approve"${when(busy, " disabled")}>Allow</button>
-    </div>
-  </article>`;
 }
 
 // ---- forms ----

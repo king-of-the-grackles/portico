@@ -515,6 +515,7 @@ export function archiveWorkspaces(db: Database, where: string, bindings: Record<
   db.query(`UPDATE workspace_agents SET left_at = $at WHERE left_at IS NULL AND workspace_id IN (${ids})`).run({ ...bindings, at });
   db.query(`DELETE FROM workspace_people WHERE workspace_id IN (${ids})`).run(bindings);
   db.query(`DELETE FROM shares WHERE workspace_id IN (${ids})`).run(bindings);
-  db.query(`DELETE FROM workspace_asks WHERE workspace_id IN (${ids})`).run(bindings);
+  // What waits for a person about one stops waiting. The rows stay, so the page that allowed a delete can say so.
+  db.query(`UPDATE consent_requests SET status = 'expired' WHERE status = 'pending' AND workspace_id IN (${ids})`).run(bindings);
   db.query(`UPDATE workspaces SET archived_at = $at WHERE archived_at IS NULL AND ${where}`).run({ ...bindings, at });
 }

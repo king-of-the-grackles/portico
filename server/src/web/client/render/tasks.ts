@@ -1,7 +1,7 @@
 // Tasks and decisions, shared by Today, Activity and the agent pages: one row per task (status, task, who, when) whose
 // steps open inside the row, and the cards for what needs a person's decision. Pure: state in, HTML out.
 import { agentState, clock, duration, esc, expiresIn, kindInfo, logo, pav, when } from "./common.js";
-import type { AgentRef, AgentView, FileView, HeldCard, HomeState, MessageView, SignInView, TaskDetail, TaskOutcome, TaskView } from "./types.js";
+import type { AgentRef, AgentView, ConsentCard, FileView, HeldCard, HomeState, MessageView, TaskDetail, TaskOutcome, TaskView } from "./types.js";
 
 /** The four outcomes, in plain words. */
 export const OUTCOME_LABEL: Record<TaskOutcome, string> = {
@@ -186,24 +186,23 @@ export function renderHeldCard(s: HomeState, m: HeldCard): string {
     ${renderFiles(m.files)}
     <div class="actions">
       <button type="button" class="btn btn-link start" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Hide message" : "Show message"}</button>
+      <a class="btn btn-link" href="/held/${encodeURIComponent(m.id)}">Open the page</a>
       ${decideButtons(s, m)}
     </div>
   </article>`;
 }
 
-/** An app asks to join: compare the 4-digit code with the one in its chat. */
-export function renderSignInCard(s: HomeState, r: SignInView): string {
-  const kind = kindInfo(r.kind).label;
-  const busy = s.busy === `signin:${r.id}`;
-  return `<article class="dcard" aria-labelledby="ds-${esc(r.id)}" data-key="ds-${esc(r.id)}">
-    <div class="dcard-head">${logo(r.kind, "", kind)}<div class="grow">
-      <h3 id="ds-${esc(r.id)}" class="dcard-title">${esc(kind)} wants to join Portico as ${esc(r.name)}</h3>
-      <p class="dcard-why tnum">Approve only if ${esc(kind)} shows the code <strong class="code-inline">${esc(r.code)}</strong>. ${expiresIn(r.expiresAt, s.now)}</p>
+/**
+ * An agent asked the person for something only the person can allow. The answer is given on the consent page, with
+ * the code from the agent's chat: this card only leads there.
+ */
+export function renderConsentCard(s: HomeState, r: ConsentCard): string {
+  return `<article class="dcard" aria-labelledby="dq-${esc(r.id)}" data-key="dq-${esc(r.id)}">
+    <div class="dcard-head"><div class="grow">
+      <h3 id="dq-${esc(r.id)}" class="dcard-title">${esc(r.title)}</h3>
+      <p class="dcard-why tnum">${esc(r.asks)} The page asks for the 4-digit code the agent shows in the chat. ${expiresIn(r.expiresAt, s.now)}</p>
     </div></div>
-    <div class="actions">
-      <button type="button" class="btn btn-text" data-action="signin-deny" data-id="${esc(r.id)}"${when(busy, " disabled")}>Don't allow</button>
-      <button type="button" class="btn btn-primary" data-action="signin-approve" data-id="${esc(r.id)}"${when(busy, " disabled")}>Approve ${esc(r.name)}</button>
-    </div>
+    <div class="actions"><a class="btn btn-primary" href="${esc(r.link)}">Open the page</a></div>
   </article>`;
 }
 

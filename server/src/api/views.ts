@@ -203,17 +203,6 @@ export interface ActivityView {
 
 // Shapes other tracks build. Kept here so every client agrees on them.
 
-/** An app agent's request to join, shown under Needs approval with its 4-digit code. */
-export interface SignInView {
-  id: string;
-  kind: AgentKind;
-  name: string;
-  code: string;
-  status: "pending" | "approved" | "denied" | "expired";
-  createdAt: string;
-  expiresAt: string;
-}
-
 export interface ComputerView {
   id: string;
   name: string;

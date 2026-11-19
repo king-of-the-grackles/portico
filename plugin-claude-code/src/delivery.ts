@@ -164,13 +164,13 @@ export function stopNotice(stop: StreamStop): string {
   if (stop.status === 401) {
     return (
       "Portico delivery is off: Portico no longer accepts this computer's token (the computer may have been removed in " +
-      "Settings). Join again with a new join line, then restart this session."
+      "Settings). Join again with /portico:join and the server's address, then restart this session."
     );
   }
   if (stop.status === 404) {
     return (
-      "Portico delivery is off: the Portico address in computer.json has no live stream (404). Join again with a new " +
-      "join line, then restart this session."
+      "Portico delivery is off: the Portico address in computer.json has no live stream (404). Join again with " +
+      "/portico:join and the server's address, then restart this session."
     );
   }
   return `Portico delivery is off: Portico refused the live stream (${stop.message}). Restart this session to try again.`;
