@@ -23,6 +23,9 @@ export const DAY = 86_400_000;
 export const PUBLIC_URL = "https://portico.example.com";
 export const PASSWORD = "correct-horse-battery";
 
+/** The secrets key every test Portico gets: 32 bytes, base64, and nothing anyone runs a server with. */
+export const TEST_SECRETS_KEY = Buffer.alloc(32, 7).toString("base64");
+
 export function testClock(start: Date = T0) {
   let current = start.getTime();
   return {
@@ -41,6 +44,8 @@ export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfi
     pluginSource: null,
     publicUrl: PUBLIC_URL,
     signingKey: "a".repeat(64),
+    secretsKey: TEST_SECRETS_KEY,
+    secretsKeyOld: null,
     webhooksAllowPrivate: false,
     mail: null,
     files: null,
@@ -439,9 +444,12 @@ export function fakeWebhooks(answer: (req: WebhookRequest) => WebhookResult = ()
 
 export type FakeWebhooks = ReturnType<typeof fakeWebhooks>;
 
-/** Lets queued microtasks and zero-delay timers run, e.g. notices and change batches. */
+/**
+ * Lets queued microtasks and zero-delay timers run, e.g. notices and change batches, and gives a wake or an event its
+ * time to leave: decrypting its key is WebCrypto's work on another thread, a few steps of well under a millisecond each.
+ */
 export function flush(): Promise<void> {
-  return Bun.sleep(1);
+  return Bun.sleep(10);
 }
 
 export interface SseEvent {

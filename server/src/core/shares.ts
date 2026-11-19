@@ -3,7 +3,8 @@ import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS } from "./limits";
 import { cleanEmail } from "./people";
-import { hashSecret, LINK_SECRET, newLinkSecret, seal, unseal } from "./tokens";
+import type { SecretPlace, Secrets } from "./secrets";
+import { hashSecret, LINK_SECRET, newLinkSecret } from "./tokens";
 import type { Agent, AgentsPolicy, Person, Workspace } from "./types";
 import { cleanAgentsPolicy, type Workspaces } from "./workspaces";
 
@@ -53,7 +54,8 @@ const toShare = (row: ShareRow): Share => ({
   revokedAt: row.revoked_at,
 });
 
-const SHARE_SEAL = "share-link";
+/** What links' secrets were sealed as, with the signing key, before the secrets key: read only by the start's pass over old rows. */
+export const SHARE_SEAL = "share-link";
 /** One answer for a link that is unknown, revoked, expired or someone else's, so a link tells a stranger nothing. */
 export const DEAD_LINK = "This share link doesn't work. Ask the person who sent the link for a new one.";
 /** How long dead links are kept. */
@@ -72,7 +74,8 @@ export interface SharesDeps {
   workspaces: Workspaces;
   changes: Changes;
   /** Seals a link's secret, so the person who made the link can copy it again. */
-  signingKey: string;
+  /** Encrypts each link's secret, so the link can be shown again to the person who made it. */
+  secrets: Secrets;
   /**
    * Whether a link can be for one address only: true where signing in gives each person a verified address. With
    * Portico's own accounts nobody has one, so a link bound to an address could never be used.
@@ -95,7 +98,7 @@ export class Shares {
   private readonly db: Database;
   private readonly workspaces: Workspaces;
   private readonly changes: Changes;
-  private readonly signingKey: string;
+  private readonly secrets: Secrets;
   readonly bindsEmail: boolean;
   private readonly now: () => Date;
   private readonly newId: () => string;
@@ -105,7 +108,7 @@ export class Shares {
     this.db = deps.db;
     this.workspaces = deps.workspaces;
     this.changes = deps.changes;
-    this.signingKey = deps.signingKey;
+    this.secrets = deps.secrets;
     this.bindsEmail = deps.bindsEmail ?? true;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
@@ -161,7 +164,7 @@ export class Shares {
         workspaceId: share.workspaceId,
         createdBy: share.createdBy,
         hash: hashSecret(secret),
-        box: seal(this.signingKey, SHARE_SEAL, secret),
+        box: this.secrets.sealSync(Shares.place(share.id), secret),
         email,
         agentsPolicy,
         createdAt: share.createdAt,
@@ -236,7 +239,15 @@ export class Shares {
     return rows.map(toShare).filter((share) => share.createdBy === personId || workspace.ownerId === personId);
   }
 
-  /** The link's secret, for the person who made the link or the workspace's owner, while the link works. */
+  /** Where a link's secret is stored: what its encrypted form is bound to. */
+  static place(shareId: string): SecretPlace {
+    return { table: "shares", column: "secret_box", row: shareId };
+  }
+
+  /**
+   * The link's secret, for the person who made the link or the workspace's owner, while the link works. Null too for
+   * one Portico can't read any more (another secrets key): that link can't be shown again, only ended and replaced.
+   */
   secretFor(personId: string, shareId: string): string | null {
     const share = this.get(shareId);
     if (!share || !this.isOpen(share)) return null;
@@ -244,7 +255,8 @@ export class Shares {
     if (!workspace || !this.workspaces.hasPerson(workspace.id, personId)) return null;
     if (share.createdBy !== personId && workspace.ownerId !== personId) return null;
     const row = this.db.query("SELECT secret_box FROM shares WHERE id = $id").get({ id: share.id }) as { secret_box: string };
-    return unseal(this.signingKey, SHARE_SEAL, row.secret_box);
+    const opened = this.secrets.openSync(Shares.place(share.id), row.secret_box);
+    return opened.ok ? opened.value : null;
   }
 
   /** Ends a link: the person who made it can, and so can the workspace's owner. Requests waiting on it end too. */

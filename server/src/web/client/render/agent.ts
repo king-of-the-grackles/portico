@@ -35,7 +35,9 @@ export function wakeOutcome(label: string, lastAt: string | null, lastStatus: st
       ? "no answer within 10 seconds"
       : lastStatus === "blocked_address"
         ? "the address points to a private network"
-        : "the address couldn't be reached";
+        : lastStatus === "secret_unreadable"
+          ? "Portico can no longer read the stored key, so set the wake URL again"
+          : "the address couldn't be reached";
   return `Last wake failed ${at}: ${why}.`;
 }
 

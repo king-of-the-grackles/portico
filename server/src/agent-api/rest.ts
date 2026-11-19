@@ -164,7 +164,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
   api.put("/wake", async (c) => {
     const body = WakeBody.parse(await readJson(c));
     const agent = c.get("agent");
-    const wake = deps.wakeUrls.set(agent, null, body);
+    const wake = await deps.wakeUrls.set(agent, null, body);
     agents.checkedIn(agent);
     return c.json({ wake: { host: wake.host } });
   });

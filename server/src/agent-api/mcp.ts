@@ -373,7 +373,7 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
         agents.checkedIn(agent);
         return json({ wake: null, removed });
       }
-      const wake = deps.wakeUrls.set(agent, null, { url: args.url, key: args.key });
+      const wake = await deps.wakeUrls.set(agent, null, { url: args.url, key: args.key });
       agents.checkedIn(agent);
       return json({ wake: { host: wake.host } });
     }

@@ -10,7 +10,7 @@ import { isBroadcast } from "./guards";
 import { DAY_MS, HOUR_MS, LIMITS, NAME } from "./limits";
 import { nameKey, requireUnreservedName } from "./names";
 import type { Presence } from "./presence";
-import { hashSecret, newToken } from "./tokens";
+import { hashSecret, newToken, sessionKeyHash } from "./tokens";
 import { AGENT_KINDS } from "./types";
 import type { Agent, AgentKind, AgentType, Computer, DeliveryTier, DirectoryEntry, LiveStatus } from "./types";
 import { slugify } from "./words";
@@ -560,7 +560,7 @@ export class Agents {
     const outcome = this.db.transaction(() => {
       const same = this.db
         .query("SELECT agent_id, id FROM agent_runs WHERE computer_id = $computerId AND session_key = $key")
-        .get({ computerId: computer.id, key: reg.key }) as { agent_id: string; id: string } | null;
+        .get({ computerId: computer.id, key: sessionKeyHash(reg.key) }) as { agent_id: string; id: string } | null;
       if (same) {
         // A revoked agent's own session comes back with the key it had: refused like any new session in the folder.
         if (this.get(same.agent_id)?.revokedAt) throw new PorticoError("folder_off", REVOKED_SESSION(reg.repo, computer.name));
@@ -622,7 +622,7 @@ export class Agents {
           `INSERT INTO agent_runs (id, agent_id, computer_id, session_key, client, started_at, last_seen_at)
            VALUES ($id, $agentId, $computerId, $key, $client, $at, $at)`,
         )
-        .run({ id: runId, agentId, computerId: computer.id, key: reg.key, client: reg.client, at });
+        .run({ id: runId, agentId, computerId: computer.id, key: sessionKeyHash(reg.key), client: reg.client, at });
       this.log("run_started", { agent_id: agentId, run_id: runId });
       return { agent: this.require(agentId), runId, created: !existing };
     })();
@@ -634,7 +634,7 @@ export class Agents {
   sessionByKey(computerId: string, key: string): { agent: Agent; runId: string } | null {
     const row = this.db
       .query("SELECT agent_id, id FROM agent_runs WHERE computer_id = $computerId AND session_key = $key")
-      .get({ computerId, key }) as { agent_id: string; id: string } | null;
+      .get({ computerId, key: sessionKeyHash(key) }) as { agent_id: string; id: string } | null;
     const agent = row ? this.get(row.agent_id) : null;
     // A revoked agent's sessions are signed out: the key answers as one that was never registered.
     return agent && agent.revokedAt === null ? { agent, runId: row!.id } : null;

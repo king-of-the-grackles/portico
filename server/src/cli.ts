@@ -6,16 +6,20 @@ import { terminalCode } from "../../plugin-claude-code/src/join";
 import { leaveCommand } from "./commands/leave";
 import { serveCommand } from "./commands/serve";
 import { setupCommand } from "./commands/setup";
+import { newSecretsKey } from "./core/secrets";
 
 const USAGE = `Usage: portico <command>
 
 Commands:
-  serve             Run Portico. Every setting is optional: PORT, PORTICO_DATA_DIR (the
-                    data folder, ./data unless set), PORTICO_PUBLIC_URL and
-                    PORTICO_PLUGIN_SOURCE. With PORTICO_DESCOPE_PROJECT_ID, people sign
+  serve             Run Portico. Needs PORTICO_SECRETS_KEY: the key that encrypts the keys
+                    and secrets Portico stores. Every other setting is optional: PORT,
+                    PORTICO_DATA_DIR (the data folder, ./data unless set),
+                    PORTICO_PUBLIC_URL and PORTICO_PLUGIN_SOURCE. With PORTICO_DESCOPE_PROJECT_ID, people sign
                     in with Descope and signing in creates the account.
   setup [--reset]   Print a one-time link that creates the owner account. With --reset,
                     print a new link. Not used with Descope sign-in.
+  key               Print a new key for PORTICO_SECRETS_KEY. Keep the key with the
+                    server's settings, never in the data folder.
   doctor            Check that Portico answers at the public URL and that setup is done.
   join <address>    Ask to join this computer to a Portico server: prints a link for a person
                     to allow on one page, then asks for the 4-digit code that page shows.
@@ -39,6 +43,9 @@ async function main(argv: string[]): Promise<number | "running"> {
       return serveCommand(io);
     case "setup":
       return setupCommand(args, io);
+    case "key":
+      io.out(newSecretsKey());
+      return 0;
     case "doctor":
       return doctorCommand(args, io);
     case "join":

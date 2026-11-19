@@ -144,7 +144,7 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
       throw new PorticoError("bad_request", "The body must be a JSON object.");
     }
     const agent = agents.requireManaged(me.id, c.req.param("id"));
-    return c.json({ wake: core.wakeUrls.set(agent, me.id, { url: body.url, key: body.key }) });
+    return c.json({ wake: await core.wakeUrls.set(agent, me.id, { url: body.url, key: body.key }) });
   });
 
   route.delete("/:id/wake", (c) => {

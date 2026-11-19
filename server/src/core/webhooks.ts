@@ -234,7 +234,7 @@ export interface RetryingPost {
   schedule: (fn: () => void, ms: number) => void;
   now: () => Date;
   /** The request for this try, built fresh (a new timestamp and signature), or null when nothing should be sent any more. */
-  request: () => WebhookRequest | null;
+  request: () => WebhookRequest | null | Promise<WebhookRequest | null>;
   /** Each try's status ("ok", "http_503", "timeout") and when the try was sent. */
   onResult: (status: string, sentAt: Date, tries: number) => void;
   /** Once the chain ends: delivered, given up, or stopped by `request`. */
@@ -244,7 +244,12 @@ export interface RetryingPost {
 /** Posts, reports each try, and retries what's worth retrying after RETRY_DELAYS_MS. */
 export function postWithRetry(opts: RetryingPost): void {
   const attempt = async (tries: number): Promise<void> => {
-    const req = opts.request();
+    let req: WebhookRequest | null;
+    try {
+      req = await opts.request();
+    } catch {
+      req = null;
+    }
     if (!req) return opts.onEnd?.();
     const sentAt = opts.now();
     let result: WebhookResult;

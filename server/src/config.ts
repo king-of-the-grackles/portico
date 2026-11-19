@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { SECRETS_KEY_HELP, SECRETS_KEY_MISSING, secretsKeyBytes } from "./core/secrets";
 import { cleanPublicUrl } from "./core/settings";
 import type { BucketConfig, MailConfig, PorticoConfig } from "./core/types";
 
@@ -29,7 +30,7 @@ const RETIRED: Record<string, string> = {
 
 /**
  * Everything is optional: PORT, PORTICO_DATA_DIR (default ./data), PORTICO_PUBLIC_URL, PORTICO_PLUGIN_SOURCE,
- * PORTICO_WEBHOOKS_ALLOW_PRIVATE, the bucket for files, email through Resend, and PORTICO_DESCOPE_PROJECT_ID, which
+ * PORTICO_WEBHOOKS_ALLOW_PRIVATE, PORTICO_SECRETS_KEY (optional here, required to serve: see loadConfig), the bucket for files, email through Resend, and PORTICO_DESCOPE_PROJECT_ID, which
  * switches sign-in from this server's own passwords to Descope. The signing key is passed in, so this stays free of
  * file access (see loadConfig).
  */
@@ -52,6 +53,15 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
   if (descopeProjectId !== null && !/^[A-Za-z0-9]{8,64}$/.test(descopeProjectId)) {
     problems.push("PORTICO_DESCOPE_PROJECT_ID must be a Descope project ID: letters and digits only");
   }
+  const secretsKey = env.PORTICO_SECRETS_KEY?.trim() || null;
+  const secretsKeyOld = env.PORTICO_SECRETS_KEY_OLD?.trim() || null;
+  // Never the value itself in a message: a key that is nearly right is still most of a key.
+  for (const [name, value] of [["PORTICO_SECRETS_KEY", secretsKey], ["PORTICO_SECRETS_KEY_OLD", secretsKeyOld]] as const) {
+    if (value !== null && !secretsKeyBytes(value)) problems.push(`${name} must be 32 random bytes as base64. ${SECRETS_KEY_HELP}`);
+  }
+  if (secretsKey !== null && secretsKey === secretsKeyOld) {
+    problems.push("PORTICO_SECRETS_KEY_OLD is the same key as PORTICO_SECRETS_KEY. Set PORTICO_SECRETS_KEY to a new key, or remove PORTICO_SECRETS_KEY_OLD.");
+  }
   const files = bucketConfig(env, problems);
   const mail = mailConfig(env, problems, publicUrl ? `Portico <invites@mail.${new URL(publicUrl).hostname}>` : null);
   if (problems.length > 0) throw new ConfigError(problems);
@@ -63,6 +73,8 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     pluginSource: env.PORTICO_PLUGIN_SOURCE?.trim() || null,
     publicUrl,
     signingKey,
+    secretsKey,
+    secretsKeyOld,
     webhooksAllowPrivate: env.PORTICO_WEBHOOKS_ALLOW_PRIVATE?.trim() === "1",
     files,
     mail,
@@ -147,8 +159,12 @@ export function hostUrl(config: Pick<PorticoConfig, "publicUrl" | "port">, env: 
   return config.publicUrl ?? saved ?? platformUrl(env) ?? `http://localhost:${config.port}`;
 }
 
-/** The config from the environment, with the data folder and its signing key, both made if missing. */
+/**
+ * The config a server starts with, from the environment, with the data folder and its signing key, both made if
+ * missing. Refused without PORTICO_SECRETS_KEY, before anything is made.
+ */
 export function loadConfig(env: Env = process.env): PorticoConfig {
   const config = parseEnv(env, "");
+  if (config.secretsKey === null) throw new ConfigError([SECRETS_KEY_MISSING]);
   return { ...config, signingKey: ensureSigningKey(config.dataDir) };
 }

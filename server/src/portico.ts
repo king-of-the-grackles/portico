@@ -33,6 +33,9 @@ import type { AccountSignIn, Agent, Message, Notice, Person, PorticoConfig, Work
 import { WakeUrls } from "./core/wake-urls";
 import { type WorkspaceEvent, Workspaces } from "./core/workspaces";
 import { safePost, type WebhookPost } from "./core/webhooks";
+import { ConfigError } from "./config";
+import { SECRETS_KEY_MISSING, Secrets } from "./core/secrets";
+import { encryptStoredLinkSecrets, encryptStoredSecrets, hashStoredSessionKeys } from "./core/stored-secrets";
 import { errorName, log } from "./log";
 
 export interface PorticoOptions {
@@ -63,6 +66,8 @@ export interface PorticoOptions {
 
 export interface Portico extends Core {
   app: Hono;
+  /** Done once every stored wake URL key and event secret is under the current secrets key. Never rejects. */
+  secretsReady: Promise<void>;
   /** check_inbox calls waiting for something to pick up. */
   inboxWaits: InboxWaits;
   /** Run every minute: expiries. */
@@ -92,6 +97,10 @@ const logInfo = (msg: string, fields: Record<string, unknown>) => log("info", ms
 /** Wires every piece of Portico together. Used by startServer and by the tests. */
 export function createPortico(config: PorticoConfig, opts: PorticoOptions): Portico {
   const { db } = opts;
+  if (config.secretsKey === null) throw new ConfigError([SECRETS_KEY_MISSING]);
+  const secrets = Secrets.from(config.secretsKey, config.secretsKeyOld);
+  hashStoredSessionKeys(db);
+  encryptStoredLinkSecrets({ db, secrets, signingKey: config.signingKey, log: (msg, fields) => log("info", msg, fields) });
   const now = opts.now ?? (() => new Date());
   const newId = opts.newId ?? (() => crypto.randomUUID());
   const changes = new Changes();
@@ -140,7 +149,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
 
   // Its own IDs: activity rows never shift the IDs tests expect for everything else.
   const activity = new Activity({ db, changes, now });
-  const people = new People({ db, changes, content, signingKey: config.signingKey, signInByName: check === null, now, newId });
+  const people = new People({ db, changes, content, secrets, signInByName: check === null, now, newId });
   const accounts = new Accounts({ db, people, now, newId });
   const workspaces = new Workspaces({ db, changes, now, newId, log: logInfo });
   const computers = new Computers({ db, changes, activity, content, now, newId, log: logInfo });
@@ -166,7 +175,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     renamed: (agent) => agentStreams.sendAll(agent.id, "renamed", { ...helloFor(agents, agent) }),
   });
   const webhookPost = opts.webhookPost ?? safePost({ allowPrivate: config.webhooksAllowPrivate });
-  const hooks = { db, post: webhookPost, changes, allowPrivate: config.webhooksAllowPrivate, now, schedule: opts.schedule, log: logInfo };
+  const hooks = { db, post: webhookPost, secrets, changes, allowPrivate: config.webhooksAllowPrivate, now, schedule: opts.schedule, log: logInfo };
   const wakeUrls = new WakeUrls({ ...hooks, activity });
   const events = new EventSubscriptions(hooks);
 
@@ -300,7 +309,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   });
   // What an agent asks about a workspace is answered only in a signed-in browser.
   // A link can be for one address only where the sign-in service verifies addresses: with Portico's own accounts nobody has one.
-  const shares = new Shares({ db, workspaces, changes, signingKey: config.signingKey, bindsEmail: check !== null, now, newId, log: logInfo });
+  const shares = new Shares({ db, workspaces, changes, secrets, bindsEmail: check !== null, now, newId, log: logInfo });
   // Mail is extra: the page is always reached from the agent's chat or Portico's own pages, so a failed email only logs.
   const mailed = (what: string, send: Promise<unknown>) => void send.catch((err) => log("error", "mail_failed", { what, error: errorName(err) }));
   const consents = new Consents({
@@ -686,6 +695,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   // Signing in makes each account, so there is no setup link to open first.
   if (accountSignIn && !settings.setupDone()) settings.set("setup_done_at", now().toISOString());
 
+  // Old rows come under the secrets key in the background: reads meanwhile take a row either way.
+  const secretsReady = encryptStoredSecrets({ db, secrets, wakeUrls, events, notices: agentNotices, log: logInfo }).then(() => undefined);
+
   const core: Core = {
     config,
     db,
@@ -765,6 +777,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   return {
     ...core,
     app,
+    secretsReady,
     inboxWaits,
     sweepFiles,
     sweepArchived,

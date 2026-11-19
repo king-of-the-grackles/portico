@@ -3,7 +3,8 @@ import type { Changes } from "./changes";
 import type { Content } from "./content";
 import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS } from "./limits";
-import { hashSecret, LINK_SECRET, newLinkSecret, seal, unseal } from "./tokens";
+import type { SecretPlace, Secrets } from "./secrets";
+import { hashSecret, LINK_SECRET, newLinkSecret } from "./tokens";
 import type { Person, PersonStatus, Role } from "./types";
 import { nameKey } from "./names";
 import { archiveWorkspaces } from "./workspaces";
@@ -140,8 +141,8 @@ export interface PeopleDeps {
    * removed (the setup command).
    */
   content?: Content;
-  /** Seals open invites' secrets, so their links can be copied again. */
-  signingKey: string;
+  /** Encrypts open invites' secrets, so their links can be copied again. Without one, a link shows only when made. */
+  secrets?: Secrets | null;
   /**
    * Whether people sign in here by name and password (a self-hosted server). Then a name belongs to one person, and
    * each new person gets a handle made from the name. False with an outside sign-in: two people can have one name,
@@ -152,7 +153,8 @@ export interface PeopleDeps {
   newId?: () => string;
 }
 
-const INVITE_SEAL = "invite";
+/** What invites' secrets were sealed as, with the signing key, before the secrets key: read only by the start's pass over old rows. */
+export const INVITE_SEAL = "invite";
 
 /**
  * The people who use Portico: one owner, and members who joined by invite. Only the owner invites, by name. An invite
@@ -165,14 +167,14 @@ export class People {
   private readonly now: () => Date;
   private readonly newId: () => string;
 
-  private readonly signingKey: string;
+  private readonly secrets: Secrets | null;
   private readonly signInByName: boolean;
 
   constructor(deps: PeopleDeps) {
     this.db = deps.db;
     this.changes = deps.changes;
     this.content = deps.content ?? null;
-    this.signingKey = deps.signingKey;
+    this.secrets = deps.secrets ?? null;
     this.signInByName = deps.signInByName ?? true;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
@@ -444,7 +446,7 @@ export class People {
         id: row.id,
         name,
         hash: hashSecret(secret),
-        box: seal(this.signingKey, INVITE_SEAL, secret),
+        box: this.secrets?.sealSync(People.invitePlace(row.id), secret) ?? null,
         createdBy: byId,
         createdAt: row.created_at,
         expiresAt: row.expires_at,
@@ -458,14 +460,24 @@ export class People {
     return row ? this.toInvite(row) : null;
   }
 
-  /** An open invite's secret, for copying its link again. Null once it's claimed, revoked or expired. */
+  /** Where an invite's secret is stored: what its encrypted form is bound to. */
+  static invitePlace(inviteId: string): SecretPlace {
+    return { table: "invites", column: "secret_box", row: inviteId };
+  }
+
+  /**
+   * An open invite's secret, for copying its link again. Null once it's claimed, revoked or expired, and for one
+   * Portico can't read any more (another secrets key): that link can't be shown again, only replaced.
+   */
   inviteSecret(id: string): string | null {
     const row = this.db
       .query(
         "SELECT secret_box FROM invites WHERE id = $id AND claimed_at IS NULL AND revoked_at IS NULL AND expires_at > $now",
       )
       .get({ id, now: this.iso() }) as { secret_box: string | null } | null;
-    return row?.secret_box ? unseal(this.signingKey, INVITE_SEAL, row.secret_box) : null;
+    if (!row?.secret_box || !this.secrets) return null;
+    const opened = this.secrets.openSync(People.invitePlace(id), row.secret_box);
+    return opened.ok ? opened.value : null;
   }
 
   /** Invites still waiting to be claimed, newest first. */

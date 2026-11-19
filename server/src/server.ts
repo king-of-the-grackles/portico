@@ -1,5 +1,7 @@
 import type { PorticoConfig } from "./core/types";
 import { LIMITS, MAX_BODY_BYTES } from "./core/limits";
+import { ConfigError } from "./config";
+import { SECRETS_KEY_MISSING } from "./core/secrets";
 import { openDb } from "./db";
 import { log } from "./log";
 import { createPortico, type Portico } from "./portico";
@@ -15,6 +17,8 @@ const DAY_MS = 86_400_000;
 
 /** The one way Portico runs: the directory database and each workspace's content in the data folder, one address. */
 export function startServer(config: PorticoConfig, opts: { port?: number } = {}): RunningServer {
+  // Before the database is opened or made: nothing starts without the key that encrypts what Portico stores.
+  if (config.secretsKey === null) throw new ConfigError([SECRETS_KEY_MISSING]);
   const db = openDb(config.dbPath, (msg, fields) => log("info", msg, fields));
   const portico = createPortico(config, { db });
   let server: ReturnType<typeof Bun.serve>;
@@ -37,6 +41,8 @@ export function startServer(config: PorticoConfig, opts: { port?: number } = {})
 
   portico.sweepMinute();
   portico.sweepDaily();
+  // Old rows come under the secrets key while the server already answers; what the pass found is in the log.
+  void portico.secretsReady;
   const minuteTimer = setInterval(() => portico.sweepMinute(), MINUTE_MS);
   const dailyTimer = setInterval(() => portico.sweepDaily(), DAY_MS);
 

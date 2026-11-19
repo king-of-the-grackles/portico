@@ -182,6 +182,7 @@ function shareRow(s: HomeState, sh: ShareView): string {
         ? `<span class="actions"><button type="button" class="btn btn-link" data-action="ws-confirm-cancel">Cancel</button><button type="button" class="btn btn-danger" data-action="ws-share-end" data-id="${esc(sh.id)}" data-autofocus${when(s.busy === "ws-confirm", " disabled")}>Confirm: end link</button></span>`
         : `<span class="actions">${when(sh.email && sh.link && sh.mails > 0 && sh.mails < 3, `<button type="button" class="btn btn-secondary" data-action="ws-share-mail" data-id="${esc(sh.id)}"${when(s.busy === `ws-mail:${sh.id}`, " disabled")}>Send again</button>`)}<button type="button" class="btn btn-text" data-action="ws-confirm" data-id="share:${esc(sh.id)}">End link</button></span>`
     }</div>
+    ${when(!sh.link, `<p class="row-help link-flush">Portico can't show this link again. The link still works for whoever has the link: to hand one over now, end this link and make a new one.</p>`)}
     ${when(
       sh.link,
       () => `<div class="link-line link-flush"><label for="${field}" class="sr">Share link</label><input id="${field}" class="line-field link-field" readonly value="${esc(sh.link)}"><button type="button" class="btn btn-primary" data-action="ws-share-copy" data-id="${esc(sh.id)}">${ICON.copy()}${s.wsCopied[sh.id] ? "Copied" : "Copy link"}</button></div>

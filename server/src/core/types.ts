@@ -258,6 +258,14 @@ export interface PorticoConfig {
   /** HMAC key for short-lived signed values, generated into the data folder on first start. */
   signingKey: string;
   /**
+   * PORTICO_SECRETS_KEY: 32 bytes as base64, kept outside the data folder. Encrypts the secrets Portico must be able to
+   * read again (wake URL keys, event secrets). Null when unset: commands that only read settings still run, and the
+   * server refuses to start.
+   */
+  secretsKey: string | null;
+  /** PORTICO_SECRETS_KEY_OLD: the key before a change of key. A start moves every value under it to the new one. */
+  secretsKeyOld: string | null;
+  /**
    * PORTICO_WEBHOOKS_ALLOW_PRIVATE=1: wake URLs and event callbacks may use http:// and private addresses. For local
    * development only; otherwise Portico posts only to public https:// addresses.
    */

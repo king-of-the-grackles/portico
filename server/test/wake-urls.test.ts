@@ -137,7 +137,7 @@ describe("wake URLs", () => {
 
   test("a new message posts the key as a bearer token, with the sender and message ID but never the text", async () => {
     const { p, hooks, chris, grok, muse } = await setup();
-    p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k_1" });
+    await p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k_1" });
     const { message } = send(p, muse, "grok", "Book the review");
     await flush();
     expect(hooks.sent).toHaveLength(1);
@@ -154,7 +154,7 @@ describe("wake URLs", () => {
 
   test("one wake covers every message until the agent checks in, or until 10 minutes pass", async () => {
     const { p, hooks, chris, grok, muse } = await setup();
-    p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k" });
+    await p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k" });
     send(p, muse, "grok", "One");
     await flush();
     send(p, muse, "grok", "Two");
@@ -176,7 +176,7 @@ describe("wake URLs", () => {
 
   test("a check-in while the wake is still on its way counts: the time sent is what's compared", async () => {
     const { p, hooks, chris, grok, muse } = await setup();
-    p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k" });
+    await p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k" });
     // The routine's run checks the inbox before the trigger's answer comes back.
     hooks.answer = () => {
       p.clock.advance(2000);
@@ -195,14 +195,14 @@ describe("wake URLs", () => {
 
   test("a new wake URL starts over, even while the old one's retries wait", async () => {
     const { p, hooks, chris, grok, muse } = await setup();
-    p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "old" });
+    await p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "old" });
     hooks.answer = () => ({ status: 503, body: "" });
     send(p, muse, "grok", "One");
     await flush();
     expect(hooks.timers).toHaveLength(1);
 
     hooks.answer = () => ({ status: 200, body: "" });
-    p.wakeUrls.set(grok.agent, chris.id, { url: "https://hooks.example.com/new", key: "new" });
+    await p.wakeUrls.set(grok.agent, chris.id, { url: "https://hooks.example.com/new", key: "new" });
     send(p, muse, "grok", "Two");
     await flush();
     expect(hooks.sent.map((r) => r.headers.authorization)).toEqual(["Bearer old", "Bearer new"]);
@@ -214,7 +214,7 @@ describe("wake URLs", () => {
 
   test("a failed wake is recorded, retried when worth it, and the next message tries again", async () => {
     const { p, hooks, chris, grok, muse } = await setup();
-    p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k" });
+    await p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k" });
     hooks.answer = () => ({ status: 503, body: "" });
     send(p, muse, "grok");
     await flush();
@@ -248,7 +248,7 @@ describe("wake URLs", () => {
     await flush();
     expect(hooks.sent).toHaveLength(0);
 
-    p.wakeUrls.set(guarded.agent, chris.id, { url: HOOK, key: "k" });
+    await p.wakeUrls.set(guarded.agent, chris.id, { url: HOOK, key: "k" });
     const { message } = send(p, muse, "guarded");
     await flush();
     expect(hooks.sent).toHaveLength(0);
@@ -259,7 +259,7 @@ describe("wake URLs", () => {
 
   test("at most 30 wakes an hour", async () => {
     const { p, hooks, chris, grok, muse } = await setup();
-    p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k" });
+    await p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k" });
     // About a minute apart, under the loop guard's 12 messages in 10 minutes, and all within the hour.
     for (let i = 0; i < MAX_WAKES_PER_HOUR + 5; i++) {
       p.clock.advance(30_000);
@@ -288,7 +288,7 @@ describe("wake URLs", () => {
     ]);
     expect(JSON.stringify(p.activity.list())).not.toContain("k_secret");
 
-    p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k" });
+    await p.wakeUrls.set(grok.agent, chris.id, { url: HOOK, key: "k" });
     p.agents.remove(chris.id, grok.agent.id);
     expect(p.db.query("SELECT COUNT(*) AS n FROM wake_urls").get()).toEqual({ n: 0 });
   });

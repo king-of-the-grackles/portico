@@ -111,6 +111,7 @@ Best if you're comfortable in a terminal.
    APP=portico-$(openssl rand -hex 3)
    fly apps create $APP
    fly volumes create portico_data --size 1 --region iad -a $APP --yes
+   fly secrets set PORTICO_SECRETS_KEY="$(openssl rand -base64 32)" -a $APP
    fly deploy -a $APP --ha=false
    fly ssh console -a $APP -C "portico setup"
    ```
@@ -124,8 +125,11 @@ Install [Bun](https://bun.sh) first, then:
 ```sh
 git clone https://github.com/king-of-the-grackles/portico && cd portico
 bun install
+export PORTICO_SECRETS_KEY="$(openssl rand -base64 32)"     # the key that encrypts what Portico stores
 PORTICO_PLUGIN_SOURCE="$PWD" bun server/src/cli.ts serve    # prints your setup link
 ```
+
+To keep using the same data folder later, save that key (a password manager, or your shell profile) and set it again before each start. See [the secrets key](#the-secrets-key).
 
 ### Finish in your browser
 
@@ -169,9 +173,10 @@ Ask which one to use, unless the request already says.
 5. **Code.** `git clone https://github.com/king-of-the-grackles/portico && cd portico`, or use the clone that's already open.
 6. **App.** App names are global on Fly, so pick something like `portico-<random word>` and run `fly apps create <app>`. Add `--org personal` if it asks for an organization.
 7. **Volume.** `fly volumes create portico_data --size 1 --region iad -a <app> --yes`. For a different region, change `primary_region` in `fly.toml` to match.
-8. **Deploy.** `fly deploy -a <app> --ha=false`. Fly builds the image remotely, so you don't need Docker. Portico keeps its database on one volume, so it runs on one machine.
-9. **Check.** `curl -fsS https://<app>.fly.dev/healthz` should answer `{"ok":true}`.
-10. **Setup link.** `fly ssh console -a <app> -C "portico setup"`. Then go to [step 3](#3-finish-up-together).
+8. **Secrets key.** `fly secrets set PORTICO_SECRETS_KEY="$(openssl rand -base64 32)" -a <app>`. Portico doesn't start without it. Don't print the key or write it into a file; see [the secrets key](#the-secrets-key).
+9. **Deploy.** `fly deploy -a <app> --ha=false`. Fly builds the image remotely, so you don't need Docker. Portico keeps its database on one volume, so it runs on one machine.
+10. **Check.** `curl -fsS https://<app>.fly.dev/healthz` should answer `{"ok":true}`.
+11. **Setup link.** `fly ssh console -a <app> -C "portico setup"`. Then go to [step 3](#3-finish-up-together).
 
 ### 2b. Render
 
@@ -341,10 +346,12 @@ These are fixed and can't be changed.
 
 ### Configuration
 
-Every setting is optional. There's no config file and no secret to generate: Portico creates its own signing key on first start. `render.yaml` and `fly.toml` already set what each host needs.
+One setting is required: `PORTICO_SECRETS_KEY`. Every other one is optional, and there's no config file: Portico creates its own signing key on first start. `render.yaml` and `fly.toml` already set what each host needs, and Render makes the secrets key for you.
 
 | Variable | Default | What it does |
 |---|---|---|
+| `PORTICO_SECRETS_KEY` | required | The key that encrypts the keys and secrets Portico has to store in a form Portico can read again: each app's wake URL key and each event subscription's signing secret. 32 random bytes as base64: `openssl rand -base64 32`, or `portico key`. Portico doesn't start without it. Keep it with the server's settings (`fly secrets set`, Render's environment), never in the data folder. See [the secrets key](#the-secrets-key). |
+| `PORTICO_SECRETS_KEY_OLD` | none | The previous secrets key, set only while changing keys. |
 | `PORT` | `8790` | The port Portico listens on. Render sets this. |
 | `PORTICO_DATA_DIR` | `./data` | The data folder. See below for what's inside. |
 | `PORTICO_PUBLIC_URL` | none | The public https address agents use. The setup page confirms this, so set it only behind a proxy that changes the host. `http://` works only for `localhost` and `127.0.0.1`. |
@@ -368,11 +375,21 @@ Every setting is optional. There's no config file and no secret to generate: Por
 
 Before an upgrade changes the database, Portico saves a copy beside the database (`portico.db.v<version>-<time>.bak`). Restoring a copy, or any older backup, brings back everything removed since: people, computers, agents, tokens, passkeys and old passwords. After a restore, remove those again, and rerun `portico setup --reset` if the owner password was reset. Delete `portico.db-wal` and `portico.db-shm` before restoring.
 
+#### The secrets key
+
+Apps hand Portico two kinds of secret that Portico has to use again later: the key Portico sends with each wake, and the secret Portico signs each event with. Portico stores both encrypted (AES-256-GCM) under `PORTICO_SECRETS_KEY`, and the same goes for the secret of each open invite link and share link, which Portico keeps so the person who made a link can copy it again. The key lives with the server's settings, not in the data folder, so a copy of the data folder or a backup of it doesn't give those secrets away. The credentials Portico only has to check (tokens, session keys, sign-in sessions, passwords) are stored only as hashes.
+
+- **A database from before the key.** At the first start with a key, Portico encrypts what was stored in plain text or sealed with the data folder's own signing key, where it is.
+- **Changing the key.** Set `PORTICO_SECRETS_KEY_OLD` to the current key and `PORTICO_SECRETS_KEY` to a new one, then restart. That start encrypts every stored value again under the new key, and the log line `stored_secrets_checked` counts them (`rekeyed`). Then remove `PORTICO_SECRETS_KEY_OLD`. On Fly: `fly secrets set PORTICO_SECRETS_KEY_OLD=<current key> PORTICO_SECRETS_KEY="$(openssl rand -base64 32)" -a <app name>`, and once the app has restarted, `fly secrets unset PORTICO_SECRETS_KEY_OLD -a <app name>`.
+- **Losing the key.** Nothing else is lost: people, agents, Porticos and messages don't depend on the key. The wake URL keys and event secrets stored under the lost key can't be read any more, so Portico stops waking those apps. Portico still starts, writes `wake_key_unreadable` and `event_secret_unreadable` to the log, shows on each agent's page that the last wake failed, and tells each such agent at its next check to register again. Setting the wake URL again (or subscribing again, which ChatGPT does when it renews) is all it takes. Open invite and share links still work for whoever holds them, but Portico can't show them again: the page says so, and a new link replaces one.
+- **Backups.** Back up the key apart from the data folder. A restored data folder needs the key it was written with, or the one before it as `PORTICO_SECRETS_KEY_OLD`.
+
 ### Commands
 
 | Command | What it does |
 |---|---|
 | `portico serve` | Runs Portico. When run locally in a terminal, prints the setup link at each start before setup; where the output is kept instead (a container, a pipe), run `portico setup`. |
+| `portico key` | Prints a new key for `PORTICO_SECRETS_KEY`. |
 | `portico setup` | Prints a one-time setup link. Run it on the server, against the same database as `serve`. |
 | `portico setup --reset` | Prints a new link. Before setup, a fresh setup link. After setup, a link that sets a new owner password, removes the owner's passkeys and signs out the owner's computers and agents. |
 | `portico doctor` | Checks that Portico answers at its public address and that setup is done. |
@@ -399,6 +416,7 @@ Portico's own pages use a JSON API under `/api` with the browser's sign-in sessi
 bun install
 bun test
 bun run typecheck                 # both packages: server and plugin
+export PORTICO_SECRETS_KEY="$(bun server/src/cli.ts key)"   # once per data folder: keep the key to start that folder again
 bun server/src/cli.ts serve       # http://localhost:8790; prints the setup link at first start
 ```
 

@@ -25,6 +25,11 @@ export function hashSecret(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+/** A session key as agent_runs stores it: Portico only ever checks one, so only its hash is kept. A raw key never holds a colon. */
+export function sessionKeyHash(key: string): string {
+  return `h:${hashSecret(key)}`;
+}
+
 /** Constant-time string comparison. */
 export function sameSecret(a: string, b: string): boolean {
   const x = Buffer.from(a);

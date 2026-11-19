@@ -50,6 +50,7 @@ function inviteRow(s: SettingsState, i: InviteView): string {
   const field = `invite-${esc(i.id)}`;
   return `<li class="srow srow-stack enter" data-key="i-${esc(i.id)}">
     <div class="srow-line"><span class="av av-round av-invite">${monogram(i.name)}</span><span class="row-text"><strong>Invite for ${esc(i.name)}</strong><span class="row-help tnum">Unclaimed. Single use, expires ${date(i.expiresAt, s.now)}.</span></span><span class="actions"><button type="button" class="btn btn-text" data-action="invite-revoke" data-id="${esc(i.id)}"${when(s.busy === `revoke:${i.id}`, " disabled")}>Revoke</button></span></div>
+    ${when(!link, `<p class="row-help">Portico can't show this link again. The link still works for whoever has the link: to hand one over now, revoke this invite and make a new one.</p>`)}
     ${when(
       link,
       `<div class="link-line"><label for="${field}" class="sr">Invite link for ${esc(i.name)}</label><input id="${field}" class="line-field link-field" readonly value="${esc(link)}"><button type="button" class="btn btn-primary" data-action="invite-copy" data-id="${esc(i.id)}">${ICON.copy()}${s.copied[i.id] ? "Copied" : "Copy link"}</button></div>`,

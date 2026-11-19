@@ -13,6 +13,8 @@ describe("config", () => {
       pluginSource: null,
       publicUrl: null,
       signingKey: "k",
+      secretsKey: null,
+      secretsKeyOld: null,
       webhooksAllowPrivate: false,
       files: null,
       mail: null,

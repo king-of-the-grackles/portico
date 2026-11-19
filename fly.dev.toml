@@ -1,6 +1,8 @@
 # Fly.io config for the dev copy of hosted Portico, at dev.portico.chat. Its data, bucket and sign-in project are its
 # own: nothing here touches the live app.
 #   fly deploy -c fly.dev.toml --ha=false
+# Required secret: PORTICO_SECRETS_KEY, which encrypts stored wake URL keys and event secrets. The server doesn't start
+# without it:  fly secrets set PORTICO_SECRETS_KEY="$(openssl rand -base64 32)" -a portico-dev
 # Secrets (fly secrets set): PORTICO_FILES_BUCKET and the bucket's keys from `fly storage create`, and
 # PORTICO_RESEND_API_KEY.
 app = "portico-dev"

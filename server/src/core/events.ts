@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Changes } from "./changes";
 import { DAY_MS, HOUR_MS, MINUTE_MS } from "./limits";
+import { SECRET_UNREADABLE, type SecretPlace, type Secrets } from "./secrets";
 import type { Agent } from "./types";
 import { cleanWebhookUrl, laterTimer, postWithRetry, signWebhook, webhookKey, type WebhookPost, type WebhookResult } from "./webhooks";
 
@@ -101,6 +102,8 @@ function callbackReason(result: WebhookResult): string {
 export interface EventSubscriptionsDeps {
   db: Database;
   post: WebhookPost;
+  /** Encrypts each subscription's secret before it is stored. */
+  secrets: Secrets;
   changes: Changes;
   /** Accepts http:// and private addresses: local development only. */
   allowPrivate?: boolean;
@@ -118,6 +121,7 @@ export interface EventSubscriptionsDeps {
 export class EventSubscriptions {
   private readonly db: Database;
   private readonly post: WebhookPost;
+  private readonly secrets: Secrets;
   private readonly changes: Changes;
   private readonly allowPrivate: boolean;
   private readonly now: () => Date;
@@ -131,12 +135,32 @@ export class EventSubscriptions {
   constructor(deps: EventSubscriptionsDeps) {
     this.db = deps.db;
     this.post = deps.post;
+    this.secrets = deps.secrets;
     this.changes = deps.changes;
     this.allowPrivate = deps.allowPrivate ?? false;
     this.now = deps.now ?? (() => new Date());
     this.schedule = deps.schedule ?? laterTimer;
     this.newNonce = deps.newNonce ?? (() => randomBytes(24).toString("base64url"));
     this.log = deps.log ?? (() => {});
+  }
+
+  /** Where a subscription's secret, or the one before a rotation, is stored: what its encrypted form is bound to. */
+  static place(subscriptionId: string, column: "secret" | "previous_secret" = "secret"): SecretPlace {
+    return { table: "event_subscriptions", column, row: subscriptionId };
+  }
+
+  /**
+   * The stored secret can't be read (another secrets key, or not what Portico stored): nothing is delivered until the
+   * agent subscribes again. Returns whether this is news, so the caller tells the agent once.
+   */
+  unreadable(subscriptionId: string, reason: string): boolean {
+    const changed = this.db
+      .query("UPDATE event_subscriptions SET last_at = $at, last_status = $status WHERE id = $id AND last_status IS NOT $status")
+      .run({ id: subscriptionId, at: this.now().toISOString(), status: SECRET_UNREADABLE }).changes;
+    if (changed === 0) return false;
+    this.log("event_secret_unreadable", { subscription_id: subscriptionId, reason });
+    this.changes.emit("agents");
+    return true;
   }
 
   private active(agentId: string): SubscriptionRow[] {
@@ -228,15 +252,22 @@ export class EventSubscriptions {
     }
 
     const refreshBefore = new Date(now.getTime() + this.grantMs(params.ttlMs)).toISOString();
-    const rotating = existing && existing.secret !== secret;
+    // The secret held until now signs alongside the new one for a while. One Portico can't read any more is dropped:
+    // subscribing again is how a subscription gets a secret Portico can use.
+    const held = existing ? await this.secrets.open(EventSubscriptions.place(id), existing.secret) : null;
+    const rotating = held !== null && held.ok && held.value !== secret;
+    const lost = held !== null && !held.ok;
+    const previous = rotating && held.ok ? await this.secrets.seal(EventSubscriptions.place(id, "previous_secret"), held.value) : null;
+    const sealed = await this.secrets.seal(EventSubscriptions.place(id), secret);
     this.db
       .query(
         `INSERT INTO event_subscriptions (id, agent_id, name, arguments, url, secret, refresh_before, verified_at, created_at)
          VALUES ($id, $agentId, $name, $args, $url, $secret, $refreshBefore, $at, $at)
          ON CONFLICT (id) DO UPDATE SET
            secret = $secret,
-           previous_secret = CASE WHEN $rotating THEN event_subscriptions.secret ELSE event_subscriptions.previous_secret END,
-           previous_until = CASE WHEN $rotating THEN $previousUntil ELSE event_subscriptions.previous_until END,
+           previous_secret = CASE WHEN $rotating THEN $previous WHEN $lost THEN NULL ELSE event_subscriptions.previous_secret END,
+           previous_until = CASE WHEN $rotating THEN $previousUntil WHEN $lost THEN NULL ELSE event_subscriptions.previous_until END,
+           last_status = CASE WHEN $lost THEN NULL ELSE event_subscriptions.last_status END,
            refresh_before = $refreshBefore,
            verified_at = CASE WHEN $verifiedNow THEN $at ELSE event_subscriptions.verified_at END`,
       )
@@ -246,7 +277,9 @@ export class EventSubscriptions {
         name,
         args,
         url,
-        secret,
+        secret: sealed,
+        previous,
+        lost: lost ? 1 : 0,
         refreshBefore,
         at,
         rotating: rotating ? 1 : 0,
@@ -335,12 +368,21 @@ export class EventSubscriptions {
         now: this.now,
         // Read again on every try: the subscription may have ended, or its secret rotated. ChatGPT asks for webhook-id
         // to be the event's ID; the timestamp and signature are new on every try.
-        request: () => {
+        request: async () => {
           const current = this.get(id);
           const now = this.now().toISOString();
           if (!current || current.refresh_before <= now) return null;
-          const secrets = [current.secret];
-          if (current.previous_secret && current.previous_until && current.previous_until > now) secrets.push(current.previous_secret);
+          const secret = await this.secrets.open(EventSubscriptions.place(id), current.secret);
+          if (!secret.ok) {
+            this.unreadable(id, secret.reason);
+            return null;
+          }
+          const secrets = [secret.value];
+          if (current.previous_secret && current.previous_until && current.previous_until > now) {
+            // The secret before a rotation only signs alongside: one that can't be read is left out.
+            const before = await this.secrets.open(EventSubscriptions.place(id, "previous_secret"), current.previous_secret);
+            if (before.ok) secrets.push(before.value);
+          }
           return this.signed(current.url, secrets, eventId, id, body);
         },
         onResult: (status, sentAt, tries) => {

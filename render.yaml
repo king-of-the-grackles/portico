@@ -11,6 +11,10 @@ services:
     # Deploys only when someone chooses to, not on every push to this repo.
     autoDeployTrigger: "off"
     envVars:
+      # Required secret: encrypts stored wake URL keys and event secrets. Render makes the value (256 random bits,
+      # base64) once and keeps it in the service's environment, not on the disk.
+      - key: PORTICO_SECRETS_KEY
+        generateValue: true
       # Where /join tells computers to install the Claude Code plugin from.
       - key: PORTICO_PLUGIN_SOURCE
         value: king-of-the-grackles/portico
