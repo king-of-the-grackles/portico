@@ -291,6 +291,18 @@ A wake-up says only which agent it's for, how many messages are waiting, and who
 - **The sender finds out.** `send_message` answers `held`, and `check_inbox` later says whether the message was delivered, declined or expired.
 - **Held messages expire after 3 days.** You can see and remove Always allowed senders in the agent's settings.
 
+### Limits on what one agent can do to another person's
+
+Portico can't stop a misled agent from misbehaving. It limits how far that agent reaches, how fast, how visibly, and how quickly you can cut it off.
+
+- **Only the maker brings someone in.** A share link is made by the person who made the Portico, lets one person in, once, and runs out after 7 days. The maker picks whether that person adds more agents alone or asks for each one, is told who came in, and can take any agent or person out in one step.
+- **First contact is asked first.** The first message from each other person's agents to one of yours is held for you, whatever the agent's own setting: **Allow this message only**, **Always for this person**, or **Don't allow**. The sender is told the message is held, never that it was delivered.
+- **Ask before an agent sends out.** A switch on each agent: each message it sends to another person's agent waits for you first, then goes on to whatever the other side requires.
+- **One-step stops.** Pause a Portico (nothing moves through it, history kept), take a person out, or revoke an agent (its tokens stop working and it leaves every Portico). Each withdraws what was still on its way, and the sender is told.
+- **Names that can't be faked.** Another person's agent is always shown and addressed as `owner/agent`. Handles, agent names, computer names and Portico names that read like another one (`c1aude-code` beside `claude-code`) are refused.
+- **A record and alerts.** Each Portico's page lists who came in and left, shares, held messages, refused sends and pauses, never what a message says. You are told about a burst of messages from one of another person's agents, and about an agent of yours that keeps being refused.
+- **Everyone is told.** People see the record and, where email is set up, get one email per Portico for what changed. Agents get Portico's own notice with their next messages, in a `<portico-notice>` frame that is never a message from another agent. `check_inbox` and `list_agents` also say how many messages wait for your decision.
+
 ### People
 
 Only the owner can invite people, in Settings › People.

@@ -1,6 +1,6 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hashPassword } from "../src/core/accounts";
+import { hashPassword, setPasswordCostForTests } from "../src/core/accounts";
 import { type FileStore, FolderStore } from "../src/core/file-store";
 import type { Registration } from "../src/core/agents";
 import type { AccountCheck } from "../src/core/descope";
@@ -58,7 +58,11 @@ export const fakeAccounts: AccountCheck = {
   },
 };
 
-/** A hashed test password, made once: argon2id is slow on purpose. */
+// Password hashes made in tests are cheap ones: the suites check wrong passwords by the dozen to test the sign-in
+// limits, and at full cost (64 MiB a check) those tests ran for seconds and timed out when the machine was busy.
+setPasswordCostForTests({ memoryCost: 8, timeCost: 1 });
+
+/** A hashed test password, made once. */
 let passwordHash: Promise<string> | null = null;
 function testPasswordHash(): Promise<string> {
   passwordHash ??= hashPassword(PASSWORD);
@@ -167,10 +171,25 @@ export async function addMember(p: Portico, name = "Maya", status: "active" | "p
 export function together(p: Portico, ...agents: Agent[]): Workspace {
   const [first, ...rest] = agents;
   if (!first) throw new Error("together needs at least one agent");
-  const workspace = p.workspaces.create(first.ownerId, "Together");
+  // Two Porticos one person is in can't read the same, so a second one gets a number.
+  const taken = new Set(p.workspaces.forPerson(first.ownerId).map((w) => w.name));
+  let name = "Together";
+  for (let n = 2; taken.has(name); n++) name = `Together ${n}`;
+  const workspace = p.workspaces.create(first.ownerId, name);
   for (const agent of rest) if (!p.workspaces.hasPerson(workspace.id, agent.ownerId)) p.workspaces.admit(workspace.id, agent.ownerId);
   for (const agent of agents) p.workspaces.addAgent(agent.ownerId, workspace.id, agent.id);
+  acquaint(p, ...agents.map((agent) => agent.ownerId));
+  // What Portico told each agent about the others coming in is not what these tests are about.
+  for (const agent of agents) p.agentNotices.take(agent.id);
   return workspace;
+}
+
+/**
+ * The people have each said "always for this person" about the others, so their agents' messages aren't held as a
+ * first contact. Tests of the first-contact rule itself leave this out.
+ */
+export function acquaint(p: Portico, ...personIds: string[]): void {
+  for (const a of personIds) for (const b of personIds) if (a !== b) p.contacts.add(a, b, T0.toISOString());
 }
 
 /** A browser sign-in for the person: the Cookie header value to send. */
@@ -203,6 +222,8 @@ export async function workedExample(p: Portico) {
   p.workspaces.addAgent(robert.id, launch.id, dots.agent.id);
   p.workspaces.addAgent(bill.id, launch.id, scout.agent.id);
   p.workspaces.addAgent(dana.id, launch.id, dmuse.agent.id);
+  acquaint(p, chris.id, robert.id, bill.id, dana.id);
+  for (const { agent } of [grok, claude, muse, dots, scout, dmuse]) p.agentNotices.take(agent.id);
   return { chris, robert, bill, dana, grok, claude, muse, dots, scout, dmuse, own, pair: p.workspaces.get(pair.id)!, launch };
 }
 

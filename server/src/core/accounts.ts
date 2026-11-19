@@ -16,9 +16,21 @@ import { cleanPublicUrl, type Settings } from "./settings";
 import { hashSecret, LINK_SECRET, newLinkSecret, newToken } from "./tokens";
 import type { Person } from "./types";
 
+/** What a new password hash costs to make and to check. Null: Bun's defaults for argon2id (64 MiB, two passes). */
+let passwordCost: { memoryCost: number; timeCost: number } | null = null;
+
+/**
+ * For the test suites only: makes new hashes cheap, so a test of the sign-in limits that checks a wrong password
+ * thirty times runs in milliseconds instead of seconds, and never comes near a test timeout on a busy machine. A hash
+ * carries its own cost, so checking one made this way is as cheap. A server never calls this.
+ */
+export function setPasswordCostForTests(cost: { memoryCost: number; timeCost: number } | null): void {
+  passwordCost = cost;
+}
+
 /** Passwords are stored only as argon2id hashes. */
 export function hashPassword(password: string): Promise<string> {
-  return Bun.password.hash(password, { algorithm: "argon2id" });
+  return Bun.password.hash(password, { algorithm: "argon2id", ...(passwordCost ?? {}) });
 }
 
 export function verifyPassword(password: string, hash: string): Promise<boolean> {

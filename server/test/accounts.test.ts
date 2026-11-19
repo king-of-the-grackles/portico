@@ -278,3 +278,19 @@ describe("passwords", () => {
     expect((await rejects(p.accounts.changePassword(chris.id, { current: PASSWORD, next: NEW_PASSWORD }))).code).toBe("rate_limited");
   });
 });
+
+describe("password hashes", () => {
+  test("a server hashes at argon2id's full cost; only the test suites turn it down", async () => {
+    const { hashPassword, setPasswordCostForTests, verifyPassword } = await import("../src/core/accounts");
+    setPasswordCostForTests(null);
+    try {
+      const hash = await hashPassword("correct-horse-battery");
+      expect(hash).toStartWith("$argon2id$");
+      expect(hash).toContain("m=65536");
+      expect(await verifyPassword("correct-horse-battery", hash)).toBe(true);
+      expect(await verifyPassword("wrong", hash)).toBe(false);
+    } finally {
+      setPasswordCostForTests({ memoryCost: 8, timeCost: 1 });
+    }
+  });
+});

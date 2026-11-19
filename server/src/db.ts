@@ -115,6 +115,8 @@ const DIRECTORY_SCHEMA = [
     folder TEXT,
     folder_id TEXT,
     approval_required INTEGER NOT NULL DEFAULT 0,
+    outbound_hold INTEGER NOT NULL DEFAULT 0,
+    revoked_at TEXT,
     created_at TEXT NOT NULL,
     last_seen_at TEXT,
     doing TEXT,
@@ -171,6 +173,15 @@ const DIRECTORY_SCHEMA = [
     used_at TEXT
   )`,
 
+  // Two lists decide what is held for a person. `allowed_people` is first contact: the agents of `sender_person_id`
+  // get through to the agents of `person_id` once that person said "always for this person". `always_allow` is one
+  // agent's own list, for an agent whose person switched on approval for every new sender.
+  `CREATE TABLE allowed_people (
+    person_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
+    sender_person_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (person_id, sender_person_id)
+  )`,
   `CREATE TABLE always_allow (
     agent_id TEXT NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
     sender_id TEXT NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
@@ -179,18 +190,35 @@ const DIRECTORY_SCHEMA = [
     PRIMARY KEY (agent_id, sender_id)
   )`,
 
-  // Joins, decisions and settings changes. Never a message's subject or text.
+  // Joins, decisions and settings changes, and each workspace's record: who came in and left, shares, holds, refused
+  // sends and pauses, with the workspace in `workspace_id`. Never a message's subject or text. `subject_id` is the
+  // person an entry is about, when it is about one (who came in, who was taken out, whom an alert is for). `seq` counts
+  // entries in the order they were written and is never reused: notice emails keep their place in the record by it.
   `CREATE TABLE activity (
-    id TEXT PRIMARY KEY,
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
     at TEXT NOT NULL,
     kind TEXT NOT NULL,
     agent_id TEXT REFERENCES agents (id) ON DELETE SET NULL,
     other_id TEXT REFERENCES agents (id) ON DELETE SET NULL,
     person_id TEXT REFERENCES people (id) ON DELETE SET NULL,
+    workspace_id TEXT REFERENCES workspaces (id) ON DELETE CASCADE,
+    subject_id TEXT REFERENCES people (id) ON DELETE SET NULL,
     detail TEXT NOT NULL
   )`,
   `CREATE INDEX activity_at ON activity (at)`,
   `CREATE INDEX activity_agent ON activity (agent_id, at)`,
+  `CREATE INDEX activity_workspace ON activity (workspace_id, at)`,
+
+  // What Portico itself tells an agent at its next check: who came into or left a workspace the agent is in.
+  `CREATE TABLE agent_notices (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
+    at TEXT NOT NULL,
+    text TEXT NOT NULL,
+    delivered_at TEXT
+  )`,
+  `CREATE INDEX agent_notices_agent ON agent_notices (agent_id, delivered_at)`,
 
   // Both keep the secret Portico sends or signs with, so neither can be hashed.
   `CREATE TABLE wake_urls (
@@ -230,14 +258,20 @@ const DIRECTORY_SCHEMA = [
     owner_id TEXT NOT NULL,
     created_at TEXT NOT NULL,
     location TEXT NOT NULL DEFAULT 'local',
-    archived_at TEXT
+    archived_at TEXT,
+    paused_at TEXT
   )`,
   `CREATE UNIQUE INDEX workspaces_personal ON workspaces (owner_id) WHERE kind = 'personal' AND archived_at IS NULL`,
   `CREATE INDEX workspaces_owner ON workspaces (owner_id)`,
+  // `agents_policy` is the owner's choice for the person: `self`, the person adds more of the person's own agents
+  // alone; `ask`, each one waits for the owner's Allow. `notified_seq` is how far the person's notice emails have got
+  // in the workspace's record: the `seq` of the last entry mailed, or of the last one written before the person came in.
   `CREATE TABLE workspace_people (
     workspace_id TEXT NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
     person_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
     added_at TEXT NOT NULL,
+    agents_policy TEXT NOT NULL DEFAULT 'self' CHECK (agents_policy IN ('self', 'ask')),
+    notified_seq INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (workspace_id, person_id)
   )`,
   `CREATE INDEX workspace_people_person ON workspace_people (person_id)`,
@@ -259,6 +293,7 @@ const DIRECTORY_SCHEMA = [
     secret_hash TEXT NOT NULL UNIQUE,
     secret_box TEXT NOT NULL,
     email TEXT,
+    agents_policy TEXT NOT NULL DEFAULT 'self' CHECK (agents_policy IN ('self', 'ask')),
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     claimed_by TEXT REFERENCES people (id) ON DELETE SET NULL,
@@ -269,11 +304,13 @@ const DIRECTORY_SCHEMA = [
   // One table for everything a person confirms on the consent page, /c/<id>. `kind` says what is asked: `computer` and
   // `agent` are a new computer or app agent joining Portico, started by anyone, so they belong to whoever signs in and
   // types the code; `enter` is an agent of the person's coming into a workspace with a share link; `share`,
-  // `remove_person` and `delete` are what an agent asks its person to confirm about a workspace. `person_id` is who has
-  // to confirm, when that is known (never for a join). `poll_hash` is for an asker with no token yet.
+  // `remove_person` and `delete` are what an agent asks its person to confirm about a workspace; `add_agent` is an agent
+  // asking to put one of its person's agents into a workspace someone else owns; `admit_agent` is the same waiting
+  // for the workspace's owner, who chose to be asked (no code: only the owner, signed in, can answer). `person_id` is
+  // who has to confirm, when that is known (never for a join). `poll_hash` is for an asker with no token yet.
   `CREATE TABLE consent_requests (
     id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL CHECK (kind IN ('computer', 'agent', 'enter', 'share', 'remove_person', 'delete')),
+    kind TEXT NOT NULL CHECK (kind IN ('computer', 'agent', 'enter', 'share', 'remove_person', 'delete', 'add_agent', 'admit_agent')),
     status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
     code TEXT NOT NULL,
     tries INTEGER NOT NULL DEFAULT 0,
@@ -298,10 +335,11 @@ const DIRECTORY_SCHEMA = [
   `CREATE INDEX consent_requests_agent ON consent_requests (agent_id)`,
   `CREATE INDEX consent_requests_client ON consent_requests (client, status)`,
   // Every email Portico sent or tried: `kind` is `share` (a share link, `ref_id` the share), `consent` (a link to the
-  // consent page, `ref_id` the request) or `held` (a link to a held message's page, `ref_id` the message).
+  // consent page, `ref_id` the request), `held` (a link to a held message's page, `ref_id` the message), `record`
+  // (what happened in a workspace, `ref_id` the workspace, the person and the time) or `alert`.
   `CREATE TABLE mails (
     id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL CHECK (kind IN ('share', 'consent', 'held')),
+    kind TEXT NOT NULL CHECK (kind IN ('share', 'consent', 'held', 'record', 'alert')),
     ref_id TEXT NOT NULL,
     workspace_id TEXT,
     sent_by TEXT NOT NULL,
@@ -358,7 +396,10 @@ const CONTENT_SCHEMA = [
   `CREATE INDEX threads_last ON threads (last_message_at)`,
 
   // `root_id` is the first message of the conversation (the reply_to chain): a task is every message with one root.
-  // `final` is 0 for a reply that says more is coming. `send_key` is the sender's own key for the message.
+  // `final` is 0 for a reply that says more is coming. `send_key` is the sender's own key for the message. `held_for`
+  // says whose decision a held message waits on and why: `outbound` is the sender's own person; `first_contact` and
+  // `approval` are the receiver's. `withdrawn` is a message that will never be delivered: its workspace was paused,
+  // or one of its two agents left the workspace or was revoked before the message was picked up.
   `CREATE TABLE messages (
     id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL REFERENCES threads (id) ON DELETE CASCADE,
@@ -371,14 +412,16 @@ const CONTENT_SCHEMA = [
     summary TEXT,
     final INTEGER NOT NULL DEFAULT 1,
     send_key TEXT,
-    status TEXT NOT NULL CHECK (status IN ('held', 'pending', 'delivered', 'declined', 'expired')),
+    status TEXT NOT NULL CHECK (status IN ('held', 'pending', 'delivered', 'declined', 'expired', 'withdrawn')),
     held_at TEXT,
+    held_for TEXT CHECK (held_for IN ('outbound', 'first_contact', 'approval')),
     decision TEXT,
     decided_by TEXT,
     decided_at TEXT,
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     delivered_at TEXT,
+    withdrawn_at TEXT,
     sender_notified_at TEXT
   )`,
   `CREATE INDEX messages_to_status ON messages (to_id, status, expires_at)`,

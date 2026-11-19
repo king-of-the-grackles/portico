@@ -160,7 +160,9 @@ export function taskRoutes(core: Core): Hono<PersonEnv> {
     const found = core.tasks.get({ person: me.id }, c.req.param("id"));
     if (!found || !sees(visibleAgents(core, me), found.task)) throw new PorticoError("not_found", "No such task.");
     const within = { person: me.id, workspace: found.task.workspaceId };
-    const messages = found.messageIds.map((id) => core.messages.get(within, id)).filter((m) => m !== null);
+    // A task or a reply still held on its way out is the sender's side's alone.
+    if (found.task.outboundHeld && !visibleAgents(core, me).includes(found.task.fromId)) throw new PorticoError("not_found", "No such task.");
+    const messages = found.messageIds.map((id) => core.messages.get(within, id)).filter((m) => m !== null).filter((m) => !views.notYetSent(m));
     return c.json({ task: views.task(found.task), messages: messages.map(views.message) });
   });
 

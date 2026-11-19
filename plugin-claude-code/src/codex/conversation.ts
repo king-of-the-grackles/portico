@@ -198,12 +198,13 @@ export class CodexConversation implements ConversationLink {
             return;
           }
           const inbox = await this.deps.client.pendingDeliveries({ timeoutMs: PEEK_MS });
+          // A notice from Portico alone starts no turn: the conversation hears it with the next message or check.
           if (inbox.messages.length === 0 && inbox.updates.length === 0) continue;
           await server.request("turn/start", { threadId, input: [{ type: "text", text: this.deps.prompt(inbox), text_elements: [] }] });
           this.idle = false;
           this.deps.log("info", "conversation_woken", { messages: inbox.messages.length, updates: inbox.updates.length });
           await this.deps.client
-            .ackDeliveries({ messages: inbox.messages.map((m) => m.id), updates: inbox.updates.map((u) => u.message_id) })
+            .ackDeliveries({ messages: inbox.messages.map((m) => m.id), updates: inbox.updates.map((u) => u.message_id), notices: (inbox.notices ?? []).map((n) => n.id) })
             .catch((err) => this.deps.log("warn", "wake_ack_failed", { error: errorName(err) }));
         }
       } catch (err) {

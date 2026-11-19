@@ -256,6 +256,9 @@ describe("the activity record", () => {
       "renamed",
       "allow_removed",
       "decision",
+      // The shared Portico's record: each of the two agents coming in.
+      "portico_agent_joined",
+      "portico_agent_joined",
       "agent_joined",
       "computer_joined",
       "agent_joined",

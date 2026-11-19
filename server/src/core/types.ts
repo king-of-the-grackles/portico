@@ -44,7 +44,13 @@ export interface Workspace {
   kind: WorkspaceKind;
   ownerId: string;
   createdAt: string;
+  /** Set while its owner has it paused: everyone stays in it, and nothing moves through it. */
+  pausedAt: string | null;
 }
+
+/** The owner's choice for one person in a Portico: the person adds more of the person's own agents alone, or each waits for the owner. */
+export type AgentsPolicy = "self" | "ask";
+export const AGENTS_POLICIES: readonly AgentsPolicy[] = ["self", "ask"];
 
 /** A computer a person let join Portico. Its sessions' addresses end in `@<name>`. */
 export interface Computer {
@@ -73,6 +79,10 @@ export interface Agent {
    */
   folderId: string | null;
   approvalRequired: boolean;
+  /** "Ask me before this agent sends to other people's agents": each such message waits for the agent's own person first. */
+  outboundHold: boolean;
+  /** Set once the agent's person revoked it: its tokens are gone, it is in no Portico, and it can't come back. */
+  revokedAt: string | null;
   createdAt: string;
   lastSeenAt: string | null;
   /** What the agent said it's doing, with update_profile, and when. One line, defanged. */
@@ -120,7 +130,13 @@ export interface DirectoryEntry {
  */
 export type DeliveryTier = "pushed" | "queued" | "offline" | "held";
 
-export type MessageStatus = "held" | "pending" | "delivered" | "declined" | "expired";
+export type MessageStatus = "held" | "pending" | "delivered" | "declined" | "expired" | "withdrawn";
+/**
+ * Whose decision a held message waits on, and why. `outbound`: the sender's own person, who asked to see what that
+ * agent sends to other people's agents. `first_contact`: the receiver's person, who hasn't allowed the sender's person
+ * yet. `approval`: the receiver's person, for an agent that takes messages only from senders on its own list.
+ */
+export type HeldFor = "outbound" | "first_contact" | "approval";
 export type Decision = "allow_once" | "always_allow" | "deny";
 export const DECISIONS: readonly Decision[] = ["allow_once", "always_allow", "deny"];
 
@@ -164,6 +180,8 @@ export interface Message {
   status: MessageStatus;
   /** Set when the message was held for approval; it stays set after the decision. */
   heldAt: string | null;
+  /** Why the message is or was held, and so who decides. */
+  heldFor: HeldFor | null;
   decision: Decision | null;
   /** The person who decided. */
   decidedBy: string | null;
@@ -172,6 +190,8 @@ export interface Message {
   /** A held or pending message expires after this. */
   expiresAt: string;
   deliveredAt: string | null;
+  /** When the message was withdrawn: its Portico was paused, or one of its two agents left the Portico or was revoked. */
+  withdrawnAt: string | null;
   /** When the sender was told how a held message ended. */
   senderNotifiedAt: string | null;
 }
@@ -181,6 +201,7 @@ export type Notice =
   | { kind: "message_sent"; message: Message }
   | { kind: "message_decided"; message: Message }
   | { kind: "message_expired"; message: Message }
+  | { kind: "message_withdrawn"; message: Message }
   | { kind: "message_delivered"; message: Message };
 
 /** Sending email through Resend: the API key, the sender, and the secret that signs Resend's webhooks. */

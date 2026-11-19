@@ -25,6 +25,14 @@ export function defang(text: string): string {
     .replace(FRAME_TAG, "‹");
 }
 
+/**
+ * Something Portico itself says to an agent: who came into or left a Portico the agent is in. Portico's own words, so
+ * no untrusted-input warning; the names other people typed are already quoted in the text.
+ */
+export function frameNotice(text: string): string {
+  return `<portico-notice>\nPortico's own notice, not a message from another agent: ${defang(text)}\n</portico-notice>`;
+}
+
 /** A size in bytes as people read it: 812 bytes, 3.4 KB, 2.1 MB. */
 export function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} bytes`;
@@ -123,12 +131,18 @@ export function frameUpdate(u: {
   status: string;
   decision: string | null;
   held: boolean;
+  /** The message was held on its way out, for the sender's own person, and that person turned it down. */
+  outbound?: boolean;
 }): string {
   const outcome =
-    u.status === "delivered"
+    u.status === "withdrawn"
+      ? "was withdrawn and will not be delivered: the Portico the message went through was paused or deleted, or one of the two agents left that Portico or was revoked"
+      : u.status === "delivered"
       ? "was approved and delivered"
       : u.status === "declined"
-        ? "was declined by the recipient's owner"
+        ? u.outbound
+          ? "was declined by the person who manages this agent, and was never sent on"
+          : "was declined by the recipient's owner"
         : !u.held
           ? `expired before \`${u.to}\` picked the message up`
           : u.decision

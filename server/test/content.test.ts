@@ -8,7 +8,7 @@ import { LOOP_LIMIT } from "../src/core/guards";
 import { LIMITS } from "../src/core/limits";
 import type { Agent, Person, Workspace } from "../src/core/types";
 import { CONTENT, DIRECTORY, FRESH_FOLDER, SchemaMismatchError } from "../src/db";
-import { addAppAgent, callAs, callPerson, DAY, errorCode, fakeBucket, flush, HOUR, makePortico, MINUTE, signIn, type TestPortico } from "./helpers";
+import { acquaint, addAppAgent, callAs, callPerson, DAY, errorCode, fakeBucket, flush, HOUR, makePortico, MINUTE, signIn, type TestPortico } from "./helpers";
 
 type Opts = Parameters<typeof makePortico>[0];
 
@@ -19,10 +19,13 @@ async function person(p: TestPortico, name: string): Promise<Person> {
 }
 
 /** A shared workspace owned by the first person, with the others admitted and the agents put in by their owners. */
-function shared(p: TestPortico, name: string, people: Person[], agents: Agent[]): Workspace {
+function shared(p: TestPortico, name: string | undefined, people: Person[], agents: Agent[]): Workspace {
   const workspace = p.workspaces.create(people[0]!.id, name);
   for (const other of people.slice(1)) p.workspaces.admit(workspace.id, other.id);
   for (const agent of agents) p.workspaces.addAgent(agent.ownerId, workspace.id, agent.id);
+  // These tests are about where content lives: nobody's first message is held, and Portico's own notices are read.
+  acquaint(p, ...people.map((one) => one.id));
+  for (const agent of agents) p.agentNotices.take(agent.id);
   // Each workspace is made at its own time, so "the oldest" is never a tie.
   p.clock.advance(MINUTE);
   return workspace;
@@ -48,7 +51,7 @@ async function world(opts: Opts = {}) {
   const personal = p.workspaces.personal(chris.id);
   p.clock.advance(MINUTE);
   const launch = shared(p, "Launch", [chris, robert, bill, dana], [grok.agent, muse.agent, dots.agent, scout.agent, dmuse.agent]);
-  const pair = shared(p, "Chris and Robert", [chris, robert], [grok.agent, dots.agent]);
+  const pair = shared(p, undefined, [chris, robert], [grok.agent, dots.agent]);
   const later = shared(p, "Later", [chris, robert, bill], [grok.agent, scout.agent]);
   return { p, chris, robert, bill, dana, grok, code, muse, dots, scout, dmuse, personal, launch, pair, later };
 }
@@ -207,7 +210,9 @@ describe("where a conversation goes", () => {
     expect(errorCode(() => say(p, grok, "robert/dots"))).toBe("not_allowed");
     // Robert is out of the workspace, and Robert's agent still reads what was said there.
     expect(p.workspaces.forPerson(robert.id).map((w) => w.id)).not.toContain(pair.id);
-    expect(p.messages.inbox(dots.agent).messages.map((m) => m.id)).toEqual([first.id]);
+    // What was still on its way is withdrawn: never delivered, and the sender hears so once.
+    expect(p.messages.inbox(dots.agent).messages).toEqual([]);
+    expect(p.messages.inbox(grok.agent).updates.map((m) => [m.id, m.status])).toEqual([[first.id, "withdrawn"]]);
     expect(p.messages.threads({ person: robert.id }, { involving: [dots.agent.id] }).map((t) => t.id)).toEqual([first.threadId]);
     const task = await callAs(p, dots, "GET", `/api/agent/tasks/${first.id}`);
     expect(task.status).toBe(200);
@@ -346,8 +351,11 @@ describe("a caller's content is a small set of workspaces", () => {
     expect(held.workspaceId).toBe(pair.id);
     // Launch still joins the two, and the message isn't in Launch.
     p.workspaces.removeAgent(chris.id, pair.id, grok.agent.id);
+    // The message is withdrawn with the agent's leaving: nothing is left to decide, and the sender hears so.
+    expect(p.messages.get({ person: chris.id }, held.id)).toMatchObject({ status: "withdrawn" });
     expect(errorCode(() => p.approvals.decide(chris.id, held.id, "allow_once"))).toBe("wrong_status");
-    expect(p.approvals.decide(chris.id, held.id, "deny").status).toBe("declined");
+    expect(errorCode(() => p.approvals.decide(chris.id, held.id, "deny"))).toBe("wrong_status");
+    expect(p.messages.inbox(dots.agent).updates.map((m) => m.status)).toEqual(["withdrawn"]);
   });
 
   test("the hourly limit counts a sender's messages in every workspace, and a key is found in any of them", async () => {
@@ -427,7 +435,7 @@ describe("removals, with no cascade between databases", () => {
 
   test("removing a person clears the person's agents' conversations and archives the workspaces the person owns", async () => {
     const { p, chris, robert, bill, grok, dots, scout, launch, pair } = await world();
-    const owned = shared(p, "Robert's", [robert, bill], [dots.agent, scout.agent]);
+    const owned = shared(p, "Side project", [robert, bill], [dots.agent, scout.agent]);
     const mine = say(p, dots, "bill/scout", "In Robert's");
     expect(mine.workspaceId).toBe(owned.id);
     const others = say(p, scout, "robert/dots", "Bill's question");
@@ -641,7 +649,9 @@ describe("on disk: a real data folder", () => {
     // another conversation in Launch.
     expect(p.messages.inThread(p.messages.thread({ person: robert.id }, first.threadId)!).messages.map((m) => m.id)).toEqual([first.id, answer.id]);
     expect((await callAs(p, dots, "GET", `/api/agent/files/${file.id}`)).status).toBe(302);
-    expect(p.messages.inbox(grok.agent).messages.map((m) => m.id)).toEqual([answer.id]);
+    // What was on its way through the deleted Portico is withdrawn, never delivered.
+    expect(p.messages.inbox(grok.agent).messages).toEqual([]);
+    expect(p.messages.get({ agent: grok.agent.id }, answer.id)).toMatchObject({ status: "withdrawn" });
     const next = reply(p, grok, answer.id, "After the delete");
     expect(next.message).toMatchObject({ workspaceId: launch.id, replyTo: null });
     expect(next.note).toContain("read-only");

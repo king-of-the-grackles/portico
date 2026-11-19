@@ -17,12 +17,12 @@ describe("decisions", () => {
     // A message between other people's agents is looked for only in the decider's own workspaces: none of Maya's
     // agents is in this conversation, so the message answers the same as one that doesn't exist.
     expect(errorCode(() => p.approvals.decide(maya.id, held.id, "allow_once"))).toBe("not_found");
-    // The sender's manager finds the message, and still can't decide it.
+    // The sender's manager can't decide it either, and gets the same answer.
     const scout = addAppAgent(p, maya, "scout").agent;
     together(p, scout, p.agents.require(held.toId));
     const fromMaya = p.messages.send(scout, { to: "chris/muse", subject: "s", text: "t" }).message;
     expect(fromMaya.status).toBe("held");
-    expect(errorCode(() => p.approvals.decide(maya.id, fromMaya.id, "allow_once"))).toBe("not_allowed");
+    expect(errorCode(() => p.approvals.decide(maya.id, fromMaya.id, "allow_once"))).toBe("not_found");
     expect(errorCode(() => p.approvals.decide(chris.id, held.id, "maybe"))).toBe("bad_request");
     const allowed = p.approvals.decide(chris.id, held.id, "allow_once");
     expect(allowed).toMatchObject({ status: "pending", decision: "allow_once", decidedBy: chris.id });

@@ -8,7 +8,12 @@ function fields(form: HTMLFormElement, submitter: HTMLElement | null): Record<st
   for (const el of Array.from(form.elements)) {
     if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) continue;
     if (!el.name || el.disabled) continue;
-    if (el instanceof HTMLInputElement && el.type === "checkbox") body[el.name] = el.checked;
+    if (el instanceof HTMLInputElement && el.type === "checkbox" && el.dataset.list !== undefined) {
+      // Ticks that make a list: every ticked value under the one name, and an empty list when none is ticked.
+      const list = Array.isArray(body[el.name]) ? (body[el.name] as string[]) : [];
+      if (el.checked) list.push(el.value);
+      body[el.name] = list;
+    } else if (el instanceof HTMLInputElement && el.type === "checkbox") body[el.name] = el.checked;
     else if (el instanceof HTMLInputElement && el.type === "radio") {
       if (el.checked) body[el.name] = el.value;
     } else body[el.name] = el.value;

@@ -54,7 +54,13 @@ function renderShareForm(s: HomeState, w: WorkspaceView, f: Extract<WorkspaceFor
   return `<form class="sform enter" data-form="ws-share" data-key="ws-share" novalidate>
     <label for="ws-email" class="lbl">Email address</label>
     <input id="ws-email" class="field field-narrow${when(f.error, " is-invalid")}" type="email" value="${esc(f.email)}" data-input="ws-email" autocomplete="off" aria-describedby="ws-email-help" aria-invalid="${Boolean(f.error)}" data-autofocus>
-    <span id="ws-email-help" class="help">Optional. With an address, Portico emails the link and only that address can use it. Without one, the link is made to hand over. Either way the link lets one person into ${esc(w.phrase)}, for 7 days.</span>
+    <span id="ws-email-help" class="help">Optional. With an address, Portico emails the link and only that address can use the link. Without one, the link is made to hand over. Either way the link lets one person into ${esc(w.phrase)}, once, within 7 days. ${esc(s.me.name)} is told who came in.</span>
+    <span class="lbl" id="ws-policy-lbl">More agents from that person</span>
+    <div role="radiogroup" aria-labelledby="ws-policy-lbl" class="ticks">
+      <button type="button" class="tick${when(f.agents === "self", " is-on")}" role="radio" aria-checked="${f.agents === "self"}" data-action="ws-policy" data-id="self"><span class="tick-box" aria-hidden="true">${when(f.agents === "self", ICON.check(14))}</span><span class="tick-name">Adds more agents with no further question</span></button>
+      <button type="button" class="tick${when(f.agents === "ask", " is-on")}" role="radio" aria-checked="${f.agents === "ask"}" data-action="ws-policy" data-id="ask"><span class="tick-box" aria-hidden="true">${when(f.agents === "ask", ICON.check(14))}</span><span class="tick-name">Asks ${esc(s.me.name)} for each agent added</span></button>
+    </div>
+    <span class="help">The person coming in picks the first agents on Portico's page. This choice is about agents added afterwards, and can be changed under People.</span>
     ${when(f.error, `<span role="alert" class="field-error">${esc(f.error)}</span>`)}
     <span class="actions"><button type="button" class="btn btn-link" data-action="ws-form-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "ws-form", " disabled")}>Create share link</button></span>
   </form>`;
@@ -112,13 +118,25 @@ function personRow(s: HomeState, w: WorkspaceView, p: PersonRef): string {
   const key = me ? "leave" : `person:${p.id}`;
   const confirming = s.wsConfirm === key;
   const can = w.kind === "shared" && !owner && (me || w.isOwner);
+  const full = w.people.find((x) => x.id === p.id);
+  const policy = owner || w.kind !== "shared" ? "" : full?.agents === "ask" ? " Asks the owner for each agent added." : " Adds agents with no further question.";
+  const policyButton =
+    w.isOwner && !owner && !me
+      ? `<button type="button" class="btn btn-text" data-action="ws-person-policy" data-id="${esc(p.id)}" data-policy="${full?.agents === "ask" ? "self" : "ask"}"${when(s.busy === `ws-policy:${p.id}`, " disabled")}>${full?.agents === "ask" ? "Stop asking" : "Ask for each agent"}</button>`
+      : "";
+  const allowedButton =
+    !me && full?.allowed
+      ? `<button type="button" class="btn btn-text" data-action="ws-contact-remove" data-id="${esc(p.id)}"${when(s.busy === `ws-contact:${p.id}`, " disabled")}>Ask about messages again</button>`
+      : "";
+  const contact = me ? "" : full?.allowed ? ` Messages from ${esc(p.name)}'s agents get through.` : ` The first message from ${esc(p.name)}'s agents waits for a decision.`;
   const verb = me ? "Leave" : "Remove";
   const actions = !can
     ? ""
     : confirming
       ? `<span class="actions"><button type="button" class="btn btn-link" data-action="ws-confirm-cancel">Cancel</button><button type="button" class="btn btn-danger" data-action="ws-person-remove" data-id="${esc(p.id)}" data-autofocus${when(s.busy === "ws-confirm", " disabled")}>Confirm: ${me ? `leave ${esc(w.phrase)}` : `remove ${esc(p.name)}`}</button></span>`
-      : `<span class="actions"><button type="button" class="btn btn-text" data-action="ws-confirm" data-id="${esc(key)}">${verb}</button></span>`;
-  return `<li class="srow" data-key="wp-${esc(p.id)}">${avatar(p)}<span class="row-text"><strong>${esc(p.name)}${when(me, " (signed in)")}</strong><span class="row-help">${owner ? "Owner. " : ""}${p.handle ? `<code>${esc(handleOf(p))}</code> ` : ""}${plural(count, "agent")} here</span></span>${actions}</li>`;
+      : `<span class="actions">${allowedButton}${policyButton}<button type="button" class="btn btn-text" data-action="ws-confirm" data-id="${esc(key)}">${verb}</button></span>`;
+  const shown = !can && (allowedButton || policyButton) ? `<span class="actions">${allowedButton}${policyButton}</span>` : actions;
+  return `<li class="srow" data-key="wp-${esc(p.id)}">${avatar(p)}<span class="row-text"><strong>${esc(p.name)}${when(me, " (signed in)")}</strong><span class="row-help">${owner ? "Owner. " : ""}${p.handle ? `<code>${esc(handleOf(p))}</code> ` : ""}${plural(count, "agent")} here.${policy}${contact}</span></span>${shown}</li>`;
 }
 
 /** How an email went, in plain words. */
@@ -149,7 +167,7 @@ function shareRow(s: HomeState, sh: ShareView): string {
   const field = `share-${esc(sh.id)}`;
   const confirming = s.wsConfirm === `share:${sh.id}`;
   const mail = s.wsMail[sh.id] ?? sh.mail ?? null;
-  const who = sh.claimedBy ? `Used by ${esc(sh.claimedBy.name)}, who can still add agents with it.` : sh.email ? `For ${esc(sh.email)} only.` : "For one person: whoever uses the link first.";
+  const who = `${sh.email ? `For ${esc(sh.email)} only.` : "For one person: whoever uses the link first."} Works once. ${sh.agents === "ask" ? "That person asks the owner for each agent added later." : "That person adds more agents with no further question."}`;
   const mailLine = !sh.email || mail === null ? "" : ` ${esc(mailNote(mail, sh.email))}`;
   return `<li class="srow srow-stack enter" data-key="ws-${esc(sh.id)}">
     <div class="srow-line"><span class="row-text"><strong>${sh.email ? `Link for ${esc(sh.email)}` : "Share link"}</strong><span class="row-help tnum">${who} Made by ${esc(sh.createdBy.name)}, expires ${date(sh.expiresAt, s.now)}.${mailLine}</span></span>${
@@ -163,6 +181,16 @@ function shareRow(s: HomeState, sh: ShareView): string {
     <p class="row-help link-flush">The link goes to an AI agent of the other person: that agent reads the page behind the link and follows the steps.</p>`,
     )}
   </li>`;
+}
+
+/** The one-step stop for a whole Portico: its owner pauses and resumes. */
+function pauseRow(s: HomeState, w: WorkspaceView): string {
+  const paused = w.pausedAt !== null;
+  return `<li class="srow"><span class="row-text"><strong>${paused ? "Paused" : "Pause"}</strong><span class="row-help">${
+    paused
+      ? `Nothing moves through ${esc(w.phrase)}. Resuming lets messages through again; what was withdrawn stays withdrawn.`
+      : `One step stops everything: nothing moves through ${esc(w.phrase)}, messages on the way are withdrawn, and everyone stays in. History is kept.`
+  }</span></span><span class="actions"><button type="button" class="btn ${paused ? "btn-secondary" : "btn-danger"}" data-action="${paused ? "ws-resume" : "ws-pause"}"${when(s.busy === "ws-pause", " disabled")}>${paused ? "Resume" : "Pause now"}</button></span></li>`;
 }
 
 export function renderWorkspace(s: HomeState, id: string): string {
@@ -179,17 +207,28 @@ export function renderWorkspace(s: HomeState, id: string): string {
     ? `Made by ${w.isOwner ? esc(s.me.name) : esc(w.owner.name)}, with ${plural(w.people.length - 1, "other person", "other people")}. Agents here can message each other.`
     : `${esc(s.me.name)}'s own agents, which can all message each other. Each new agent joins here. An agent taken out is reached only through the other Porticos the agent is in.`;
   const tasks = s.tasks?.tasks ?? null;
+  const paused = w.pausedAt !== null;
+  const record = data?.record ?? [];
+  const asks = data?.asks ?? [];
   return `<div class="page workspace" data-key="page-ws-${esc(id)}">
     <header class="page-head">
       <div class="block-head ws-head">
         <div class="page-title"><h1 class="h-page">${esc(w.name)}</h1></div>
         <span class="actions ws-actions">
           ${when(shared, `<button type="button" class="btn btn-secondary" data-action="ws-people-toggle" aria-expanded="${s.peopleOpen}">People (${w.people.length})</button>`)}
-          <button type="button" class="btn btn-primary" data-action="ws-share-open">${ICON.userPlus()}Share</button>
+          ${when(!shared || w.isOwner, `<button type="button" class="btn btn-primary" data-action="ws-share-open">${ICON.userPlus()}Share</button>`)}
         </span>
       </div>
-      <p class="sec-help">${lead}</p>
+      <p class="sec-help">${lead}${when(shared && !w.isOwner, ` Only ${esc(w.owner.name)}, who made the Portico, brings another person in.`)}</p>
+      ${when(paused, `<p class="notice notice-error" role="status">Paused${w.isOwner ? "" : ` by ${esc(w.owner.name)}`}: nothing moves through ${esc(w.phrase)}. Everyone stays in, and the conversations stay readable. A send through ${esc(w.phrase)} is refused until the owner resumes.${when(w.isOwner, ` <button type="button" class="btn btn-secondary" data-action="ws-resume"${when(s.busy === "ws-pause", " disabled")}>Resume</button>`)}</p>`)}
     </header>
+    ${when(
+      asks.length > 0,
+      () => `<section aria-labelledby="h-ws-asks" class="block">
+      <h2 id="h-ws-asks" class="h-section">Waiting for ${esc(s.me.name)}</h2>
+      <ul class="rows card-list">${asks.map((a) => `<li class="srow" data-key="wk-${esc(a.id)}"><span class="row-text"><strong>${esc(a.text)}</strong><span class="row-help tnum">Waits until ${date(a.expiresAt, s.now)}.</span></span><span class="actions"><a class="btn btn-primary" href="${esc(a.link)}">Decide</a></span></li>`).join("")}</ul>
+    </section>`,
+    )}
     ${when(f?.kind === "share", () => renderShareForm(s, w, f as Extract<WorkspaceForm, { kind: "share" }>))}
     ${when(f?.kind === "new", () => renderNewForm(s, f as Extract<WorkspaceForm, { kind: "new" }>))}
     ${when(
@@ -241,12 +280,25 @@ export function renderWorkspace(s: HomeState, id: string): string {
       }
       ${when(s.tasks?.more, `<button type="button" class="morebtn" data-action="more"${when(s.loadingMore, " disabled")}>Show more</button>`)}
     </section>
+    <section aria-labelledby="h-ws-record" class="block">
+      <h2 id="h-ws-record" class="h-section">Record</h2>
+      <p class="sec-help">Who came in and left, shares, held messages, refused sends and pauses. Never what a message says.</p>
+      ${record.length === 0 ? `<p class="empty">Nothing recorded yet.</p>` : `<ul class="rows card-list">${record.map((r) => `<li class="srow" data-key="wr-${esc(r.id)}"><span class="row-text"><span class="row-help">${esc(r.text)}</span></span><span class="tnum row-help">${date(r.at, s.now)}</span></li>`).join("")}</ul>`}
+    </section>
+    ${when(
+      !shared && w.isOwner,
+      () => `<section aria-labelledby="h-ws-stop" class="block">
+      <h2 id="h-ws-stop" class="h-section">Stop</h2>
+      <ul class="rows card-list">${pauseRow(s, w)}</ul>
+    </section>`,
+    )}
     ${when(
       shared && w.isOwner,
       () => `<section aria-labelledby="h-ws-manage" class="block">
       <h2 id="h-ws-manage" class="h-section">Manage ${esc(w.phrase)}</h2>
       ${when(f?.kind === "rename", () => renderRenameForm(s, f as Extract<WorkspaceForm, { kind: "rename" }>))}
       <ul class="rows card-list">
+        ${pauseRow(s, w)}
         <li class="srow"><span class="row-text"><strong>Name</strong><span class="row-help">${w.named ? esc(w.name) : `No name yet: named after the people here, ${esc(w.name)}.`}</span></span><span class="actions"><button type="button" class="btn btn-secondary" data-action="ws-rename-open">Rename</button></span></li>
         <li class="srow"><span class="row-text"><strong>Delete</strong><span class="row-help">Agents that reach each other only through ${esc(w.phrase)} stop reaching each other. Conversations stay readable, and take nothing new.</span></span>${
           s.wsConfirm === "delete"

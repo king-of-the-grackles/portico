@@ -14,7 +14,7 @@ export interface OpenApiDocument {
 const nullableString = { type: ["string", "null"] };
 const nullableTime = { type: ["string", "null"], format: "date-time" };
 const errorResponse = { $ref: "#/components/responses/Error" };
-const STATUSES = ["held", "pending", "delivered", "declined", "expired"];
+const STATUSES = ["held", "pending", "delivered", "declined", "expired", "withdrawn"];
 
 function jsonBody(schema: unknown) {
   return { required: true, content: { "application/json": { schema } } };
@@ -190,7 +190,7 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
               enum: [...TASK_OUTCOMES],
               description: "needs_approval (a person decides), in_progress, done (a final answer) or failed.",
             },
-            reason: { type: ["string", "null"], enum: ["not_allowed", "expired", "no_answer", null], description: "For failed: why." },
+            reason: { type: ["string", "null"], enum: ["not_allowed", "expired", "no_answer", "withdrawn", null], description: "For failed: why." },
             started_at: { type: "string", format: "date-time" },
             updated_at: { type: "string", format: "date-time" },
             ended_at: nullableTime,
@@ -218,6 +218,17 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
             subject: { type: "string" },
             status: { type: "string", enum: STATUSES },
             at: { type: "string", format: "date-time" },
+            framed_message: { type: "string" },
+          },
+        },
+        Notice: {
+          type: "object",
+          description: "Portico's own notice: who came into or left a Portico this agent is in. Never from another agent.",
+          required: ["id", "at", "text", "framed_message"],
+          properties: {
+            id: { type: "string" },
+            at: { type: "string", format: "date-time" },
+            text: { type: "string" },
             framed_message: { type: "string" },
           },
         },
@@ -410,9 +421,9 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
             },
           ],
           responses: {
-            "200": jsonResponse("New messages, each with framed_message, and updates.", {
+            "200": jsonResponse("New messages, each with framed_message, updates, Portico's own notices, and how many messages wait for the person.", {
               type: "object",
-              required: ["messages", "updates"],
+              required: ["messages", "updates", "notices", "held_for_person"],
               properties: {
                 messages: {
                   type: "array",
@@ -424,6 +435,12 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
                   },
                 },
                 updates: { type: "array", items: { $ref: "#/components/schemas/Update" } },
+                notices: { type: "array", items: { $ref: "#/components/schemas/Notice" } },
+                held_for_person: {
+                  type: "integer",
+                  description: "How many messages wait for a decision by the person who manages this agent. Nothing held is delivered until then.",
+                },
+                held_note: { type: "string", description: "Present when messages wait: the sentence to pass on to that person." },
               },
             }),
             "401": errorResponse,

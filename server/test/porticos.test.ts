@@ -257,7 +257,10 @@ describe("a Portico's name", () => {
     p.workspaces.admit(pair.id, bill.id);
     expect(p.workspaces.get(pair.id)!.name).toBe("Side project");
     // A name that already ends in the word isn't doubled.
-    expect(p.workspaces.rename(chris.id, pair.id, "Launch Portico").phrase).toBe("the Launch Portico");
+    expect(p.workspaces.rename(chris.id, pair.id, "Side Portico").phrase).toBe("the Side Portico");
+    // A name that reads the same as another Portico Chris is in is refused, with or without the word.
+    expect(errorCode(() => p.workspaces.rename(chris.id, pair.id, "Launch Portico"))).toBe("conflict");
+    expect(errorCode(() => p.workspaces.rename(chris.id, pair.id, "LAUNCH"))).toBe("conflict");
     expect(p.workspaces.rename(chris.id, pair.id, "")).toMatchObject({ name: "Chris, Robert and Bill", named: false });
   });
 

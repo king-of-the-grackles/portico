@@ -20,8 +20,7 @@ import {
   PUBLIC_URL,
   signIn,
   type TestPortico,
-  visibleCopy,
-} from "./helpers";
+  visibleCopy, acquaint } from "./helpers";
 
 const MAIL = { apiKey: "re_test_key", from: "Portico <notices@mail.portico.example>", webhookSecret: null };
 
@@ -431,7 +430,12 @@ describe("what an agent asks its person, through the page", () => {
     expect((await page(p, `/c/${entering.id}`, cookies.chris)).status).toBe(404);
     expect((await answerConsent(p, cookies.maya, entering.id, { decision: "approve", code: entering.code })).status).toBe(200);
     expect(p.workspaces.hasAgent(launch.id, scout.agent.id)).toBe(true);
-    expect((await page(p, `/c/${entering.id}`, cookies.maya)).html).toContain("The agent “scout” is in the Portico “Launch” now.");
+    // The page offers Maya's agents to bring in, the asking one ticked, and says the link works once.
+    expect(enterPage.html).toContain(`name="agents" data-list value="${scout.agent.id}" checked`);
+    expect(visibleCopy(enterPage.html)).toContain("The share link works once");
+    const entered = await page(p, `/c/${entering.id}`, cookies.maya);
+    expect(visibleCopy(entered.html)).toContain("Maya is in the Portico “Launch” now, with 1 agent. The share link is used up.");
+    expect(copyProblems(visibleCopy(entered.html))).toEqual([]);
 
     // remove a person
     const removing = (await tool(p, muse.token, "remove_from_portico", { portico: "Launch", person: "maya" })).request;
@@ -523,7 +527,7 @@ describe("consent email", () => {
     const { p, chris, muse, scout, launch, bodies } = await mailed();
     // Maya has no address on file.
     p.workspaces.admit(launch.id, scout.agent.ownerId);
-    p.consents.ask(scout.agent, "share", launch.id);
+    p.consents.ask(scout.agent, "remove_person", launch.id, { person: "maya" });
     await flush();
     expect(bodies()).toEqual([]);
     for (let i = 0; i < 22; i++) {
@@ -555,7 +559,9 @@ describe("a held message's page", () => {
   async function held(mail = false) {
     const hooks = fakeWebhooks();
     const w = await world(makePortico(mail ? { config: { mail: MAIL }, mailPost: hooks.post } : {}));
-    const { p, chris, muse, dots } = w;
+    const { p, chris, robert, muse, dots } = w;
+    // Chris has allowed Robert's agents before: what holds this message is muse's own approval switch.
+    acquaint(p, chris.id, robert.id);
     p.agents.update(chris.id, muse.agent.id, { approvalRequired: true });
     const message = p.messages.send(dots.agent, {
       to: "chris/muse",

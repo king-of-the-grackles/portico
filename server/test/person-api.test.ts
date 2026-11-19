@@ -194,7 +194,8 @@ describe("live updates", () => {
     expect((await events.next()).event).toBe("hello");
     p.messages.send(grok, { to: "muse", subject: "s", text: "t" });
     await flush();
-    expect(await events.next()).toEqual({ event: "changed", data: { topics: ["approvals", "threads"] } });
+    // The hold is in the record too, so the activity topic comes along.
+    expect(await events.next()).toEqual({ event: "changed", data: { topics: ["approvals", "threads", "activity"] } });
     await events.cancel();
   });
 });

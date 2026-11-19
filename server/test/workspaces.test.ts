@@ -14,8 +14,7 @@ import {
   makePortico,
   signIn,
   together,
-  type TestPortico,
-} from "./helpers";
+  type TestPortico, acquaint } from "./helpers";
 
 const on = () => makePortico();
 
@@ -37,6 +36,9 @@ async function world() {
   p.workspaces.admit(launch.id, robert.id);
   p.workspaces.addAgent(chris.id, launch.id, muse.agent.id);
   p.workspaces.addAgent(robert.id, launch.id, rmuse.agent.id);
+  // These tests are about reach: the people have allowed each other's agents, and Portico's own notices are read.
+  acquaint(p, chris.id, robert.id, maya.id);
+  for (const { agent } of [muse, grok, rmuse, dots, scout]) p.agentNotices.take(agent.id);
   return { p, chris, robert, maya, muse, grok, rmuse, dots, scout, launch };
 }
 
@@ -324,6 +326,7 @@ describe("the reach rule", () => {
     const ask = say(p, muse.agent, "robert/muse", "Fares?");
     expect(p.messages.inbox(rmuse.agent).messages.map((m) => m.id)).toEqual([ask.id]);
     const answer = p.messages.send(rmuse.agent, { replyTo: ask.id, subject: "Re", text: "x" }).message;
+    expect(p.messages.inbox(muse.agent).messages.map((m) => m.id)).toEqual([answer.id]);
     p.workspaces.removeAgent(robert.id, launch.id, rmuse.agent.id);
 
     // A reply names no agent, so the reach check, not the name lookup, has to stop it. Both directions.
@@ -334,8 +337,8 @@ describe("the reach rule", () => {
     expect(errorCode(() => say(p, muse.agent, "robert/muse"))).toBe("not_allowed");
     expect(names(p, muse.agent)).toEqual(["grok-bot"]);
 
-    // What was sent before still arrives and can be read, by the agents and over the API.
-    expect(p.messages.inbox(muse.agent).messages.map((m) => m.id)).toEqual([answer.id]);
+    // What was picked up before can still be read, by the agents and over the API.
+    expect(p.messages.inbox(muse.agent).messages).toEqual([]);
     const [thread] = p.messages.threadsBetween(muse.agent.id, rmuse.agent.id);
     expect(p.messages.inThread(thread!).messages).toHaveLength(2);
     // Robert's agent left the workspace, and still reads what it said there.
@@ -391,6 +394,7 @@ describe("the reach rule", () => {
     const { note, delivery } = p.messages.send(muse.agent, { to: "robert/muse", subject: "Hi", text: "x" });
     expect(delivery).toBe("held");
     expect(note).toContain("Held: robert/muse requires approval");
+    expect(note).toContain("The message is not delivered.");
     const tasks = (await (await callAs(p, muse, "GET", "/api/agent/tasks")).json()) as { tasks: { with: string }[] };
     expect(tasks.tasks.map((t) => t.with)).toEqual(["robert/muse"]);
     expect(errorCode(() => p.agents.resolve("robert/dots", muse.agent.id))).toBe("unknown_agent");

@@ -19,11 +19,28 @@ export const ACTIVITY_KINDS = [
   "allow_removed",
   "wake_set",
   "wake_removed",
+  "outbound_switched",
+  "agent_revoked",
+  // A Portico's record. Each carries the Portico.
+  "portico_person_joined",
+  "portico_person_left",
+  "portico_agent_joined",
+  "portico_agent_left",
+  "portico_shared",
+  "portico_share_ended",
+  "portico_paused",
+  "portico_resumed",
+  "portico_held",
+  "portico_refused",
+  "portico_burst",
+  "portico_refusals",
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
 /** One entry. `detail` holds names and choices, never message text or anything secret. */
 export interface ActivityEntry {
+  /** The entry's place in the order entries were written. */
+  seq: number;
   id: string;
   at: string;
   kind: ActivityKind;
@@ -33,16 +50,23 @@ export interface ActivityEntry {
   otherId: string | null;
   /** The person who did it, when a person did. */
   personId: string | null;
+  /** The Portico the entry belongs to, for an entry of a Portico's record. */
+  workspaceId: string | null;
+  /** The person the entry is about: who came in or left, or whom an alert is for. */
+  subjectId: string | null;
   detail: Record<string, string | boolean | null>;
 }
 
 interface ActivityRow {
+  seq: number;
   id: string;
   at: string;
   kind: string;
   agent_id: string | null;
   other_id: string | null;
   person_id: string | null;
+  workspace_id: string | null;
+  subject_id: string | null;
   detail: string;
 }
 
@@ -54,12 +78,15 @@ function toEntry(row: ActivityRow): ActivityEntry {
     // An unreadable detail shows as none.
   }
   return {
+    seq: row.seq,
     id: row.id,
     at: row.at,
     kind: row.kind as ActivityKind,
     agentId: row.agent_id,
     otherId: row.other_id,
     personId: row.person_id,
+    workspaceId: row.workspace_id,
+    subjectId: row.subject_id,
     detail,
   };
 }
@@ -87,12 +114,19 @@ export class Activity {
 
   record(
     kind: ActivityKind,
-    fields: { agentId?: string | null; otherId?: string | null; personId?: string | null; detail?: ActivityEntry["detail"] } = {},
+    fields: {
+      agentId?: string | null;
+      otherId?: string | null;
+      personId?: string | null;
+      workspaceId?: string | null;
+      subjectId?: string | null;
+      detail?: ActivityEntry["detail"];
+    } = {},
   ): void {
     this.db
       .query(
-        `INSERT INTO activity (id, at, kind, agent_id, other_id, person_id, detail)
-         VALUES ($id, $at, $kind, $agentId, $otherId, $personId, $detail)`,
+        `INSERT INTO activity (id, at, kind, agent_id, other_id, person_id, workspace_id, subject_id, detail)
+         VALUES ($id, $at, $kind, $agentId, $otherId, $personId, $workspaceId, $subjectId, $detail)`,
       )
       .run({
         id: this.newId(),
@@ -101,6 +135,8 @@ export class Activity {
         agentId: fields.agentId ?? null,
         otherId: fields.otherId ?? null,
         personId: fields.personId ?? null,
+        workspaceId: fields.workspaceId ?? null,
+        subjectId: fields.subjectId ?? null,
         detail: JSON.stringify(fields.detail ?? {}),
       });
     this.changes.emit("activity");
@@ -129,6 +165,34 @@ export class Activity {
     return (
       this.db.query(`SELECT * FROM activity ${where} ORDER BY at DESC, rowid DESC LIMIT $limit`).all(bindings) as ActivityRow[]
     ).map(toEntry);
+  }
+
+  /**
+   * One Portico's record, newest first: who came in and left, shares, holds, refused sends and pauses. With `after`,
+   * only the entries written after that one (its `seq`). An alert shows only to the person it is for (`forPerson`).
+   */
+  recordOf(workspaceId: string, opts: { forPerson?: string; after?: number; limit?: number } = {}): ActivityEntry[] {
+    const rows = this.db
+      .query(
+        `SELECT * FROM activity WHERE workspace_id = $workspaceId AND seq > $after
+           AND (kind NOT IN ('portico_burst', 'portico_refusals') OR subject_id IS $forPerson)
+         ORDER BY at DESC, rowid DESC LIMIT $limit`,
+      )
+      .all({ workspaceId, after: opts.after ?? 0, forPerson: opts.forPerson ?? null, limit: Math.min(Math.max(opts.limit ?? 50, 1), 200) }) as ActivityRow[];
+    return rows.map(toEntry);
+  }
+
+  /** How many entries of a kind about one agent the record has since a time: for "told once a day". */
+  count(kind: ActivityKind, fields: { agentId?: string; otherId?: string; subjectId?: string; since: string }): number {
+    return (
+      this.db
+        .query(
+          `SELECT COUNT(*) AS n FROM activity WHERE kind = $kind AND at > $since
+             AND ($agentId IS NULL OR agent_id = $agentId) AND ($otherId IS NULL OR other_id = $otherId)
+             AND ($subjectId IS NULL OR subject_id = $subjectId)`,
+        )
+        .get({ kind, since: fields.since, agentId: fields.agentId ?? null, otherId: fields.otherId ?? null, subjectId: fields.subjectId ?? null }) as { n: number }
+    ).n;
   }
 
   /** Deletes entries older than the history window. Returns how many. */

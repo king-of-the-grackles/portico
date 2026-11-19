@@ -53,7 +53,10 @@ export function porticoTools() {
       name: "add_to_portico",
       description:
         "Put one agent of the person who manages this agent into a Portico that person is in. Everyone in the Portico can " +
-        "then message the agent. An agent that person took out of that person's own Portico stays out: only the person " +
+        "then message the agent. In a Portico that person made, the agent is in at once. In a Portico someone else made, " +
+        "the answer is waiting_for_person: that person allows the request on Portico's page with a 4-digit code, or, " +
+        "where the Portico's owner asked to allow each agent, the owner does (waiting_for_owner, with no code). " +
+        "An agent that person took out of that person's own Portico stays out: only the person " +
         "puts such an agent anywhere, on Portico's pages.",
       inputSchema: {
         type: "object",
@@ -110,16 +113,24 @@ export function porticoTools() {
     {
       name: "share_portico",
       description:
-        "Ask to share a Portico with one more person. The person who manages this agent allows the request first on " +
+        "Ask to share a Portico with one more person. Only the Portico's owner can, and the person who manages this " +
+        "agent allows the request first on " +
         "Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link and a 4-digit " +
-        "code. Calling again after the code ran out gives a fresh one. list_porticos then shows the request approved, with a share link that works for " +
-        `${LIMITS.shareDays} days and for one person: that person hands the link to an agent. With email, Portico sends ` +
-        "the link to that address, and only that address can use the link.",
+        "code. Calling again after the code ran out gives a fresh one. list_porticos then shows the request approved, with a share link that works once, within " +
+        `${LIMITS.shareDays} days, for one person: that person hands the link to an agent. With email, Portico sends ` +
+        "the link to that address, and only that address can use the link. The owner is told who came in.",
       inputSchema: {
         type: "object",
         properties: {
           portico: str(PORTICO),
           email: str("Optional. The address to email the link to."),
+          agents: {
+            type: "string",
+            enum: ["self", "ask"],
+            description:
+              "Optional. What the person coming in may do afterwards. self (the default): add more of that person's own " +
+              "agents with no further question. ask: each agent that person adds later waits for the owner's Allow.",
+          },
         },
         required: ["portico"],
         additionalProperties: false,
@@ -130,8 +141,9 @@ export function porticoTools() {
       description:
         "Come into a Portico with a share link that someone sent to the person who manages this agent. The answer is " +
         "waiting_for_person, with a sentence to show that carries the link to Portico's page and a 4-digit code: the " +
-        "person types the code there. Calling again after the code ran out gives a fresh one. The share link alone lets no agent in. " +
-        "The same link works for more of that person's agents until the link expires.",
+        "person types the code there, and can tick more of that person's agents to bring in under the one Allow. " +
+        "Calling again after the code ran out gives a fresh one. The share link alone lets no agent in, and works once: " +
+        "afterwards add_to_portico puts more agents in.",
       inputSchema: {
         type: "object",
         properties: { link: str("Required. The whole share link, such as https://portico.example/share#….") },
@@ -215,7 +227,13 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
     owner: person(w.ownerId),
     owned_by_this_person: w.ownerId === ownerId,
     this_agent_is_in: workspaces.hasAgent(w.id, agent.id),
-    people: workspaces.peopleIn(w.id).map(person),
+    /** Paused by its owner: nothing moves through it, and a send through it is refused. */
+    paused: w.pausedAt !== null,
+    people: workspaces.peopleIn(w.id).map((id) => ({
+      ...person(id),
+      // The owner's choice for each other person: whether more of that person's agents wait for the owner.
+      ...(w.kind === "shared" && id !== w.ownerId ? { more_agents: workspaces.policyOf(w.id, id) === "ask" ? "ask_owner" : "self" } : {}),
+    })),
     agents: workspaces
       .agentsIn(w.id)
       .map((id) => agents.get(id))
@@ -232,14 +250,20 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
     const share = request.result?.shareId ? shares.get(request.result.shareId) : null;
     const secret = share ? shares.secretFor(ownerId, share.id) : null;
     const pending = request.status === "pending";
+    // What waits for a Portico's owner has no code, and its page is the owner's alone.
+    const forOwner = request.kind === "admit_agent";
+    const subject = request.detail.agentId ? agents.get(request.detail.agentId) : null;
     return {
       id: request.id,
       kind: request.kind === "enter" ? "join" : request.kind,
       status: request.status,
       ...(request.workspaceId ? { portico: named(request.workspaceId) } : {}),
       ...(request.detail.email ? { email: request.detail.email } : {}),
-      ...(request.detail.personId ? { person: person(request.detail.personId).handle } : {}),
-      ...(pending ? { link: pageFor(request), code: request.code } : {}),
+      ...(request.detail.agents ? { more_agents: request.detail.agents === "ask" ? "ask_owner" : "self" } : {}),
+      ...(subject ? { agent: addr(subject) } : {}),
+      ...(request.detail.personId && !forOwner ? { person: person(request.detail.personId).handle } : {}),
+      ...(pending && !forOwner ? { link: pageFor(request), code: request.code } : {}),
+      ...(pending && forOwner ? { waiting_for: "the Portico's owner" } : {}),
       ...(secret ? { share_link: `${deps.publicUrl()}/share#${secret}`, share_link_expires_at: share!.expiresAt } : {}),
       expires_at: request.expiresAt,
     };
@@ -257,13 +281,24 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
     note: "Nothing has changed yet. Show the sentence in show as it is: the link, the code and the time. list_porticos shows the outcome; the same call again gives a fresh link and code once this one has run out.",
   });
 
+  /** What the agent shows while a request waits for a Portico's owner: no link, no code, since the answer is the owner's. */
+  const waitingForOwner = (w: Workspace, a: Agent, request: ConsentRequest) => ({
+    status: "waiting_for_owner",
+    show:
+      `Waiting for ${person(w.ownerId).name || "the owner"}, who made ${w.phrase} and asked to allow each agent ${owner.name} adds there: ` +
+      `\`${addr(a)}\` comes in once ${person(w.ownerId).name || "the owner"} allows the request on Portico's page. The request waits until ${request.expiresAt}.`,
+    request: requestView(request),
+    note: "Nothing has changed yet. Portico tells the owner. list_porticos shows the outcome.",
+  });
+
   switch (name) {
     case "list_porticos": {
       workspaces.personal(ownerId);
       return {
         handle: owner.handle,
         porticos: workspaces.forPerson(ownerId).map(view),
-        waiting: consents.recentFor(ownerId).map(requestView),
+        // What this person's agents asked: of this person, and of the owners of Porticos this person is in.
+        waiting: [...consents.recentFor(ownerId), ...consents.recentAskedBy(ownerId)].map(requestView),
       };
     }
     case "create_portico": {
@@ -281,6 +316,15 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
       const w = portico();
       const a = own(text("agent"));
       requireNotApart(a, w);
+      if (workspaces.hasAgent(w.id, a.id)) return { portico: view(w), note: `\`${addr(a)}\` is already in ${w.phrase}.` };
+      // A Portico this person made, or this person's own: organising one's own agents needs no question. In someone
+      // else's, the person confirms, or the owner does where the owner asked to.
+      if (w.ownerId !== ownerId) {
+        const ask = consents.askToAdd(agent, w.id, a);
+        return ask.kind === "admit_agent"
+          ? { portico: ref(w), ...waitingForOwner(w, a, ask) }
+          : { portico: ref(w), ...waiting(`\`${addr(a)}\` coming into ${w.phrase}`, ask) };
+      }
       workspaces.addAgent(ownerId, w.id, a.id);
       return { portico: view(w), note: `\`${addr(a)}\` is in ${w.phrase}: everyone there can message \`${addr(a)}\`.` };
     }
@@ -316,7 +360,7 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
     }
     case "share_portico": {
       const w = portico();
-      const ask = consents.ask(agent, "share", w.id, { email: args.email });
+      const ask = consents.ask(agent, "share", w.id, { email: args.email, agents: args.agents });
       return { portico: ref(w), ...waiting(`sharing ${w.phrase}${ask.detail.email ? ` with ${ask.detail.email}` : " with one more person"}`, ask) };
     }
     case "join_portico": {

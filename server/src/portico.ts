@@ -4,9 +4,12 @@ import { helloFor, AgentStreams } from "./agent-api/stream";
 import { PersonStreams } from "./api/events";
 import { buildApp } from "./app";
 import { Accounts } from "./core/accounts";
-import { Activity } from "./core/activity";
+import { Activity, type ActivityEntry } from "./core/activity";
 import { Agents } from "./core/agents";
-import { AllowList, Approvals } from "./core/approvals";
+import { AllowList, Approvals, Contacts } from "./core/approvals";
+import { AgentNotices } from "./core/notices";
+import { recordWords } from "./core/record-words";
+import { DAY_MS, MINUTE_MS } from "./core/limits";
 import { Changes } from "./core/changes";
 import { Computers } from "./core/computers";
 import { consentWords, quote } from "./core/consent-words";
@@ -26,9 +29,9 @@ import { Presence } from "./core/presence";
 import { Settings } from "./core/settings";
 import { Shares } from "./core/shares";
 import { Tasks } from "./core/tasks";
-import type { AccountSignIn, Message, Notice, PorticoConfig } from "./core/types";
+import type { AccountSignIn, Agent, Message, Notice, Person, PorticoConfig, Workspace } from "./core/types";
 import { WakeUrls } from "./core/wake-urls";
-import { Workspaces } from "./core/workspaces";
+import { type WorkspaceEvent, Workspaces } from "./core/workspaces";
 import { safePost, type WebhookPost } from "./core/webhooks";
 import { errorName, log } from "./log";
 
@@ -66,6 +69,13 @@ export interface Portico extends Core {
   sweepMinute(): void;
   /** Run every day: history, stale sessions, expired sign-ins and links. */
   sweepDaily(): void;
+  /** One line of a Portico's record, in Portico's own words, as one person reads it. Null for a kind the record doesn't show. */
+  recordLine(entry: ActivityEntry, reader: Person, workspace: Workspace): string | null;
+  /**
+   * Emails each person what happened in the Porticos the person is in since the last such email: one email per person
+   * and Portico, so several changes in a minute arrive together. Part of the minute sweep; tests await it.
+   */
+  sweepRecordMail(): Promise<number>;
   /** Deletes files no message carries. Part of the minute sweep; tests await it. */
   sweepFiles(): Promise<number>;
   /**
@@ -177,7 +187,12 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
           wake(m.toId);
           wakeApp(m);
         }
-        if (m.status === "held") mailHeld(m);
+        if (m.status === "held") {
+          // The Portico's record says that a message was held, never what the message says.
+          activity.record("portico_held", { agentId: m.toId, otherId: m.fromId, workspaceId: m.workspaceId, detail: { for: m.heldFor ?? "approval" } });
+          mailHeld(m);
+        }
+        watchBurst(m);
         return;
       }
       case "message_decided":
@@ -194,6 +209,10 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         // The sender hears about it on the next check, held or not.
         wake(m.fromId);
         return;
+      case "message_withdrawn":
+        files.release(m).catch((err) => log("error", "file_release_failed", { message_id: m.id, error: errorName(err) }));
+        wake(m.fromId);
+        return;
       case "message_delivered":
         if (m.heldAt !== null) wake(m.fromId);
         return;
@@ -201,6 +220,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   };
 
   const allowList = new AllowList(db);
+  const contacts = new Contacts(db);
+  const agentNotices = new AgentNotices(db, now);
   const files: Files = new Files({
     db,
     content,
@@ -217,6 +238,10 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     agents,
     workspaces,
     alwaysAllows: (agentId, senderId) => allowList.has(agentId, senderId),
+    peopleAllowed: (personId, senderPersonId) => contacts.has(personId, senderPersonId),
+    personName: (personId) => people.get(personId)?.name ?? "that agent's person",
+    heldLink: (messageId) => `${settings.publicUrl()}/held/${messageId}`,
+    onRefused: (refusal) => refused(refusal),
     changes,
     waits: inboxWaits,
     files,
@@ -225,6 +250,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     notify,
     log: logInfo,
   });
+  messages.extraUnread = (agentId) => agentNotices.count(agentId);
   const tasks = new Tasks({ content, now });
   const mail = new ShareMail({
     db,
@@ -264,35 +290,280 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
           subject: `${words.title}: an agent asks`,
           lines: [words.asks, "To answer, open this page and sign in to Portico:"],
           link: `${settings.publicUrl()}/c/${request.id}`,
-          after: [
-            "The page asks for the 4-digit code the agent shows in its chat. Portico never emails that code, so nothing happens without the chat.",
-            "Didn't ask an agent for this? Open the page and choose Don't allow, or ignore this email.",
-          ],
+          after:
+            request.kind === "admit_agent"
+              ? ["No code is needed: only the owner of the Portico, signed in, can answer on that page."]
+              : [
+                  "The page asks for the 4-digit code the agent shows in its chat. Portico never emails that code, so nothing happens without the chat.",
+                  "Didn't ask an agent for this? Open the page and choose Don't allow, or ignore this email.",
+                ],
+          // The one-step stop that fits: the agent that asked, or for a request from someone else's agent, the Portico.
+          stop:
+            request.kind === "admit_agent" && request.workspaceId
+              ? { line: "To stop the person who asked, take that person out, or pause the Portico, in one step on the Portico's page:", link: `${settings.publicUrl()}/p/${request.workspaceId}` }
+              : request.agentId
+                ? { line: "To stop the agent that asked, revoke the agent in one step on the agent's page:", link: `${settings.publicUrl()}/a/${request.agentId}` }
+                : undefined,
         }),
       );
     },
   });
-  // A held message's page is emailed to the person who decides. Never the subject or the text.
+  const porticoPage = (workspaceId: string) => `${settings.publicUrl()}/p/${workspaceId}`;
+  /** A person as Portico names one in its own sentences: the name someone typed as a quote, then the handle. */
+  const personWords = (person: Person) => `${quote(person.name)}${person.handle ? ` (${person.handle})` : ""}`;
+  // A held message's page is emailed to the person who decides: the receiver's, or for a message held on its way out,
+  // the sender's own. Never the subject or the text.
   const mailHeld = (m: Message) => {
     if (!mail.enabled) return;
     const receiver = agents.get(m.toId);
     const sender = agents.get(m.fromId);
-    const person = receiver ? people.get(receiver.ownerId) : null;
+    const outbound = m.heldFor === "outbound";
+    const person = outbound ? (sender ? people.get(sender.ownerId) : null) : receiver ? people.get(receiver.ownerId) : null;
     if (!receiver || !sender || !person) return;
+    const from = quote(agents.addressFor(sender, person.id));
+    const to = quote(agents.addressFor(receiver, person.id));
+    const why = outbound
+      ? `A message from ${from} to ${to} is held: ${person.name} asked to see what that agent sends to other people's agents first.`
+      : m.heldFor === "first_contact"
+        ? `A message from ${from} to ${to} is held: ${person.name} hasn't allowed messages from the agents of ${personWords(people.get(sender.ownerId) ?? person)} yet.`
+        : `A message from ${from} to ${to} is held: that agent takes messages only once ${person.name} allows each sender.`;
+    // Each hold of one message is its own email: a message held on its way out can be held again on arrival.
     mailed(
       "held",
-      mail.notify("held", m.id, person, {
+      mail.notify("held", outbound ? `${m.id}:out` : m.id, person, {
         subject: "A message waits for a decision on Portico",
-        lines: [
-          `A message from ${quote(agents.addressFor(sender, person.id))} to ${quote(agents.nameFor(receiver, person.id))} is held: that agent takes messages only once ${person.name} allows each sender.`,
-          "To read the message and decide, open this page and sign in to Portico:",
-        ],
+        lines: [why, "To read the message and decide, open this page and sign in to Portico:"],
         link: `${settings.publicUrl()}/held/${m.id}`,
         after: [`The message waits ${LIMITS.messageExpiryHours / 24} days, then lapses.`],
+        stop: outbound
+          ? { line: "To stop that agent for good, revoke the agent in one step on the agent's page:", link: `${settings.publicUrl()}/a/${sender.id}` }
+          : { line: "To stop the sender, take the sender's person out, or pause the Portico, in one step on the Portico's page:", link: porticoPage(m.workspaceId) },
       }),
     );
   };
-  const approvals = new Approvals({ agents, workspaces, messages, people, allowList, changes, activity, now, notify, log: logInfo });
+  const approvals = new Approvals({ agents, workspaces, messages, people, allowList, contacts, changes, activity, now, notify, log: logInfo });
+
+  // ---- alerts: a burst of messages from another person's agent, and repeated refused sends ----
+
+  const alert = (ref: string, person: Person, subject: string, line: string, stop: { line: string; link: string }, page: string) => {
+    if (!mail.enabled) return;
+    mailed("alert", mail.notify("alert", ref, person, { subject, lines: [line, "Portico's page shows the record:"], link: page, after: [], stop }));
+  };
+  const day = () => now().toISOString().slice(0, 10);
+  /** When each sender last wrote to each other person's agents, within the burst window. */
+  const recent = new Map<string, number[]>();
+  const watchBurst = (m: Message) => {
+    const sender = agents.get(m.fromId);
+    const receiver = agents.get(m.toId);
+    if (!sender || !receiver || sender.ownerId === receiver.ownerId) return;
+    // Counted in memory, as each message is sent: a burst is a matter of minutes, and no database is opened to see one.
+    const key = `${sender.id} ${receiver.ownerId}`;
+    const from = now().getTime() - LIMITS.burstMinutes * MINUTE_MS;
+    const times = [...(recent.get(key) ?? []).filter((at) => at > from), now().getTime()];
+    recent.set(key, times);
+    if (recent.size > 10_000) for (const [other, list] of recent) if (list.every((at) => at <= from)) recent.delete(other);
+    const count = times.length;
+    if (count < LIMITS.burstMessages) return;
+    const since = new Date(now().getTime() - DAY_MS).toISOString();
+    if (activity.count("portico_burst", { otherId: sender.id, subjectId: receiver.ownerId, since }) > 0) return;
+    activity.record("portico_burst", { agentId: receiver.id, otherId: sender.id, workspaceId: m.workspaceId, subjectId: receiver.ownerId, detail: { count: String(count) } });
+    const person = people.get(receiver.ownerId);
+    if (!person) return;
+    alert(
+      `burst:${sender.id}:${person.id}:${day()}`,
+      person,
+      "Many messages from one agent on Portico",
+      `${quote(agents.addressFor(sender, person.id))} sent ${count} messages to ${person.name}'s agents within ${LIMITS.burstMinutes} minutes.`,
+      { line: "To stop the sender, take the sender's person out, or pause the Portico, in one step on the Portico's page:", link: porticoPage(m.workspaceId) },
+      porticoPage(m.workspaceId),
+    );
+  };
+  const refused = (refusal: { caller: Agent; receiver: Agent | null; workspace: Workspace | null; code: string }) => {
+    const { caller } = refusal;
+    const window = new Date(now().getTime() - LIMITS.refusedMinutes * MINUTE_MS).toISOString();
+    const before = activity.count("portico_refused", { agentId: caller.id, since: window });
+    // A looping agent is refused many times a minute: the record keeps enough to see the pattern, not every one.
+    if (before >= LIMITS.refusedSends * 3) return;
+    activity.record("portico_refused", { agentId: caller.id, otherId: refusal.receiver?.id ?? null, workspaceId: refusal.workspace?.id ?? null, detail: { reason: refusal.code } });
+    if (before + 1 < LIMITS.refusedSends) return;
+    if (activity.count("portico_refusals", { agentId: caller.id, since: new Date(now().getTime() - DAY_MS).toISOString() }) > 0) return;
+    activity.record("portico_refusals", { agentId: caller.id, workspaceId: refusal.workspace?.id ?? null, subjectId: caller.ownerId, detail: { count: String(before + 1) } });
+    const person = people.get(caller.ownerId);
+    if (!person) return;
+    const page = `${settings.publicUrl()}/a/${caller.id}`;
+    alert(
+      `refusals:${caller.id}:${day()}`,
+      person,
+      "An agent keeps being refused on Portico",
+      `${quote(agents.nameFor(caller, person.id))} had ${before + 1} sends refused within ${LIMITS.refusedMinutes} minutes. An agent that keeps trying may have been misled by something the agent read.`,
+      { line: "To stop the agent, revoke the agent in one step on the agent's page:", link: page },
+      page,
+    );
+  };
+
+  // ---- who is in a Portico changed: the record, the agents there, and what can no longer be delivered ----
+
+  const placeWords = (workspace: Workspace) => `the Portico ${quote(workspace.name)}`;
+  /** Tells every agent in the workspace now, but the ones named, in Portico's own words, each by the names that agent uses. */
+  const tellAgents = (workspace: Workspace, except: string[], text: (viewer: Agent) => string) => {
+    if (workspace.kind !== "shared") return;
+    for (const id of workspaces.agentsIn(workspace.id)) {
+      if (except.includes(id)) continue;
+      const viewer = agents.get(id);
+      if (!viewer) continue;
+      agentNotices.add(viewer.id, text(viewer));
+      wake(viewer.id);
+    }
+  };
+  const tellAgent = (agentId: string, text: string) => {
+    const agent = agents.get(agentId);
+    if (!agent || agent.revokedAt !== null) return;
+    agentNotices.add(agent.id, text);
+    wake(agent.id);
+  };
+  const named = (subject: Agent, viewer: Agent) => `\`${agents.nameFor(subject, viewer.ownerId)}\``;
+  const onWorkspaceEvent = (event: WorkspaceEvent) => {
+    const { workspace } = event;
+    const place = placeWords(workspace);
+    const shared = workspace.kind === "shared";
+    switch (event.kind) {
+      case "person_joined": {
+        // The record's line is written by the share that let the person in, with how many agents came along.
+        const person = people.get(event.personId);
+        if (person) tellAgents(workspace, [], () => `${personWords(person)} came into ${place}.`);
+        return;
+      }
+      case "person_left": {
+        const person = people.get(event.personId);
+        activity.record("portico_person_left", { personId: event.byId, subjectId: event.personId, workspaceId: workspace.id, detail: { agents: String(event.agentIds.length) } });
+        messages.withdraw(workspace.id, event.agentIds);
+        if (person) tellAgents(workspace, [], () => `${personWords(person)} left ${place}, with every agent ${quote(person.name)} had there.`);
+        for (const id of event.agentIds) tellAgent(id, `This agent is out of ${place}: ${person ? personWords(person) : "the person who manages this agent"} left that Portico or was taken out.`);
+        // Someone taken out by the owner is told at once, since the Portico's record no longer reaches that person.
+        if (person && event.byId !== event.personId && mail.enabled) {
+          mailed(
+            "alert",
+            mail.notify("alert", `out:${workspace.id}:${person.id}:${now().toISOString()}`, person, {
+              subject: "Taken out of a Portico",
+              lines: [`${personWords(people.get(event.byId) ?? person)} took ${person.name} out of ${place}, with every agent ${person.name} had there. Those agents no longer reach anyone through that Portico.`, "Portico's page shows the Porticos left:"],
+              link: `${settings.publicUrl()}/`,
+              after: [],
+            }),
+          );
+        }
+        return;
+      }
+      case "agent_joined": {
+        const subject = agents.get(event.agentId);
+        if (!shared || !subject) return;
+        activity.record("portico_agent_joined", { agentId: subject.id, personId: event.byId, workspaceId: workspace.id, detail: { agent: agents.addressFor(subject, ""), allowed: event.ownerAllowed } });
+        tellAgents(workspace, [subject.id], (viewer) => `${named(subject, viewer)} came into ${place}. This agent and ${named(subject, viewer)} can message each other now.`);
+        tellAgent(subject.id, `This agent is in ${place} now, and can message the agents there. list_agents shows who.`);
+        return;
+      }
+      case "agent_left": {
+        const subject = agents.get(event.agentId);
+        messages.withdraw(workspace.id, [event.agentId]);
+        if (!shared || !subject) return;
+        activity.record("portico_agent_left", { agentId: subject.id, personId: event.byId, workspaceId: workspace.id, detail: { agent: agents.addressFor(subject, ""), revoked: subject.revokedAt !== null } });
+        tellAgents(workspace, [subject.id], (viewer) => `${named(subject, viewer)} left ${place}.`);
+        tellAgent(subject.id, `This agent is out of ${place}, and reaches nobody through that Portico any more.`);
+        return;
+      }
+      case "paused":
+      case "resumed": {
+        const owner = people.get(event.byId);
+        activity.record(event.kind === "paused" ? "portico_paused" : "portico_resumed", { personId: event.byId, workspaceId: workspace.id });
+        if (event.kind === "paused") messages.withdraw(workspace.id, null);
+        tellAgents(workspace, [], () =>
+          event.kind === "paused"
+            ? `${owner ? personWords(owner) : "The owner"} paused ${place}: nothing moves through that Portico until the owner resumes the Portico, and a send through that Portico is refused.`
+            : `${owner ? personWords(owner) : "The owner"} resumed ${place}: messages move through that Portico again.`,
+        );
+        return;
+      }
+      case "deleted":
+        messages.withdraw(workspace.id, null);
+        for (const id of event.agentIds) tellAgent(id, `${place.charAt(0).toUpperCase()}${place.slice(1)} was deleted. This agent reaches nobody through that Portico any more.`);
+        return;
+    }
+  };
+  workspaces.onEvent = (event) => {
+    try {
+      onWorkspaceEvent(event);
+    } catch (err) {
+      log("error", "workspace_event_failed", { kind: event.kind, error: errorName(err) });
+    }
+  };
+  shares.onShared = (share, workspace) => activity.record("portico_shared", { personId: share.createdBy, workspaceId: workspace.id, detail: { policy: share.agentsPolicy } });
+  shares.onEnded = (_share, workspace, byId) => activity.record("portico_share_ended", { personId: byId, workspaceId: workspace.id });
+  shares.onEntered = (share, workspace, person, entered) =>
+    activity.record("portico_person_joined", { personId: person.id, subjectId: person.id, workspaceId: workspace.id, detail: { agents: String(entered.length), share: share.id } });
+
+  /** One line of a Portico's record as one person reads it. */
+  const recordLine: Portico["recordLine"] = (entry: Parameters<typeof recordWords>[0], reader: Person, workspace: Workspace) =>
+    recordWords(entry, {
+      person: (id) => {
+        const person = id ? people.get(id) : null;
+        return person ? personWords(person) : null;
+      },
+      agent: (id) => {
+        const agent = id ? agents.get(id) : null;
+        return agent ? quote(agents.addressFor(agent, reader.id)) : null;
+      },
+      // Who came in, by name and email: for the owner, who let that person in.
+      email: (id) => (id && workspace.ownerId === reader.id ? (people.get(id)?.email ?? null) : null),
+    });
+
+  const MAILED_KINDS = ["portico_person_joined", "portico_person_left", "portico_agent_joined", "portico_agent_left", "portico_paused", "portico_resumed"];
+  const sweepRecordMail = async () => {
+    if (!mail.enabled) return 0;
+    let sent = 0;
+    try {
+      const at = now().toISOString();
+      const due = db
+        .query(
+          `SELECT p.workspace_id AS workspaceId, p.person_id AS personId, p.notified_seq AS since
+           FROM workspace_people p JOIN workspaces w ON w.id = p.workspace_id
+           WHERE w.kind = 'shared' AND w.archived_at IS NULL AND EXISTS (
+             SELECT 1 FROM activity a WHERE a.workspace_id = p.workspace_id AND a.seq > p.notified_seq
+               AND a.person_id IS NOT p.person_id AND a.kind IN (${MAILED_KINDS.map((kind) => `'${kind}'`).join(", ")}))`,
+        )
+        .all() as { workspaceId: string; personId: string; since: number }[];
+      const latest = (db.query("SELECT COALESCE(MAX(seq), 0) AS seq FROM activity").get() as { seq: number }).seq;
+      for (const row of due) {
+        // Moved on first, so a slow or failed email is never sent twice.
+        db.query("UPDATE workspace_people SET notified_seq = $latest WHERE workspace_id = $workspaceId AND person_id = $personId").run({ latest, workspaceId: row.workspaceId, personId: row.personId });
+        const person = people.get(row.personId);
+        const workspace = workspaces.get(row.workspaceId);
+        if (!person || !workspace) continue;
+        const entries = activity
+          .recordOf(workspace.id, { forPerson: person.id, after: row.since, limit: 200 })
+          .filter((entry) => MAILED_KINDS.includes(entry.kind) && entry.personId !== person.id)
+          .reverse();
+        const lines = entries.map((entry) => recordLine(entry, person, workspace)).filter((line): line is string => line !== null);
+        if (lines.length === 0) continue;
+        const shown = lines.slice(0, LIMITS.recordMailLines);
+        const owner = workspace.ownerId === person.id;
+        const outcome = await mail.notify("record", `${workspace.id}:${person.id}:${at}`, person, {
+          subject: "Who came into or left a Portico",
+          lines: [`In ${placeWords(workspace)}:`, ...shown, ...(lines.length > shown.length ? [`And ${lines.length - shown.length} more.`] : []), "The Portico's page shows the whole record:"],
+          link: porticoPage(workspace.id),
+          after: [],
+          stop: {
+            line: owner
+              ? "On that page the owner pauses the Portico, or takes a person or an agent out, in one step:"
+              : `On that page ${person.name} takes ${person.name}'s own agents out, or leaves the Portico, in one step:`,
+            link: porticoPage(workspace.id),
+          },
+        });
+        if (outcome === "sent") sent++;
+      }
+    } catch (err) {
+      log("error", "record_mail_failed", { error: errorName(err) });
+    }
+    return sent;
+  };
 
   const accountSignIn: AccountSignIn | null = check
     ? { projectId: config.descopeProjectId ?? "", account: (token) => accountFrom(check, token) }
@@ -318,6 +589,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     files,
     approvals,
     allowList,
+    contacts,
+    agentNotices,
     activity,
     tasks,
     presence,
@@ -380,6 +653,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     inboxWaits,
     sweepFiles,
     sweepArchived,
+    sweepRecordMail,
+    recordLine,
     close: () => content.close(),
     sweepMinute() {
       // First: the sweeps below open the databases again only for as long as each needs one.
@@ -390,12 +665,14 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       sweep("oauth_clients", () => computers.sweepUnusedClients());
       sweep("sign_in_limits", () => accounts.sweepLimiters());
       sweep("consent_requests", () => consents.sweepMinute());
+      void sweepRecordMail();
     },
     sweepDaily() {
       sweep("history", () => messages.prune());
       void sweepArchived();
       sweep("runs", () => agents.pruneRuns());
       sweep("activity", () => activity.prune());
+      sweep("agent_notices", () => agentNotices.prune());
       sweep("web_sessions", () => accounts.sweep());
       sweep("people", () => people.sweep());
       sweep("computers", () => computers.sweep());

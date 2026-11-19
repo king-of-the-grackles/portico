@@ -10,6 +10,7 @@ import { inboxWaitMs } from "../core/inbox-waits";
 import { DELIVERY_BATCH_MAX, type Messages } from "../core/messages";
 import type { Tasks } from "../core/tasks";
 import type { WakeUrls } from "../core/wake-urls";
+import type { AgentNotices } from "../core/notices";
 import { parseStatusReport, type Presence } from "../core/presence";
 import { errorName, log } from "../log";
 import { type AgentEnv, requireAgent, requireSession, type Resolver, unauthorized } from "./auth";
@@ -37,7 +38,7 @@ const UploadBody = z.object({
 const ProfileBody = z.object({ description: z.string().nullish(), doing: z.string().nullish() });
 const WakeBody = z.object({ url: z.string(), key: z.string() });
 const AckIds = z.array(z.string()).max(DELIVERY_BATCH_MAX).default([]);
-const AckBody = z.object({ messages: AckIds, updates: AckIds });
+const AckBody = z.object({ messages: AckIds, updates: AckIds, notices: AckIds });
 
 export async function readJson(c: Context): Promise<unknown> {
   try {
@@ -72,6 +73,8 @@ export interface AgentRestDeps {
   changes: Changes;
   now: () => Date;
   porticoTools: PorticoToolDeps;
+  /** Portico's own notices to agents, delivered beside messages and outcomes. */
+  notices: AgentNotices;
 }
 
 /**
@@ -189,7 +192,12 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       if (outcome === "gone") return unauthorized(c, deps.resolver);
     }
     const { messages: picked, updates } = messages.inbox(agent);
-    return c.json({ messages: picked.map((m) => views.delivery(m, agent)), updates: updates.map((m) => views.update(m, agent)) });
+    return c.json({
+      messages: picked.map((m) => views.delivery(m, agent)),
+      updates: updates.map((m) => views.update(m, agent)),
+      notices: deps.notices.take(agent.id).map(views.notice),
+      ...views.heldForPerson(agent),
+    });
   });
 
   // Peek and ack, for sessions' plugins: a GET changes nothing, and only the ack marks what was delivered.
@@ -197,14 +205,18 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
     const agent = c.get("agent");
     requireSession(agent, "use deliveries; apps and connectors call check_inbox");
     const pending = messages.pending(agent);
-    return c.json({ messages: pending.messages.map((m) => views.delivery(m, agent)), updates: pending.updates.map((m) => views.update(m, agent)) });
+    return c.json({
+      messages: pending.messages.map((m) => views.delivery(m, agent)),
+      updates: pending.updates.map((m) => views.update(m, agent)),
+      notices: deps.notices.waiting(agent.id, DELIVERY_BATCH_MAX).map(views.notice),
+    });
   });
 
   api.post("/deliveries/ack", async (c) => {
     const agent = c.get("agent");
     requireSession(agent, "use deliveries");
     const body = AckBody.parse(await readJson(c));
-    return c.json({ acked: messages.ack(agent, body) });
+    return c.json({ acked: { ...messages.ack(agent, body), notices: deps.notices.ack(agent.id, body.notices) } });
   });
 
   // Sessions' live status, kept in memory. The text is cleaned here; nothing about it is logged.

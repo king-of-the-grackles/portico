@@ -1,6 +1,6 @@
 import type { Content, ContentDb, Scope } from "./content";
 import { HOUR_MS, LIMITS } from "./limits";
-import type { Decision, Message, MessageStatus } from "./types";
+import type { Decision, HeldFor, Message, MessageStatus } from "./types";
 
 /**
  * Where a task stands: the four outcomes the pages show (Needs a decision, In progress, Done, Didn't go through) and
@@ -10,13 +10,16 @@ import type { Decision, Message, MessageStatus } from "./types";
 export type TaskOutcome = "needs_approval" | "in_progress" | "done" | "failed";
 export const TASK_OUTCOMES: readonly TaskOutcome[] = ["needs_approval", "in_progress", "done", "failed"];
 
-/** Why a task didn't go through: a person didn't allow it, it expired unread or undecided, or no answer came. */
-export type TaskReason = "not_allowed" | "expired" | "no_answer";
+/**
+ * Why a task didn't go through: a person didn't allow it, it expired unread or undecided, no answer came, or it was
+ * withdrawn (its Portico was paused, or one of the two agents left the Portico or was revoked, before pickup).
+ */
+export type TaskReason = "not_allowed" | "expired" | "no_answer" | "withdrawn";
 
 /** A task where nothing happens for this long after pickup, or after the latest update, didn't go through. */
 export const NO_ANSWER_AFTER_MS = LIMITS.messageExpiryHours * HOUR_MS;
 
-export type TaskStepKind = "asked" | "allowed" | "denied" | "picked_up" | "answered" | "expired";
+export type TaskStepKind = "asked" | "allowed" | "denied" | "picked_up" | "answered" | "expired" | "withdrawn";
 
 export interface TaskStep {
   kind: TaskStepKind;
@@ -52,6 +55,11 @@ export interface Task {
   answer: { id: string; subject: string; summary: string | null; final: boolean; createdAt: string } | null;
   /** A held message in the task, for the decision buttons. */
   heldMessageId: string | null;
+  /**
+   * The first message is held on its way out, for its sender's own person: the other side hasn't been sent anything
+   * yet, so only the sender's side may see the task.
+   */
+  outboundHeld: boolean;
   messageCount: number;
   steps: TaskStep[];
 }
@@ -101,6 +109,10 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
     outcome = "failed";
     reason = "expired";
     endedAt = root.expiresAt;
+  } else if (root.status === "withdrawn") {
+    outcome = "failed";
+    reason = "withdrawn";
+    endedAt = root.withdrawnAt ?? root.createdAt;
   } else if (root.status === "pending") outcome = "in_progress";
   else {
     // Picked up: the clock runs from pickup, and starts again with each update.
@@ -123,6 +135,7 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
   }
   if (root.deliveredAt) steps.push({ kind: "picked_up", at: root.deliveredAt, personId: null, decision: null });
   if (root.status === "expired") steps.push({ kind: "expired", at: root.expiresAt, personId: null, decision: null });
+  if (root.status === "withdrawn") steps.push({ kind: "withdrawn", at: root.withdrawnAt ?? root.createdAt, personId: null, decision: null });
   if (outcome === "done") steps.push({ kind: "answered", at: endedAt!, personId: null, decision: null });
 
   return {
@@ -134,7 +147,7 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
     outcome,
     reason,
     startedAt: root.createdAt,
-    updatedAt: latest(...chain.flatMap((m) => [m.createdAt, m.decidedAt, m.deliveredAt]), endedAt),
+    updatedAt: latest(...chain.flatMap((m) => [m.createdAt, m.decidedAt, m.deliveredAt, m.withdrawnAt]), endedAt),
     endedAt,
     heldAt: root.heldAt,
     pickedUpAt: root.deliveredAt,
@@ -148,6 +161,7 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
         }
       : null,
     heldMessageId: held?.id ?? null,
+    outboundHeld: root.status === "held" && root.heldFor === "outbound",
     messageCount: chain.length,
     steps,
   };
@@ -171,11 +185,13 @@ interface TaskRow {
   created_at: string;
   expires_at: string;
   delivered_at: string | null;
+  withdrawn_at: string | null;
+  held_for: string | null;
   sender_notified_at: string | null;
 }
 
-const COLUMNS = `id, thread_id, from_id, to_id, subject, reply_to, root_id, summary, final, status, held_at, decision,
-  decided_by, decided_at, created_at, expires_at, delivered_at, sender_notified_at`;
+const COLUMNS = `id, thread_id, from_id, to_id, subject, reply_to, root_id, summary, final, status, held_at, held_for, decision,
+  decided_by, decided_at, created_at, expires_at, delivered_at, withdrawn_at, sender_notified_at`;
 
 function toTaskMessage(row: TaskRow, workspaceId: string): TaskMessage {
   return {
@@ -191,12 +207,14 @@ function toTaskMessage(row: TaskRow, workspaceId: string): TaskMessage {
     final: row.final !== 0,
     status: row.status as MessageStatus,
     heldAt: row.held_at,
+    heldFor: row.held_for as HeldFor | null,
     decision: row.decision as Decision | null,
     decidedBy: row.decided_by,
     decidedAt: row.decided_at,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     deliveredAt: row.delivered_at,
+    withdrawnAt: row.withdrawn_at,
     senderNotifiedAt: row.sender_notified_at,
   };
 }
@@ -307,7 +325,10 @@ export class Tasks {
     const now = this.now();
     const tasks: Task[] = [];
     for (const content of this.content.of(within)) tasks.push(...this.tasksIn(content, where, bindings, now));
-    return tasks.sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id));
+    // A task still held on its way out is its sender's side's alone: a person sees it only for that person's own agent.
+    const own = filter.visible;
+    const shown = own ? tasks.filter((task) => !task.outboundHeld || own.includes(task.fromId)) : tasks;
+    return shown.sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id));
   }
 
   private tasksIn(content: ContentDb, where: string, bindings: Record<string, string>, now: Date): Task[] {

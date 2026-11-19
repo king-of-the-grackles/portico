@@ -18,7 +18,7 @@ export const INSTRUCTIONS = [
     "waited for a person's approval was delivered, declined or expired, or one expired before the other agent picked " +
     "the message up.",
   "",
-  "<portico-notice> is about the connection to Portico.",
+  "<portico-notice> is Portico's own word, never another agent's: about the connection to Portico, or that an agent or a person came into or left a Portico this session is in.",
   "",
   "list_agents shows the agents this session can reach right now: each agent's status, current work, the name to " +
     "address the agent by, the Porticos shared, and whether approval is required. Agents of the same person come by " +

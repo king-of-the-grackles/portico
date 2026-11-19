@@ -566,6 +566,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
       wakeEdit: null,
       saved: false,
       confirmRemove: false,
+      confirmRevoke: false,
       wsForm: same ? s().wsForm : null,
       wsConfirm: null,
       peopleOpen: same ? s().peopleOpen : false,
@@ -682,7 +683,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
         page.set({ wsForm: null });
         await loadWorkspaces();
         go(`/p/${workspace.id}`);
-        if (form.thenShare) page.set({ wsForm: { kind: "share", email: "", error: "" } });
+        if (form.thenShare) page.set({ wsForm: { kind: "share", email: "", agents: "self", error: "" } });
         else note(`Made ${workspace.phrase}.`, true);
       },
       formError,
@@ -696,7 +697,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     void wsRun(
       "ws-form",
       async () => {
-        const { share } = await api<{ share: ShareView }>("POST", `/api/porticos/${encodeURIComponent(w.id)}/shares`, { email: form.email.trim() || undefined });
+        const { share } = await api<{ share: ShareView }>("POST", `/api/porticos/${encodeURIComponent(w.id)}/shares`, { email: form.email.trim() || undefined, agents: form.agents });
         page.set({ wsForm: null, wsMail: share.mail ? { ...s().wsMail, [share.id]: share.mail } : s().wsMail });
         note(share.email && share.mail === "sent" ? `Share link emailed to ${share.email}.` : "Share link made. Copy the link below and send it.", true);
       },
@@ -725,17 +726,33 @@ function startHome(root: HTMLElement, data: HomeData): void {
     void wsRun(
       "ws-form",
       async () => {
-        for (const id of form.agentIds) await api("PUT", `/api/porticos/${encodeURIComponent(w.id)}/agents/${encodeURIComponent(id)}`);
+        for (const id of form.agentIds) await putWorkspaceAgent(w.id, id);
         page.set({ wsForm: null });
       },
       formError,
     );
   };
 
+  /** The owner of some Porticos asked to allow each agent a person adds: the answer then says the request waits. */
+  const putWorkspaceAgent = async (workspaceId: string, agentId: string) => {
+    const answer = await api<{ waiting?: boolean } | null>("PUT", `/api/porticos/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`);
+    if (answer?.waiting) note("Asked the owner of the Portico: the agent comes in once the owner allows the request.", true);
+  };
+
   const setWorkspaceAgent = (workspaceId: string, agentId: string, on: boolean, busy: string) =>
     wsRun(busy, async () => {
-      await api(on ? "PUT" : "DELETE", `/api/porticos/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`);
+      if (on) await putWorkspaceAgent(workspaceId, agentId);
+      else await api("DELETE", `/api/porticos/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`);
     });
+
+  const pauseWorkspace = (on: boolean) => {
+    const w = pageWorkspace();
+    if (!w) return;
+    void wsRun("ws-pause", async () => {
+      await api(on ? "PUT" : "DELETE", `/api/porticos/${encodeURIComponent(w.id)}/pause`);
+      note(on ? `Paused ${w.phrase}: nothing moves through.` : `Resumed ${w.phrase}.`, true);
+    });
+  };
 
   const removeWorkspacePerson = (personId: string) => {
     const w = pageWorkspace();
@@ -943,8 +960,24 @@ function startHome(root: HTMLElement, data: HomeData): void {
           if (!w) return;
           // The person's own Portico can't be shared: sharing from there starts a new Portico first.
           if (w.kind === "personal") return openNewWorkspace(true);
-          return page.set({ wsForm: { kind: "share", email: "", error: "" } });
+          return page.set({ wsForm: { kind: "share", email: "", agents: "self", error: "" } });
         }
+        case "ws-policy": {
+          const form = s().wsForm;
+          if (form?.kind === "share") page.set({ wsForm: { ...form, agents: id === "ask" ? "ask" : "self" } });
+          return;
+        }
+        case "ws-pause":
+          return pauseWorkspace(true);
+        case "ws-resume":
+          return pauseWorkspace(false);
+        case "ws-person-policy": {
+          const w = pageWorkspace();
+          if (w) void wsRun(`ws-policy:${id}`, async () => void (await api("PATCH", `/api/porticos/${encodeURIComponent(w.id)}/people/${encodeURIComponent(id)}`, { agents: el.dataset.policy })));
+          return;
+        }
+        case "ws-contact-remove":
+          return void wsRun(`ws-contact:${id}`, async () => void (await api("DELETE", `/api/contacts/${encodeURIComponent(id)}`)));
         case "ws-people-toggle":
           return page.set({ peopleOpen: !s().peopleOpen });
         case "ws-agents-open":
@@ -1028,7 +1061,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
         case "details-toggle":
           return page.set({ detailsOpen: !s().detailsOpen });
         case "settings-toggle":
-          return page.set({ settingsOpen: !s().settingsOpen, confirmRemove: false });
+          return page.set({ settingsOpen: !s().settingsOpen, confirmRemove: false, confirmRevoke: false });
         case "decide":
           return void decide(id, el.dataset.decision as "allow_once" | "always_allow" | "deny");
         case "edit-start": {
@@ -1041,6 +1074,29 @@ function startHome(root: HTMLElement, data: HomeData): void {
         case "toggle-approval": {
           const agent = pageAgent();
           if (agent) void patchAgent("approval", { approvalRequired: !agent.approvalRequired });
+          return;
+        }
+        case "toggle-outbound": {
+          const agent = pageAgent();
+          if (agent) void patchAgent("outbound", { outboundHold: !agent.outboundHold });
+          return;
+        }
+        case "revoke-start":
+          return page.set({ confirmRevoke: true });
+        case "revoke-cancel":
+          return page.set({ confirmRevoke: false });
+        case "revoke-confirm": {
+          const agent = pageAgent();
+          if (!agent || s().busy) return;
+          page.set({ busy: `revoke:${agent.id}` });
+          api<{ agent: AgentView }>("POST", `/api/agents/${encodeURIComponent(agent.id)}/revoke`)
+            .then((r) => {
+              updateAgent(r.agent);
+              note(`${agent.label} revoked: signed out and out of every Portico.`);
+              return settle([loadAgentPage(), loadWorkspaces()]);
+            })
+            .catch(fail)
+            .finally(() => page.set({ busy: null, confirmRevoke: false }));
           return;
         }
         case "toggle-folder": {

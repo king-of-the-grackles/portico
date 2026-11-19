@@ -1,6 +1,7 @@
 import type { Agents } from "../core/agents";
 import type { Files, StoredFile } from "../core/files";
-import { frameMessage, frameUpdate } from "../core/framing";
+import { frameMessage, frameNotice, frameUpdate } from "../core/framing";
+import type { AgentNotice } from "../core/notices";
 import type { People } from "../core/people";
 import type { Workspaces } from "../core/workspaces";
 import type { Agent, AgentKind, AgentType, DeliveryTier, DirectoryEntry, LiveStatus, Message, MessageStatus, Workspace } from "../core/types";
@@ -32,6 +33,8 @@ export interface AgentEntryView {
 export interface PorticoRef {
   id: string;
   name: string;
+  /** Set while the Portico is paused: nothing moves through it, and a send through it is refused. */
+  paused?: boolean;
 }
 
 /** A file a message carries. `url` answers this agent's token with the file; get_task adds an address that needs none. */
@@ -63,6 +66,14 @@ export interface MessageOutView {
   attachments: FileOutView[];
 }
 
+/** Something Portico itself tells the agent: who came into or left a Portico the agent is in. Never from another agent. */
+export interface NoticeView {
+  id: string;
+  at: string;
+  text: string;
+  framed_message: string;
+}
+
 export interface UpdateView {
   message_id: string;
   to: string;
@@ -81,7 +92,7 @@ export const UNTRUSTED_PROFILES =
  * View builders for the agent API, which name agents by address and people by name. Every name is the one the viewing
  * agent addresses the other by: `<handle>/<name>` for another person's agent.
  */
-export function agentViews(agents: Agents, people: People, files: Files, workspaces: Workspaces, publicUrl: () => string) {
+export function agentViews(agents: Agents, people: People, files: Files, workspaces: Workspaces, publicUrl: () => string, heldCount: (personId: string) => number = () => 0) {
   // Read on every call: these builders live as long as the server, and people rename themselves.
   const ownerName = (id: string) => people.get(id)?.name ?? "";
   /** An agent ID as its display name; a removed agent's ID stays as it is. */
@@ -90,7 +101,7 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
     return agent ? agents.nameFor(agent, viewer.ownerId) : id;
   };
 
-  const portico = (w: Pick<Workspace, "id" | "name">): PorticoRef => ({ id: w.id, name: w.name });
+  const portico = (w: Pick<Workspace, "id" | "name"> & { pausedAt?: string | null }): PorticoRef => ({ id: w.id, name: w.name, ...(w.pausedAt ? { paused: true } : {}) });
   /** The Portico a message went through. Its row goes once its history has: the ID is what is left then. */
   const porticoOf = (workspaceId: string) => workspaces.known(workspaceId);
 
@@ -167,7 +178,26 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
         status: m.status,
         decision: m.decision,
         held: m.heldAt !== null,
+        outbound: m.heldFor === "outbound",
       }),
+    };
+  };
+
+  const notice = (n: AgentNotice): NoticeView => ({ id: n.id, at: n.at, text: n.text, framed_message: frameNotice(n.text) });
+
+  /**
+   * How many messages wait for a decision by the person who manages the viewer, with the sentence an agent can pass
+   * on when no email is set up. Never which messages, or from whom: the person reads those on Portico's page.
+   */
+  const heldForPerson = (viewer: Agent) => {
+    const count = heldCount(viewer.ownerId);
+    return {
+      held_for_person: count,
+      ...(count > 0
+        ? {
+            held_note: `${count === 1 ? "1 message waits" : `${count} messages wait`} for a decision by ${ownerName(viewer.ownerId) || "the person who manages this agent"}, on Portico's page: ${publicUrl()}/. Tell that person; nothing held is delivered until then.`,
+          }
+        : {}),
     };
   };
 
@@ -177,6 +207,7 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
     return {
       agents: only ? entries.filter((e) => e.porticos?.some((p) => p.id === only.id)) : entries,
       ...(only ? { portico: portico(only) } : {}),
+      ...heldForPerson(viewer),
       note: UNTRUSTED_PROFILES,
     };
   };
@@ -188,7 +219,7 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
     return { message: view, delivery, portico: through };
   };
 
-  return { entry, message, delivery, update, file, nameOf, portico, list, sent };
+  return { entry, message, delivery, update, notice, heldForPerson, file, nameOf, portico, list, sent };
 }
 
 export type AgentViews = ReturnType<typeof agentViews>;

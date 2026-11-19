@@ -72,6 +72,15 @@ export interface UpdateDelivery {
   framed_message: string;
 }
 
+/** Portico's own notice: who came into or left a Portico this agent is in. Never from another agent. */
+export interface NoticeDelivery {
+  id: string;
+  at: string;
+  text: string;
+  /** The notice wrapped in Portico's `<portico-notice>` frame. */
+  framed_message: string;
+}
+
 /** How a sent message will arrive. */
 export type DeliveryTier = "pushed" | "queued" | "offline" | "held";
 
@@ -120,12 +129,19 @@ export const MAX_INBOX_WAIT_SECONDS = 40;
 export interface Inbox {
   messages: MessageDelivery[];
   updates: UpdateDelivery[];
+  /** Portico's own notices. Absent from a Portico server that sends none. */
+  notices?: NoticeDelivery[];
+  /** How many messages wait for a decision by the person who manages this agent, and the sentence to pass on. */
+  held_for_person?: number;
+  held_note?: string;
 }
 
 /** The IDs this session delivered, for `POST /api/agent/deliveries/ack`. Updates go by their message's ID. */
 export interface DeliveryAck {
   messages: string[];
   updates: string[];
+  /** Portico's own notices this session was told. */
+  notices?: string[];
 }
 
 /** What a session's stream open registers. Only a basename and an HMAC leave the computer. */
@@ -251,7 +267,7 @@ export class PorticoClient {
   }
 
   /** Marks the posted messages delivered and the posted updates reported. */
-  ackDeliveries(ack: DeliveryAck, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<{ acked: { messages: number; updates: number } }> {
+  ackDeliveries(ack: DeliveryAck, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<{ acked: { messages: number; updates: number; notices?: number } }> {
     return this.call("POST", "/api/agent/deliveries/ack", ack, opts);
   }
 

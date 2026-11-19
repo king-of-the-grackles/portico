@@ -5,6 +5,7 @@ import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS } from "./limits";
 import { hashSecret, LINK_SECRET, newLinkSecret, seal, unseal } from "./tokens";
 import type { Person, PersonStatus, Role } from "./types";
+import { nameKey } from "./names";
 import { archiveWorkspaces } from "./workspaces";
 import { slugify } from "./words";
 
@@ -91,7 +92,7 @@ const RESERVED_HANDLES = [
  * with one key read the same at a glance, so only one of them can exist.
  */
 export function handleKey(handle: string): string {
-  return handle.replace(/-/g, "").replace(/0/g, "o").replace(/[1i]/g, "l").replace(/rn/g, "m").replace(/vv/g, "w");
+  return nameKey(handle);
 }
 
 const RESERVED_KEYS = new Set(RESERVED_HANDLES.map(handleKey));

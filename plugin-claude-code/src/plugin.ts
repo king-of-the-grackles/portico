@@ -86,6 +86,7 @@ export function porticoPrompt(inbox: Inbox): string {
  * decision whose reason Codex takes as the next prompt, so the session handles the messages without being asked.
  */
 export function stopHookOutput(inbox: Inbox): string {
+  // A notice from Portico alone keeps no conversation going: it rides along with the next message or check.
   if (inbox.messages.length === 0 && inbox.updates.length === 0) return "";
   return JSON.stringify({ decision: "block", reason: porticoPrompt(inbox) });
 }
@@ -268,7 +269,7 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
       const text = stopHookOutput(pending);
       if (!text) return NO_DECISION;
       await client.ackDeliveries(
-        { messages: pending.messages.map((m) => m.id), updates: pending.updates.map((u) => u.message_id) },
+        { messages: pending.messages.map((m) => m.id), updates: pending.updates.map((u) => u.message_id), notices: (pending.notices ?? []).map((n) => n.id) },
         { signal, timeoutMs: STOP_HOOK_MS },
       );
       return signal.aborted ? NO_DECISION : { content: [{ type: "text", text }] };

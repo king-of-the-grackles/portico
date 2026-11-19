@@ -4,19 +4,24 @@ import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS } from "./limits";
 import { cleanEmail } from "./people";
 import { hashSecret, LINK_SECRET, newLinkSecret, seal, unseal } from "./tokens";
-import type { Agent, Person, Workspace } from "./types";
-import type { Workspaces } from "./workspaces";
+import type { Agent, AgentsPolicy, Person, Workspace } from "./types";
+import { cleanAgentsPolicy, type Workspaces } from "./workspaces";
 
-/** A link that lets one person into a shared workspace. */
+/** A link that lets one person into a shared workspace, once. */
 export interface Share {
   id: string;
   workspaceId: string;
   createdBy: string;
   /** Set when the link was sent by email: only the person with this address can claim it. */
   email: string | null;
+  /**
+   * The owner's choice for the person the link lets in: `self`, that person adds more of their own agents alone;
+   * `ask`, each one waits for the owner's Allow.
+   */
+  agentsPolicy: AgentsPolicy;
   createdAt: string;
   expiresAt: string;
-  /** The person the link turned out to be for: the first to confirm with it. Nobody else can use it afterwards. */
+  /** The person who came in with the link. The link is used up then: it lets nobody in again, that person included. */
   claimedBy: string | null;
   claimedAt: string | null;
   revokedAt: string | null;
@@ -27,6 +32,7 @@ interface ShareRow {
   workspace_id: string;
   created_by: string;
   email: string | null;
+  agents_policy: AgentsPolicy;
   created_at: string;
   expires_at: string;
   claimed_by: string | null;
@@ -39,6 +45,7 @@ const toShare = (row: ShareRow): Share => ({
   workspaceId: row.workspace_id,
   createdBy: row.created_by,
   email: row.email,
+  agentsPolicy: row.agents_policy,
   createdAt: row.created_at,
   expiresAt: row.expires_at,
   claimedBy: row.claimed_by,
@@ -99,12 +106,17 @@ export class Shares {
   // ---- links ----
 
   /**
-   * A new link into a shared workspace, made by anyone in it. The secret is returned here and can be read again by
-   * the people who may see the link. With an email address, only the person with that address can claim the link.
+   * A new link into a shared workspace. Only the workspace's owner makes one: nobody else brings a new person in. The
+   * secret is returned here and the owner can read it again. With an email address, only the person with that address
+   * can claim the link. `agents` is the owner's choice for the person coming in: `self` (the default) or `ask`.
    */
-  create(byId: string, workspaceId: string, input: { email?: unknown } = {}): { share: Share; secret: string } {
+  create(byId: string, workspaceId: string, input: { email?: unknown; agents?: unknown } = {}): { share: Share; secret: string } {
     const workspace = this.sharedFor(byId, workspaceId);
+    if (workspace.ownerId !== byId) {
+      throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can share that Portico: the owner decides who comes in.`);
+    }
     const email = input.email === undefined || input.email === null || input.email === "" ? null : cleanEmail(input.email);
+    const agentsPolicy = cleanAgentsPolicy(input.agents);
     const secret = newLinkSecret();
     const at = this.now();
     const share: Share = {
@@ -112,6 +124,7 @@ export class Shares {
       workspaceId: workspace.id,
       createdBy: byId,
       email,
+      agentsPolicy,
       createdAt: at.toISOString(),
       expiresAt: new Date(at.getTime() + LIMITS.shareDays * DAY_MS).toISOString(),
       claimedBy: null,
@@ -120,8 +133,8 @@ export class Shares {
     };
     this.db
       .query(
-        `INSERT INTO shares (id, workspace_id, created_by, secret_hash, secret_box, email, created_at, expires_at)
-         VALUES ($id, $workspaceId, $createdBy, $hash, $box, $email, $createdAt, $expiresAt)`,
+        `INSERT INTO shares (id, workspace_id, created_by, secret_hash, secret_box, email, agents_policy, created_at, expires_at)
+         VALUES ($id, $workspaceId, $createdBy, $hash, $box, $email, $agentsPolicy, $createdAt, $expiresAt)`,
       )
       .run({
         id: share.id,
@@ -130,11 +143,13 @@ export class Shares {
         hash: hashSecret(secret),
         box: seal(this.signingKey, SHARE_SEAL, secret),
         email,
+        agentsPolicy,
         createdAt: share.createdAt,
         expiresAt: share.expiresAt,
       });
     this.log("share_created", { share_id: share.id, workspace_id: workspace.id, emailed: email !== null });
     this.changes.emit("workspaces");
+    this.onShared?.(share, workspace);
     return { share, secret };
   }
 
@@ -143,9 +158,26 @@ export class Shares {
     return row ? toShare(row) : null;
   }
 
-  /** Whether the link still lets someone in. */
+  /** Whether the link still lets someone in: not ended, not run out, and not used yet. A link works once. */
   isOpen(share: Share): boolean {
-    return share.revokedAt === null && Date.parse(share.expiresAt) > this.now().getTime();
+    return share.revokedAt === null && share.claimedBy === null && Date.parse(share.expiresAt) > this.now().getTime();
+  }
+
+  /** Set by portico.ts: a link was made, or ended, for the workspace's record. */
+  onShared: ((share: Share, workspace: Workspace) => void) | null = null;
+  onEnded: ((share: Share, workspace: Workspace, byId: string) => void) | null = null;
+  /** Set by portico.ts: a person came in with a link, with these agents. The link's maker is told who. */
+  onEntered: ((share: Share, workspace: Workspace, person: Person, agents: Agent[]) => void) | null = null;
+
+  /**
+   * The workspace a link already let this person into, when the secret is that link's and the person is still there.
+   * Only the person who used a link learns that it was used: anyone else gets the one answer for every dead link.
+   */
+  usedBy(rawSecret: unknown, personId: string): Workspace | null {
+    const secret = shareSecret(rawSecret);
+    const row = secret ? (this.db.query("SELECT * FROM shares WHERE secret_hash = $hash").get({ hash: hashSecret(secret) }) as ShareRow | null) : null;
+    if (!row || row.claimed_by !== personId || !this.workspaces.hasPerson(row.workspace_id, personId)) return null;
+    return this.workspaces.get(row.workspace_id);
   }
 
   /**
@@ -179,7 +211,7 @@ export class Shares {
     const workspace = this.workspaces.get(workspaceId);
     if (!workspace || !this.workspaces.hasPerson(workspace.id, personId)) return [];
     const rows = this.db
-      .query("SELECT * FROM shares WHERE workspace_id = $workspaceId AND revoked_at IS NULL AND expires_at > $now ORDER BY created_at, id")
+      .query("SELECT * FROM shares WHERE workspace_id = $workspaceId AND revoked_at IS NULL AND claimed_by IS NULL AND expires_at > $now ORDER BY created_at, id")
       .all({ workspaceId, now: this.iso() }) as ShareRow[];
     return rows.map(toShare).filter((share) => share.createdBy === personId || workspace.ownerId === personId);
   }
@@ -210,6 +242,7 @@ export class Shares {
     })();
     this.log("share_revoked", { share_id: share.id });
     this.changes.emit("workspaces", "approvals");
+    if (share.revokedAt === null) this.onEnded?.(share, workspace, byId);
     return { ...share, revokedAt: share.revokedAt ?? at };
   }
 
@@ -240,18 +273,24 @@ export class Shares {
   }
 
   /**
-   * The person comes into the link's workspace with one agent, once the person allowed that on the consent page. Claims
-   * the link for the person. The one place a person comes into someone else's workspace; call inside a transaction.
+   * The person comes into the link's workspace with the agents the person picked, once the person allowed that on the
+   * consent page. Uses the link up: it lets nobody in again. The owner's choice on the link becomes the person's in the
+   * workspace. The one place a person comes into someone else's workspace; call inside a transaction.
    */
-  enter(share: Share, person: Person, agent: Agent): Workspace {
+  enter(share: Share, person: Person, agents: Agent[]): Workspace {
     const workspace = this.workspaces.get(share.workspaceId);
     if (!workspace || !this.worksFor(share, person)) throw new PorticoError("not_found", DEAD_LINK);
-    if (share.claimedBy === null) {
-      this.db.query("UPDATE shares SET claimed_by = $personId, claimed_at = $at WHERE id = $id AND claimed_by IS NULL").run({ id: share.id, personId: person.id, at: this.iso() });
-    }
-    this.workspaces.admit(workspace.id, person.id);
-    this.workspaces.addAgent(person.id, workspace.id, agent.id);
-    this.log("share_entered", { share_id: share.id, workspace_id: workspace.id, agent_id: agent.id });
+    if (agents.some((agent) => agent.ownerId !== person.id)) throw new PorticoError("not_allowed", "Only the person who manages an agent can add the agent to a Portico.");
+    const claimed = this.db
+      .query("UPDATE shares SET claimed_by = $personId, claimed_at = $at WHERE id = $id AND claimed_by IS NULL")
+      .run({ id: share.id, personId: person.id, at: this.iso() }).changes;
+    if (claimed !== 1) throw new PorticoError("not_found", DEAD_LINK);
+    // Every other request waiting on the link ends with it.
+    this.db.query("UPDATE consent_requests SET status = 'expired' WHERE share_id = $id AND status = 'pending'").run({ id: share.id });
+    this.workspaces.admit(workspace.id, person.id, share.agentsPolicy);
+    for (const agent of agents) this.workspaces.addAgent(person.id, workspace.id, agent.id, { allowed: true });
+    this.log("share_entered", { share_id: share.id, workspace_id: workspace.id, agents: agents.length });
+    this.onEntered?.({ ...share, claimedBy: person.id }, workspace, person, agents);
     return workspace;
   }
 

@@ -73,19 +73,51 @@ export function consentWords(view: ConsentView, me: string, agentName: (agent: A
     }
     case "enter":
       return {
-        title: "Let an agent into a Portico",
+        title: "Come into a Portico",
         asks: `${asker} asks to come into ${place}, shared by ${by}.`,
-        then: [`Once allowed, everyone in that Portico can message the agent, and the agent can message the agents there. ${me} comes into the Portico too.`],
+        then: [
+          `Once allowed, ${me} comes into that Portico with the agents ticked below. Everyone in that Portico can message those agents, and those agents can message the agents there.`,
+          view.share?.agentsPolicy === "ask"
+            ? `${by} asked to allow each agent ${me} adds there later.`
+            : `${me} can add more agents there later, with no further question.`,
+          "The share link works once: afterwards the link lets nobody else in.",
+        ],
         allow: "Allow",
       };
+    case "add_agent": {
+      const subject = view.subject ? quote(agentName(view.subject)) : "an agent";
+      return {
+        title: "Put an agent in a Portico",
+        asks: `${asker} asks to put the agent ${subject} into ${place}.`,
+        then: ["Once allowed, everyone in that Portico can message the agent, and the agent can message the agents there."],
+        allow: "Allow",
+      };
+    }
+    case "admit_agent": {
+      const who = target ? `${target.name}${target.handle ? ` (${target.handle})` : ""}` : "A person in the Portico";
+      const subject = view.subject ? quote(agentName(view.subject)) : "an agent";
+      return {
+        title: "Let one more agent into a Portico",
+        asks: `${who} asks to put the agent ${subject} into ${place}.`,
+        then: [
+          `${me} chose to be asked for each agent ${target?.name ?? "that person"} adds there. Once allowed, everyone in that Portico can message the agent, and the agent can message the agents there.`,
+          "No code is needed: only the owner of the Portico, signed in, can answer here.",
+        ],
+        allow: "Allow",
+      };
+    }
     case "share": {
       const email = request.detail.email;
       return {
         title: "Share a Portico",
         asks: `${asker} asks to share ${place} with ${email ? quote(email) : "one more person"}.`,
         then: [
-          `Once allowed, Portico makes a link that lets one person into that Portico for ${LIMITS.shareDays} days, with the agents that person chooses. Those agents and the agents already there can then message each other.`,
+          `Once allowed, Portico makes a link that lets one person into that Portico, once, within ${LIMITS.shareDays} days, with the agents that person chooses. Those agents and the agents already there can then message each other.`,
+          request.detail.agents === "ask"
+            ? `That person asks ${me} for each agent added there afterwards.`
+            : `That person can add more of that person's own agents there afterwards, with no further question.`,
           email ? "Portico emails the link to that address, and only an account with that address can use the link." : "The link shows here next, to hand to that person.",
+          `${me} is told who came in, and can take that person out in one step.`,
         ],
         allow: "Allow",
       };

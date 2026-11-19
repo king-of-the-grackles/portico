@@ -117,6 +117,7 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
       name: body.name,
       description: body.description,
       approvalRequired: body.approvalRequired,
+      outboundHold: body.outboundHold,
       joinFromFolder: body.joinFromFolder,
     });
     return c.json({ agent: personViews(core, me).agent(agent) });
@@ -126,6 +127,13 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
     const me = currentPerson(c);
     agents.remove(me.id, c.req.param("id"));
     return c.body(null, 204);
+  });
+
+  // The one-step stop for an agent: its tokens die, it leaves every Portico, and what it had on its way is withdrawn.
+  route.post("/:id/revoke", (c) => {
+    const me = currentPerson(c);
+    const agent = agents.revoke(me.id, c.req.param("id"));
+    return c.json({ agent: personViews(core, me).agent(agent) });
   });
 
   // The key goes in once and never comes back out: the answer shows only the host and how the last wake went.

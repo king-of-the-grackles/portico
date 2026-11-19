@@ -42,6 +42,24 @@ export function eventText(e: ActivityView): { tag: string; line: string; who: st
       return { tag: "Setting", line: `Wake URL for ${agent} set to ${String(e.detail.host ?? "")}`, who: e.detail.by_agent === true ? agent : person };
     case "wake_removed":
       return { tag: "Setting", line: `Wake URL for ${agent} removed`, who: e.detail.by_agent === true ? agent : person };
+    case "outbound_switched":
+      return { tag: "Setting", line: `Ask before ${agent} sends to other people's agents: ${onOff(e.detail.on)}`, who: person };
+    case "agent_revoked":
+      return { tag: "Revoked", line: `${agent} revoked: signed out and out of every Portico`, who: person };
+    case "portico_agent_joined":
+      return { tag: "Portico", line: `${agent} came into a Portico`, who: person };
+    case "portico_agent_left":
+      return { tag: "Portico", line: `${agent} left a Portico`, who: person };
+    case "portico_held":
+      return { tag: "Held", line: `A message from ${other} to ${agent} was held`, who: "" };
+    case "portico_refused":
+      return { tag: "Refused", line: `A send by ${agent} was refused`, who: "" };
+    case "portico_burst":
+      return { tag: "Alert", line: `${other} sent ${String(e.detail.count ?? "many")} messages in a few minutes`, who: "" };
+    case "portico_refusals":
+      return { tag: "Alert", line: `${agent} had ${String(e.detail.count ?? "many")} sends refused in a few minutes`, who: "" };
+    default:
+      return { tag: "Portico", line: "A change in a Portico", who: person };
   }
 }
 

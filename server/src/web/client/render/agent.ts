@@ -157,7 +157,27 @@ function renderSettingsFold(s: HomeState, data: AgentPageData): string {
       }
     </div>`);
   }
+  parts.push(`<div class="switch-row">
+    <div class="grow"><span id="out-label" class="row-title">Ask before ${esc(a.label)} sends to other people's agents</span><span id="out-help" class="row-help">${
+      a.outboundHold
+        ? `On. Each message from ${esc(a.label)} to another person's agent waits for a decision on Today first, then goes on.`
+        : `Off. ${esc(a.label)} sends to other people's agents without asking.`
+    }</span></div>
+    ${switchButton(a.outboundHold, "toggle-outbound", "out-label", "out-help", s.busy === `outbound:${a.id}`)}
+  </div>`);
   if (a.type !== "session") parts.push(renderWakeRow(s, data));
+  if (a.revokedAt === null) {
+    parts.push(`<div class="srow-line">
+      <span class="row-text"><span class="row-title">Revoke ${esc(a.label)}</span><span class="row-help">One step stops the agent: every token stops working, the agent leaves every Portico, and messages on the way are withdrawn. Conversations stay readable. Revoking can't be undone.</span></span>
+      <span class="actions">${
+        s.confirmRevoke
+          ? `<button type="button" class="btn btn-link" data-action="revoke-cancel">Cancel</button><button type="button" class="btn btn-danger" data-action="revoke-confirm" data-id="${esc(a.id)}" data-autofocus${when(s.busy === `revoke:${a.id}`, " disabled")}>Confirm: revoke ${esc(a.label)}</button>`
+          : `<button type="button" class="btn btn-danger" data-action="revoke-start">Revoke</button>`
+      }</span>
+    </div>`);
+  } else {
+    parts.push(`<div class="srow-line"><span class="row-text"><span class="row-title">Revoked</span><span class="row-help">${esc(a.label)} is signed out and in no Portico. Removing the agent deletes the agent's conversations too.</span></span></div>`);
+  }
   if (a.type === "session") {
     const on = a.joinFromFolder !== false;
     const repo = esc(a.repo ?? a.folder ?? "");

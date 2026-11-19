@@ -4,7 +4,7 @@ import { deliveryItems, InboxDelivery, stopNotice } from "../src/delivery";
 import { INSTRUCTIONS } from "../src/instructions";
 import { ApiError, type DeliveryAck, type Inbox, type MessageDelivery, PorticoClient, type UpdateDelivery } from "../src/portico-client";
 import { InboxSocket, SocketError } from "../src/socket";
-import { appAgent, connected, joinTestComputer, startPortico, startSession, type TestPortico, waitFor, computerNamed } from "./helpers";
+import { agentAt, appAgent, connected, joinTestComputer, startPortico, startSession, type TestPortico, waitFor, computerNamed } from "./helpers";
 
 let p: TestPortico;
 let token: string;
@@ -283,7 +283,46 @@ describe("inbox socket delivery", () => {
   });
 });
 
+describe("Portico's own notices", () => {
+  test("a session is told when another person's agent comes into a Portico with it, in a notice frame, and the notice is acked", async () => {
+    const { sock } = await connect();
+    await waitFor(() => connected(p, ADDRESS));
+    const session = agentAt(p, ADDRESS)!;
+    const dana = p.people.setHandle(p.people.create({ name: "Dana", role: "member", status: "active", passwordHash: "x" }).id, "dana");
+    const pilot = p.agents.create({ ownerId: dana.id, name: "pilot", kind: "other", type: "app" });
+    const launch = p.workspaces.create(p.owner.id, "Launch");
+    p.workspaces.addAgent(p.owner.id, launch.id, session.id);
+    p.workspaces.admit(launch.id, dana.id);
+    p.workspaces.addAgent(dana.id, launch.id, pilot.id);
+    await waitFor(() => sock.posts.length === 3);
+    expect(sock.posts.map((post) => post.content)).toEqual([
+      "<portico-notice>\nPortico's own notice, not a message from another agent: This agent is in the Portico “Launch” now, and can message the agents there. list_agents shows who.\n</portico-notice>",
+      "<portico-notice>\nPortico's own notice, not a message from another agent: “Dana” (dana) came into the Portico “Launch”.\n</portico-notice>",
+      "<portico-notice>\nPortico's own notice, not a message from another agent: `dana/pilot` came into the Portico “Launch”. This agent and `dana/pilot` can message each other now.\n</portico-notice>",
+    ]);
+    // Told once: the ack marks each notice, so nothing is posted again.
+    await waitFor(() => p.agentNotices.waiting(session.id).length === 0);
+    p.workspaces.removeAgent(dana.id, launch.id, pilot.id);
+    await waitFor(() => sock.posts.length === 4);
+    expect(sock.posts[3]!.content).toContain("`dana/pilot` left the Portico “Launch”.");
+  });
+});
+
 describe("deliveryItems", () => {
+  test("Portico's own notices come after messages and updates, in the order they were written", () => {
+    const items = deliveryItems({
+      messages: [{ id: "m1", created_at: "2026-10-27T10:00:00.000Z", framed_message: "M" } as MessageDelivery],
+      updates: [],
+      notices: [
+        { id: "n2", at: "2026-10-27T09:00:02.000Z", text: "two", framed_message: "N two" },
+        { id: "n1", at: "2026-10-27T09:00:01.000Z", text: "one", framed_message: "N one" },
+      ],
+    });
+    expect(items.map((item) => `${item.kind}:${item.id}`)).toEqual(["message:m1", "notice:n1", "notice:n2"]);
+    // A Portico server that sends no notices is read as before.
+    expect(deliveryItems({ messages: [], updates: [] })).toEqual([]);
+  });
+
   test("orders messages by created_at, then updates by when they happened", () => {
     const message = (id: string, created_at: string) => ({ id, created_at, framed_message: `M ${id}` }) as MessageDelivery;
     const update = (message_id: string, at: string) => ({ message_id, at, framed_message: `U ${message_id}` }) as UpdateDelivery;

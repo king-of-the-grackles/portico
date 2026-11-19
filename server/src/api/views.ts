@@ -12,6 +12,7 @@ import type {
   AgentKind,
   AgentType,
   Decision,
+  HeldFor,
   LiveStatus,
   Message,
   MessageStatus,
@@ -72,6 +73,10 @@ export interface AgentView {
   lastSeen: string | null;
   checkInMinutes: number | null;
   approvalRequired: boolean;
+  /** "Ask me before this agent sends to other people's agents." Only said to the agent's own person. */
+  outboundHold: boolean;
+  /** When the agent's person revoked it, or null. */
+  revokedAt: string | null;
   createdAt: string;
   /** Sessions: how many terminals or Codex conversations are open in the folder now. */
   liveRuns: number;
@@ -112,7 +117,7 @@ export interface MessageView {
 
 /** A held message as its approval card shows it, with the facts Portico checks itself (managedBy: the sender's manager). */
 export interface HeldCard extends MessageView {
-  facts: { managedBy: PersonRef; replyToRecipient: boolean; earlier: { decision: Decision; at: string }[] };
+  facts: { managedBy: PersonRef; heldFor: HeldFor; replyToRecipient: boolean; earlier: { decision: Decision; at: string }[] };
 }
 
 /** One side of a thread, with who manages the agent: the panel names managers when two people's agents talk. */
@@ -304,6 +309,8 @@ export function personViews(deps: ViewDeps, me: Person) {
       lastSeen: entry.lastSeen,
       checkInMinutes: entry.checkInMinutes,
       approvalRequired: a.approvalRequired,
+      outboundHold: a.ownerId === me.id && a.outboundHold,
+      revokedAt: a.revokedAt,
       createdAt: a.createdAt,
       liveRuns: agents.liveRuns(a.id),
     };
@@ -354,7 +361,7 @@ export function personViews(deps: ViewDeps, me: Person) {
             createdAt: previous.createdAt,
           }
         : view.replyTo,
-      facts: { managedBy: personRef(facts.managedBy.id), replyToRecipient: facts.replyToRecipient, earlier: facts.earlier },
+      facts: { managedBy: personRef(facts.managedBy.id), heldFor: facts.heldFor, replyToRecipient: facts.replyToRecipient, earlier: facts.earlier },
     };
   };
 
@@ -365,8 +372,13 @@ export function personViews(deps: ViewDeps, me: Person) {
       : { id, display: id, label: id, kind: "other", owner: personRef("") };
   };
 
+  /** A message held on its way out is its sender's person's to see first: the other side reads it once it is let go. */
+  const notYetSent = (m: Pick<Message, "status" | "heldFor" | "fromId">): boolean =>
+    m.status === "held" && m.heldFor === "outbound" && agents.get(m.fromId)?.ownerId !== me.id;
+
   const thread = (t: Thread): ThreadView => {
-    const summary = messages.threadSummary(t);
+    const found = messages.threadSummary(t);
+    const summary = found.last && notYetSent(found.last) ? { ...found, last: null } : found;
     return {
       id: t.id,
       ...place(t.workspaceId, t.aId, t.bId),
@@ -410,7 +422,8 @@ export function personViews(deps: ViewDeps, me: Person) {
     range: { before?: string; limit?: number } = {},
   ): { thread: ThreadView; messages: MessageView[]; more: boolean } => {
     const page = messages.inThread(t, range);
-    return { thread: thread(t), messages: page.messages.map(message), more: page.more };
+    const shown = page.messages.filter((m) => !notYetSent(m));
+    return { thread: thread(t), messages: shown.map(message), more: page.more };
   };
 
   const projectOf = (id: string): string | null => {
@@ -463,7 +476,7 @@ export function personViews(deps: ViewDeps, me: Person) {
     detail: e.detail,
   });
 
-  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef, task, run, activity, place };
+  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef, task, run, activity, place, notYetSent };
 }
 
 export type PersonViews = ReturnType<typeof personViews>;

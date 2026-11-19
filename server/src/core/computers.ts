@@ -4,6 +4,7 @@ import type { Activity } from "./activity";
 import type { Changes } from "./changes";
 import type { Content } from "./content";
 import { PorticoError } from "./errors";
+import { isReservedName, nameKey } from "./names";
 import { HOUR_MS } from "./limits";
 import { hashSecret, newToken } from "./tokens";
 import type { AgentKind, Computer } from "./types";
@@ -205,9 +206,14 @@ export class Computers {
   }
 
   /** The base name, or the first free `<base>-2` … `<base>-99`. A name is unique among its owner's computers. */
-  private freeName(base: string, ownerId: string): string {
-    const taken = (name: string) =>
-      this.db.query("SELECT 1 FROM computers WHERE owner_id = $ownerId AND name = $name").get({ ownerId, name }) !== null;
+  /**
+   * The first free form of the name among the owner's computers. A name that only reads like another computer's
+   * (look-alike characters folded, as for handles) counts as taken, and a reserved word gets `-computer` added.
+   */
+  private freeName(proposed: string, ownerId: string): string {
+    const base = isReservedName(proposed) ? `${proposed}-computer` : proposed;
+    const keys = new Set((this.db.query("SELECT name FROM computers WHERE owner_id = $ownerId").all({ ownerId }) as { name: string }[]).map((row) => nameKey(row.name)));
+    const taken = (name: string) => keys.has(nameKey(name));
     let name = base;
     for (let n = 2; taken(name); n++) {
       if (n > MAX_DEDUPE) throw new PorticoError("rate_limited", `Too many computers named ${base}. Remove some first.`);

@@ -49,6 +49,8 @@ function sessionOn(id: string, computer: { id: string; name: string }, status: A
     lastSeen: at(11, 50),
     checkInMinutes: null,
     approvalRequired: false,
+    outboundHold: false,
+    revokedAt: null,
     createdAt: at(9, 0, 8),
   };
 }

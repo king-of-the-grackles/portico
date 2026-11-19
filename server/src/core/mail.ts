@@ -47,9 +47,20 @@ const stopLine = (stopUrl: string) =>
  * sentences, with anything an agent supplied already quoted and cleaned by the caller, then the link. Never a code,
  * and never a message's subject or text: those show on the page, to the signed-in person.
  */
-export function noticeEmail(o: { subject: string; lines: string[]; link: string; after: string[]; stopUrl: string }): { subject: string; text: string; html: string } {
-  const text = [...o.lines, o.link, ...o.after, `Stop emails from Portico to this address: ${o.stopUrl}`].join("\n\n");
-  const html = page(`${o.lines.map(para).join("")}${linkBox(o.link)}${o.after.map(para).join("")}${stopLine(o.stopUrl)}`);
+export function noticeEmail(o: {
+  subject: string;
+  lines: string[];
+  link: string;
+  after: string[];
+  /** The one-step stop that fits the notice: a sentence, and the page where the step is. */
+  stop?: { line: string; link: string };
+  stopUrl: string;
+}): { subject: string; text: string; html: string } {
+  const stop = o.stop ? [o.stop.line, o.stop.link] : [];
+  const text = [...o.lines, o.link, ...o.after, ...stop, `Stop emails from Portico to this address: ${o.stopUrl}`].join("\n\n");
+  const html = page(
+    `${o.lines.map(para).join("")}${linkBox(o.link)}${o.after.map(para).join("")}${o.stop ? `${para(o.stop.line)}${linkBox(o.stop.link)}` : ""}${stopLine(o.stopUrl)}`,
+  );
   return { subject: o.subject, text, html };
 }
 
@@ -86,7 +97,16 @@ export interface ShareMailDeps {
   log?: (msg: string, fields: Record<string, unknown>) => void;
 }
 
-type MailKind = "share" | "consent" | "held";
+type MailKind = "share" | "consent" | "held" | "record" | "alert";
+
+/** What a notice email says: Portico's own lines, the page to open, and the one-step stop that fits. */
+export interface NoticeMail {
+  subject: string;
+  lines: string[];
+  link: string;
+  after: string[];
+  stop?: { line: string; link: string };
+}
 
 /**
  * Portico's email, through Resend: a share link to the person invited, and to a person Portico knows, the link to a
@@ -166,10 +186,11 @@ export class ShareMail {
 
   /**
    * Emails a person Portico knows the link to one of that person's own pages: a consent request an agent of the
-   * person's made, or a message held for the person's decision. Once per request or message. The person's own address
-   * only, the one the sign-in service verified; a person without one gets no email.
+   * person's made, a message held for the person's decision, what happened in a Portico the person is in (`record`),
+   * or an alert about one. Once per `refId`. The person's own address only, the one the sign-in service verified; a
+   * person without one gets no email. Every notice counts against the limit per person, so nothing here can flood.
    */
-  async notify(kind: "consent" | "held", refId: string, to: Person, mail: { subject: string; lines: string[]; link: string; after: string[] }): Promise<MailOutcome> {
+  async notify(kind: "consent" | "held" | "record" | "alert", refId: string, to: Person, mail: NoticeMail): Promise<MailOutcome> {
     if (!this.config) return "off";
     if (to.email === null) return "failed";
     return this.deliver({ kind, refId, workspaceId: null, by: to.id, to: to.email, resends: 0, mail: (stopUrl) => noticeEmail({ ...mail, stopUrl }) });
@@ -189,8 +210,10 @@ export class ShareMail {
     if (this.isBlocked(to)) return "blocked";
     const at = this.now();
     const since = new Date(at.getTime() - DAY_MS).toISOString();
+    // Share emails count on their own; every notice to a person counts together, whatever the notice is about.
+    const kinds = kind === "share" ? "kind = 'share'" : "kind != 'share'";
     const count = (where: string, value: string) =>
-      (this.db.query(`SELECT COUNT(*) AS n FROM mails WHERE kind = $kind AND ${where} = $value AND sent_at > $since`).get({ kind, value, since }) as { n: number }).n;
+      (this.db.query(`SELECT COUNT(*) AS n FROM mails WHERE ${kinds} AND ${where} = $value AND sent_at > $since`).get({ value, since }) as { n: number }).n;
     const last = this.db.query("SELECT number, sent_at FROM mails WHERE kind = $kind AND ref_id = $refId ORDER BY number DESC LIMIT 1").get({ kind, refId }) as {
       number: number;
       sent_at: string;

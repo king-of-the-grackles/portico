@@ -52,7 +52,7 @@ describe("PorticoClient", () => {
     expect(reply.message.to).toBe("api-claude");
     const waiting = await client.pendingDeliveries();
     expect(waiting.messages.map((m) => m.id)).toEqual([reply.message.id]);
-    expect(await client.ackDeliveries({ messages: [reply.message.id], updates: [] })).toEqual({ acked: { messages: 1, updates: 0 } });
+    expect(await client.ackDeliveries({ messages: [reply.message.id], updates: [] })).toEqual({ acked: { messages: 1, updates: 0, notices: 0 } });
     expect((await client.pendingDeliveries()).messages).toEqual([]);
   });
 

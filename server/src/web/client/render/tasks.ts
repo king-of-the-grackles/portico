@@ -36,6 +36,7 @@ export function taskLine(t: TaskView): string {
         const by = t.steps.find((s) => s.kind === "denied")?.by;
         return by ? `Not allowed by ${by.name}.` : "Not allowed.";
       }
+      if (t.reason === "withdrawn") return "Withdrawn before delivery: the Portico was paused or deleted, or one of the two agents left the Portico.";
       if (t.reason === "expired") {
         return t.heldAt && !t.steps.some((s) => s.kind === "allowed")
           ? `Expired: no decision within ${TASK_WINDOW}.`
@@ -64,6 +65,7 @@ const STEP_LABEL = {
   denied: (_t: TaskView, by: string | null) => `Not allowed${by ? ` by ${by}` : ""}`,
   picked_up: (t: TaskView) => `Picked up by ${t.to.label}`,
   expired: () => "Expired",
+  withdrawn: () => "Withdrawn",
   answered: () => "Answered",
 } as const;
 
@@ -159,13 +161,15 @@ export function decideButtons(s: HomeState, m: HeldCard): string {
   const busy = s.busy === `decide:${m.id}`;
   const id = esc(m.id);
   return `<button type="button" class="btn btn-text" data-action="decide" data-id="${id}" data-decision="deny"${when(busy, " disabled")}>Don't allow</button>
-      <button type="button" class="btn btn-secondary" data-action="decide" data-id="${id}" data-decision="always_allow"${when(busy, " disabled")}>Always allow ${esc(m.from.label)}</button>
+      ${when(m.facts.heldFor !== "outbound", () => `<button type="button" class="btn btn-secondary" data-action="decide" data-id="${id}" data-decision="always_allow"${when(busy, " disabled")}>${m.facts.heldFor === "first_contact" ? `Always for ${esc(m.facts.managedBy.name)}` : `Always allow ${esc(m.from.label)}`}</button>`)}
       <button type="button" class="btn btn-primary" data-action="decide" data-id="${id}" data-decision="allow_once"${when(busy, " disabled")}>Allow once</button>`;
 }
 
 /** Why the message waits, in Portico's own words: never anything the sender wrote. */
 function heldReason(s: HomeState, m: HeldCard): string {
   const parts: string[] = [];
+  if (m.facts.heldFor === "outbound") return `${m.from.label} sends to other people's agents only once ${s.me.name} has seen each message. Nothing has reached ${m.to.label}.`;
+  if (m.facts.heldFor === "first_contact") parts.push(`${s.me.name} hasn't allowed messages from ${m.facts.managedBy.name}'s agents yet.`);
   if (m.facts.replyToRecipient) parts.push(`Follows a message from ${m.to.label}, but starts a new conversation.`);
   else if (m.facts.earlier.length === 0) parts.push(`First time ${m.from.label} has asked ${m.to.label} for anything, and new contacts need approval.`);
   else parts.push(`New contacts need approval. ${m.from.label} has asked before.`);

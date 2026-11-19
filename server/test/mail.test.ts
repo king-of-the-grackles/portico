@@ -104,7 +104,8 @@ describe("emailing a share link", () => {
       const member = p.people.setHandle((await addMember(p, `Member ${m}`)).id, `member-${m}`);
       p.workspaces.admit(launch.id, member.id);
       for (let i = 0; i < MAIL_LIMITS.perPersonDaily && last !== "workspace_limit"; i++) {
-        const { share, secret } = p.shares.create(member.id, launch.id, { email: `m${m}-${i}@example.com` });
+        // Only the owner makes a link. The limit per Portico counts whoever each email is sent for.
+        const { share, secret } = p.shares.create(p.workspaces.get(launch.id)!.ownerId, launch.id, { email: `m${m}-${i}@example.com` });
         last = await p.mail.send(share, `https://portico.example.com/share#${secret}`, member);
         if (last === "sent") sent++;
       }

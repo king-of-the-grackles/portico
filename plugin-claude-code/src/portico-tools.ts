@@ -36,7 +36,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "add_to_portico",
-    "description": "Put one agent of the person who manages this agent into a Portico that person is in. Everyone in the Portico can then message the agent. An agent that person took out of that person's own Portico stays out: only the person puts such an agent anywhere, on Portico's pages.",
+    "description": "Put one agent of the person who manages this agent into a Portico that person is in. Everyone in the Portico can then message the agent. In a Portico that person made, the agent is in at once. In a Portico someone else made, the answer is waiting_for_person: that person allows the request on Portico's page with a 4-digit code, or, where the Portico's owner asked to allow each agent, the owner does (waiting_for_owner, with no code). An agent that person took out of that person's own Portico stays out: only the person puts such an agent anywhere, on Portico's pages.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -122,7 +122,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "share_portico",
-    "description": "Ask to share a Portico with one more person. The person who manages this agent allows the request first on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link and a 4-digit code. Calling again after the code ran out gives a fresh one. list_porticos then shows the request approved, with a share link that works for 7 days and for one person: that person hands the link to an agent. With email, Portico sends the link to that address, and only that address can use the link.",
+    "description": "Ask to share a Portico with one more person. Only the Portico's owner can, and the person who manages this agent allows the request first on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link and a 4-digit code. Calling again after the code ran out gives a fresh one. list_porticos then shows the request approved, with a share link that works once, within 7 days, for one person: that person hands the link to an agent. With email, Portico sends the link to that address, and only that address can use the link. The owner is told who came in.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -133,6 +133,14 @@ export const PORTICO_TOOLS: Tool[] = [
         "email": {
           "type": "string",
           "description": "Optional. The address to email the link to."
+        },
+        "agents": {
+          "type": "string",
+          "enum": [
+            "self",
+            "ask"
+          ],
+          "description": "Optional. What the person coming in may do afterwards. self (the default): add more of that person's own agents with no further question. ask: each agent that person adds later waits for the owner's Allow."
         }
       },
       "required": [
@@ -143,7 +151,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "join_portico",
-    "description": "Come into a Portico with a share link that someone sent to the person who manages this agent. The answer is waiting_for_person, with a sentence to show that carries the link to Portico's page and a 4-digit code: the person types the code there. Calling again after the code ran out gives a fresh one. The share link alone lets no agent in. The same link works for more of that person's agents until the link expires.",
+    "description": "Come into a Portico with a share link that someone sent to the person who manages this agent. The answer is waiting_for_person, with a sentence to show that carries the link to Portico's page and a 4-digit code: the person types the code there, and can tick more of that person's agents to bring in under the one Allow. Calling again after the code ran out gives a fresh one. The share link alone lets no agent in, and works once: afterwards add_to_portico puts more agents in.",
     "inputSchema": {
       "type": "object",
       "properties": {

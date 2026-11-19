@@ -73,6 +73,7 @@ export function homeState(data: Omit<HomeData, "page"> & { now: number }): HomeS
     wakeEdit: null,
     saved: false,
     confirmRemove: false,
+    confirmRevoke: false,
     loadingMore: false,
     busy: null,
   };

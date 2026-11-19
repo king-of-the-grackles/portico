@@ -4,7 +4,8 @@ import type { PersonStreams } from "../api/events";
 import type { Accounts } from "./accounts";
 import type { Activity } from "./activity";
 import type { Agents } from "./agents";
-import type { AllowList, Approvals } from "./approvals";
+import type { AllowList, Approvals, Contacts } from "./approvals";
+import type { AgentNotices } from "./notices";
 import type { Changes } from "./changes";
 import type { Computers } from "./computers";
 import type { Consents } from "./consents";
@@ -47,6 +48,10 @@ export interface Core {
   files: Files;
   approvals: Approvals;
   allowList: AllowList;
+  /** First contact: whose agents get through to whose. */
+  contacts: Contacts;
+  /** Portico's own notices to agents: who came into or left a Portico. */
+  agentNotices: AgentNotices;
   activity: Activity;
   tasks: Tasks;
   presence: Presence;

@@ -2,7 +2,9 @@ import { type Context, Hono } from "hono";
 import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
 import type { Share } from "../core/shares";
-import type { Person, Workspace, WorkspaceKind } from "../core/types";
+import { recordWords } from "../core/record-words";
+import { quote } from "../core/consent-words";
+import type { AgentsPolicy, Person, Workspace, WorkspaceKind } from "../core/types";
 import { type PersonEnv, currentPerson } from "./context";
 import { jsonObject } from "./session";
 import { type PersonRef, porticoPhrase, porticoTitle } from "./views";
@@ -19,8 +21,14 @@ export interface WorkspaceView {
   kind: WorkspaceKind;
   owner: PersonRef;
   isOwner: boolean;
-  /** Everyone in it, the owner first. A personal workspace holds only its owner. */
-  people: PersonRef[];
+  /**
+   * Everyone in it, the owner first. A personal workspace holds only its owner. `agents` is the owner's choice for the
+   * person: `self`, the person adds more of the person's own agents alone; `ask`, each one waits for the owner.
+   * `allowed` says whether that person's agents get through to the signed-in person's agents without being asked about.
+   */
+  people: (PersonRef & { agents: AgentsPolicy; allowed: boolean })[];
+  /** Set while the owner has it paused: nothing moves through it. */
+  pausedAt: string | null;
   /** Every agent in it, whoever manages each. */
   agentIds: string[];
   /** Something in it waits for the person: a held message, or an agent's request about the workspace. */
@@ -33,6 +41,8 @@ export interface ShareView {
   workspaceId: string;
   /** The address the link was emailed to, or null for a link to hand over. */
   email: string | null;
+  /** The owner's choice for the person the link lets in. */
+  agents: AgentsPolicy;
   createdBy: PersonRef;
   createdAt: string;
   expiresAt: string;
@@ -67,7 +77,12 @@ export function workspaceViews(core: Core, me: Person) {
     kind: w.kind,
     owner: ref(w.ownerId),
     isOwner: w.ownerId === me.id,
-    people: [w.ownerId, ...workspaces.peopleIn(w.id).filter((id) => id !== w.ownerId)].map(ref),
+    people: [w.ownerId, ...workspaces.peopleIn(w.id).filter((id) => id !== w.ownerId)].map((id) => ({
+      ...ref(id),
+      agents: workspaces.policyOf(w.id, id),
+      allowed: core.contacts.has(me.id, id),
+    })),
+    pausedAt: w.pausedAt,
     agentIds: workspaces.agentsIn(w.id),
     needs: needs.has(w.id),
   });
@@ -77,6 +92,7 @@ export function workspaceViews(core: Core, me: Person) {
       id: s.id,
       workspaceId: s.workspaceId,
       email: s.email,
+      agents: s.agentsPolicy,
       createdBy: ref(s.createdBy),
       createdAt: s.createdAt,
       expiresAt: s.expiresAt,
@@ -98,16 +114,66 @@ export function workspaceViews(core: Core, me: Person) {
   };
 }
 
+/** One line of a Portico's record: Portico's own sentence, with no message subject or text. */
+export interface RecordView {
+  id: string;
+  at: string;
+  kind: string;
+  text: string;
+}
+
 /** What a workspace's page shows besides the workspace itself. */
 export interface WorkspacePageData {
   workspace: WorkspaceView;
   shares: ShareView[];
+  /** The Portico's record, newest first: who came in and left, shares, holds, refused sends and pauses. */
+  record: RecordView[];
+  /** What the people here asked the owner: agents waiting to come in. Only for the owner. */
+  asks: { id: string; link: string; text: string; expiresAt: string }[];
+}
+
+/** A Portico's record as one person in it reads it. */
+export function recordFor(core: Core, me: Person, workspace: Workspace): RecordView[] {
+  const person = (id: string | null) => {
+    const p = id ? core.people.get(id) : null;
+    return p ? `${p.name}${p.handle ? ` (${p.handle})` : ""}` : null;
+  };
+  const names = {
+    person,
+    agent: (id: string | null) => {
+      const agent = id ? core.agents.get(id) : null;
+      return agent ? core.agents.addressFor(agent, me.id) : null;
+    },
+    email: (id: string | null) => (id && workspace.ownerId === me.id ? (core.people.get(id)?.email ?? null) : null),
+  };
+  return core.activity.recordOf(workspace.id, { forPerson: me.id }).flatMap((entry) => {
+    const text = recordWords(entry, names);
+    return text === null ? [] : [{ id: entry.id, at: entry.at, kind: entry.kind, text }];
+  });
 }
 
 export function workspacePageData(core: Core, me: Person, id: string): WorkspacePageData {
   const views = workspaceViews(core, me);
   const workspace = core.workspaces.requireFor(me.id, id);
-  return { workspace: views.workspace(workspace), shares: core.shares.openFor(me.id, workspace.id).map((s) => views.share(s)) };
+  const asks = core.consents
+    .waitingFor(me.id)
+    .filter((request) => request.kind === "admit_agent" && request.workspaceId === workspace.id)
+    .map((request) => {
+      const asker = request.detail.personId ? core.people.get(request.detail.personId) : null;
+      const subject = request.detail.agentId ? core.agents.get(request.detail.agentId) : null;
+      return {
+        id: request.id,
+        link: `/c/${request.id}`,
+        text: `${asker?.name ?? "A person here"} asks to put the agent ${quote(subject ? core.agents.addressFor(subject, me.id) : "agent")} in.`,
+        expiresAt: request.expiresAt,
+      };
+    });
+  return {
+    workspace: views.workspace(workspace),
+    shares: core.shares.openFor(me.id, workspace.id).map((s) => views.share(s)),
+    record: recordFor(core, me, workspace),
+    asks,
+  };
 }
 
 /**
@@ -120,9 +186,14 @@ export function workspacePageData(core: Core, me: Person, id: string): Workspace
  *   PATCH  /api/porticos/:id { name }            → { workspace }
  *   DELETE /api/porticos/:id
  *   PUT    /api/porticos/:id/agents/:agentId     DELETE the same: the person's own agents in and out, the person's
- *                                                own Portico included (taking an agent out of it, and putting it back)
+ *                                                own Portico included (taking an agent out of it, and putting it back).
+ *                                                Where the owner chose to be asked, PUT answers 202 { waiting }: the
+ *                                                agent comes in once the owner allows the request.
  *   DELETE /api/porticos/:id/people/:personId    the owner removes someone, or anyone leaves
- *   POST   /api/porticos/:id/shares { email? }   → { share }: a link for one person
+ *   PATCH  /api/porticos/:id/people/:personId { agents }  the owner's choice for that person: self or ask
+ *   PUT    /api/porticos/:id/pause               DELETE the same: the owner pauses and resumes
+ *   POST   /api/porticos/:id/shares { email?, agents? }   → { share }: a link for one person, made by the owner
+ *   DELETE /api/contacts/:personId               ask again about that person's agents' messages
  *   POST   /api/shares/:id/mail                    → { share }: the share's email again
  *   DELETE /api/shares/:id
  */
@@ -163,7 +234,38 @@ export function workspaceRoutes(core: Core): Hono<PersonEnv> {
 
   route.put("/porticos/:id/agents/:agentId", (c) => {
     const me = currentPerson(c);
-    workspaces.addAgent(me.id, c.req.param("id"), c.req.param("agentId"));
+    const workspace = workspaces.requireFor(me.id, c.req.param("id"));
+    // The owner chose to be asked for each agent this person adds: the request goes to the owner.
+    if (workspaces.asksOwner(workspace.id, me.id)) {
+      const agent = core.agents.get(c.req.param("agentId"));
+      if (!agent || agent.ownerId !== me.id) throw new PorticoError("not_allowed", "Only the person who manages an agent can add the agent to a Portico.");
+      const request = core.consents.askOwner(me.id, workspace.id, agent);
+      return c.json({ waiting: true, expiresAt: request.expiresAt }, 202);
+    }
+    workspaces.addAgent(me.id, workspace.id, c.req.param("agentId"));
+    return c.body(null, 204);
+  });
+
+  route.put("/porticos/:id/pause", (c) => {
+    const me = currentPerson(c);
+    return c.json({ workspace: workspaceViews(core, me).workspace(workspaces.pause(me.id, c.req.param("id"))) });
+  });
+
+  route.delete("/porticos/:id/pause", (c) => {
+    const me = currentPerson(c);
+    return c.json({ workspace: workspaceViews(core, me).workspace(workspaces.resume(me.id, c.req.param("id"))) });
+  });
+
+  route.patch("/porticos/:id/people/:personId", async (c) => {
+    const me = currentPerson(c);
+    const body = await jsonObject(c);
+    workspaces.setPolicy(me.id, c.req.param("id"), c.req.param("personId"), body.agents);
+    return c.body(null, 204);
+  });
+
+  // First contact: taking a person off the list means the next message from that person's agents is asked about again.
+  route.delete("/contacts/:personId", (c) => {
+    core.approvals.removeAllowedPerson(currentPerson(c).id, c.req.param("personId"));
     return c.body(null, 204);
   });
 
@@ -182,7 +284,7 @@ export function workspaceRoutes(core: Core): Hono<PersonEnv> {
   route.post("/porticos/:id/shares", async (c) => {
     const me = currentPerson(c);
     const body = await jsonObject(c);
-    const { share, secret } = shares.create(me.id, c.req.param("id"), { email: body.email });
+    const { share, secret } = shares.create(me.id, c.req.param("id"), { email: body.email, agents: body.agents });
     let mail: string | null = null;
     if (share.email !== null) mail = await core.mail.send(share, `${core.settings.publicUrl()}/share#${secret}`, me);
     return c.json({ share: workspaceViews(core, me).share(share, mail) }, 201);

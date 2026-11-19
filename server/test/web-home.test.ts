@@ -53,6 +53,8 @@ function agent(o: Partial<AgentView> & { id: string; name: string }): AgentView 
     lastSeen: at(11, 56),
     checkInMinutes: null,
     approvalRequired: false,
+    outboundHold: false,
+    revokedAt: null,
     createdAt: at(9, 0, 5),
     ...o,
   };
@@ -112,9 +114,12 @@ function message(o: Partial<MessageView> & { id: string; from: AgentView; to: Ag
   };
 }
 
+/** A person as a Portico lists one: adding agents alone, and not yet allowed as a sender. */
+const inPortico = (p: { id: string; name: string }) => ({ ...p, agents: "self" as const, allowed: false });
+
 const HELD: HeldCard = {
   ...message({ id: "m-held", from: grok, to: claude, subject: "Deploy the People export to staging", status: "held", deliveredAt: null, createdAt: at(11, 58), expiresAt: at(18, 0) }),
-  facts: { managedBy: CHRIS, replyToRecipient: false, earlier: [] },
+  facts: { managedBy: CHRIS, heldFor: "approval", replyToRecipient: false, earlier: [] },
 };
 const ASKED: ConsentCard = {
   id: "s1",
@@ -226,7 +231,8 @@ const PERSONAL: WorkspaceView = {
   kind: "personal",
   owner: CHRIS,
   isOwner: true,
-  people: [CHRIS],
+  people: [inPortico(CHRIS)],
+  pausedAt: null,
   agentIds: AGENTS.filter((a) => a.mine).map((a) => a.id),
   needs: false,
 };
@@ -502,7 +508,7 @@ describe("an agent's page", () => {
 
 describe("the navigation", () => {
   test("Home with its count, Activity, the Porticos with who else is there, Agents and Settings", () => {
-    const launch: WorkspaceView = { id: "w-launch", name: "Launch", phrase: "the Launch Portico", named: true, kind: "shared", owner: CHRIS, isOwner: true, people: [CHRIS, MAYA], agentIds: [], needs: true };
+    const launch: WorkspaceView = { id: "w-launch", name: "Launch", phrase: "the Launch Portico", named: true, kind: "shared", owner: CHRIS, isOwner: true, people: [inPortico(CHRIS), inPortico(MAYA)], pausedAt: null, agentIds: [], needs: true };
     const html = render(state({ workspaces: [PERSONAL, launch] }));
     const t = text(html);
     inOrder(t, "Home 3 waiting for a decision", "Activity", "Porticos", "Your Portico", "Launch", "Something here needs a decision", "New Portico", "Agents", "Settings");

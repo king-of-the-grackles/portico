@@ -122,7 +122,7 @@ describe("a Codex conversation's link to its conversation", () => {
     a.link.nudge();
     await waitFor(() => acks.length === 1);
     expect(codex.turns).toEqual([{ threadId: "a", text: "Portico: m0, m1" }]);
-    expect(acks[0]).toEqual({ messages: ["m0", "m1"], updates: [] });
+    expect(acks[0]).toEqual({ messages: ["m0", "m1"], updates: [], notices: [] });
     expect(a.reports).toEqual(["idle", "busy"]);
   });
 

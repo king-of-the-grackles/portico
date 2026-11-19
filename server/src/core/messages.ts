@@ -8,7 +8,7 @@ import type { InboxWaits } from "./inbox-waits";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
 import { letThrough } from "./tasks";
 import type { Workspaces } from "./workspaces";
-import type { Agent, Decision, DeliveryTier, Message, MessageStatus, Notice, Thread, Workspace } from "./types";
+import type { Agent, Decision, DeliveryTier, HeldFor, Message, MessageStatus, Notice, Thread, Workspace } from "./types";
 
 interface MessageRow {
   id: string;
@@ -24,12 +24,14 @@ interface MessageRow {
   send_key: string | null;
   status: string;
   held_at: string | null;
+  held_for: string | null;
   decision: string | null;
   decided_by: string | null;
   decided_at: string | null;
   created_at: string;
   expires_at: string;
   delivered_at: string | null;
+  withdrawn_at: string | null;
   sender_notified_at: string | null;
 }
 
@@ -59,12 +61,14 @@ function toMessage(row: MessageRow, workspaceId: string): Message {
     sendKey: row.send_key,
     status: row.status as MessageStatus,
     heldAt: row.held_at,
+    heldFor: row.held_for as HeldFor | null,
     decision: row.decision as Decision | null,
     decidedBy: row.decided_by,
     decidedAt: row.decided_at,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     deliveredAt: row.delivered_at,
+    withdrawnAt: row.withdrawn_at,
     senderNotifiedAt: row.sender_notified_at,
   };
 }
@@ -98,10 +102,13 @@ export const DELIVERY_BATCH_MAX = 500;
 export const THREAD_PAGE = 200;
 export const THREAD_PAGE_MAX = 2000;
 
-/** What the sender hears about once: a held message that ended, and a message that expired before it was picked up. */
+/**
+ * What the sender hears about once: a held message that ended, a message that expired before it was picked up, and a
+ * message that was withdrawn.
+ */
 const UPDATE =
   "from_id = $agent AND sender_notified_at IS NULL AND " +
-  "((held_at IS NOT NULL AND status IN ('delivered', 'declined', 'expired')) OR (held_at IS NULL AND status = 'expired'))";
+  "((held_at IS NOT NULL AND status IN ('delivered', 'declined', 'expired')) OR (held_at IS NULL AND status = 'expired') OR status = 'withdrawn')";
 /** A message the agent can pick up now. */
 const PENDING = "to_id = $agent AND status = 'pending' AND expires_at > $now";
 
@@ -172,8 +179,16 @@ export interface MessagesDeps {
   agents: Agents;
   /** The reach rule, and which workspace a conversation goes in. */
   workspaces: Workspaces;
-  /** Whether the receiver always allows messages from the sender. */
+  /** Whether the receiver always allows messages from the sender: the agent's own list. */
   alwaysAllows: (agentId: string, senderId: string) => boolean;
+  /** First contact: whether the agents of one person get through to the agents of another. By default, everyone's do. */
+  peopleAllowed?: (personId: string, senderPersonId: string) => boolean;
+  /** The name of the person, for the sentences a held send answers with. */
+  personName?: (personId: string) => string;
+  /** The page where a held message is decided. */
+  heldLink?: (messageId: string) => string;
+  /** A send was refused: for the Portico's record and the alert about repeated refusals. Never the message. */
+  onRefused?: (refusal: { caller: Agent; receiver: Agent | null; workspace: Workspace | null; code: string }) => void;
   changes: Changes;
   /** Where check_inbox calls wait; Portico wakes them as it nudges sessions. */
   waits: InboxWaits;
@@ -196,6 +211,10 @@ export class Messages {
   private readonly agents: Agents;
   private readonly workspaces: Workspaces;
   private readonly alwaysAllows: (agentId: string, senderId: string) => boolean;
+  private readonly peopleAllowed: (personId: string, senderPersonId: string) => boolean;
+  private readonly personName: (personId: string) => string;
+  private readonly heldLink: ((messageId: string) => string) | null;
+  private readonly onRefused: NonNullable<MessagesDeps["onRefused"]>;
   private readonly changes: Changes;
   private readonly waits: InboxWaits;
   private readonly files: MessageFiles | null;
@@ -211,6 +230,10 @@ export class Messages {
     this.agents = deps.agents;
     this.workspaces = deps.workspaces;
     this.alwaysAllows = deps.alwaysAllows;
+    this.peopleAllowed = deps.peopleAllowed ?? (() => true);
+    this.personName = deps.personName ?? (() => "that agent's person");
+    this.heldLink = deps.heldLink ?? null;
+    this.onRefused = deps.onRefused ?? (() => {});
     this.changes = deps.changes;
     this.waits = deps.waits;
     this.files = deps.files ?? null;
@@ -221,9 +244,13 @@ export class Messages {
   }
 
   /**
-   * Sends a message. It's held for the receiver's owner when the receiver requires approval, doesn't always allow the
-   * sender, and hasn't itself written in the message's conversation in the last 24 hours. Every message obeys the size
-   * limit, the hourly limit and the loop guard. A reply with done: false says more is coming. A message with a key the
+   * Sends a message. Three things can hold it for a person, the first that applies:
+   * - outbound: the sender's own person asked to see what the sender writes to other people's agents;
+   * - first contact: the receiver's person hasn't allowed the sender's person yet, whatever the receiver's own setting;
+   * - approval: the receiver requires approval and doesn't always allow the sender.
+   * The last two never hold a reply in a conversation the receiver itself wrote in during the last 24 hours, and two
+   * agents of one person are never held by the first two. Every message obeys the size limit, the hourly limit and
+   * the loop guard. A reply with done: false says more is coming. A message with a key the
    * sender used before isn't sent again: the first one comes back. Attachments are file IDs: finished uploads of the
    * sender's own, or files the sender received.
    *
@@ -296,8 +323,16 @@ export class Messages {
       }
     }
     const attachments = this.attachable(caller, input.attachments);
-    let receiver: Agent | null =
-      typeof input.to === "string" && input.to.trim() !== "" ? this.agents.resolve(input.to, caller.id) : null;
+    let receiver: Agent | null = null;
+    if (typeof input.to === "string" && input.to.trim() !== "") {
+      try {
+        receiver = this.agents.resolve(input.to, caller.id);
+      } catch (err) {
+        // A name that reaches nobody is a refused send too: many in a row is what a misled agent looks like.
+        if (err instanceof PorticoError && (err.code === "unknown_agent" || err.code === "not_allowed")) this.onRefused({ caller, receiver: null, workspace: null, code: err.code });
+        throw err;
+      }
+    }
     let original: Message | null = null;
     if (input.replyTo !== undefined && input.replyTo !== null && input.replyTo !== "") {
       // Only among the caller's own workspaces: a message anywhere else answers the same as one that doesn't exist.
@@ -320,12 +355,24 @@ export class Messages {
       throw new PorticoError("bad_request", "done: false marks a reply as an update with more to come, so reply_to is required.");
     }
     if (receiver.id === caller.id) throw new PorticoError("bad_request", "An agent can't send a message to itself.");
-    const shared = this.workspaces.shared(caller.id, receiver.id);
-    if (shared.length === 0) {
+    const everyShared = this.workspaces.shared(caller.id, receiver.id);
+    if (everyShared.length === 0) {
+      this.onRefused({ caller, receiver, workspace: null, code: "not_allowed" });
       throw new PorticoError(
         "not_allowed",
         `You and \`${this.agents.nameFor(receiver, caller.ownerId)}\` no longer share a Portico, so the conversation is ` +
           "read-only. list_agents shows who can be reached now.",
+      );
+    }
+    // Nothing moves through a paused workspace. The two may still share another.
+    const shared = everyShared.filter((w) => w.pausedAt === null);
+    if (shared.length === 0) {
+      const paused = everyShared[0]!;
+      this.onRefused({ caller, receiver, workspace: paused, code: "paused" });
+      throw new PorticoError(
+        "not_allowed",
+        `${paused.phrase.charAt(0).toUpperCase()}${paused.phrase.slice(1)} is paused, so nothing moves through that Portico: this message was not sent. ` +
+          `${this.personName(paused.ownerId)}, who paused the Portico, can resume the Portico on Portico's pages.`,
       );
     }
     // A reply stays where the conversation is while that workspace still joins the two. Otherwise the conversation is
@@ -335,16 +382,20 @@ export class Messages {
     const moved = original !== null && !stays;
     const replyTo = stays ? original!.id : null;
     const rootId = stays ? original!.rootId : null;
-    this.requireBudget(caller, receiver, shared);
+    try {
+      this.requireBudget(caller, receiver, shared);
+    } catch (err) {
+      if (err instanceof PorticoError) this.onRefused({ caller, receiver, workspace, code: err.code });
+      throw err;
+    }
 
     const at = this.iso();
     const content = this.content.for(workspace.id);
     const message = content.db.transaction(() => {
       const thread = this.threadIn(content, caller.id, receiver.id) ?? this.startThread(content, caller.id, receiver.id, at);
-      const held =
-        receiver.approvalRequired &&
-        !this.alwaysAllows(receiver.id, caller.id) &&
-        !(replyTo !== null && this.receiverInConversation(content.db, replyTo, receiver.id));
+      const heldFor: HeldFor | null =
+        caller.outboundHold && caller.ownerId !== receiver.ownerId ? "outbound" : this.arrivalHold(content.db, caller, receiver, replyTo);
+      const held = heldFor !== null;
       const id = this.newId();
       const m: Message = {
         id,
@@ -361,12 +412,14 @@ export class Messages {
         sendKey,
         status: held ? "held" : "pending",
         heldAt: held ? at : null,
+        heldFor,
         decision: null,
         decidedBy: null,
         decidedAt: null,
         createdAt: at,
         expiresAt: this.iso(LIMITS.messageExpiryHours * HOUR_MS),
         deliveredAt: null,
+        withdrawnAt: null,
         senderNotifiedAt: null,
       };
       this.insert(content.db, m);
@@ -389,14 +442,7 @@ export class Messages {
           "with no reply_to.",
       );
     }
-    if (delivery === "held") {
-      notes.push(
-        `Held: ${name} requires approval for new conversations. Replies (reply_to) in a ` +
-          `conversation ${name} wrote in during the last ${LIMITS.replyWindowHours} hours aren't ` +
-          `held. A person decides within ${LIMITS.messageExpiryHours / 24} days; check_inbox reports whether the message ` +
-          "was delivered, declined or expired.",
-      );
-    }
+    if (delivery === "held") notes.push(this.heldNote(message, caller, receiver, name));
     return { message, delivery, note: notes.length > 0 ? notes.join(" ") : null, workspace };
   }
 
@@ -408,9 +454,11 @@ export class Messages {
     const at = this.iso();
     const messages: Message[][] = [];
     const updates: Message[][] = [];
+    const open = this.deliverable(caller.id);
     for (const content of this.content.of({ agent: caller.id })) {
       content.db.transaction(() => {
-        const pending = this.pendingFor(content, caller.id, at, -1);
+        // Only through a workspace the caller is in now, that isn't deleted or paused. Outcomes come from anywhere.
+        const pending = open.has(content.workspaceId) ? this.pendingFor(content, caller.id, at, -1) : [];
         const outcomes = this.updatesFor(content, caller.id, -1);
         this.markDelivered(content.db, caller.id, pending.map((m) => m.id), at);
         this.markNotified(content.db, caller.id, outcomes.map((m) => m.id), at);
@@ -428,8 +476,9 @@ export class Messages {
   pending(caller: Agent): { messages: Message[]; updates: Message[] } {
     const at = this.iso();
     const contents = this.content.of({ agent: caller.id });
+    const open = this.deliverable(caller.id);
     const pending = {
-      messages: merged(contents.map((c) => this.pendingFor(c, caller.id, at, DELIVERY_BATCH_MAX)), sentAt).slice(0, DELIVERY_BATCH_MAX),
+      messages: merged(contents.filter((c) => open.has(c.workspaceId)).map((c) => this.pendingFor(c, caller.id, at, DELIVERY_BATCH_MAX)), sentAt).slice(0, DELIVERY_BATCH_MAX),
       updates: merged(contents.map((c) => this.updatesFor(c, caller.id, DELIVERY_BATCH_MAX)), endedAt).slice(0, DELIVERY_BATCH_MAX),
     };
     this.agents.checkedIn(caller);
@@ -443,10 +492,11 @@ export class Messages {
     const updateIds = [...new Set(ack.updates)];
     const delivered: Message[] = [];
     let notified = 0;
+    const open = this.deliverable(caller.id);
     for (const content of this.content.of({ agent: caller.id })) {
       content.db.transaction(() => {
         // Marked first, then read back: only the ones this ack delivered carry this delivered_at.
-        this.markDelivered(content.db, caller.id, ids, at);
+        if (open.has(content.workspaceId)) this.markDelivered(content.db, caller.id, ids, at);
         for (const id of ids) {
           const m = this.getIn(content, id);
           if (m && m.toId === caller.id && m.deliveredAt === at) delivered.push(m);
@@ -462,17 +512,30 @@ export class Messages {
   unreadCount(agentId: string): number {
     const now = this.iso();
     let count = 0;
-    for (const { db } of this.content.of({ agent: agentId })) {
-      count += (
-        db
-          .query(
-            `SELECT (SELECT COUNT(*) FROM messages WHERE ${PENDING})
-                  + (SELECT COUNT(*) FROM messages WHERE ${UPDATE}) AS n`,
-          )
-          .get({ agent: agentId, now }) as { n: number }
-      ).n;
+    const open = this.deliverable(agentId);
+    for (const { db, workspaceId } of this.content.of({ agent: agentId })) {
+      const row = db
+        .query(
+          `SELECT (SELECT COUNT(*) FROM messages WHERE ${PENDING}) AS pending,
+                  (SELECT COUNT(*) FROM messages WHERE ${UPDATE}) AS updates`,
+        )
+        .get({ agent: agentId, now }) as { pending: number; updates: number };
+      count += (open.has(workspaceId) ? row.pending : 0) + row.updates;
     }
-    return count;
+    return count + this.extraUnread(agentId);
+  }
+
+  /** What else waits for an agent besides messages and outcomes: Portico's own notices. Set by portico.ts. */
+  extraUnread: (agentId: string) => number = () => 0;
+
+  /** The workspaces a message can reach the agent through now: the agent is in each, and none is deleted or paused. */
+  private deliverable(agentId: string): Set<string> {
+    return new Set(
+      this.workspaces
+        .ofAgent(agentId)
+        .filter((w) => w.pausedAt === null)
+        .map((w) => w.id),
+    );
   }
 
   hasWaiting(agentId: string): boolean {
@@ -680,8 +743,9 @@ export class Messages {
   }
 
   /**
-   * Held messages to agents the person manages, oldest first. Two steps: the directory says which agents are the
-   * person's, and each of the person's workspaces is asked for held messages to those agents.
+   * Held messages the person decides, oldest first: those held on arrival for agents the person manages, and those
+   * held on their way out from agents the person manages. Two steps: the directory says which agents are the person's,
+   * and each of the person's workspaces is asked for held messages of those agents.
    */
   heldFor(personId: string): Message[] {
     const mine = this.agents.ownedBy(personId).map((agent) => agent.id);
@@ -690,10 +754,86 @@ export class Messages {
     const names = among(mine, "m", bindings);
     const lists = this.content.of({ person: personId }).map(({ db, workspaceId }) =>
       (
-        db.query(`SELECT * FROM messages WHERE status = 'held' AND to_id IN (${names}) ORDER BY created_at, rowid`).all(bindings) as MessageRow[]
+        db
+          .query(
+            `SELECT * FROM messages WHERE status = 'held'
+               AND ((to_id IN (${names}) AND held_for IS NOT 'outbound') OR (from_id IN (${names}) AND held_for = 'outbound'))
+             ORDER BY created_at, rowid`,
+          )
+          .all(bindings) as MessageRow[]
       ).map((row) => toMessage(row, workspaceId)),
     );
     return merged(lists, sentAt);
+  }
+
+  /** First contacts held from one person's agents for another person's decision, oldest first. */
+  heldFromPerson(senderPersonId: string, personId: string): Message[] {
+    const from = this.agents.ownedBy(senderPersonId).map((agent) => agent.id);
+    const to = this.agents.ownedBy(personId).map((agent) => agent.id);
+    if (from.length === 0 || to.length === 0) return [];
+    const bindings: Record<string, string | number> = {};
+    const senders = among(from, "f", bindings);
+    const receivers = among(to, "t", bindings);
+    const lists = this.content.of({ person: personId }).map(({ db, workspaceId }) =>
+      (
+        db
+          .query(`SELECT * FROM messages WHERE status = 'held' AND held_for = 'first_contact' AND from_id IN (${senders}) AND to_id IN (${receivers}) ORDER BY created_at, rowid`)
+          .all(bindings) as MessageRow[]
+      ).map((row) => toMessage(row, workspaceId)),
+    );
+    return merged(lists, sentAt);
+  }
+
+  /**
+   * The sender's person allowed a message held on its way out. The message goes on to whatever the receiving side
+   * requires: held again, now for the receiver's person, or pending. Null when the message isn't held any more.
+   */
+  releaseOutbound(held: Pick<Message, "id" | "workspaceId">, personId: string, at: string): Message | null {
+    const content = this.content.find(held.workspaceId);
+    if (!content) return null;
+    return content.db.transaction(() => {
+      const now = this.getIn(content, held.id);
+      if (!now || now.status !== "held" || now.heldFor !== "outbound") return null;
+      const caller = this.agents.get(now.fromId);
+      const receiver = this.agents.get(now.toId);
+      const next = caller && receiver ? this.arrivalHold(content.db, caller, receiver, now.replyTo) : null;
+      if (next) {
+        // `decided_by` keeps who let the message go on, until the receiver's person decides.
+        content.db.query("UPDATE messages SET held_for = $next, held_at = $at, decided_by = $personId WHERE id = $id AND status = 'held'").run({ id: now.id, next, at, personId });
+      } else {
+        content.db
+          .query("UPDATE messages SET status = 'pending', decision = 'allow_once', decided_by = $personId, decided_at = $at WHERE id = $id AND status = 'held'")
+          .run({ id: now.id, personId, at });
+      }
+      return this.getIn(content, held.id);
+    })();
+  }
+
+  /**
+   * Withdraws messages that can no longer be delivered: held or pending ones in the workspace, from or to the agents
+   * named, or every one with `null` (the workspace was paused or deleted). A withdrawn message is never delivered; its
+   * sender is told once, as for a message that expired.
+   */
+  withdraw(workspaceId: string, agentIds: string[] | null): Message[] {
+    if (agentIds !== null && agentIds.length === 0) return [];
+    const content = this.content.stored(workspaceId);
+    if (!content) return [];
+    const at = this.iso();
+    const bindings: Record<string, string | number> = {};
+    const names = agentIds === null ? "" : among(agentIds, "w", bindings);
+    const which = agentIds === null ? "" : `AND (from_id IN (${names}) OR to_id IN (${names}))`;
+    const withdrawn = content.db.transaction(() => {
+      const rows = content.db.query(`SELECT * FROM messages WHERE status IN ('held', 'pending') ${which} ORDER BY created_at, rowid`).all(bindings) as MessageRow[];
+      if (rows.length === 0) return [];
+      content.db.query(`UPDATE messages SET status = 'withdrawn', withdrawn_at = $at WHERE status IN ('held', 'pending') ${which}`).run({ ...bindings, at });
+      return rows.map((row) => ({ ...toMessage(row, content.workspaceId), status: "withdrawn" as const, withdrawnAt: at }));
+    })();
+    for (const message of withdrawn) {
+      this.log("message_withdrawn", { message_id: message.id, workspace_id: workspaceId });
+      this.notify({ kind: "message_withdrawn", message });
+    }
+    if (withdrawn.length > 0) this.changes.emit("threads", "approvals");
+    return withdrawn;
   }
 
   /** Held messages from the sender to the receiver, oldest first, in every workspace the receiver is or was in. */
@@ -797,6 +937,42 @@ export class Messages {
 
   // ---- helpers ----
 
+  /**
+   * What holds a message when it reaches the receiving side, if anything. Neither rule holds a reply in a conversation
+   * the receiver itself wrote in during the last 24 hours.
+   */
+  private arrivalHold(db: Database, caller: Agent, receiver: Agent, replyTo: string | null): HeldFor | null {
+    const firstContact = caller.ownerId !== receiver.ownerId && !this.peopleAllowed(receiver.ownerId, caller.ownerId);
+    const approval = receiver.approvalRequired && !this.alwaysAllows(receiver.id, caller.id);
+    if (!firstContact && !approval) return null;
+    if (replyTo !== null && this.receiverInConversation(db, replyTo, receiver.id)) return null;
+    return firstContact ? "first_contact" : "approval";
+  }
+
+  /** What a held send says: plainly that the message is held and for whom, never that it was delivered. */
+  private heldNote(message: Message, caller: Agent, receiver: Agent, name: string): string {
+    const outcome = `The message is not delivered. A person decides within ${LIMITS.messageExpiryHours / 24} days; check_inbox reports whether the message was delivered, declined or expired.`;
+    if (message.heldFor === "outbound") {
+      const person = this.personName(caller.ownerId);
+      const where = this.heldLink ? ` on Portico's page, ${this.heldLink(message.id)}` : " on Portico's pages";
+      return (
+        `Held for ${person}: ${person} asked to see each message this agent sends to other people's agents first, and decides${where}. ` +
+        `Once allowed, the message goes on to ${name}, whose own person may be asked too. ${outcome}`
+      );
+    }
+    if (message.heldFor === "first_contact") {
+      const person = this.personName(receiver.ownerId);
+      return (
+        `Held: ${person}, who manages ${name}, hasn't allowed messages from ${this.personName(caller.ownerId)}'s agents yet, so ${person} is asked about this one first. ` +
+        outcome
+      );
+    }
+    return (
+      `Held: ${name} requires approval for new conversations. Replies (reply_to) in a ` +
+      `conversation ${name} wrote in during the last ${LIMITS.replyWindowHours} hours aren't held. ${outcome}`
+    );
+  }
+
   private getIn(content: ContentDb, id: string): Message | null {
     const row = content.db.query("SELECT * FROM messages WHERE id = $id").get({ id }) as MessageRow | null;
     return row ? toMessage(row, content.workspaceId) : null;
@@ -869,9 +1045,9 @@ export class Messages {
     const { workspaceId: _workspace, ...row } = m;
     db.query(
       `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, reply_to, root_id, summary, final, send_key,
-         status, held_at, decision, decided_by, decided_at, created_at, expires_at, delivered_at, sender_notified_at)
+         status, held_at, held_for, decision, decided_by, decided_at, created_at, expires_at, delivered_at, withdrawn_at, sender_notified_at)
        VALUES ($id, $threadId, $fromId, $toId, $subject, $text, $replyTo, $rootId, $summary, $final, $sendKey,
-         $status, $heldAt, $decision, $decidedBy, $decidedAt, $createdAt, $expiresAt, $deliveredAt, $senderNotifiedAt)`,
+         $status, $heldAt, $heldFor, $decision, $decidedBy, $decidedAt, $createdAt, $expiresAt, $deliveredAt, $withdrawnAt, $senderNotifiedAt)`,
     ).run({ ...row, final: m.final ? 1 : 0 });
   }
 
@@ -884,7 +1060,7 @@ export class Messages {
 
   private updatesFor(content: ContentDb, agentId: string, limit: number): Message[] {
     const rows = content.db
-      .query(`SELECT * FROM messages WHERE ${UPDATE} ORDER BY COALESCE(decided_at, created_at), rowid LIMIT $limit`)
+      .query(`SELECT * FROM messages WHERE ${UPDATE} ORDER BY COALESCE(withdrawn_at, decided_at, created_at), rowid LIMIT $limit`)
       .all({ agent: agentId, limit }) as MessageRow[];
     return rows.map((row) => toMessage(row, content.workspaceId));
   }
@@ -920,4 +1096,4 @@ export class Messages {
 /** When a message was sent: what an inbox is ordered by. */
 const sentAt = (m: Message) => m.createdAt;
 /** When a sent message's outcome was reached: what updates are ordered by. */
-const endedAt = (m: Message) => m.decidedAt ?? m.createdAt;
+const endedAt = (m: Message) => m.withdrawnAt ?? m.decidedAt ?? m.createdAt;

@@ -10,15 +10,17 @@ import type { People } from "./people";
 import { cleanEmail } from "./people";
 import { DEAD_LINK, type Share, type Shares } from "./shares";
 import { hashSecret, newToken, sameSecret } from "./tokens";
-import type { Agent, AgentKind, Computer, Person, Workspace } from "./types";
-import type { Workspaces } from "./workspaces";
+import type { Agent, AgentKind, AgentsPolicy, Computer, Person, Workspace } from "./types";
+import { cleanAgentsPolicy, type Workspaces } from "./workspaces";
 
 /**
  * What a consent request asks for. `computer` and `agent`: a new computer or app agent joins Portico. `enter`: an agent
  * already on Portico comes into a workspace with a share link. `share`, `remove_person`, `delete`: an agent asks the
- * person who manages it to share a workspace, take a person out of one, or delete one.
+ * person who manages it to share a workspace, take a person out of one, or delete one. `add_agent`: an agent asks its
+ * person to put one of that person's agents into a workspace someone else owns. `admit_agent`: the same, waiting for
+ * the workspace's owner, who chose to be asked for each agent that person adds.
  */
-export type ConsentKind = "computer" | "agent" | "enter" | "share" | "remove_person" | "delete";
+export type ConsentKind = "computer" | "agent" | "enter" | "share" | "remove_person" | "delete" | "add_agent" | "admit_agent";
 export type ConsentStatus = "pending" | "approved" | "denied" | "expired";
 /** The kinds anyone can start, with no token: whoever signs in and types the code becomes the owner. */
 export type JoinKind = "computer" | "agent";
@@ -26,6 +28,11 @@ export type JoinKind = "computer" | "agent";
 export type AskKind = "share" | "remove_person" | "delete";
 
 export const isJoin = (kind: ConsentKind): kind is JoinKind => kind === "computer" || kind === "agent";
+/**
+ * The kinds answered without a code. The code ties a page to the agent showing it in its person's chat; the owner of a
+ * workspace answering about someone else's agent has no such chat, and only that owner, signed in, can open the page.
+ */
+export const needsCode = (kind: ConsentKind): boolean => kind !== "admit_agent";
 
 /** One thing waiting for a person's Allow on the consent page, `/c/<id>`. */
 export interface ConsentRequest {
@@ -45,8 +52,12 @@ export interface ConsentRequest {
   name: string | null;
   /** `agent`: the app's kind. `computer`: the coding agent that started the join, when it said. */
   agentKind: AgentKind | null;
-  /** `share`: the address to email the link to, or null. `remove_person`: the person to take out. */
-  detail: { email?: string | null; personId?: string };
+  /**
+   * `share`: the address to email the link to, or null, and the owner's choice for the person coming in.
+   * `remove_person`: the person to take out. `add_agent` and `admit_agent`: the agent to put in; `admit_agent` also
+   * the person who asked (`personId`).
+   */
+  detail: { email?: string | null; personId?: string; agents?: AgentsPolicy; agentId?: string };
   /** `share`, once allowed: the share that was made. */
   result: { shareId?: string } | null;
   /** `computer`, once allowed: the computer that was made. */
@@ -92,8 +103,12 @@ export interface ConsentView {
   share: Share | null;
   /** Who made the share link an agent comes in with. */
   sharedBy: Person | null;
-  /** `remove_person`: who would be taken out. */
+  /** `remove_person`: who would be taken out. `admit_agent`: whose agent asks to come in. */
   target: Person | null;
+  /** `add_agent` and `admit_agent`: the agent to put in. */
+  subject: Agent | null;
+  /** `enter`, and `agent` with a share link: the viewer's own agents that could come in too, the asking one first. */
+  candidates: Agent[];
 }
 
 export interface Decided {
@@ -124,6 +139,8 @@ export interface ConsentsDeps {
   log?: (msg: string, fields: Record<string, unknown>) => void;
   /** A request whose person is known was just made: the place to email that person the page's link. */
   onAsked?: (request: ConsentRequest) => void;
+  /** A request ended: the place to tell the agents that wait on its answer. */
+  onDecided?: (request: ConsentRequest) => void;
 }
 
 /**
@@ -145,6 +162,7 @@ export class Consents {
   private readonly newId: () => string;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
   private readonly onAsked: (request: ConsentRequest) => void;
+  private readonly onDecided: (request: ConsentRequest) => void;
 
   constructor(deps: ConsentsDeps) {
     this.db = deps.db;
@@ -159,6 +177,7 @@ export class Consents {
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.log = deps.log ?? (() => {});
     this.onAsked = deps.onAsked ?? (() => {});
+    this.onDecided = deps.onDecided ?? (() => {});
   }
 
   // ---- starting a request ----
@@ -219,8 +238,16 @@ export class Consents {
    * out, a fresh one.
    */
   enter(agent: Agent, rawLink: unknown): ConsentRequest {
-    const share = this.shares.usable(rawLink);
     const owner = this.people.require(agent.ownerId);
+    // A link works once. Only the person it let in is told so, with the way to bring more agents in.
+    const already = this.shares.usedBy(rawLink, owner.id);
+    if (already) {
+      throw new PorticoError(
+        "wrong_status",
+        `This share link already let ${owner.name} into ${already.phrase}, and a link works once. To put this agent there too, use add_to_portico.`,
+      );
+    }
+    const share = this.shares.usable(rawLink);
     if (!this.shares.mayClaim(share, owner)) throw new PorticoError("not_found", DEAD_LINK);
     if (this.workspaces.hasAgent(share.workspaceId, agent.id)) {
       throw new PorticoError("wrong_status", `This agent is already in ${this.workspaces.get(share.workspaceId)?.phrase ?? "that Portico"}.`);
@@ -233,11 +260,14 @@ export class Consents {
    * are the person's to confirm, so nothing changes yet. The workspace must be one the person is in. Asking again while
    * the same request waits answers that request; once it has run out, a fresh one.
    */
-  ask(agent: Agent, kind: AskKind, workspaceId: string, input: { email?: unknown; person?: unknown } = {}): ConsentRequest {
+  ask(agent: Agent, kind: AskKind, workspaceId: string, input: { email?: unknown; person?: unknown; agents?: unknown } = {}): ConsentRequest {
     const workspace = this.shares.sharedFor(agent.ownerId, workspaceId);
     let detail: ConsentRequest["detail"];
     if (kind === "share") {
-      detail = { email: input.email === undefined || input.email === null || input.email === "" ? null : cleanEmail(input.email) };
+      if (workspace.ownerId !== agent.ownerId) {
+        throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can share that Portico: the owner decides who comes in.`);
+      }
+      detail = { email: input.email === undefined || input.email === null || input.email === "" ? null : cleanEmail(input.email), agents: cleanAgentsPolicy(input.agents) };
     } else if (kind === "delete") {
       if (workspace.ownerId !== agent.ownerId) throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can delete it.`);
       detail = {};
@@ -255,10 +285,54 @@ export class Consents {
     return this.askOnce({ kind, agentId: agent.id, personId: agent.ownerId, workspaceId: workspace.id, detail });
   }
 
+  /**
+   * An agent asks to put one of its person's agents into a workspace someone else owns. Where the person adds agents
+   * alone, the person confirms on the consent page with the code the asking agent shows. Where the owner chose to be
+   * asked, the request goes to the owner instead (`askOwner`).
+   */
+  askToAdd(agent: Agent, workspaceId: string, subject: Agent): ConsentRequest {
+    const workspace = this.shares.sharedFor(agent.ownerId, workspaceId);
+    if (subject.ownerId !== agent.ownerId) throw new PorticoError("not_allowed", "Only the person who manages an agent can add the agent to a Portico.");
+    if (this.workspaces.hasAgent(workspace.id, subject.id)) throw new PorticoError("wrong_status", `That agent is already in ${workspace.phrase}.`);
+    if (this.workspaces.asksOwner(workspace.id, agent.ownerId)) return this.askOwner(agent.ownerId, workspace.id, subject, agent);
+    return this.askOnce({ kind: "add_agent", agentId: agent.id, personId: agent.ownerId, workspaceId: workspace.id, detail: { agentId: subject.id } });
+  }
+
+  /**
+   * A person in a workspace whose owner chose to be asked wants one more of the person's own agents in. The request
+   * waits for the owner, for days rather than minutes, and takes no code: nobody but the owner, signed in, can answer.
+   * `asker` is the agent that asked, when one did.
+   */
+  askOwner(personId: string, workspaceId: string, subject: Agent, asker: Agent | null = null): ConsentRequest {
+    const workspace = this.shares.sharedFor(personId, workspaceId);
+    if (subject.ownerId !== personId) throw new PorticoError("not_allowed", "Only the person who manages an agent can add the agent to a Portico.");
+    if (subject.revokedAt !== null) throw new PorticoError("not_allowed", "A revoked agent can't be put in a Portico.");
+    if (this.workspaces.hasAgent(workspace.id, subject.id)) throw new PorticoError("wrong_status", `That agent is already in ${workspace.phrase}.`);
+    // One request for one agent, whoever asked: the agent itself, another agent of the person, or the person's pages.
+    const same = this.db
+      .query("SELECT * FROM consent_requests WHERE kind = 'admit_agent' AND workspace_id = $workspaceId AND status = 'pending' AND expires_at > $now AND json_extract(detail, '$.agentId') = $agentId")
+      .get({ workspaceId: workspace.id, agentId: subject.id, now: this.iso() }) as Row | null;
+    if (same) return this.toRequest(same);
+    const waiting = (
+      this.db
+        .query("SELECT COUNT(*) AS n FROM consent_requests WHERE kind = 'admit_agent' AND workspace_id = $workspaceId AND status = 'pending' AND expires_at > $now AND json_extract(detail, '$.personId') = $personId AND json_extract(detail, '$.agentId') != $agentId")
+        .get({ workspaceId: workspace.id, personId, agentId: subject.id, now: this.iso() }) as { n: number }
+    ).n;
+    if (waiting >= LIMITS.admitWaitingPerPerson) {
+      throw new PorticoError("rate_limited", `Too many requests already wait for the owner of ${workspace.phrase}. Ask again once some are answered.`);
+    }
+    return this.askOnce(
+      { kind: "admit_agent", agentId: asker?.id ?? subject.id, personId: workspace.ownerId, workspaceId: workspace.id, detail: { agentId: subject.id, personId } },
+      null,
+      LIMITS.admitDays * DAY_MS,
+    );
+  }
+
   /** The same request while one waits; otherwise the old one is closed and a fresh one made. */
   private askOnce(
     input: { kind: ConsentKind; agentId: string; personId: string; workspaceId: string; shareId?: string; detail?: ConsentRequest["detail"] },
     share: Share | null = null,
+    waitMs: number = LIMITS.consentMinutes * MINUTE_MS,
   ): ConsentRequest {
     const detail = JSON.stringify(input.detail ?? {});
     const same = { kind: input.kind, agentId: input.agentId, workspaceId: input.workspaceId, shareId: input.shareId ?? null, detail };
@@ -270,7 +344,7 @@ export class Consents {
     if (open >= MAX_WAITING_PER_PERSON) {
       throw new PorticoError("rate_limited", "Too many requests are waiting for this person. list_porticos shows them; ask again once some are answered or have run out.");
     }
-    const request = this.insert({ ...input, shareId: input.shareId ?? null, name: null, agentKind: null, client: null, pollSecret: null }, share);
+    const request = this.insert({ ...input, shareId: input.shareId ?? null, name: null, agentKind: null, client: null, pollSecret: null }, share, waitMs);
     this.onAsked(request);
     return request;
   }
@@ -289,10 +363,11 @@ export class Consents {
       pollSecret: string | null;
     },
     share: Share | null,
+    waitMs: number = LIMITS.consentMinutes * MINUTE_MS,
   ): ConsentRequest {
     const at = this.now();
     // A request never outlives the link it came with.
-    const until = Math.min(at.getTime() + LIMITS.consentMinutes * MINUTE_MS, share ? Date.parse(share.expiresAt) : Infinity);
+    const until = Math.min(at.getTime() + waitMs, share ? Date.parse(share.expiresAt) : Infinity);
     const request: ConsentRequest = {
       id: this.newId(),
       kind: input.kind,
@@ -362,6 +437,14 @@ export class Consents {
     return rows.map((row) => this.toRequest(row));
   }
 
+  /** What this person, or an agent of this person's, asked the owners of other people's workspaces in the last day, newest first. */
+  recentAskedBy(personId: string): ConsentRequest[] {
+    const rows = this.db
+      .query("SELECT * FROM consent_requests WHERE kind = 'admit_agent' AND json_extract(detail, '$.personId') = $personId AND created_at > $since ORDER BY created_at DESC, id")
+      .all({ personId, since: new Date(this.now().getTime() - DAY_MS).toISOString() }) as Row[];
+    return rows.map((row) => this.toRequest(row));
+  }
+
   /**
    * The request as this person may see it on the consent page, or null, which looks the same as no request at all.
    * What an agent of someone's asked is only that person's to see. A join is nobody's yet, so anyone signed in who has
@@ -377,13 +460,25 @@ export class Consents {
     if (request.shareId && (!share || !this.shares.mayClaim(share, viewer))) return null;
     const workspace = request.workspaceId ? this.workspaces.known(request.workspaceId) : null;
     if (request.workspaceId && !workspace) return null;
+    const agent = request.agentId ? this.agents.get(request.agentId) : null;
+    // With a share link the person picks any number of their own agents, on the one page: every agent of the person
+    // that isn't in the workspace yet, the asking one first.
+    const picks = share && request.status === "pending" && (request.kind === "enter" || request.kind === "agent");
+    const candidates = picks
+      ? this.agents
+          .ownedBy(viewer.id)
+          .filter((a) => a.revokedAt === null && !this.workspaces.hasAgent(share.workspaceId, a.id))
+          .sort((a, b) => Number(b.id === agent?.id) - Number(a.id === agent?.id))
+      : [];
     return {
       request,
-      agent: request.agentId ? this.agents.get(request.agentId) : null,
+      agent,
       workspace,
       share,
       sharedBy: share ? this.people.get(share.createdBy) : null,
       target: request.detail.personId ? this.people.get(request.detail.personId) : null,
+      subject: request.detail.agentId ? this.agents.get(request.detail.agentId) : null,
+      candidates,
     };
   }
 
@@ -393,9 +488,10 @@ export class Consents {
    * The person's answer. Allow needs the code the asking agent shows: a wrong code counts, and the request closes
    * after a few. Allowing does what was asked, as the person: a computer or app agent is made under the person, an
    * agent comes into the shared workspace, or the workspace is shared, loses a person or is deleted. `name` renames a
-   * joining app agent. `handle` is for a person who has none yet: it is taken only once the code is right.
+   * joining app agent. `handle` is for a person who has none yet: it is taken only once the code is right. `agents` is
+   * for a share link: the person's own agents that come in, any number, under the one Allow (by default the asking one).
    */
-  decide(personId: string, id: string, input: { decision: unknown; code?: unknown; name?: unknown; handle?: unknown }): Decided {
+  decide(personId: string, id: string, input: { decision: unknown; code?: unknown; name?: unknown; handle?: unknown; agents?: unknown }): Decided {
     const { decision } = input;
     if (decision !== "approve" && decision !== "deny") throw new PorticoError("bad_request", "decision must be approve or deny.");
     const person = this.people.require(personId);
@@ -411,11 +507,13 @@ export class Consents {
       this.log("consent_decided", { request_id: id, kind: request.kind, decision });
       if (request.kind === "agent") this.activity?.record("sign_in_denied", { personId, detail: { name: request.name ?? "", kind: request.agentKind ?? "other" } });
       this.changes.emit("approvals");
-      return { request: { ...request, status: "denied", decidedAt: at, decidedBy: personId }, agent: null, computer: null, workspace: found.workspace, share: null };
+      const denied: ConsentRequest = { ...request, status: "denied", decidedAt: at, decidedBy: personId };
+      this.onDecided(denied);
+      return { request: denied, agent: null, computer: null, workspace: found.workspace, share: null };
     }
     if (person.status !== "active") throw new PorticoError("not_allowed", "Waiting for the owner to approve this account.");
     const typed = typeof input.code === "string" ? input.code.replace(/\s+/g, "") : "";
-    if (!sameSecret(hashSecret(typed), hashSecret(request.code))) {
+    if (needsCode(request.kind) && !sameSecret(hashSecret(typed), hashSecret(request.code))) {
       const { tries } = this.db.query("UPDATE consent_requests SET tries = tries + 1 WHERE id = $id RETURNING tries").get({ id }) as { tries: number };
       if (tries >= LIMITS.consentCodeTries) {
         this.db.query("UPDATE consent_requests SET status = 'denied', decided_at = $at WHERE id = $id").run({ id, at });
@@ -426,6 +524,11 @@ export class Consents {
     }
     const wanted = typeof input.handle === "string" ? input.handle.trim().toLowerCase() : "";
     if (person.handle === null && wanted === "") throw new PorticoError("bad_request", "Pick a handle first.");
+    // The person's own agents picked on the page to come in with a share link. Anything else named is ignored.
+    const pickable = new Map(found.candidates.map((a) => [a.id, a]));
+    const picked = Array.isArray(input.agents)
+      ? [...new Set(input.agents.filter((item): item is string => typeof item === "string"))].map((item) => pickable.get(item)).filter((a): a is Agent => a !== undefined)
+      : null;
     const done = this.db.transaction(() => {
       if (person.handle === null) {
         this.people.setHandle(person.id, wanted);
@@ -443,16 +546,34 @@ export class Consents {
         case "agent": {
           const chosen = input.name === undefined || input.name === null || input.name === "" ? request.name : input.name;
           agent = this.agents.create({ ownerId: person.id, name: chosen, kind: request.agentKind ?? "other", type: "app" });
-          if (share) workspace = this.shares.enter(share, person, agent);
+          if (share) workspace = this.shares.enter(share, person, [agent, ...(picked ?? [])]);
           break;
         }
-        case "enter":
+        case "enter": {
           if (!agent || agent.ownerId !== person.id || !share) throw new PorticoError("not_found", "No such request.");
-          workspace = this.shares.enter(share, person, agent);
+          const coming = picked ?? [agent];
+          if (coming.length === 0) throw new PorticoError("bad_request", "Pick at least one agent to bring in.");
+          workspace = this.shares.enter(share, person, coming);
           break;
+        }
         case "share":
-          made = this.shares.create(person.id, request.workspaceId!, { email: request.detail.email }).share;
+          made = this.shares.create(person.id, request.workspaceId!, { email: request.detail.email, agents: request.detail.agents }).share;
           break;
+        case "add_agent": {
+          const subject = found.subject;
+          if (!subject || subject.ownerId !== person.id) throw new PorticoError("not_found", "No such request.");
+          // The owner may have asked to be asked since: the person's own Allow then isn't enough.
+          this.workspaces.addAgent(person.id, request.workspaceId!, subject.id);
+          break;
+        }
+        case "admit_agent": {
+          const subject = found.subject;
+          const asker = request.detail.personId;
+          if (!subject || !asker || subject.ownerId !== asker || found.workspace?.ownerId !== person.id) throw new PorticoError("not_found", "No such request.");
+          if (!this.workspaces.hasPerson(request.workspaceId!, asker)) throw new PorticoError("wrong_status", "That person isn't in the Portico any more.");
+          this.workspaces.addAgent(asker, request.workspaceId!, subject.id, { ownerAllowed: true });
+          break;
+        }
         case "delete":
           this.workspaces.remove(person.id, request.workspaceId!);
           break;
@@ -472,6 +593,7 @@ export class Consents {
     })();
     this.log("consent_decided", { request_id: id, kind: request.kind, decision });
     this.changes.emit("approvals", "workspaces", "agents", "people", "computers");
+    this.onDecided(done.request);
     return done;
   }
 

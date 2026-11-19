@@ -18,15 +18,15 @@ describe("addresses and the agent list", () => {
     expect(p.agents.display(second)).toBe("dialog-claude@studio");
   });
 
-  test("an app that had the name first keeps the short name; a later session goes by its full address", async () => {
+  test("an app that had the name first keeps the name; a later session takes the next name that can't be mistaken for the app's", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     addAppAgent(p, chris, "api-claude");
     const viewer = addAppAgent(p, chris, "viewer").agent;
     const session = addSession(p, addComputer(p, chris).computer, { repo: "api" }).agent;
-    expect(p.agents.display(session)).toBe("api-claude@macbook");
+    expect(p.agents.display(session)).toBe("api-claude-2");
     expect(p.agents.resolve("api-claude", viewer.id).type).toBe("app");
-    expect(p.agents.resolve("api-claude@macbook", viewer.id).id).toBe(session.id);
+    expect(p.agents.resolve("api-claude-2@macbook", viewer.id).id).toBe(session.id);
   });
 
   test("resolve refuses patterns, names a duplicate short name's computers, and lists valid names", async () => {

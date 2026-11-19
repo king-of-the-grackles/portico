@@ -33,7 +33,7 @@ const names = (p: TestPortico, viewer: Agent) => p.agents.entriesFor(viewer).map
 const link = (secret: string) => `https://portico.example.com/share#${secret}`;
 
 describe("share links", () => {
-  test("anyone in a shared workspace makes a link; a personal workspace and a stranger's workspace can't be shared", async () => {
+  test("only the owner of a shared workspace makes a link; a personal workspace and a stranger's workspace can't be shared", async () => {
     const { p, chris, robert, maya, launch } = await world();
     const { share, secret } = p.shares.create(chris.id, launch.id);
     expect(share).toMatchObject({ workspaceId: launch.id, createdBy: chris.id, email: null, claimedBy: null });
@@ -43,17 +43,23 @@ describe("share links", () => {
     // Not in the workspace: the same answer as a workspace that isn't there.
     expect(errorCode(() => p.shares.create(robert.id, launch.id))).toBe("not_found");
     expect(errorCode(() => p.shares.create(chris.id, "nope"))).toBe("not_found");
-    // A member who isn't the owner shares too.
+    // A member who isn't the owner brings nobody in: not from the pages, and not through an agent.
     p.workspaces.admit(launch.id, maya.id);
-    expect(p.shares.create(maya.id, launch.id).share.createdBy).toBe(maya.id);
+    expect(errorCode(() => p.shares.create(maya.id, launch.id))).toBe("not_allowed");
+    const scout = p.agents.ownedBy(maya.id)[0]!;
+    expect(errorCode(() => p.consents.ask(scout, "share", launch.id))).toBe("not_allowed");
+    // The owner's choice for the person coming in rides on the link.
+    expect(share.agentsPolicy).toBe("self");
+    expect(p.shares.create(chris.id, launch.id, { agents: "ask" }).share.agentsPolicy).toBe("ask");
+    expect(errorCode(() => p.shares.create(chris.id, launch.id, { agents: "anyone" }))).toBe("bad_request");
   });
 
-  test("the link shows again only to the person who made the link and to the workspace's owner", async () => {
+  test("the link shows again only to the workspace's owner, who made the link", async () => {
     const { p, chris, robert, maya, launch } = await world();
     p.workspaces.admit(launch.id, maya.id);
     p.workspaces.admit(launch.id, robert.id);
-    const mine = p.shares.create(maya.id, launch.id);
-    expect(p.shares.secretFor(maya.id, mine.share.id)).toBe(mine.secret);
+    const mine = p.shares.create(chris.id, launch.id);
+    expect(p.shares.secretFor(maya.id, mine.share.id)).toBeNull();
     expect(p.shares.secretFor(chris.id, mine.share.id)).toBe(mine.secret);
     expect(p.shares.secretFor(robert.id, mine.share.id)).toBeNull();
     expect(p.shares.openFor(robert.id, launch.id)).toEqual([]);
@@ -113,16 +119,34 @@ describe("an agent on Portico comes in with a link", () => {
     expect(p.workspaces.agentsIn(launch.id).sort()).toEqual([muse.agent.id, rmuse.agent.id].sort());
     expect(p.shares.get(share.id)!.claimedBy).toBe(robert.id);
     expect(names(p, muse.agent)).toContain("robert/muse");
-    expect(p.messages.send(rmuse.agent, { to: "chris/muse", subject: "Hi", text: "x" }).message.status).toBe("pending");
+    // Coming in lets the agents reach each other; the first message from Robert's agents is still Chris's to allow.
+    expect(p.messages.send(rmuse.agent, { to: "chris/muse", subject: "Hi", text: "x" }).message).toMatchObject({ status: "held", heldFor: "first_contact" });
+    // The link is used up: nobody comes in with it again, and Robert hears why.
+    expect(p.shares.isOpen(p.shares.get(share.id)!)).toBe(false);
+    expect(errorCode(() => p.consents.enter(dots.agent, secret))).toBe("wrong_status");
     // Robert's other agent stays out until Robert puts that one in too.
     expect(names(p, muse.agent)).not.toContain("robert/dots");
     expect(errorCode(() => allow(p, robert.id, request.id))).toBe("wrong_status");
 
-    // The same link brings in another of Robert's agents.
-    const second = p.consents.enter(dots.agent, secret);
-    allow(p, robert.id, second.id);
+    // Robert, who may add agents alone, puts the other one in afterwards with no link.
+    p.workspaces.addAgent(robert.id, launch.id, dots.agent.id);
     expect(names(p, muse.agent)).toContain("robert/dots");
-    expect(errorCode(() => p.consents.enter(dots.agent, secret))).toBe("wrong_status");
+  });
+
+  test("the person coming in picks any number of that person's own agents, and one Allow covers all of them", async () => {
+    const { p, chris, robert, muse, grok, rmuse, dots, launch } = await world();
+    const { secret } = p.shares.create(chris.id, launch.id);
+    const request = p.consents.enter(rmuse.agent, secret);
+    // The page offers Robert's agents that aren't in yet, the asking one first; nobody else's can be named.
+    expect(p.consents.describe(robert, request.id)!.candidates.map((a) => a.id)).toEqual([rmuse.agent.id, dots.agent.id]);
+    allow(p, robert.id, request.id, { agents: [rmuse.agent.id, dots.agent.id, grok.agent.id, "nope"] });
+    expect(p.workspaces.agentsIn(launch.id).sort()).toEqual([muse.agent.id, rmuse.agent.id, dots.agent.id].sort());
+    // With nothing ticked, nobody comes in and the link is still good.
+    const other = p.shares.create(chris.id, launch.id);
+    p.workspaces.removePerson(chris.id, launch.id, robert.id);
+    const again = p.consents.enter(rmuse.agent, other.secret);
+    expect(errorCode(() => allow(p, robert.id, again.id, { agents: [] }))).toBe("bad_request");
+    expect(p.shares.isOpen(p.shares.get(other.share.id)!)).toBe(true);
   });
 
   test("once one person used a link, nobody else can", async () => {
@@ -301,13 +325,12 @@ describe("what the security review found", () => {
     const { p, chris, robert, maya, rmuse, scout, launch } = await world();
     const { secret } = p.shares.create(chris.id, launch.id);
     allow(p, robert.id, p.consents.enter(rmuse.agent, secret).id);
-    const made = p.shares.create(robert.id, launch.id);
-    const waiting = p.consents.enter(scout.agent, made.secret);
+    // Robert, who isn't the owner, makes no link of Robert's own.
+    expect(errorCode(() => p.shares.create(robert.id, launch.id))).toBe("not_allowed");
     p.workspaces.removePerson(chris.id, launch.id, robert.id);
-    // The link Robert came in with, and the one Robert made, are both dead.
+    // The link Robert came in with is dead, for Robert and for anyone else.
     expect(errorCode(() => p.consents.enter(rmuse.agent, secret))).toBe("not_found");
-    expect(errorCode(() => p.consents.enter(scout.agent, made.secret))).toBe("not_found");
-    expect(errorCode(() => allow(p, maya.id, waiting.id))).toBe("wrong_status");
+    expect(errorCode(() => p.consents.enter(scout.agent, secret))).toBe("not_found");
     expect(p.workspaces.hasPerson(launch.id, robert.id)).toBe(false);
     expect(p.workspaces.hasPerson(launch.id, maya.id)).toBe(false);
     // A fresh link from the owner still works for Robert.
@@ -339,8 +362,11 @@ describe("what the security review found", () => {
     const held = p.messages.send(rmuse.agent, { to: "chris/muse", subject: "Hi", text: "x" }).message;
     expect(held.status).toBe("held");
     p.workspaces.removePerson(chris.id, launch.id, robert.id);
+    // Taking Robert out withdrew the message: nothing is left to let through, or to turn down.
+    expect(p.messages.get({ person: chris.id }, held.id)).toMatchObject({ status: "withdrawn" });
     expect((await callPerson(p, cookies.chris, "POST", `/api/approvals/held/${held.id}`, { decision: "allow_once" })).status).toBe(409);
-    expect((await callPerson(p, cookies.chris, "POST", `/api/approvals/held/${held.id}`, { decision: "deny" })).status).toBe(200);
+    expect((await callPerson(p, cookies.chris, "POST", `/api/approvals/held/${held.id}`, { decision: "deny" })).status).toBe(409);
+    expect(p.messages.inbox(muse.agent).messages).toEqual([]);
   });
 
   test("a stranger can't tell someone else's workspace or agent from one that isn't there", async () => {
@@ -463,7 +489,7 @@ describe("the Portico tools", () => {
     );
     expect((await tool(p, rmuse.token, "list_porticos")).body.waiting).toMatchObject([{ kind: "join", status: "pending", portico: { name: "Launch" }, code: joining.body.request.code }]);
     const waiting = (await (await callPerson(p, cookies.robert, "GET", "/api/approvals")).json()) as { consents: { id: string }[] };
-    expect(waiting.consents).toMatchObject([{ id: joining.body.request.id, kind: "enter", title: "Let an agent into a Portico" }]);
+    expect(waiting.consents).toMatchObject([{ id: joining.body.request.id, kind: "enter", title: "Come into a Portico" }]);
     expect((await answerConsent(p, cookies.chris, joining.body.request.id, { decision: "approve", code: joining.body.request.code })).status).toBe(404);
     expect((await answerConsent(p, cookies.robert, joining.body.request.id, { decision: "approve", code: joining.body.request.code })).status).toBe(200);
     expect(p.workspaces.hasPerson(launch.id, robert.id)).toBe(true);
