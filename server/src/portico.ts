@@ -28,7 +28,7 @@ import { People } from "./core/people";
 import { Presence } from "./core/presence";
 import { Settings } from "./core/settings";
 import { Shares } from "./core/shares";
-import { Tasks } from "./core/tasks";
+import { neverSent, Tasks } from "./core/tasks";
 import type { AccountSignIn, Agent, Message, Notice, Person, PorticoConfig, Workspace } from "./core/types";
 import { WakeUrls } from "./core/wake-urls";
 import { type WorkspaceEvent, Workspaces } from "./core/workspaces";
@@ -220,7 +220,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
           });
           mailHeld(m);
         }
-        watchBurst(m);
+        // A message still on its sender's side has reached nobody: it counts once it is let go (held again for the
+        // receiving side, which comes through here once more, or released, below).
+        if (!neverSent(m)) watchBurst(m);
         return;
       }
       case "message_decided":
@@ -230,6 +232,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         if (m.status === "pending") {
           wake(m.toId);
           wakeApp(m);
+          // Let go by the sender's own person, straight through: now the message counts as sent.
+          if (m.heldFor === "outbound") watchBurst(m);
         }
         if (m.status === "declined") wake(m.fromId);
         return;
@@ -295,7 +299,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     log: logInfo,
   });
   // What an agent asks about a workspace is answered only in a signed-in browser.
-  const shares = new Shares({ db, workspaces, changes, signingKey: config.signingKey, now, newId, log: logInfo });
+  // A link can be for one address only where the sign-in service verifies addresses: with Portico's own accounts nobody has one.
+  const shares = new Shares({ db, workspaces, changes, signingKey: config.signingKey, bindsEmail: check !== null, now, newId, log: logInfo });
   // Mail is extra: the page is always reached from the agent's chat or Portico's own pages, so a failed email only logs.
   const mailed = (what: string, send: Promise<unknown>) => void send.catch((err) => log("error", "mail_failed", { what, error: errorName(err) }));
   const consents = new Consents({
@@ -513,7 +518,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       }
       case "person_left": {
         const person = people.get(event.personId);
-        activity.record("portico_person_left", { personId: event.byId, subjectId: event.personId, workspaceId: workspace.id, detail: { agents: String(event.agentIds.length) } });
+        activity.record("portico_person_left", { personId: event.byId, subjectId: event.personId, workspaceId: workspace.id, detail: { agents: String(event.agentIds.length), name: person?.name ?? "" } });
         messages.withdraw(workspace.id, event.agentIds);
         if (person) tellAgents(workspace, [], () => `${personWords(person)} left ${place}, with every agent ${quote(person.name)} had there.`);
         for (const id of event.agentIds) tellAgent(id, `This agent is out of ${place}: ${person ? personWords(person) : "the person who manages this agent"} left that Portico or was taken out.`);
@@ -566,6 +571,18 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         return;
     }
   };
+  // A person's account is about to be removed: the person leaves each Portico of someone else's first, as if taken
+  // out, so the record says so, the agents there are told, and what was on its way is withdrawn.
+  people.onRemoving = (personId) => {
+    for (const workspace of workspaces.forPerson(personId)) {
+      if (workspace.kind !== "shared" || workspace.ownerId === personId) continue;
+      try {
+        workspaces.removePerson(personId, workspace.id, personId);
+      } catch (err) {
+        log("error", "workspace_event_failed", { kind: "person_removed", error: errorName(err) });
+      }
+    }
+  };
   // A person's account was removed: each Portico that person owned went too, as if deleted.
   people.onWorkspacesGone = (gone) => {
     for (const { workspaceId, agentIds } of gone) {
@@ -607,7 +624,14 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     });
 
   const MAILED_KINDS = ["portico_person_joined", "portico_person_left", "portico_agent_joined", "portico_agent_left", "portico_paused", "portico_resumed"];
-  const sweepRecordMail = async () => {
+  // One run at a time: a second sweep that starts while a slow one still sends would read the same record again.
+  let recordMailing: Promise<number> | null = null;
+  const sweepRecordMail = (): Promise<number> => {
+    if (recordMailing) return recordMailing;
+    recordMailing = mailRecords().finally(() => (recordMailing = null));
+    return recordMailing;
+  };
+  const mailRecords = async () => {
     if (!mail.enabled) return 0;
     let sent = 0;
     try {

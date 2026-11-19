@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import { parseEnv, ConfigError } from "../src/config";
 import { MAIL_LIMITS, shareEmail } from "../src/core/mail";
-import { addAppAgent, addMember, addOwner, callPerson, copyProblems, fakeWebhooks, HOUR, makePortico, MINUTE, signIn, visibleCopy } from "./helpers";
+import { addAppAgent, addMember, addOwner, callPerson, copyProblems, fakeWebhooks, HOUR, makePortico, MINUTE, signIn, visibleCopy, fakeAccounts } from "./helpers";
 
 const MAIL = { apiKey: "re_test_key", from: "Portico <invites@mail.portico.example>", webhookSecret: `whsec_${Buffer.from("resend-webhook-secret").toString("base64")}` };
 
 async function world(mail: typeof MAIL | null = MAIL) {
   const hooks = fakeWebhooks();
-  const p = makePortico({ config: { mail }, mailPost: hooks.post });
+  const p = makePortico({ config: { mail }, mailPost: hooks.post, accountCheck: fakeAccounts });
   const chris = p.people.setEmail(p.people.setHandle((await addOwner(p, "Chris")).id, "chris").id, "chris@example.com");
   const robert = p.people.setHandle((await addMember(p, "Robert")).id, "robert");
   const muse = addAppAgent(p, chris, "muse");

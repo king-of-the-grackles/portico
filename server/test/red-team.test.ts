@@ -4,7 +4,7 @@ import { defang, frameMessage, frameNotice } from "../src/core/framing";
 import { LOOP_LIMIT } from "../src/core/guards";
 import { clientIp, limitKey } from "../src/client-ip";
 import { LIMITS } from "../src/core/limits";
-import type { MailConfig } from "../src/core/types";
+import type { MailConfig, Message } from "../src/core/types";
 import {
   acquaint,
   addAppAgent,
@@ -40,7 +40,7 @@ const MAIL: MailConfig = { apiKey: "re_test", from: "Portico <notices@mail.porti
  */
 async function world(opts: Parameters<typeof makePortico>[0] = {}) {
   const bucket = fakeBucket();
-  const p = makePortico({ fileStore: bucket.store, ...opts });
+  const p = makePortico({ fileStore: bucket.store, accountCheck: fakeAccounts, ...opts });
   const person = async (name: string, owner = false) => {
     const made = owner ? await addOwner(p, name) : await addMember(p, name);
     p.people.setEmail(made.id, `${name.toLowerCase()}@example.com`);
@@ -946,13 +946,9 @@ describe("red team: what a review found", () => {
     // Asking is refused, with the way that does work.
     const asked = await json(callAs(p, second, "POST", "/api/agent/portico-tools/join_portico", { link: `${PUBLIC_URL}/share#${secret}` }));
     expect(asked.message).toBe("The person who manages this agent is already in the Portico “Launch”, and a share link only brings a new person in. To put an agent there, use add_to_portico.");
-    // The door itself is shut too, whatever asked: a new app agent joining with the link.
-    const { request, pollSecret } = p.consents.startJoin({ kind: "agent", name: "third", link: secret }, "test");
-    const { code } = p.consents.decide(dana.id, request.id, { decision: "approve" }).request;
-    expect(errorCode(() => p.consents.submitCode(request.id, pollSecret, code))).toBe("wrong_status");
+    // The door itself is shut too, whatever asked.
     expect(errorCode(() => p.shares.enter(share, dana, [second.agent]))).toBe("wrong_status");
     expect(p.workspaces.agentsOf(launch.id, dana.id)).toEqual([pilot.agent.id]);
-    expect(p.agents.ownedBy(dana.id).map((a) => a.name).sort()).toEqual(["pilot", "second"]);
     expect(p.shares.get(share.id)!.claimedBy).toBeNull();
     // add_to_portico goes to the owner, as the owner chose.
     expect((await json(callAs(p, second, "POST", "/api/agent/portico-tools/add_to_portico", { portico: "Launch", agent: "second" }))).status).toBe("waiting_for_owner");
@@ -1141,5 +1137,232 @@ describe("red team: what a review found", () => {
     p.accounts.endSessionsFor(mallory.id);
     p.personStreams.closeEnded();
     await expect(reader.next(500)).rejects.toThrow();
+  });
+});
+
+describe("red team: what the code review found", () => {
+  const tool = (p: TestPortico, who: { token: string }, name: string, args: Body = {}) => json(callAs(p, who, "POST", `/api/agent/portico-tools/${name}`, args));
+
+  test("1. a share link shows in list_porticos only to the agent that asked for the share, and never to an agent nobody vouched for", async () => {
+    const { p, chris, muse, grok, launch, cookies } = await world();
+    const asked = await tool(p, muse, "share_portico", { portico: launch.id });
+    expect((await callPerson(p, cookies.chris, "POST", `/api/consents/${asked.request.id}`, { decision: "approve" })).status).toBe(200);
+    const seenBy = async (who: { token: string }) => (await tool(p, who, "list_porticos")).waiting.find((r: Body) => r.id === asked.request.id) as Body;
+    // The asker reads the link; Chris's other agent sees that the share was made, without the link.
+    expect((await seenBy(muse)).share_link).toMatch(/\/share#[A-Za-z0-9_-]+$/);
+    expect(await seenBy(grok)).toMatchObject({ kind: "share", status: "approved" });
+    expect(JSON.stringify(await tool(p, grok, "list_porticos"))).not.toContain("/share#");
+    // An agent that joined with no tick reads no link, whatever it lists; nor does the asker once it is marked unvouched.
+    const rogue = { token: (await finishJoin(p, cookies.chris, await askToJoin(p, { kind: "agent", name: "rogue" }))).token as string };
+    expect(p.agents.ownedBy(chris.id).find((a) => a.name === "rogue")!.unproven).toBe(true);
+    expect(JSON.stringify(await tool(p, rogue, "list_porticos"))).not.toContain("/share#");
+    p.agents.markUnproven({ agentId: muse.agent.id });
+    expect(JSON.stringify(await tool(p, muse, "list_porticos"))).not.toContain("/share#");
+  });
+
+  test("2. a message held on its sender's side counts toward a burst only once it is let go, and once", async () => {
+    const { p, chris, mallory, mal, launch } = await world();
+    acquaint(p, chris.id, mallory.id);
+    p.workspaces.addAgent(chris.id, launch.id, p.agents.byAddress("grok")!.id);
+    p.agents.update(mallory.id, mal.agent.id, { outboundHold: true });
+    const bursts = () => p.activity.list({ limit: 500 }).filter((entry) => entry.kind === "portico_burst");
+    const sent: Message[] = [];
+    // Twice the burst's size, all still on Mallory's side: nothing reached Chris's agents, so no burst.
+    for (let i = 0; i < LIMITS.burstMessages * 2; i++) {
+      sent.push(p.messages.send(p.agents.get(mal.agent.id)!, { to: i % 2 === 0 ? "chris/muse" : "chris/grok", subject: `Held ${i}`, text: "x" }).message);
+      p.clock.advance(1000);
+    }
+    await flush();
+    expect(sent.every((m) => m.heldFor === "outbound")).toBe(true);
+    expect(bursts()).toEqual([]);
+    // Let go one by one: each counts once, so the burst is seen at the tenth and not before.
+    for (const m of sent.slice(0, LIMITS.burstMessages - 1)) p.approvals.decide(mallory.id, m.id, "allow_once");
+    await flush();
+    expect(bursts()).toEqual([]);
+    p.approvals.decide(mallory.id, sent[LIMITS.burstMessages - 1]!.id, "allow_once");
+    await flush();
+    expect(bursts()).toHaveLength(1);
+    expect(bursts()[0]!.detail.count).toBe(String(LIMITS.burstMessages));
+    // A message held again on arrival counts once, when it gets there held, and not again when Chris allows it.
+    const again = await world();
+    acquaint(again.p, again.chris.id, again.mallory.id);
+    again.p.agents.update(again.mallory.id, again.mal.agent.id, { outboundHold: true });
+    again.p.agents.update(again.chris.id, again.muse.agent.id, { approvalRequired: true });
+    const held: Message[] = [];
+    for (let i = 0; i < LIMITS.burstMessages - 1; i++) held.push(again.p.messages.send(again.p.agents.get(again.mal.agent.id)!, { to: "chris/muse", subject: `Twice ${i}`, text: "x" }).message);
+    for (const m of held) expect(again.p.approvals.decide(again.mallory.id, m.id, "allow_once").heldFor).toBe("approval");
+    for (const m of held) again.p.approvals.decide(again.chris.id, m.id, "allow_once");
+    await flush();
+    expect(again.p.activity.list({ limit: 500 }).filter((entry) => entry.kind === "portico_burst")).toEqual([]);
+  });
+
+  test("3. with Portico's own accounts a share link is never bound to an address nobody could prove, and no page says so", async () => {
+    const p = makePortico();
+    const chris = p.people.setHandle((await addOwner(p, "Chris")).id, "chris");
+    const robert = p.people.setHandle((await addMember(p, "Robert")).id, "robert");
+    const muse = addAppAgent(p, chris, "muse");
+    const dots = addAppAgent(p, robert, "dots");
+    const launch = p.workspaces.create(chris.id, "Launch");
+    p.workspaces.addAgent(chris.id, launch.id, muse.agent.id);
+    const cookie = signIn(p, chris);
+    // From the page and through an agent: the address is checked and left out, so the link is for whoever uses it first.
+    const made = await json(callPerson(p, cookie, "POST", `/api/porticos/${launch.id}/shares`, { email: "robert@example.com" }));
+    expect(made.share.email).toBeNull();
+    expect((await callPerson(p, cookie, "POST", `/api/porticos/${launch.id}/shares`, { email: "not an address" })).status).toBe(400);
+    const asked = await tool(p, muse, "share_portico", { portico: "Launch", email: "robert@example.com" });
+    expect(asked.request.email).toBeUndefined();
+    expect(asked.show).toContain("with one more person");
+    const consent = await page(p, `/c/${asked.request.id}`, cookie);
+    expect(consent.html).not.toContain("robert@example.com");
+    expect(visibleCopy(consent.html)).not.toContain("only an account with that address");
+    expect((await json(callPerson(p, cookie, "GET", `/api/porticos/${launch.id}`))).workspace.linksByEmail).toBe(false);
+    // Robert, who has no address on file, comes in with the link.
+    const request = p.consents.enter(dots.agent, made.share.link);
+    p.consents.decide(robert.id, request.id, { decision: "approve" });
+    expect(p.workspaces.hasAgent(launch.id, dots.agent.id)).toBe(true);
+    // Where signing in verifies addresses, the binding stands.
+    const hosted = await world();
+    expect(hosted.p.shares.create(hosted.chris.id, hosted.launch.id, { email: "Erin@Example.com" }).share.email).toBe("erin@example.com");
+    expect((await json(callPerson(hosted.p, hosted.cookies.chris, "GET", `/api/porticos/${hosted.launch.id}`))).workspace.linksByEmail).toBe(true);
+  });
+
+  test("4. a removed person's handle is never given to anyone else", async () => {
+    const { p, chris, mallory, dana } = await world();
+    p.people.removeMember(chris.id, mallory.id);
+    expect(p.people.byHandle("mallory")).toBeNull();
+    expect(errorCode(() => p.people.setHandle(dana.id, "mallory"))).toBe("conflict");
+    expect(errorCode(() => p.people.setHandle(dana.id, "Mallory"))).not.toBeNull();
+    const fresh = await addMember(p, "Mallory Two");
+    expect(errorCode(() => p.people.setHandle(fresh.id, "mallory"))).toBe("conflict");
+    expect(p.people.suggestHandle("Mallory", fresh.id)).not.toBe("mallory");
+    expect(p.people.setHandle(fresh.id, "mallory-two").handle).toBe("mallory-two");
+  });
+
+  test("5. two sweeps of the record mail at once send each email once", async () => {
+    const hooks = fakeWebhooks();
+    const slow: typeof hooks.post = async (...args) => {
+      await Bun.sleep(5);
+      return hooks.post(...args);
+    };
+    const { p, chris, launch, grok } = await world({ config: { mail: MAIL }, mailPost: slow });
+    // What the world's own making left to mail goes first.
+    await p.sweepRecordMail();
+    p.clock.advance(120_000);
+    p.workspaces.addAgent(chris.id, launch.id, grok.agent.id);
+    hooks.sent.length = 0;
+    const counts = await Promise.all([p.sweepRecordMail(), p.sweepRecordMail(), p.sweepRecordMail()]);
+    const to = hooks.sent.map((sent) => (JSON.parse(sent.body) as { to: string[] }).to[0]).sort();
+    expect(to).toEqual(["dana@example.com", "mallory@example.com"]);
+    expect(counts).toEqual([2, 2, 2]);
+    // The guard lets the next sweep run.
+    expect(await p.sweepRecordMail()).toBe(0);
+  });
+
+  test("6. a new app agent that joins with a share link while its person is already in that Portico joins, and comes in the way the owner chose", async () => {
+    const { p, chris, dana, mallory, pilot, launch, cookies } = await world();
+    const { share, secret } = p.shares.create(chris.id, launch.id);
+    // Dana adds agents alone there: the new agent joins and is in, and the link is still unused.
+    const first = await askToJoin(p, { kind: "agent", name: "third", link: `${PUBLIC_URL}/share#${secret}` });
+    const joined = await finishJoin(p, cookies.dana, first, { mine: true });
+    expect(joined).toMatchObject({ status: "approved", agent: { name: "third" } });
+    const third = p.agents.ownedBy(dana.id).find((a) => a.name === "third")!;
+    expect(p.workspaces.agentsOf(launch.id, dana.id).sort()).toEqual([pilot.agent.id, third.id].sort());
+    expect((await callAs(p, { token: joined.token }, "GET", "/api/agent/agents")).status).toBe(200);
+    expect(p.shares.get(share.id)!.claimedBy).toBeNull();
+    expect((await page(p, `/c/${first.id}`, cookies.dana)).html).toContain("<h1>Joined</h1>");
+    // Mallory waits for the owner for each agent: the new agent joins Portico, and the owner is asked about the Portico.
+    p.workspaces.setPolicy(chris.id, launch.id, mallory.id, "ask");
+    const second = await askToJoin(p, { kind: "agent", name: "fourth", link: `${PUBLIC_URL}/share#${secret}` });
+    expect((await finishJoin(p, cookies.mallory, second)).status).toBe("approved");
+    const fourth = p.agents.ownedBy(mallory.id).find((a) => a.name === "fourth")!;
+    expect(p.workspaces.hasAgent(launch.id, fourth.id)).toBe(false);
+    const waiting = p.consents.waitingFor(chris.id).filter((r) => r.kind === "admit_agent");
+    expect(waiting.map((r) => r.detail.agentId)).toEqual([fourth.id]);
+    p.consents.decide(chris.id, waiting[0]!.id, { decision: "approve" });
+    expect(p.workspaces.hasAgent(launch.id, fourth.id)).toBe(true);
+    // The link still brings one new person in afterwards.
+    expect(p.shares.usable(secret).claimedBy).toBeNull();
+  });
+
+  test("7. removing a person says so in every Portico that person was in: the record, the agents there, and what was on its way", async () => {
+    const { p, chris, mallory, dana, muse, mal, pilot, launch } = await world();
+    acquaint(p, chris.id, mallory.id, dana.id);
+    const waitingOne = p.messages.send(mal.agent, { to: "dana/pilot", subject: "On its way", text: "x" }).message;
+    const other = p.messages.send(pilot.agent, { to: "mallory/mal", subject: "To the leaver", text: "x" }).message;
+    for (const { agent } of [muse, pilot]) p.agentNotices.take(agent.id);
+    p.people.removeMember(chris.id, mallory.id);
+    await flush();
+    // The Portico's record has the line, as when Mallory is taken out.
+    const record = p.activity.recordOf(launch.id, { forPerson: chris.id });
+    expect(record.filter((entry) => entry.kind === "portico_person_left").map((entry) => entry.detail)).toEqual([{ agents: "1", name: "Mallory" }]);
+    const shown = (await json(callPerson(p, signIn(p, chris), "GET", `/api/porticos/${launch.id}`))).record as Body[];
+    expect(shown.filter((r) => r.kind === "portico_person_left").map((r) => r.text)).toEqual(["“Mallory” left, with 1 agent."]);
+    // The agents left there are told, in Portico's own words.
+    for (const { agent } of [muse, pilot]) {
+      const texts = p.agentNotices.take(agent.id).map((n) => n.text);
+      expect(texts.some((text) => text.includes("“Mallory” (mallory) left the Portico “Launch”"))).toBe(true);
+    }
+    // What was on its way to and from the person's agent was withdrawn, as when a person is taken out; then the
+    // conversations with the removed person's agents went with the account.
+    expect(p.notices.filter((n) => n.kind === "message_withdrawn").map((n) => n.message.id).sort()).toEqual([waitingOne.id, other.id].sort());
+    expect(p.messages.get({ person: dana.id }, waitingOne.id)).toBeNull();
+    expect(p.messages.inbox(pilot.agent).messages).toEqual([]);
+    expect(p.workspaces.peopleIn(launch.id)).toEqual([chris.id, dana.id]);
+  });
+
+  test("8. a withdrawn message's update carries the time it was withdrawn, not the time it would have run out", async () => {
+    const { p, chris, mallory, mal, muse, launch } = await world();
+    acquaint(p, chris.id, mallory.id);
+    const sent = p.messages.send(mal.agent, { to: "chris/muse", subject: "Hi", text: "x" }).message;
+    p.clock.advance(5 * MINUTE);
+    const at = p.clock.now().toISOString();
+    p.workspaces.pause(chris.id, launch.id);
+    const update = (await json(callAs(p, mal, "GET", "/api/agent/inbox"))).updates.find((u: Body) => u.message_id === sent.id);
+    expect(update).toMatchObject({ status: "withdrawn", at });
+    expect(update.at).not.toBe(sent.expiresAt);
+    expect(muse.agent.id).toBeTruthy();
+  });
+
+  test("9. revoking an agent ends what the agent asked and what was asked about the agent", async () => {
+    const { p, chris, mallory, muse, mal, launch, cookies } = await world();
+    const share = (await tool(p, muse, "share_portico", { portico: launch.id })).request;
+    const gone = (await tool(p, muse, "delete_portico", { portico: launch.id })).request;
+    p.workspaces.setPolicy(chris.id, launch.id, mallory.id, "ask");
+    const extra = addAppAgent(p, mallory, "extra");
+    const admit = p.consents.askOwner(mallory.id, launch.id, extra.agent, mal.agent);
+    expect(p.consents.waitingFor(chris.id).map((r) => r.id).sort()).toEqual([share.id, gone.id, admit.id].sort());
+    p.agents.revoke(chris.id, muse.agent.id);
+    p.agents.revoke(mallory.id, extra.agent.id);
+    expect(p.consents.waitingFor(chris.id)).toEqual([]);
+    for (const id of [share.id, gone.id, admit.id]) expect(p.consents.get(id)!.status).toBe("expired");
+    // Nothing a revoked agent asked can be allowed afterwards.
+    expect((await callPerson(p, cookies.chris, "POST", `/api/consents/${gone.id}`, { decision: "approve" })).status).toBe(409);
+    expect(p.workspaces.get(launch.id)).not.toBeNull();
+    expect((await page(p, "/", cookies.chris)).html).not.toContain(`/c/${gone.id}`);
+  });
+
+  test("10. Allow once for a new agent lets go every message already held between the same two agents, in order", async () => {
+    const { p, chris, muse, grok, cookies } = await world();
+    const token = (await finishJoin(p, cookies.chris, await askToJoin(p, { kind: "agent", name: "newcomer" }))).token as string;
+    const newcomer = p.agents.ownedBy(chris.id).find((a) => a.name === "newcomer")!;
+    const say = (to: string, subject: string) => {
+      p.clock.advance(1000);
+      return p.messages.send(newcomer, { to, subject, text: "x" }).message;
+    };
+    const one = say("muse", "One");
+    const two = say("muse", "Two");
+    const other = say("grok", "To grok");
+    const three = say("muse", "Three");
+    expect([one, two, other, three].map((m) => m.heldFor)).toEqual(Array(4).fill("new_agent"));
+    // Chris allows the newest: the earlier ones to muse go with it, and muse reads them in the order they were written.
+    p.approvals.decide(chris.id, three.id, "allow_once");
+    const status = (id: string) => p.messages.get({ person: chris.id }, id)!.status;
+    expect([one, two, three].map((m) => status(m.id))).toEqual(["pending", "pending", "pending"]);
+    expect((await json(callAs(p, muse, "GET", "/api/agent/inbox"))).messages.map((m: Body) => m.subject)).toEqual(["One", "Two", "Three"]);
+    // The other pair is still asked about, and the agent is still unvouched.
+    expect(status(other.id)).toBe("held");
+    expect(p.agents.get(newcomer.id)!.unproven).toBe(true);
+    expect(say("muse", "Four").status).toBe("pending");
+    expect(token && grok.agent.id).toBeTruthy();
   });
 });

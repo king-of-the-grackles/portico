@@ -372,6 +372,9 @@ export class People {
    * messages of the person's agents are deleted in each workspace those agents were in.
    */
   remove(id: string): void {
+    // While the person and the person's agents still exist: the Porticos of other people hear that the person left.
+    this.onRemoving?.(id);
+    const handle = this.get(id)?.handle ?? null;
     const agentIds = (this.db.query("SELECT id FROM agents WHERE owner_id = $id").all({ id }) as { id: string }[]).map((row) => row.id);
     const clearContent = this.content?.gather(agentIds);
     // The workspaces that go with the person, and the other people's agents in each, who are told and whose waiting
@@ -386,12 +389,25 @@ export class People {
     }));
     this.db.transaction(() => {
       archiveWorkspaces(this.db, "owner_id = $id", { id }, this.iso());
+      // The handle named this person's agents to everyone else (handle/agent): nobody takes it up afterwards, or old
+      // addresses, allow lists and records would point at a stranger.
+      if (handle !== null) {
+        this.db
+          .query(
+            `INSERT INTO released_handles (handle_key, handle, person_id, released_at) VALUES ($key, $handle, $id, $at)
+             ON CONFLICT (handle_key) DO UPDATE SET handle = $handle, person_id = $id, released_at = $at`,
+          )
+          .run({ key: handleKey(handle), handle, id, at: this.iso() });
+      }
       this.db.query("DELETE FROM people WHERE id = $id").run({ id });
     })();
     clearContent?.();
     this.onWorkspacesGone?.(gone);
     this.changes.emit("people", "agents", "threads", "approvals", "computers");
   }
+
+  /** Set by portico.ts: called before a person is removed, while the person's rows are still there. */
+  onRemoving: ((personId: string) => void) | null = null;
 
   /** Set by portico.ts: the workspaces a removed person owned are gone, with the other people's agents that were in each. */
   onWorkspacesGone: ((gone: { workspaceId: string; agentIds: string[] }[]) => void) | null = null;

@@ -960,6 +960,13 @@ export class Agents {
       this.db.query("DELETE FROM oauth_codes WHERE agent_id = $id").run({ id: agent.id });
       this.db.query("DELETE FROM wake_urls WHERE agent_id = $id").run({ id: agent.id });
       this.db.query("DELETE FROM event_subscriptions WHERE agent_id = $id").run({ id: agent.id });
+      // What the agent asked a person, and what was asked about putting the agent somewhere, stops waiting.
+      this.db
+        .query(
+          `UPDATE consent_requests SET status = 'expired', code = NULL
+           WHERE status IN ('pending', 'allowed') AND (agent_id = $id OR json_extract(detail, '$.agentId') = $id)`,
+        )
+        .run({ id: agent.id });
     })();
     this.workspaces.agentRevoked(agent.id, personId);
     this.activity?.record("agent_revoked", { agentId: agent.id, personId, detail: { name: addressOf(agent) } });

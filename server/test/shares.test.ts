@@ -3,7 +3,8 @@ import { porticoTools } from "../src/agent-api/portico-tools";
 import type { Agent } from "../src/core/types";
 import { addAppAgent, addMember, addOwner, answerConsent, askToJoin, callAs, callPerson, copyProblems, DAY, errorCode, fakeAccounts, joinCodeOn, makePortico, MINUTE, pollJoin, signIn, submitJoinCode, type TestPortico, visibleCopy } from "./helpers";
 
-const on = () => makePortico();
+// Signing in verifies each person's address here, as on hosted Portico: a link can be for one address.
+const on = () => makePortico({ accountCheck: fakeAccounts });
 
 /**
  * Chris (handle chris) with muse and grok-bot in his shared workspace "Launch". Robert (handle robert) with muse and

@@ -120,7 +120,9 @@ export function porticoTools() {
         "Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link, which only " +
         "that person can open. Calling again after the request ran out gives a fresh one. list_porticos then shows the request approved, with a share link that works once, within " +
         `${LIMITS.shareDays} days, for one person: that person hands the link to an agent. With email, Portico sends ` +
-        "the link to that address, and only that address can use the link. The owner is told who came in.",
+        "the link to that address, and only that address can use the link; on a Portico server where people sign in with a " +
+        "password, no address is verified, so email is left out and the link is for whoever uses the link first. Only the " +
+        "agent that asked reads the share link in list_porticos. The owner is told who came in.",
       inputSchema: {
         type: "object",
         properties: {
@@ -256,7 +258,9 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
   /** A request as the agent that asked may see it. The page's link shows only while the request waits. */
   const requestView = (request: ConsentRequest) => {
     const share = request.result?.shareId ? shares.get(request.result.shareId) : null;
-    const secret = share ? shares.secretFor(ownerId, share.id) : null;
+    // A share link lets a person in: only the agent that asked for the share reads it here, and never an agent nobody
+    // vouched for. The person's other agents see that the share was made, without the link.
+    const secret = share && !agent.unproven && request.agentId === agent.id ? shares.secretFor(ownerId, share.id) : null;
     const pending = request.status === "pending";
     // What waits for a Portico's owner has a page that is the owner's alone.
     const forOwner = request.kind === "admit_agent";

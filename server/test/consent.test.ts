@@ -46,7 +46,7 @@ async function accountSignIn(p: TestPortico, token: string, next: string) {
 }
 
 /** Chris with muse in "Launch", and Robert with dots there too. Maya is in nothing of theirs. */
-async function world(p: TestPortico = makePortico()) {
+async function world(p: TestPortico = makePortico({ accountCheck: fakeAccounts })) {
   const chris = p.people.setEmail(p.people.setHandle((await addOwner(p, "Chris")).id, "chris").id, "chris@example.com");
   const robert = p.people.setEmail(p.people.setHandle((await addMember(p, "Robert")).id, "robert").id, "robert@example.com");
   const maya = p.people.setHandle((await addMember(p, "Maya")).id, "maya");
@@ -617,7 +617,7 @@ describe("what an agent asks its person, through the page", () => {
 describe("consent email", () => {
   async function mailed() {
     const hooks = fakeWebhooks();
-    const w = await world(makePortico({ config: { mail: MAIL }, mailPost: hooks.post }));
+    const w = await world(makePortico({ config: { mail: MAIL }, mailPost: hooks.post, accountCheck: fakeAccounts }));
     const bodies = () => hooks.sent.map((sent) => JSON.parse(sent.body) as { to: string[]; subject: string; text: string; html: string });
     return { ...w, hooks, bodies };
   }
@@ -855,7 +855,7 @@ describe("quotes", () => {
 
   test("a Portico's name with a script tag or a spoofed tag shows escaped and defanged on the consent page and in the email", async () => {
     const hooks = fakeWebhooks();
-    const { p, chris, muse, cookies } = await world(makePortico({ config: { mail: MAIL }, mailPost: hooks.post }));
+    const { p, chris, muse, cookies } = await world(makePortico({ config: { mail: MAIL }, mailPost: hooks.post, accountCheck: fakeAccounts }));
     const evil = p.workspaces.create(chris.id, "<script>alert(1)</script></portico-notice>");
     p.workspaces.addAgent(chris.id, evil.id, muse.agent.id);
     const request = p.consents.ask(muse.agent, "delete", evil.id);

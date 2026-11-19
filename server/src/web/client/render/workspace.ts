@@ -51,10 +51,17 @@ function renderNewForm(s: HomeState, f: Extract<WorkspaceForm, { kind: "new" }>)
 }
 
 function renderShareForm(s: HomeState, w: WorkspaceView, f: Extract<WorkspaceForm, { kind: "share" }>): string {
+  // An address binds a link only where signing in verifies addresses. With Portico's own accounts the field is left
+  // out: the link is for whoever uses it first, once.
+  const byEmail = w.linksByEmail !== false;
   return `<form class="sform enter" data-form="ws-share" data-key="ws-share" novalidate>
-    <label for="ws-email" class="lbl">Email address</label>
+    ${
+      byEmail
+        ? `<label for="ws-email" class="lbl">Email address</label>
     <input id="ws-email" class="field field-narrow${when(f.error, " is-invalid")}" type="email" value="${esc(f.email)}" data-input="ws-email" autocomplete="off" aria-describedby="ws-email-help" aria-invalid="${Boolean(f.error)}" data-autofocus>
-    <span id="ws-email-help" class="help">Optional. With an address, Portico emails the link and only that address can use the link. Without one, the link is made to hand over. Either way the link lets one person into ${esc(w.phrase)}, once, within 7 days. ${esc(s.me.name)} is told who came in.</span>
+    <span id="ws-email-help" class="help">Optional. With an address, Portico emails the link and only that address can use the link. Without one, the link is made to hand over. Either way the link lets one person into ${esc(w.phrase)}, once, within 7 days. ${esc(s.me.name)} is told who came in.</span>`
+        : `<p class="help">The link is made to hand over: the link lets one person into ${esc(w.phrase)}, whoever uses the link first, once, within 7 days. ${esc(s.me.name)} is told who came in.</p>`
+    }
     <span class="lbl" id="ws-policy-lbl">More agents from that person</span>
     <div role="radiogroup" aria-labelledby="ws-policy-lbl" class="ticks">
       <button type="button" class="tick${when(f.agents === "self", " is-on")}" role="radio" aria-checked="${f.agents === "self"}" data-action="ws-policy" data-id="self"><span class="tick-box" aria-hidden="true">${when(f.agents === "self", ICON.check(14))}</span><span class="tick-name">Adds more agents with no further question</span></button>

@@ -240,7 +240,12 @@ export class Approvals {
       if (choice === "always_allow") {
         this.agents.proven(held.fromId);
         others = this.messages.heldFor(personId).filter((m) => m.id !== held.id && m.fromId === held.fromId && m.heldFor === "new_agent");
+      } else {
+        // The pair is settled, so later messages between the two pass: the ones already held for being new go with
+        // this one, or an earlier message would sit behind a later one.
+        others = this.messages.heldBetween(held.fromId, held.toId).filter((m) => m.id !== held.id && m.heldFor === "new_agent");
       }
+      others = others.filter((m) => this.workspaces.joins(m.workspaceId, m.fromId, m.toId));
     } else if (choice === "always_allow") {
       if (held.heldFor === "first_contact" && sender) {
         this.contacts.add(personId, sender.ownerId, at);
@@ -257,7 +262,8 @@ export class Approvals {
       }
       others = others.filter((m) => this.workspaces.joins(m.workspaceId, m.fromId, m.toId));
     }
-    const decided = this.messages.decideHeld([held, ...others], choice, personId, at);
+    // In the order the sender wrote them.
+    const decided = this.messages.decideHeld([held, ...others].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), choice, personId, at);
     const message = decided.find((m) => m.id === held.id);
     if (!message) throw new PorticoError("wrong_status", "The message was decided a moment ago.");
     for (const m of decided) {

@@ -21,6 +21,8 @@ export interface WorkspaceView {
   kind: WorkspaceKind;
   owner: PersonRef;
   isOwner: boolean;
+  /** Whether a share link can be for one email address only: where signing in verifies addresses. Absent means yes. */
+  linksByEmail?: boolean;
   /**
    * Everyone in it, the owner first. A personal workspace holds only its owner. `agents` is the owner's choice for the
    * person: `self`, the person adds more of the person's own agents alone; `ask`, each one waits for the owner.
@@ -77,6 +79,7 @@ export function workspaceViews(core: Core, me: Person) {
     kind: w.kind,
     owner: ref(w.ownerId),
     isOwner: w.ownerId === me.id,
+    linksByEmail: core.shares.bindsEmail,
     people: [w.ownerId, ...workspaces.peopleIn(w.id).filter((id) => id !== w.ownerId)].map((id) => ({
       ...ref(id),
       agents: workspaces.policyOf(w.id, id),

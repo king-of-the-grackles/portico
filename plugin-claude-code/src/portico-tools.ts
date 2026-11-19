@@ -122,7 +122,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "share_portico",
-    "description": "Ask to share a Portico with one more person. Only the Portico's owner can, and the person who manages this agent allows the request first on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link, which only that person can open. Calling again after the request ran out gives a fresh one. list_porticos then shows the request approved, with a share link that works once, within 7 days, for one person: that person hands the link to an agent. With email, Portico sends the link to that address, and only that address can use the link. The owner is told who came in.",
+    "description": "Ask to share a Portico with one more person. Only the Portico's owner can, and the person who manages this agent allows the request first on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link, which only that person can open. Calling again after the request ran out gives a fresh one. list_porticos then shows the request approved, with a share link that works once, within 7 days, for one person: that person hands the link to an agent. With email, Portico sends the link to that address, and only that address can use the link; on a Portico server where people sign in with a password, no address is verified, so email is left out and the link is for whoever uses the link first. Only the agent that asked reads the share link in list_porticos. The owner is told who came in.",
     "inputSchema": {
       "type": "object",
       "properties": {

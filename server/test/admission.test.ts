@@ -16,7 +16,7 @@ import {
   PUBLIC_URL,
   signIn,
   type TestPortico,
-  visibleCopy,
+  visibleCopy, fakeAccounts 
 } from "./helpers";
 
 const MAIL: MailConfig = { apiKey: "re_test", from: "Portico <notices@mail.portico.example>", webhookSecret: null };
@@ -25,7 +25,7 @@ const MAIL: MailConfig = { apiKey: "re_test", from: "Portico <notices@mail.porti
  * Chris made the Portico “Launch” and put muse in. Robert (dots, scout) and Maya (pilot) have accounts and are in nothing
  * of Chris's yet.
  */
-async function world(p: TestPortico = makePortico()) {
+async function world(p: TestPortico = makePortico({ accountCheck: fakeAccounts })) {
   const person = async (name: string, owner = false) => {
     const made = owner ? await addOwner(p, name) : await addMember(p, name);
     p.people.setEmail(made.id, `${name.toLowerCase()}@example.com`);
@@ -187,7 +187,7 @@ describe("adding more agents later", () => {
 
   test("where the maker chose to be asked: the request goes to the maker, and the agent comes in on the maker's Allow", async () => {
     const hooks = fakeWebhooks();
-    const w = await world(makePortico({ config: { mail: MAIL }, mailPost: hooks.post }));
+    const w = await world(makePortico({ config: { mail: MAIL }, mailPost: hooks.post, accountCheck: fakeAccounts }));
     const { p, chris, robert, dots, scout, launch, cookies } = w;
     await comeIn(w, "ask");
     expect(p.workspaces.policyOf(launch.id, robert.id)).toBe("ask");
@@ -340,7 +340,7 @@ describe("everyone in a Portico is told who comes in and who leaves", () => {
 
   test("with mail set up, several changes arrive as one email per person, with the stop link; the person who did it gets none", async () => {
     const hooks = fakeWebhooks();
-    const w = await world(makePortico({ config: { mail: MAIL }, mailPost: hooks.post }));
+    const w = await world(makePortico({ config: { mail: MAIL }, mailPost: hooks.post, accountCheck: fakeAccounts }));
     const { p, chris, robert, scout, launch } = w;
     await comeIn(w);
     p.workspaces.addAgent(robert.id, launch.id, scout.agent.id);

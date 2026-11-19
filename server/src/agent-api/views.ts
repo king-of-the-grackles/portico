@@ -164,7 +164,8 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
 
   const update = (m: Message, viewer: Agent): UpdateView => {
     const to = nameOf(m.toId, viewer);
-    const at = m.status === "delivered" ? (m.deliveredAt ?? m.createdAt) : (m.decidedAt ?? m.expiresAt);
+    // When the message ended: delivered, withdrawn, decided, or run out.
+    const at = m.status === "delivered" ? (m.deliveredAt ?? m.createdAt) : m.status === "withdrawn" ? (m.withdrawnAt ?? m.decidedAt ?? m.expiresAt) : (m.decidedAt ?? m.expiresAt);
     return {
       message_id: m.id,
       to,

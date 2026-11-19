@@ -9,7 +9,6 @@ import { quote } from "./framing";
 import { DAY_MS, LIMITS, MINUTE_MS } from "./limits";
 import { requireUnreservedName } from "./names";
 import type { People } from "./people";
-import { cleanEmail } from "./people";
 import { DEAD_LINK, IN_ALREADY, type Share, type Shares } from "./shares";
 import { hashSecret, newToken, sameSecret } from "./tokens";
 import type { Agent, AgentKind, AgentsPolicy, Computer, Person, Workspace } from "./types";
@@ -294,7 +293,7 @@ export class Consents {
       if (workspace.ownerId !== agent.ownerId) {
         throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can share that Portico: the owner decides who comes in.`);
       }
-      detail = { email: input.email === undefined || input.email === null || input.email === "" ? null : cleanEmail(input.email), agents: cleanAgentsPolicy(input.agents) };
+      detail = { email: this.shares.emailFor(input.email), agents: cleanAgentsPolicy(input.agents) };
     } else if (kind === "delete") {
       if (workspace.ownerId !== agent.ownerId) throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can delete it.`);
       detail = {};
@@ -723,7 +722,16 @@ export class Consents {
           if (!share) throw new PorticoError("not_found", DEAD_LINK);
           const ticked = new Set(request.detail.bring ?? []);
           const more = this.agents.ownedBy(person.id).filter((a) => ticked.has(a.id) && a.revokedAt === null && !this.workspaces.hasAgent(share.workspaceId, a.id));
-          this.shares.enter(share, person, [agent, ...more]);
+          if (this.workspaces.hasPerson(share.workspaceId, person.id)) {
+            // The person is in that workspace already, so the link brings nobody in and stays unused. The agents go
+            // in the way add_to_portico puts them: at once, or by asking the owner where the owner chose to be asked.
+            for (const coming of [agent, ...more]) {
+              if (this.workspaces.asksOwner(share.workspaceId, person.id)) this.askOwner(person.id, share.workspaceId, coming, agent);
+              else this.workspaces.addAgent(person.id, share.workspaceId, coming.id);
+            }
+          } else {
+            this.shares.enter(share, person, [agent, ...more]);
+          }
         }
       }
       // Nobody vouched for the join: the newcomer's first message to each other agent of the person is asked about.

@@ -73,6 +73,11 @@ export interface SharesDeps {
   changes: Changes;
   /** Seals a link's secret, so the person who made the link can copy it again. */
   signingKey: string;
+  /**
+   * Whether a link can be for one address only: true where signing in gives each person a verified address. With
+   * Portico's own accounts nobody has one, so a link bound to an address could never be used.
+   */
+  bindsEmail?: boolean;
   now?: () => Date;
   newId?: () => string;
   log?: (msg: string, fields: Record<string, unknown>) => void;
@@ -91,6 +96,7 @@ export class Shares {
   private readonly workspaces: Workspaces;
   private readonly changes: Changes;
   private readonly signingKey: string;
+  readonly bindsEmail: boolean;
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
@@ -100,10 +106,21 @@ export class Shares {
     this.workspaces = deps.workspaces;
     this.changes = deps.changes;
     this.signingKey = deps.signingKey;
+    this.bindsEmail = deps.bindsEmail ?? true;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.log = deps.log ?? (() => {});
     this.workspaces.onPersonRemoved = (workspaceId, personId) => this.personRemoved(workspaceId, personId);
+  }
+
+  /**
+   * The address a new link is for, or null: checked as typed, and kept only where a link can be bound to one. Elsewhere
+   * the address is left out, and the link is for whoever uses it first, once.
+   */
+  emailFor(raw: unknown): string | null {
+    if (raw === undefined || raw === null || raw === "") return null;
+    const email = cleanEmail(raw);
+    return this.bindsEmail ? email : null;
   }
 
   // ---- links ----
@@ -118,7 +135,7 @@ export class Shares {
     if (workspace.ownerId !== byId) {
       throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can share that Portico: the owner decides who comes in.`);
     }
-    const email = input.email === undefined || input.email === null || input.email === "" ? null : cleanEmail(input.email);
+    const email = this.emailFor(input.email);
     const agentsPolicy = cleanAgentsPolicy(input.agents);
     const secret = newLinkSecret();
     const at = this.now();

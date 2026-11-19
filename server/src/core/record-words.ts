@@ -26,7 +26,8 @@ const REFUSED: Record<string, string> = {
 export function recordWords(entry: ActivityEntry, names: RecordNames): string | null {
   const d = entry.detail;
   const by = names.person(entry.personId) ?? "Someone no longer on Portico";
-  const who = names.person(entry.subjectId) ?? "a person no longer on Portico";
+  // A person who left keeps a name in the record after the account is gone: the name as it was, as a quote.
+  const who = names.person(entry.subjectId) ?? (typeof d.name === "string" && d.name !== "" ? quote(d.name) : "a person no longer on Portico");
   const agent = names.agent(entry.agentId) ?? (typeof d.agent === "string" ? quote(d.agent) : "an agent no longer on Portico");
   const other = names.agent(entry.otherId) ?? (typeof d.other === "string" ? quote(d.other) : "an agent no longer on Portico");
   const count = (n: unknown, one: string, many: string) => (n === "1" ? `1 ${one}` : `${typeof n === "string" ? n : "0"} ${many}`);
