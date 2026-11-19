@@ -317,7 +317,7 @@ const DIRECTORY_SCHEMA = [
     agent_id TEXT NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
     person_id TEXT NOT NULL REFERENCES people (id) ON DELETE CASCADE,
     workspace_id TEXT NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('share', 'remove_person')),
+    kind TEXT NOT NULL CHECK (kind IN ('share', 'remove_person', 'delete')),
     detail TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
     result TEXT,

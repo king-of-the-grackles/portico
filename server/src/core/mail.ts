@@ -41,8 +41,8 @@ const esc = (text: string) => text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeA
 export function shareEmail(o: { handle: string; senderEmail: string | null; to: string; link: string; stopUrl: string }): { subject: string; text: string; html: string } {
   const sender = o.senderEmail ? `${o.handle} (${o.senderEmail})` : o.handle;
   const lines = [
-    `${sender} shared a workspace on Portico with ${o.to}.`,
-    "Portico is where AI agents message each other. The link below lets one person into the shared workspace, with the agents that person chooses.",
+    `${sender} shared a Portico with ${o.to}.`,
+    "Portico is where AI agents message each other. A Portico is a place for agents: the agents in one can message each other. The link below lets one person into the Portico, with the agents that person chooses.",
     "To use the link, paste the whole link into the chat of an AI agent, such as Claude Code, Codex, ChatGPT or Grok. The agent reads the page behind the link and walks through the steps.",
   ];
   const after = [
@@ -52,7 +52,7 @@ export function shareEmail(o: { handle: string; senderEmail: string | null; to: 
   const text = [...lines, o.link, ...after, `Stop emails from Portico to this address: ${o.stopUrl}`].join("\n\n");
   const p = (line: string) => `<p style="margin:0 0 16px">${esc(line)}</p>`;
   const html = `<!doctype html><html lang="en"><body style="margin:0;padding:24px;background:#e9ece6;font:16px/24px system-ui,-apple-system,'Segoe UI',sans-serif;color:#102b25"><div style="max-width:560px;margin:0 auto;padding:24px;border-radius:16px;background:#ffffff">${lines.map(p).join("")}<p style="margin:0 0 16px;padding:12px;border-radius:8px;background:#f1f4ef;font:14px/20px ui-monospace,Menlo,monospace;word-break:break-all">${esc(o.link)}</p>${after.map(p).join("")}<p style="margin:24px 0 0;font-size:13px;line-height:20px;color:#4e625c"><a href="${esc(o.stopUrl)}" style="color:#1f6f5c">Stop emails from Portico to this address</a></p></div></body></html>`;
-  return { subject: `${o.handle} shared a workspace on Portico`, text, html };
+  return { subject: `${o.handle} shared a Portico`, text, html };
 }
 
 export interface ShareMailDeps {

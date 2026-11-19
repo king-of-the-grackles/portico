@@ -195,7 +195,7 @@ export class People {
     if (input.role === "owner" && this.owner()) throw new PorticoError("conflict", "Portico already has an owner.");
     const externalId = input.externalId ?? null;
     if (externalId !== null && this.byExternalId(externalId)) {
-      throw new PorticoError("conflict", "This account already has a place on this Portico.");
+      throw new PorticoError("conflict", "This account already has a place on this Portico server.");
     }
     const at = this.iso();
     const person: Person = {

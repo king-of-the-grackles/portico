@@ -13,7 +13,7 @@ describe("a session's live stream", () => {
   test("registers the session, says hello first, and nudges when a message arrives", async () => {
     const { p, token, grok } = await setup();
     const { hello, events } = await openSessionStream(p, token, { key: "key-000001", repo: "api" });
-    expect(hello).toEqual({ address: "api-claude@macbook", name: "api-claude", computer: "macbook", workspaces: true });
+    expect(hello).toEqual({ address: "api-claude@macbook", name: "api-claude", computer: "macbook" });
     expect(p.agents.entriesFor(grok.agent).find((e) => e.display === "api-claude")?.status).toBe("idle");
     await callAs(p, { token: grok.token }, "POST", "/api/agent/messages", { to: "api-claude", subject: "s", text: "t" });
     expect((await events.next()).event).toBe("nudge");
@@ -136,7 +136,7 @@ describe("a session's live stream", () => {
     p.agents.update(chris.id, p.agents.byAddress("api-claude@macbook")!.id, { name: "billing-claude" });
     expect(await events.next()).toEqual({
       event: "renamed",
-      data: { address: "billing-claude@macbook", name: "billing-claude", computer: "macbook", workspaces: true },
+      data: { address: "billing-claude@macbook", name: "billing-claude", computer: "macbook" },
     });
     await events.cancel();
   });

@@ -23,13 +23,24 @@ export interface Person {
   email: string | null;
 }
 
-/** Personal holds only its owner's agents and can't be shared. Shared bridges to other people's agents. */
+/** `personal` is a person's own Portico: only that person's agents, never shared. `shared` brings other people's agents in. */
 export type WorkspaceKind = "personal" | "shared";
 
-/** A list of people and agents. Two agents reach each other only while both are in one workspace. */
+/**
+ * A Portico, the place: a list of people and agents. Two agents reach each other only while both are in one. The code
+ * calls it a workspace, since `Portico` here names the running app; nothing a person or an agent sees does.
+ */
 export interface Workspace {
   id: string;
+  /**
+   * What everyone calls it: the name someone gave it, the people in it when nobody has ("Chris and Robert"), or
+   * "Chris's Portico" for a person's own.
+   */
   name: string;
+  /** Whether someone gave it a name. */
+  named: boolean;
+  /** How a sentence names it: "the Launch Portico", "Chris's Portico". */
+  phrase: string;
   kind: WorkspaceKind;
   ownerId: string;
   createdAt: string;

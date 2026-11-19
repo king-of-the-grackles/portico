@@ -134,12 +134,17 @@ export function renderTaskRow(s: HomeState, t: TaskView, perspective: string | n
   return `<li class="trow${when(open, " is-open")}" data-key="t-${esc(t.id)}">
     <button type="button" class="trow-main" data-action="task-toggle" data-id="${esc(t.id)}" aria-expanded="${open}">
       <span class="trow-status">${statusPill(t.outcome)}</span>
-      <span class="trow-task"><span class="trow-subject">${esc(t.subject)}</span><span class="trow-line">${esc(taskLine(t))}</span></span>
+      <span class="trow-task"><span class="trow-subject">${esc(t.subject)}</span><span class="trow-line">${esc(taskLine(t))}${when(t.readOnly, () => ` ${esc(readOnlyLine(t))}`)}</span></span>
       <span class="trow-who">${who(t, t.from, t.to, perspective)}</span>
       <span class="trow-when tnum">${taskWhen(t)}</span>
     </button>
     ${when(open, () => renderOpened(s, t, s.openTasks[t.id] ?? null))}
   </li>`;
+}
+
+/** Why nothing new goes in a conversation: its Portico stopped joining the two agents. */
+export function readOnlyLine(t: TaskView): string {
+  return `Read-only: ${t.portico || "a deleted Portico"} no longer joins ${t.from.label} and ${t.to.label}.`;
 }
 
 /** The column heads above a list of task rows; hidden on phones, where each row stacks. */

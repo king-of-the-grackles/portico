@@ -110,13 +110,15 @@ describe("handles", () => {
 });
 
 describe("workspaces", () => {
-  test("a new agent joins its owner's personal workspace, which is made on first use", async () => {
+  test("a new agent joins its owner's own Portico, which is made on first use", async () => {
     const p = on();
     const chris = await addOwner(p);
     expect(p.workspaces.forPerson(chris.id)).toEqual([]);
     const { agent: muse } = addAppAgent(p, chris, "muse");
     const [personal] = p.workspaces.forPerson(chris.id);
-    expect(personal).toMatchObject({ name: "Personal", kind: "personal", ownerId: chris.id });
+    expect(personal).toMatchObject({ name: "Chris's Portico", phrase: "Chris's Portico", named: false, kind: "personal", ownerId: chris.id });
+    // The stored name is internal: nothing reads it back.
+    expect((p.db.query("SELECT name FROM workspaces WHERE id = $id").get({ id: personal!.id }) as { name: string }).name).toBe("Personal");
     const { computer } = addComputer(p, chris);
     const { agent: session } = addSession(p, computer);
     expect(p.workspaces.agentsIn(personal!.id).sort()).toEqual([muse.id, session.id].sort());
@@ -133,13 +135,13 @@ describe("workspaces", () => {
     expect(p.workspaces.agentsIn(personal.id)).toEqual([muse.id]);
   });
 
-  test("a personal workspace can't be shared, renamed or deleted, and loses no agent", async () => {
+  test("a person's own Portico can't be shared, renamed or deleted", async () => {
     const { p, chris, robert, muse, rmuse } = await world();
     const personal = p.workspaces.personal(chris.id);
     expect(errorCode(() => p.workspaces.admit(personal.id, robert.id))).toBe("not_allowed");
     // To someone else, another person's personal workspace looks like one that isn't there.
     expect(errorCode(() => p.workspaces.addAgent(robert.id, personal.id, rmuse.agent.id))).toBe("not_found");
-    expect(errorCode(() => p.workspaces.removeAgent(chris.id, personal.id, muse.agent.id))).toBe("not_allowed");
+    expect(errorCode(() => p.workspaces.removeAgent(robert.id, personal.id, muse.agent.id))).toBe("not_found");
     expect(errorCode(() => p.workspaces.rename(chris.id, personal.id, "Mine"))).toBe("not_allowed");
     expect(errorCode(() => p.workspaces.remove(chris.id, personal.id))).toBe("not_allowed");
     expect(p.workspaces.peopleIn(personal.id)).toEqual([chris.id]);
@@ -154,7 +156,8 @@ describe("workspaces", () => {
     p.people.setHandle(chris.id, "chris");
     const launch = p.workspaces.create(chris.id, "  Launch   team ");
     expect(launch).toMatchObject({ name: "Launch team", kind: "shared", ownerId: chris.id });
-    expect(errorCode(() => p.workspaces.create(chris.id, " "))).toBe("bad_request");
+    expect(errorCode(() => p.workspaces.create(chris.id, 7))).toBe("bad_request");
+    expect(errorCode(() => p.workspaces.create(chris.id, "x".repeat(61)))).toBe("bad_request");
     expect(errorCode(() => p.workspaces.admit(launch.id, maya.id))).toBe("wrong_status");
     p.people.setHandle(maya.id, "maya");
     p.workspaces.admit(launch.id, maya.id);
@@ -267,12 +270,12 @@ describe("the reach rule", () => {
     expect(names(p, scout.agent)).toEqual([]);
   });
 
-  test("list_agents over the API carries the address, the owner and the workspaces in common", async () => {
+  test("list_agents over the API carries the address, the owner and the Porticos in common", async () => {
     const { p, muse } = await world();
     const res = await callAs(p, muse, "GET", "/api/agent/agents");
-    const { agents } = (await res.json()) as { agents: { name: string; address: string; owner: string; workspaces: string[] }[] };
-    expect(agents.map((a) => [a.name, a.address, a.owner, a.workspaces]).sort()).toEqual([
-      ["grok-bot", "grok-bot", "Chris", ["Personal"]],
+    const { agents } = (await res.json()) as { agents: { name: string; address: string; owner: string; porticos: { name: string }[] }[] };
+    expect(agents.map((a) => [a.name, a.address, a.owner, a.porticos.map((w) => w.name)]).sort()).toEqual([
+      ["grok-bot", "grok-bot", "Chris", ["Chris's Portico"]],
       ["robert/muse", "robert/muse", "Robert", ["Launch"]],
     ]);
   });
@@ -326,7 +329,9 @@ describe("the reach rule", () => {
     // A reply names no agent, so the reach check, not the name lookup, has to stop it. Both directions.
     expect(errorCode(() => p.messages.send(muse.agent, { replyTo: answer.id, subject: "More", text: "x" }))).toBe("not_allowed");
     expect(errorCode(() => p.messages.send(rmuse.agent, { replyTo: ask.id, subject: "More", text: "x" }))).toBe("not_allowed");
-    expect(errorCode(() => say(p, muse.agent, "robert/muse"))).toBe("unknown_agent");
+    // A plain refusal, said only because the two shared a Portico once.
+    expect(() => say(p, muse.agent, "robert/muse")).toThrow("You and `robert/muse` no longer share a Portico. list_agents shows who can be reached now.");
+    expect(errorCode(() => say(p, muse.agent, "robert/muse"))).toBe("not_allowed");
     expect(names(p, muse.agent)).toEqual(["grok-bot"]);
 
     // What was sent before still arrives and can be read, by the agents and over the API.
@@ -363,7 +368,7 @@ describe("the reach rule", () => {
     expect(next.message).toMatchObject({ workspaceId: second.id, replyTo: null, rootId: next.message.id });
     expect(next.message.threadId).not.toBe(first.threadId);
     expect(next.note).toContain("read-only");
-    expect(next.note).toContain("the Second workspace");
+    expect(next.note).toContain("a new conversation in the Second Portico");
     expect(p.messages.threadsBetween(muse.agent.id, rmuse.agent.id).map((t) => t.workspaceId)).toEqual([second.id, launch.id]);
     // The old thread is still read, with nothing new in it.
     expect(p.messages.inThread(old!).messages.map((m) => m.id)).toEqual([first.id, reply.message.id]);

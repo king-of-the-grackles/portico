@@ -6,12 +6,17 @@ import type { AgentKind, Person, Workspace, WorkspaceKind } from "../core/types"
 import { log } from "../log";
 import { type PersonEnv, currentPerson } from "./context";
 import { jsonObject } from "./session";
-import { type AgentRef, type PersonRef, personViews } from "./views";
+import { type AgentRef, type PersonRef, personViews, porticoPhrase, porticoTitle } from "./views";
 
-/** A workspace as the signed-in person sees it. */
+/** A Portico (a workspace, in this code) as the signed-in person sees it. */
 export interface WorkspaceView {
   id: string;
+  /** Its heading: "Your Portico" for the person's own, otherwise the name someone gave it or the people in it. */
   name: string;
+  /** The same inside a sentence: "your Portico", "the Launch Portico". */
+  phrase: string;
+  /** Whether someone gave it a name. Without one it is named after the people in it. */
+  named: boolean;
   kind: WorkspaceKind;
   owner: PersonRef;
   isOwner: boolean;
@@ -47,17 +52,17 @@ export interface JoinView {
   /** The code the agent shows in its chat. */
   code: string;
   agent: AgentRef;
-  workspace: { id: string; name: string };
+  workspace: { id: string; name: string; phrase: string };
   sharedBy: PersonRef | null;
   expiresAt: string;
 }
 
-/** Something an agent asked the person to confirm: sharing a workspace, or taking a person out. */
+/** Something an agent asked the person to confirm: sharing a workspace, taking a person out, or deleting it. */
 export interface AskView {
   id: string;
   kind: WorkspaceAsk["kind"];
   agent: AgentRef;
-  workspace: { id: string; name: string };
+  workspace: { id: string; name: string; phrase: string };
   email: string | null;
   person: PersonRef | null;
   expiresAt: string;
@@ -84,7 +89,9 @@ export function workspaceViews(core: Core, me: Person) {
   };
   const workspace = (w: Workspace, needs: Set<string> = needing()): WorkspaceView => ({
     id: w.id,
-    name: w.name,
+    name: porticoTitle(w, me),
+    phrase: porticoPhrase(w, me),
+    named: w.named,
     kind: w.kind,
     owner: ref(w.ownerId),
     isOwner: w.ownerId === me.id,
@@ -107,7 +114,10 @@ export function workspaceViews(core: Core, me: Person) {
       ...(mail === null ? {} : { mail }),
     };
   };
-  const named = (id: string) => ({ id, name: workspaces.get(id)?.name ?? "" });
+  const named = (id: string) => {
+    const w = workspaces.get(id);
+    return { id, name: w ? porticoTitle(w, me) : "", phrase: w ? porticoPhrase(w, me) : "a Portico" };
+  };
   const join = (request: ShareRequest): JoinView | null => {
     const s = shares.get(request.shareId);
     const agent = request.agentId ? agents.get(request.agentId) : null;
@@ -126,7 +136,7 @@ export function workspaceViews(core: Core, me: Person) {
   return {
     workspace,
     share,
-    /** The person's workspaces: Personal first, then shared ones by name. */
+    /** The person's workspaces: the person's own first, then shared ones, the oldest first. */
     list: (): WorkspaceView[] => {
       workspaces.personal(me.id);
       const needs = needing();
@@ -156,17 +166,18 @@ export function workspacePageData(core: Core, me: Person, id: string): Workspace
 }
 
 /**
- * Workspaces, for the signed-in person. A workspace nobody shared with the person answers 404, like one that isn't
- * there.
+ * Porticos, for the signed-in person. One nobody shared with the person answers 404, like one that isn't there. The
+ * JSON keeps the code's word for a Portico, `workspace`.
  *
- *   GET    /api/workspaces                         → { workspaces }
- *   POST   /api/workspaces { name, agentIds? }     → { workspace }: a new shared workspace with the person's agents
- *   GET    /api/workspaces/:id                     → { workspace, shares }
- *   PATCH  /api/workspaces/:id { name }            → { workspace }
- *   DELETE /api/workspaces/:id
- *   PUT    /api/workspaces/:id/agents/:agentId     DELETE the same: the person's own agents in and out
- *   DELETE /api/workspaces/:id/people/:personId    the owner removes someone, or anyone leaves
- *   POST   /api/workspaces/:id/shares { email? }   → { share }: a link for one person
+ *   GET    /api/porticos                         → { workspaces }
+ *   POST   /api/porticos { name?, agentIds? }    → { workspace }: a new one with the person's agents, named or not
+ *   GET    /api/porticos/:id                     → { workspace, shares }
+ *   PATCH  /api/porticos/:id { name }            → { workspace }
+ *   DELETE /api/porticos/:id
+ *   PUT    /api/porticos/:id/agents/:agentId     DELETE the same: the person's own agents in and out, the person's
+ *                                                own Portico included (taking an agent out of it, and putting it back)
+ *   DELETE /api/porticos/:id/people/:personId    the owner removes someone, or anyone leaves
+ *   POST   /api/porticos/:id/shares { email? }   → { share }: a link for one person
  *   POST   /api/shares/:id/mail                    → { share }: the share's email again
  *   DELETE /api/shares/:id
  *   POST   /api/approvals/joins/:id { decision, code?, name? }
@@ -177,9 +188,9 @@ export function workspaceRoutes(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
   const views = (c: Context<PersonEnv>) => workspaceViews(core, currentPerson(c));
 
-  route.get("/workspaces", (c) => c.json({ workspaces: views(c).list() }));
+  route.get("/porticos", (c) => c.json({ workspaces: views(c).list() }));
 
-  route.post("/workspaces", async (c) => {
+  route.post("/porticos", async (c) => {
     const me = currentPerson(c);
     const body = await jsonObject(c);
     const ids = Array.isArray(body.agentIds) ? body.agentIds.filter((id): id is string => typeof id === "string") : [];
@@ -191,41 +202,41 @@ export function workspaceRoutes(core: Core): Hono<PersonEnv> {
     return c.json({ workspace: workspaceViews(core, me).workspace(workspace) }, 201);
   });
 
-  route.get("/workspaces/:id", (c) => c.json(workspacePageData(core, currentPerson(c), c.req.param("id"))));
+  route.get("/porticos/:id", (c) => c.json(workspacePageData(core, currentPerson(c), c.req.param("id"))));
 
-  route.patch("/workspaces/:id", async (c) => {
+  route.patch("/porticos/:id", async (c) => {
     const me = currentPerson(c);
     const body = await jsonObject(c);
     workspaces.requireFor(me.id, c.req.param("id"));
     return c.json({ workspace: workspaceViews(core, me).workspace(workspaces.rename(me.id, c.req.param("id"), body.name)) });
   });
 
-  route.delete("/workspaces/:id", (c) => {
+  route.delete("/porticos/:id", (c) => {
     const me = currentPerson(c);
     workspaces.requireFor(me.id, c.req.param("id"));
     workspaces.remove(me.id, c.req.param("id"));
     return c.body(null, 204);
   });
 
-  route.put("/workspaces/:id/agents/:agentId", (c) => {
+  route.put("/porticos/:id/agents/:agentId", (c) => {
     const me = currentPerson(c);
     workspaces.addAgent(me.id, c.req.param("id"), c.req.param("agentId"));
     return c.body(null, 204);
   });
 
-  route.delete("/workspaces/:id/agents/:agentId", (c) => {
+  route.delete("/porticos/:id/agents/:agentId", (c) => {
     const me = currentPerson(c);
     workspaces.removeAgent(me.id, c.req.param("id"), c.req.param("agentId"));
     return c.body(null, 204);
   });
 
-  route.delete("/workspaces/:id/people/:personId", (c) => {
+  route.delete("/porticos/:id/people/:personId", (c) => {
     const me = currentPerson(c);
     workspaces.removePerson(me.id, c.req.param("id"), c.req.param("personId"));
     return c.body(null, 204);
   });
 
-  route.post("/workspaces/:id/shares", async (c) => {
+  route.post("/porticos/:id/shares", async (c) => {
     const me = currentPerson(c);
     const body = await jsonObject(c);
     const { share, secret } = shares.create(me.id, c.req.param("id"), { email: body.email });
@@ -258,8 +269,8 @@ export function workspaceRoutes(core: Core): Hono<PersonEnv> {
       status: request.status,
       workspace: { id: workspace.id, name: workspace.name },
       agent: agent ? personViews(core, me).agent(agent) : null,
-      // For the confirm page's form, which goes on to the workspace.
-      next: request.status === "approved" ? `/w/${workspace.id}` : "/",
+      // For the confirm page's form, which goes on to the Portico's page.
+      next: request.status === "approved" ? `/p/${workspace.id}` : "/",
     });
   });
 

@@ -393,7 +393,7 @@ export class Files {
         if (stored + file.size > MAX_STORED_BYTES) {
           throw new PorticoError(
             "too_large",
-            `File storage for this workspace is full (${LIMITS.maxStoredGb} GB). Files leave with the ${LIMITS.historyDays}-day history.`,
+            `File storage for the Portico this message goes through is full (${LIMITS.maxStoredGb} GB). Files leave with the ${LIMITS.historyDays}-day history.`,
           );
         }
         db.query(

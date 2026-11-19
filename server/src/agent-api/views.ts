@@ -3,7 +3,7 @@ import type { Files, StoredFile } from "../core/files";
 import { frameMessage, frameUpdate } from "../core/framing";
 import type { People } from "../core/people";
 import type { Workspaces } from "../core/workspaces";
-import type { Agent, AgentKind, AgentType, DirectoryEntry, LiveStatus, Message, MessageStatus } from "../core/types";
+import type { Agent, AgentKind, AgentType, DeliveryTier, DirectoryEntry, LiveStatus, Message, MessageStatus, Workspace } from "../core/types";
 
 /** What agents see. snake_case, as the agent API has always been. */
 export interface AgentEntryView {
@@ -24,8 +24,14 @@ export interface AgentEntryView {
   last_seen: string | null;
   /** New senders' messages to this agent wait for a person's approval. */
   approval_required: boolean;
-  /** The names of the workspaces this agent and the caller are both in. */
-  workspaces?: string[];
+  /** The Porticos this agent and the caller are both in. */
+  porticos?: PorticoRef[];
+}
+
+/** A Portico, as a result names it. */
+export interface PorticoRef {
+  id: string;
+  name: string;
 }
 
 /** A file a message carries. `url` answers this agent's token with the file; get_task adds an address that needs none. */
@@ -41,7 +47,13 @@ export interface MessageOutView {
   id: string;
   thread_id: string;
   from: string;
+  /** The name of the person who manages the sender. */
+  from_owner: string;
+  /** Whether that person also manages the agent reading this. */
+  from_own_person: boolean;
   to: string;
+  /** The Portico the message went through. */
+  portico: PorticoRef;
   subject: string;
   text: string;
   reply_to: string | null;
@@ -78,6 +90,10 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
     return agent ? agents.nameFor(agent, viewer.ownerId) : id;
   };
 
+  const portico = (w: Pick<Workspace, "id" | "name">): PorticoRef => ({ id: w.id, name: w.name });
+  /** The Portico a message went through. Its row goes once its history has: the ID is what is left then. */
+  const porticoOf = (workspaceId: string) => workspaces.known(workspaceId);
+
   const entry = (e: DirectoryEntry, viewer?: Agent): AgentEntryView => ({
     name: e.display,
     address: e.address,
@@ -92,7 +108,7 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
     doing: e.doing,
     last_seen: e.lastSeen,
     approval_required: e.agent.approvalRequired,
-    ...(viewer ? { workspaces: workspaces.shared(viewer.id, e.agent.id).map((w) => w.name) } : {}),
+    ...(viewer ? { porticos: workspaces.shared(viewer.id, e.agent.id).map(portico) } : {}),
   });
 
   const file = (f: StoredFile): FileOutView => ({
@@ -107,7 +123,10 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
     id: m.id,
     thread_id: m.threadId,
     from: nameOf(m.fromId, viewer),
+    from_owner: ownerName(agents.get(m.fromId)?.ownerId ?? ""),
+    from_own_person: agents.get(m.fromId)?.ownerId === viewer.ownerId,
     to: nameOf(m.toId, viewer),
+    portico: portico(porticoOf(m.workspaceId) ?? { id: m.workspaceId, name: "" }),
     subject: m.subject,
     text: m.text,
     reply_to: m.replyTo,
@@ -119,7 +138,16 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
 
   const delivery = (m: Message, viewer: Agent): MessageOutView & { framed_message: string } => {
     const view = message(m, viewer);
-    const framed = frameMessage({ id: m.id, from: view.from, subject: m.subject, text: m.text, replyTo: m.replyTo, final: m.final, files: view.attachments });
+    const framed = frameMessage({
+      id: m.id,
+      from: view.from,
+      subject: m.subject,
+      text: m.text,
+      replyTo: m.replyTo,
+      final: m.final,
+      files: view.attachments,
+      origin: { owner: view.from_owner, ownPerson: view.from_own_person, portico: porticoOf(m.workspaceId)?.phrase ?? "a Portico that is gone now" },
+    });
     return { ...view, framed_message: framed };
   };
 
@@ -143,7 +171,24 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
     };
   };
 
-  return { entry, message, delivery, update, file, nameOf };
+  /** What list_agents answers: every agent the viewer reaches, or only those in one Portico with the viewer. */
+  const list = (viewer: Agent, only: Workspace | null) => {
+    const entries = agents.entriesFor(viewer).map((e) => entry(e, viewer));
+    return {
+      agents: only ? entries.filter((e) => e.porticos?.some((p) => p.id === only.id)) : entries,
+      ...(only ? { portico: portico(only) } : {}),
+      note: UNTRUSTED_PROFILES,
+    };
+  };
+
+  /** What a send answers: the message, how it will arrive, and the Portico it went through. */
+  const sent = (m: Message, delivery: DeliveryTier, workspace: Workspace | null, viewer: Agent) => {
+    const view = message(m, viewer);
+    const through = workspace ? portico(workspace) : view.portico;
+    return { message: view, delivery, portico: through };
+  };
+
+  return { entry, message, delivery, update, file, nameOf, portico, list, sent };
 }
 
 export type AgentViews = ReturnType<typeof agentViews>;

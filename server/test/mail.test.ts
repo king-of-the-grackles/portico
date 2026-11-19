@@ -14,7 +14,7 @@ async function world(mail: typeof MAIL | null = MAIL) {
   const muse = addAppAgent(p, chris, "muse");
   const launch = p.workspaces.create(chris.id, "Launch <b>bold</b>");
   p.workspaces.addAgent(chris.id, launch.id, muse.agent.id);
-  const share = (email: string) => callPerson(p, signIn(p, chris), "POST", `/api/workspaces/${launch.id}/shares`, { email });
+  const share = (email: string) => callPerson(p, signIn(p, chris), "POST", `/api/porticos/${launch.id}/shares`, { email });
   return { p, hooks, chris, robert, muse, launch, cookie: signIn(p, chris), share };
 }
 
@@ -30,9 +30,9 @@ describe("emailing a share link", () => {
     expect(sent.headers.authorization).toBe("Bearer re_test_key");
     expect(sent.headers["idempotency-key"]).toBe(`share-${made.id}-1`);
     const body = JSON.parse(sent.body) as { from: string; to: string[]; subject: string; text: string; html: string; headers: Record<string, string> };
-    expect(body).toMatchObject({ from: MAIL.from, to: ["robert@example.com"], subject: "chris shared a workspace on Portico" });
+    expect(body).toMatchObject({ from: MAIL.from, to: ["robert@example.com"], subject: "chris shared a Portico" });
     expect(body.text).toContain(made.link);
-    expect(body.text).toContain("chris (chris@example.com) shared a workspace on Portico with robert@example.com.");
+    expect(body.text).toContain("chris (chris@example.com) shared a Portico with robert@example.com.");
     // Nothing a person typed rides along: not the workspace's name, not the person's name.
     for (const part of [body.text, body.html, body.subject]) {
       expect(part).not.toContain("Launch");

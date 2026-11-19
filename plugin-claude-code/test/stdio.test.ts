@@ -109,7 +109,7 @@ describe("the plugin over stdio", () => {
     registerSession(env, { sessionId: "s-stdio", cwd: project, status: "busy" });
     const { host, channel, errors, stderr } = await launch(env);
     try {
-      expect((await host.listTools()).tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile"]);
+      expect((await host.listTools()).tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "list_porticos", "create_portico", "add_to_portico", "remove_from_portico", "rename_portico", "delete_portico", "share_portico", "join_portico"]);
       await waitFor(() => connected(p, address), 5000);
       await waitFor(() => p.presence.get(agentAt(p, address)!.id)?.status === "busy", 5000);
       // Outside git, the repo is the folder's basename; never the path.
@@ -168,7 +168,7 @@ describe("the plugin over stdio", () => {
       const address = `${sessionBaseName(basename(project))}@macbook`;
       await waitFor(() => connected(p!, address), 8000);
       await waitFor(() => changes === 1, 5000);
-      expect((await host.listTools()).tools).toHaveLength(13);
+      expect((await host.listTools()).tools).toHaveLength(15);
       await waitFor(() => sock!.posts.length === 1, 5000);
       expect(sock.posts[0]!.content).toContain(`Joined Portico as \`${sessionBaseName(basename(project))}\`.`);
       expect(logged(stderr(), "computer_joined")).toEqual([expect.objectContaining({ computer: "macbook" })]);

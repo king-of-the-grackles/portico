@@ -177,7 +177,7 @@ describe("where a conversation goes", () => {
     expect(next.message.threadId).not.toBe(first.threadId);
     expect(next.note).toContain("no longer joins this agent and robert/dots");
     expect(next.note).toContain("read-only");
-    expect(next.note).toContain("new conversation in the Launch workspace");
+    expect(next.note).toContain("new conversation in the Launch Portico");
     // The same from the other side, and over the API the note comes back with the message.
     const res = await callAs(p, dots, "POST", "/api/agent/messages", { reply_to: first.id, subject: "Late answer", text: "x" });
     expect(res.status).toBe(201);
@@ -204,7 +204,7 @@ describe("where a conversation goes", () => {
     p.workspaces.removeAgent(robert.id, launch.id, dots.agent.id);
     expect(errorCode(() => reply(p, grok, first.id))).toBe("not_allowed");
     expect(errorCode(() => reply(p, dots, first.id))).toBe("not_allowed");
-    expect(errorCode(() => say(p, grok, "robert/dots"))).toBe("unknown_agent");
+    expect(errorCode(() => say(p, grok, "robert/dots"))).toBe("not_allowed");
     // Robert is out of the workspace, and Robert's agent still reads what was said there.
     expect(p.workspaces.forPerson(robert.id).map((w) => w.id)).not.toContain(pair.id);
     expect(p.messages.inbox(dots.agent).messages.map((m) => m.id)).toEqual([first.id]);
@@ -330,7 +330,7 @@ describe("a caller's content is a small set of workspaces", () => {
     const inPair = say(p, dots, "chris/grok", "Held in the pair");
     expect([inLaunch.status, inPair.status, inLaunch.workspaceId, inPair.workspaceId]).toEqual(["held", "held", launch.id, pair.id]);
     expect(p.approvals.heldFor(chris.id).map((m) => m.subject)).toEqual(["Held in Launch", "Held in the pair"]);
-    const cards = (await (await callPerson(p, signIn(p, chris), "GET", "/api/workspaces")).json()) as { workspaces: { name: string; needs: boolean }[] };
+    const cards = (await (await callPerson(p, signIn(p, chris), "GET", "/api/porticos")).json()) as { workspaces: { name: string; needs: boolean }[] };
     expect(cards.workspaces.filter((w) => w.needs).map((w) => w.name).sort()).toEqual(["Chris and Robert", "Launch"]);
 
     p.approvals.decide(chris.id, inPair.id, "always_allow");
@@ -636,7 +636,7 @@ describe("on disk: a real data folder", () => {
     expect(p.workspaces.forPerson(robert.id).map((w) => w.id)).not.toContain(pair.id);
     expect(p.workspaces.agentsIn(pair.id)).toEqual([]);
     expect(p.shares.get(link.share.id)).toBeNull();
-    expect((await callPerson(p, signIn(p, chris), "GET", `/api/workspaces/${pair.id}`)).status).toBe(404);
+    expect((await callPerson(p, signIn(p, chris), "GET", `/api/porticos/${pair.id}`)).status).toBe(404);
     // The conversation is still read by both sides, files included, and takes nothing new: the next message starts
     // another conversation in Launch.
     expect(p.messages.inThread(p.messages.thread({ person: robert.id }, first.threadId)!).messages.map((m) => m.id)).toEqual([first.id, answer.id]);

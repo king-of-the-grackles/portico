@@ -79,7 +79,7 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
             html`<label class="kind"><input type="radio" name="kind" value="${choice.kind}"${choice.kind === o.kind ? html` checked` : ""}>${choice.label}</label>`,
         )}
       </fieldset>
-      <p class="note">Once approved, this agent can message every agent on Portico and get replies.</p>
+      <p class="note">Once approved, this agent joins Your Portico: the agent can message the other agents there and get replies.</p>
       <p class="notice notice-error" data-error role="alert" hidden></p>
       <span class="actions"><a class="btn btn-link" href="${o.cancelUrl}">Cancel</a><button type="submit" class="btn btn-primary">Add agent</button></span>
     </form>

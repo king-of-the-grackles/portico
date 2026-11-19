@@ -8,14 +8,18 @@ import { type PersonEnv, currentPerson } from "./context";
 import type { TaskOutcome } from "../core/tasks";
 import { visibleAgents } from "./tasks";
 import type { Person } from "../core/types";
-import { type AgentRef, type AgentView, type AllowEntry, agentsInOrder, personViews, type RunView } from "./views";
+import { type AgentRef, type AgentView, type AllowEntry, agentsInOrder, personViews, type Place, type RunView } from "./views";
 
 /** What GET /api/agents/:id answers: the agent page's data. */
 export interface AgentPageData {
   agent: AgentView;
   allowList: AllowEntry[] | null;
   taskCounts: Record<TaskOutcome, number>;
-  worksWith: { agent: AgentRef; tasks: number; lastAt: string }[];
+  /**
+   * Who the agent works with, one entry for each other agent. `parts` is one for each Portico the two have talked
+   * through, the latest first: a conversation that continued in another Portico shows under the one heading.
+   */
+  worksWith: { agent: AgentRef; tasks: number; lastAt: string; parts: (Place & { tasks: number; lastAt: string })[] }[];
   runs: RunView[];
   runCount: number;
   /** Whether Portico wakes the agent when a message arrives: a wake URL or event subscription whose last try didn't fail. */
@@ -42,16 +46,27 @@ export function agentPageData(core: Core, me: Person, id: string): AgentPageData
   const visible = visibleAgents(core, me);
   const tasks = core.tasks.all({ person: me.id }, { visible, agentId: agent.id });
   const counts: Record<TaskOutcome, number> = { needs_approval: 0, in_progress: 0, done: 0, failed: 0 };
-  const partners = new Map<string, { tasks: number; lastAt: string }>();
+  type Count = { tasks: number; lastAt: string };
+  const partners = new Map<string, Count & { parts: Map<string, Count> }>();
+  const add = (seen: Count | undefined, at: string): Count => ({ tasks: (seen?.tasks ?? 0) + 1, lastAt: seen && seen.lastAt > at ? seen.lastAt : at });
   for (const task of tasks) {
     counts[task.outcome]++;
     const other = task.fromId === agent.id ? task.toId : task.fromId;
     const seen = partners.get(other);
-    partners.set(other, { tasks: (seen?.tasks ?? 0) + 1, lastAt: seen && seen.lastAt > task.updatedAt ? seen.lastAt : task.updatedAt });
+    const parts = seen?.parts ?? new Map<string, Count>();
+    parts.set(task.workspaceId, add(parts.get(task.workspaceId), task.updatedAt));
+    partners.set(other, { ...add(seen, task.updatedAt), parts });
   }
   const worksWith = [...partners]
     .sort(([, a], [, b]) => b.tasks - a.tasks || b.lastAt.localeCompare(a.lastAt))
-    .map(([partner, p]) => ({ agent: views.agentRef(partner), tasks: p.tasks, lastAt: p.lastAt }));
+    .map(([partner, p]) => ({
+      agent: views.agentRef(partner),
+      tasks: p.tasks,
+      lastAt: p.lastAt,
+      parts: [...p.parts]
+        .sort(([, a], [, b]) => b.lastAt.localeCompare(a.lastAt))
+        .map(([workspaceId, part]) => ({ ...views.place(workspaceId, agent.id, partner), tasks: part.tasks, lastAt: part.lastAt })),
+    }));
   return {
     agent: views.agent(agent),
     allowList,

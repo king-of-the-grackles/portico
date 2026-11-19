@@ -489,6 +489,15 @@ export class Agents {
       const addresses = reached.map((agent) => this.addressFor(agent, caller.ownerId)).join(", ");
       throw new PorticoError("unknown_agent", `"${to}" is on ${reached.length} computers. Use one of: ${addresses}.`);
     }
+    // Said only of an agent the caller already knew: the two were in one Portico once. Anyone else's agent answers
+    // below, exactly as a name nobody has.
+    const before = named.filter((agent) => agent.id !== caller.id && this.workspaces.everShared(caller.id, agent.id));
+    if (before.length > 0) {
+      throw new PorticoError(
+        "not_allowed",
+        `You and \`${this.nameFor(before[0]!, caller.ownerId)}\` no longer share a Portico. list_agents shows who can be reached now.`,
+      );
+    }
     const valid = this.entriesFor(caller)
       .map((entry) => entry.display)
       .join(", ");

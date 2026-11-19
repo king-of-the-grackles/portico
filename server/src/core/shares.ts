@@ -48,7 +48,7 @@ export interface ShareRequest {
   issuedAt: string | null;
 }
 
-export type AskKind = "share" | "remove_person";
+export type AskKind = "share" | "remove_person" | "delete";
 
 /** Something an agent asked for on its owner's behalf that the owner has to confirm. */
 export interface WorkspaceAsk {
@@ -282,7 +282,7 @@ export class Shares {
     const workspace = share ? this.workspaces.get(share.workspaceId) : null;
     if (!share || !workspace || !this.workspaces.hasPerson(workspace.id, byId)) throw new PorticoError("not_found", "No such share link.");
     if (share.createdBy !== byId && workspace.ownerId !== byId) {
-      throw new PorticoError("not_allowed", "Only the person who made a share link, or the owner of the workspace, can end the link.");
+      throw new PorticoError("not_allowed", `Only the person who made a share link, or the owner of ${workspace.phrase}, can end the link.`);
     }
     const at = this.iso();
     this.db.transaction(() => {
@@ -326,7 +326,7 @@ export class Shares {
     const owner = this.people.require(agent.ownerId);
     if (!this.mayClaim(share, owner)) throw new PorticoError("not_found", DEAD_LINK);
     if (this.workspaces.hasAgent(share.workspaceId, agent.id)) {
-      throw new PorticoError("wrong_status", "This agent is already in that workspace.");
+      throw new PorticoError("wrong_status", `This agent is already in ${this.workspaces.get(share.workspaceId)?.phrase ?? "that Portico"}.`);
     }
     const waiting = this.db
       .query("SELECT * FROM share_requests WHERE share_id = $shareId AND agent_id = $agentId AND status = 'pending' AND expires_at > $now")
@@ -513,15 +513,18 @@ export class Shares {
     let detail: WorkspaceAsk["detail"];
     if (kind === "share") {
       detail = { email: input.email === undefined || input.email === null || input.email === "" ? null : cleanEmail(input.email) };
+    } else if (kind === "delete") {
+      if (workspace.ownerId !== agent.ownerId) throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can delete it.`);
+      detail = {};
     } else {
       const target = typeof input.person === "string" ? this.people.byHandle(input.person.trim().toLowerCase()) : null;
       if (!target || !this.workspaces.hasPerson(workspace.id, target.id)) {
-        throw new PorticoError("not_found", "Nobody with that handle is in the workspace.");
+        throw new PorticoError("not_found", `Nobody with that handle is in ${workspace.phrase}.`);
       }
       if (target.id !== agent.ownerId && workspace.ownerId !== agent.ownerId) {
-        throw new PorticoError("not_allowed", "Only the owner of the workspace can remove another person.");
+        throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can remove another person.`);
       }
-      if (target.id === workspace.ownerId) throw new PorticoError("not_allowed", "The owner of a workspace can't leave. Delete the workspace instead.");
+      if (target.id === workspace.ownerId) throw new PorticoError("not_allowed", `The owner of ${workspace.phrase} can't leave. Delete the Portico instead.`);
       detail = { personId: target.id };
     }
     const at = this.now();
@@ -603,6 +606,7 @@ export class Shares {
       let done: WorkspaceAsk["result"] = null;
       if (decision === "approve") {
         if (ask.kind === "share") done = { shareId: this.create(personId, ask.workspaceId, { email: ask.detail.email }).share.id };
+        else if (ask.kind === "delete") this.workspaces.remove(personId, ask.workspaceId);
         else this.workspaces.removePerson(personId, ask.workspaceId, ask.detail.personId!);
       }
       this.db
@@ -639,9 +643,12 @@ export class Shares {
   /** The shared workspace, for a person in it. Personal ones are never shared; a stranger sees `not_found`. */
   private sharedFor(personId: string, workspaceId: string): Workspace {
     const workspace = this.workspaces.get(workspaceId);
-    if (!workspace || !this.workspaces.hasPerson(workspace.id, personId)) throw new PorticoError("not_found", "No such workspace.");
+    if (!workspace || !this.workspaces.hasPerson(workspace.id, personId)) throw new PorticoError("not_found", "No such Portico.");
     if (workspace.kind !== "shared") {
-      throw new PorticoError("not_allowed", "A personal workspace can't be shared. Make a shared workspace and share that.");
+      throw new PorticoError(
+        "not_allowed",
+        `${workspace.name} holds only the agents of one person: it can't be shared or deleted. Make a new Portico to bring someone else's agents in.`,
+      );
     }
     return workspace;
   }

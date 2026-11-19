@@ -6,6 +6,7 @@ import type { Files } from "../core/files";
 import type { Messages } from "../core/messages";
 import type { People } from "../core/people";
 import type { Task, TaskOutcome, TaskReason, TaskStepKind } from "../core/tasks";
+import type { Workspaces } from "../core/workspaces";
 import type {
   Agent,
   AgentKind,
@@ -18,6 +19,7 @@ import type {
   PersonStatus,
   Role,
   Thread,
+  Workspace,
 } from "../core/types";
 
 // The person API's shapes, camelCase. Home, Settings and any later client render from these and nothing else.
@@ -118,7 +120,30 @@ export interface ThreadAgent extends AgentRef {
   owner: PersonRef;
 }
 
-export interface ThreadView {
+/**
+ * Where a conversation runs. A pair of agents can have conversations in more than one Portico: when the Portico that
+ * joined the two stops doing so, the conversation there is read-only and the next one starts in another the two share.
+ * The pages show those under one heading, each part with this.
+ */
+export interface Place {
+  workspaceId: string;
+  /** The Portico's name as the signed-in person reads it: "Your Portico", "Launch". Empty once the Portico's row is gone. */
+  portico: string;
+  /** The Portico no longer joins the two agents: nothing new goes in this conversation. */
+  readOnly: boolean;
+}
+
+/** A Portico's name as its heading: a person's own is "Your Portico" to that person. */
+export function porticoTitle(w: Pick<Workspace, "kind" | "ownerId" | "name">, me: Pick<Person, "id">): string {
+  return w.kind === "personal" && w.ownerId === me.id ? "Your Portico" : w.name;
+}
+
+/** The same Portico inside a sentence: "your Portico", "the Launch Portico". */
+export function porticoPhrase(w: Pick<Workspace, "kind" | "ownerId" | "phrase">, me: Pick<Person, "id">): string {
+  return w.kind === "personal" && w.ownerId === me.id ? "your Portico" : w.phrase;
+}
+
+export interface ThreadView extends Place {
   id: string;
   a: ThreadAgent;
   b: ThreadAgent;
@@ -130,7 +155,7 @@ export interface ThreadView {
 }
 
 /** One task: a conversation between two agents, with where it stands. */
-export interface TaskView {
+export interface TaskView extends Place {
   id: string;
   subject: string;
   from: AgentRef;
@@ -221,6 +246,7 @@ export interface PasskeyView {
 }
 
 export interface ViewDeps {
+  workspaces: Workspaces;
   agents: Agents;
   people: People;
   messages: Messages;
@@ -238,7 +264,16 @@ function clipText(text: string, max = QUOTE_MAX): string {
 
 /** View builders for one signed-in person. */
 export function personViews(deps: ViewDeps, me: Person) {
-  const { agents, people, messages, approvals, files } = deps;
+  const { agents, people, messages, approvals, files, workspaces } = deps;
+  const titles = new Map<string, string>();
+  /** Where a conversation between the two runs, and whether anything new can still go there. */
+  const place = (workspaceId: string, aId: string, bId: string): Place => {
+    if (!titles.has(workspaceId)) {
+      const w = workspaces.known(workspaceId);
+      titles.set(workspaceId, w ? porticoTitle(w, me) : "");
+    }
+    return { workspaceId, portico: titles.get(workspaceId)!, readOnly: !workspaces.joins(workspaceId, aId, bId) };
+  };
   const peopleById = new Map<string, Person | null>();
   const personRef = (id: string): PersonRef => {
     if (!peopleById.has(id)) peopleById.set(id, people.get(id));
@@ -345,6 +380,7 @@ export function personViews(deps: ViewDeps, me: Person) {
     const summary = messages.threadSummary(t);
     return {
       id: t.id,
+      ...place(t.workspaceId, t.aId, t.bId),
       a: threadAgent(t.aId),
       b: threadAgent(t.bId),
       startedBy: t.startedBy,
@@ -395,6 +431,7 @@ export function personViews(deps: ViewDeps, me: Person) {
 
   const task = (t: Task): TaskView => ({
     id: t.id,
+    ...place(t.workspaceId, t.fromId, t.toId),
     subject: t.subject,
     from: agentRef(t.fromId),
     to: agentRef(t.toId),
@@ -437,7 +474,7 @@ export function personViews(deps: ViewDeps, me: Person) {
     detail: e.detail,
   });
 
-  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef, task, run, activity };
+  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef, task, run, activity, place };
 }
 
 export type PersonViews = ReturnType<typeof personViews>;

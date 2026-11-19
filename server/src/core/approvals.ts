@@ -122,7 +122,7 @@ export class Approvals {
     // The message's workspace stopped joining the two agents while the message waited: the conversation there is
     // read-only, so the message can be turned down, not let through.
     if (choice !== "deny" && !this.workspaces.joins(held.workspaceId, held.fromId, held.toId)) {
-      throw new PorticoError("wrong_status", "The workspace this message came through no longer joins the sender and this agent, so the message can only be turned down.");
+      throw new PorticoError("wrong_status", "The Portico this message came through no longer joins the sender and this agent, so the message can only be turned down.");
     }
     const at = this.now().toISOString();
     // With Always allow, every other message held from the sender, in a workspace that still joins the two.

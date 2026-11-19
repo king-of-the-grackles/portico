@@ -199,6 +199,24 @@ function jobLine(s: HomeState, a: AgentView): string {
   return "";
 }
 
+/**
+ * Where one pair's conversations ran, under the pair's one heading: each Portico the two talked through, the latest
+ * first, with the ones that take nothing new marked read-only. One part that still joins the two needs no list.
+ */
+export function renderParts(s: HomeState, parts: AgentPageData["worksWith"][number]["parts"]): string {
+  if (parts.length === 0 || (parts.length === 1 && !parts[0]!.readOnly)) return "";
+  return `<ul class="with-parts">${parts
+    .map((p) => {
+      const href = `/p/${encodeURIComponent(p.workspaceId)}`;
+      const name = p.portico ? esc(p.portico) : "A deleted Portico";
+      // A Portico that is gone, or that the person is no longer in, has no page to open.
+      const open = s.workspaces.some((w) => w.id === p.workspaceId);
+      const where = open ? `<a class="row-link" href="${href}" data-action="go" data-href="${href}">${name}</a>` : `<span>${name}</span>`;
+      return `<li class="with-part tnum" data-key="wwp-${esc(p.workspaceId)}">${where}${when(p.readOnly, ` <span class="pill pill-quiet">Read-only</span>`)} <span class="with-n">${plural(p.tasks, "task")}, last ${atWhen(p.lastAt, s.now)}</span></li>`;
+    })
+    .join("")}</ul>`;
+}
+
 export function renderAgent(s: HomeState, id: string): string {
   const data = s.agentPage && s.agentPage.agent.id === id ? s.agentPage : null;
   const known = data?.agent ?? s.agents.find((a) => a.id === id) ?? null;
@@ -251,7 +269,7 @@ export function renderAgent(s: HomeState, id: string): string {
       <h2 id="g-with" class="h-section">Works with</h2>
       <ul class="with">${data!.worksWith
         .map(
-          (w) => `<li data-key="ww-${esc(w.agent.id)}"><a class="with-link" href="/a/${encodeURIComponent(w.agent.id)}" data-action="go" data-href="/a/${encodeURIComponent(w.agent.id)}">${logo(w.agent.kind, "logo-sm")}<span>${esc(w.agent.label)}</span><span class="tnum with-n">${plural(w.tasks, "task")}, last ${atWhen(w.lastAt, s.now)}</span></a></li>`,
+          (w) => `<li data-key="ww-${esc(w.agent.id)}"><a class="with-link" href="/a/${encodeURIComponent(w.agent.id)}" data-action="go" data-href="/a/${encodeURIComponent(w.agent.id)}">${logo(w.agent.kind, "logo-sm")}<span>${esc(w.agent.label)}</span><span class="tnum with-n">${plural(w.tasks, "task")}, last ${atWhen(w.lastAt, s.now)}</span></a>${renderParts(s, w.parts)}</li>`,
         )
         .join("")}</ul>
     </section>`,

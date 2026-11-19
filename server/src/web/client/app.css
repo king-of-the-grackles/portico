@@ -331,6 +331,10 @@ button.trow-main:hover { background: #f5f7f3; }
 .with-link { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 14px 6px 8px; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--hairline); color: var(--ink); font-weight: 600; text-decoration: none; }
 .with-link:hover { background: #f5f7f3; color: var(--ink); }
 .with-n { font-size: 13px; font-weight: 500; color: var(--muted); }
+.with > li { display: flex; flex-direction: column; gap: 4px; }
+.with-parts { list-style: none; margin: 0; padding: 0 0 0 8px; font-size: 13px; }
+.with-part { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 24px; }
+.pill-quiet { background: #ecebe8; color: #4f4a45; }
 .fold { border-top: 1px solid var(--hairline); }
 .fold-h { margin: 0; }
 .fold-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 52px; padding: 8px 0; border: none; background: transparent; color: var(--ink); font: inherit; font-size: 18px; line-height: 28px; font-weight: 700; text-align: left; cursor: pointer; }

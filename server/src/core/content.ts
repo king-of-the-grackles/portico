@@ -77,7 +77,7 @@ export class Content {
 
   /** The workspace's content database, made on first use. Throws for a workspace the directory doesn't have. */
   for(workspaceId: string): ContentDb {
-    if (!this.known(workspaceId)) throw new Error(`no workspace ${workspaceId}`);
+    if (!this.known(workspaceId)) throw new Error(`no_workspace:${workspaceId}`);
     return this.use(workspaceId, true)!;
   }
 

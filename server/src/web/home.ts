@@ -60,7 +60,7 @@ export function homeData(core: Core, me: Person, route: Route): HomeData {
   };
 }
 
-/** Today (/), Activity (/activity) and each agent's page (/a/:agentId). An old thread link (/c/:id) goes to Activity. */
+/** Today (/), Activity (/activity), each agent's page (/a/:agentId) and each Portico's (/p/:id). An old thread link (/c/:id) goes to Activity. */
 export function homePage(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
   const page = (c: Context<PersonEnv>, open: Route) => {
@@ -77,12 +77,13 @@ export function homePage(core: Core): Hono<PersonEnv> {
         : data.route.page === "agent"
           ? (data.agentPage?.agent.label ?? "Agent")
           : data.route.page === "workspace"
-            ? (data.workspacePage?.workspace.name ?? "Workspace")
+            ? (data.workspacePage?.workspace.name ?? "A Portico")
             : data.route.page === "agents"
               ? "Agents"
               : "Today";
     return sendPage(c, {
-      title: `${title} on Portico`,
+      // "Launch on Portico", but "Your Portico" as it is.
+      title: /\bPortico$/.test(title) ? title : `${title} on Portico`,
       body: html`<div id="app">${raw(first)}</div>`,
       data,
       scripts: ["app.js"],
@@ -92,7 +93,7 @@ export function homePage(core: Core): Hono<PersonEnv> {
   route.get("/", (c) => page(c, { page: "today" }));
   route.get("/activity", (c) => page(c, { page: "activity" }));
   route.get("/a/:agentId", (c) => page(c, { page: "agent", id: c.req.param("agentId") }));
-  route.get("/w/:workspaceId", (c) => page(c, { page: "workspace", id: c.req.param("workspaceId") }));
+  route.get("/p/:workspaceId", (c) => page(c, { page: "workspace", id: c.req.param("workspaceId") }));
   route.get("/agents", (c) => page(c, { page: "agents" }));
   route.get("/c/:threadId", (c) => (c.get("person") ? c.redirect("/activity", 303) : c.redirect(signInPath(c.req.url), 303)));
   return route;

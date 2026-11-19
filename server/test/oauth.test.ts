@@ -301,7 +301,7 @@ describe("the consent page", () => {
     expect(html).toContain('value="claude-duet" aria-describedby="c-name-help"');
     expect(html).toMatch(/value="claude-duet" checked>Claude Duet/);
     expect(html).toContain("Other agents use this name when sending messages.");
-    expect(html).toContain("Once approved, this agent can message every agent on Portico and get replies.");
+    expect(html).toContain("Once approved, this agent joins Your Portico: the agent can message the other agents there and get replies.");
     expect(html.indexOf(">Cancel</a>")).toBeLessThan(html.indexOf(">Add agent</button>"));
     expect(html).toContain(`href="${REDIRECT}?error=access_denied&amp;state=state-123"`);
     expect(html).toContain("Chris</span></header>");
@@ -605,7 +605,7 @@ describe("an MCP SDK client end to end", () => {
     const { tools } = await connected.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
       "list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "set_wake_url",
-      "list_workspaces", "create_workspace", "set_workspace_agents", "share_workspace", "remove_from_workspace", "join_workspace",
+      "list_porticos", "create_portico", "add_to_portico", "remove_from_portico", "rename_portico", "delete_portico", "share_portico", "join_portico",
     ]);
     const listed = await connected.callTool({ name: "list_agents", arguments: {} });
     expect(listed.isError).toBeFalsy();

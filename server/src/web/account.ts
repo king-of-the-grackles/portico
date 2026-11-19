@@ -54,7 +54,7 @@ export function accountPages(core: Core, signIn: AccountSignIn): Hono<PersonEnv>
 <form class="form-card" data-api="POST /api/welcome" novalidate>
 <label for="wl-name" class="lbl">Name</label>
 <input id="wl-name" name="name" class="field" autocomplete="name" maxlength="60" required value="${person.name === "New person" ? "" : person.name}" aria-describedby="wl-name-help">
-<span id="wl-name-help" class="help">Shown to people in shared workspaces.</span>
+<span id="wl-name-help" class="help">Shown to the people who share a Portico.</span>
 <label for="wl-handle" class="lbl">Handle</label>
 <input id="wl-handle" name="handle" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="${HANDLE_MIN}" maxlength="${HANDLE_MAX}" required value="${suggested}" aria-describedby="wl-handle-help" data-handle>
 <span id="wl-handle-help" class="help" data-handle-note aria-live="polite">${HANDLE_MIN} to ${HANDLE_MAX} lowercase letters, digits and hyphens. A handle can be changed later in Settings, and the old one stays held back.</span>

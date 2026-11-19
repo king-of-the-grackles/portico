@@ -16,7 +16,7 @@ import { type AgentEnv, requireAgent, requireSession, type Resolver, unauthorize
 import { jsonBodyLimit } from "./limits";
 import { getAgentTask, listAgentTasks } from "./tasks";
 import { type AgentViews, UNTRUSTED_PROFILES } from "./views";
-import { runWorkspaceTool, WORKSPACE_TOOL_NAMES, type WorkspaceToolDeps } from "./workspace-tools";
+import { runPorticoTool, PORTICO_TOOL_NAMES, type PorticoToolDeps, porticoFilter } from "./portico-tools";
 
 const SendBody = z.object({
   to: z.string().optional(),
@@ -71,7 +71,7 @@ export interface AgentRestDeps {
   resolver: Resolver;
   changes: Changes;
   now: () => Date;
-  workspaceTools: WorkspaceToolDeps;
+  porticoTools: PorticoToolDeps;
 }
 
 /**
@@ -88,25 +88,25 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
   api.get("/agents", (c) => {
     const agent = c.get("agent");
     agents.checkedIn(agent);
-    return c.json({ agents: agents.entriesFor(agent).map((e) => views.entry(e, agent)), note: UNTRUSTED_PROFILES });
+    return c.json(views.list(agent, porticoFilter(deps.porticoTools.workspaces, agent, c.req.query("portico"))));
   });
 
-  // The workspace tools, one route for all: the body is the tool's arguments, as on /mcp.
-  api.post("/workspace-tools/:name", async (c) => {
+  // The Portico tools, one route for all: the body is the tool's arguments, as on /mcp.
+  api.post("/portico-tools/:name", async (c) => {
     const agent = c.get("agent");
     const name = c.req.param("name");
-    if (!WORKSPACE_TOOL_NAMES.includes(name)) throw new PorticoError("not_found", "No such tool.");
+    if (!PORTICO_TOOL_NAMES.includes(name)) throw new PorticoError("not_found", "No such tool.");
     const body = c.req.header("content-length") === "0" ? {} : await readJson(c).catch(() => ({}));
     const args = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
     agents.checkedIn(agent);
-    return c.json(runWorkspaceTool(deps.workspaceTools, agent, name, args));
+    return c.json(runPorticoTool(deps.porticoTools, agent, name, args));
   });
 
   api.post("/messages", async (c) => {
     const body = SendBody.parse(await readJson(c));
     const agent = c.get("agent");
     await deps.files.settle(agent, body.attachments);
-    const { message, delivery, note } = messages.send(agent, {
+    const { message, delivery, note, workspace } = messages.send(agent, {
       to: body.to,
       subject: body.subject,
       text: body.text,
@@ -117,7 +117,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       attachments: body.attachments,
     });
     agents.checkedIn(agent);
-    return c.json({ message: views.message(message, agent), delivery, ...(note ? { note } : {}) }, 201);
+    return c.json({ ...views.sent(message, delivery, workspace, agent), ...(note ? { note } : {}) }, 201);
   });
 
   // Starts a file to attach. Small text comes in the call; anything else gets an address to PUT the bytes to.

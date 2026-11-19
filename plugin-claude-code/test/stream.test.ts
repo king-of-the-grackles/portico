@@ -54,7 +54,7 @@ describe("StreamClient against Portico", () => {
     p.messages.send(agent, { to: "api-claude", subject: "Hello", text: "hello" });
     await waitFor(() => watched.events.length > 1);
     expect(watched.events).toEqual([
-      { event: "hello", data: { address: "api-claude@macbook", name: "api-claude", computer: "macbook", workspaces: true } },
+      { event: "hello", data: { address: "api-claude@macbook", name: "api-claude", computer: "macbook" } },
       { event: "nudge", data: {} },
     ]);
   });
@@ -66,7 +66,7 @@ describe("StreamClient against Portico", () => {
     await waitFor(() => watched.events.length > 1);
     expect(watched.events[1]).toEqual({
       event: "renamed",
-      data: { address: "billing-claude@macbook", name: "billing-claude", computer: "macbook", workspaces: true },
+      data: { address: "billing-claude@macbook", name: "billing-claude", computer: "macbook" },
     });
   });
 

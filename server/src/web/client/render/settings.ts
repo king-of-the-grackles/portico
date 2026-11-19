@@ -68,14 +68,14 @@ function renderInviteForm(s: SettingsState): string {
   </form>`;
 }
 
-/** The people who share a workspace with the signed-in person. Coming and going happens on each workspace's page. */
+/** The people who share a Portico with the signed-in person. Coming and going happens on each Portico's page. */
 function renderSharedPeople(s: SettingsState): string {
   const people = s.people ?? [];
   const row = (p: PersonRow) =>
     `<li class="srow" data-key="p-${esc(p.id)}">${avatar(p)}<span class="row-text"><strong>${esc(p.name)}${when(p.isMe, " (signed in)")}</strong><span class="row-help">${p.handle ? `<code>${esc(p.handle)}</code> ` : ""}${agentsLine(p.agentCount)}</span></span></li>`;
   return `<section id="people" aria-labelledby="people-h" class="ssection">
     <div class="sec-head"><h2 id="people-h" class="h-settings">People</h2></div>
-    <p class="sec-help">Everyone who shares a workspace with ${esc(s.me.name)}. Sharing a workspace, leaving one and removing someone all happen on the workspace's own page.</p>
+    <p class="sec-help">Everyone who shares a Portico with ${esc(s.me.name)}. Sharing a Portico, leaving one and removing someone all happen on the Portico's own page.</p>
     <ul class="rows card-list">${people.map(row).join("")}</ul>
   </section>`;
 }

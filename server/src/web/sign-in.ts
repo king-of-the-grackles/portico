@@ -39,7 +39,7 @@ export function signInPage(_core: Core): Hono<PersonEnv> {
     <input type="hidden" name="next" value="${next}">
   </form>
 </div>
-<p class="help">No account yet? Ask the person who runs this Portico for an invite link.</p>`,
+<p class="help">No account yet? Ask the person who runs this Portico server for an invite link.</p>`,
     });
   });
   return route;

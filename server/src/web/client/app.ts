@@ -472,7 +472,7 @@ const ROUTES: [RegExp, (m: RegExpExecArray) => Route][] = [
   [/^\/$/, () => ({ page: "today" })],
   [/^\/activity\/?$/, () => ({ page: "activity" })],
   [/^\/a\/([^/]+)\/?$/, (m) => ({ page: "agent", id: decodeURIComponent(m[1]!) })],
-  [/^\/w\/([^/]+)\/?$/, (m) => ({ page: "workspace", id: decodeURIComponent(m[1]!) })],
+  [/^\/p\/([^/]+)\/?$/, (m) => ({ page: "workspace", id: decodeURIComponent(m[1]!) })],
   [/^\/agents\/?$/, () => ({ page: "agents" })],
 ];
 
@@ -493,7 +493,7 @@ function pathOf(route: Route): string {
     case "agents":
       return "/agents";
     case "workspace":
-      return `/w/${encodeURIComponent(route.id)}`;
+      return `/p/${encodeURIComponent(route.id)}`;
     case "agent":
       return `/a/${encodeURIComponent(route.id)}`;
   }
@@ -528,19 +528,19 @@ function startHome(root: HTMLElement, data: HomeData): void {
     page.set({ held: r.held, signIns: r.signIns, joins: r.joins ?? [], asks: r.asks ?? [] });
   };
   const loadWorkspaces = async () => {
-    page.set({ workspaces: (await api<{ workspaces: WorkspaceView[] }>("GET", "/api/workspaces")).workspaces });
+    page.set({ workspaces: (await api<{ workspaces: WorkspaceView[] }>("GET", "/api/porticos")).workspaces });
   };
   const loadWorkspacePage = async () => {
     const route = s().route;
     if (route.page !== "workspace") return;
     try {
-      const workspacePage = await api<WorkspacePageData>("GET", `/api/workspaces/${encodeURIComponent(route.id)}`);
+      const workspacePage = await api<WorkspacePageData>("GET", `/api/porticos/${encodeURIComponent(route.id)}`);
       const now = s().route;
       if (now.page === "workspace" && now.id === route.id) page.set({ workspacePage });
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         go("/");
-        note("That workspace isn't there any more.");
+        note("That Portico isn't there any more.");
       } else throw err;
     }
   };
@@ -795,26 +795,24 @@ function startHome(root: HTMLElement, data: HomeData): void {
   };
 
   const openNewWorkspace = (thenShare: boolean) => {
-    const first = s().me.name.trim().split(/\s+/)[0] ?? "";
     const route = s().route;
-    // The form shows on the Agents page and on a workspace's own page.
+    // The form shows on the Agents page and on a Portico's own page. The name is optional.
     if (route.page !== "workspace" && route.page !== "agents") go("/agents");
-    page.set({ wsForm: { kind: "new", name: thenShare && first ? `${first}'s shared workspace` : "", agentIds: [], thenShare, error: "" }, navOpen: false });
+    page.set({ wsForm: { kind: "new", name: "", agentIds: [], thenShare, error: "" }, navOpen: false });
   };
 
   const createWorkspace = () => {
     const form = s().wsForm;
     if (form?.kind !== "new") return;
-    if (!form.name.trim()) return page.set({ wsForm: { ...form, error: "Give the workspace a name." } });
     void wsRun(
       "ws-form",
       async () => {
-        const { workspace } = await api<{ workspace: WorkspaceView }>("POST", "/api/workspaces", { name: form.name, agentIds: form.agentIds });
+        const { workspace } = await api<{ workspace: WorkspaceView }>("POST", "/api/porticos", { name: form.name, agentIds: form.agentIds });
         page.set({ wsForm: null });
         await loadWorkspaces();
-        go(`/w/${workspace.id}`);
+        go(`/p/${workspace.id}`);
         if (form.thenShare) page.set({ wsForm: { kind: "share", email: "", error: "" } });
-        else note(`${workspace.name} created.`, true);
+        else note(`Made ${workspace.phrase}.`, true);
       },
       formError,
     );
@@ -827,7 +825,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     void wsRun(
       "ws-form",
       async () => {
-        const { share } = await api<{ share: ShareView }>("POST", `/api/workspaces/${encodeURIComponent(w.id)}/shares`, { email: form.email.trim() || undefined });
+        const { share } = await api<{ share: ShareView }>("POST", `/api/porticos/${encodeURIComponent(w.id)}/shares`, { email: form.email.trim() || undefined });
         page.set({ wsForm: null, wsMail: share.mail ? { ...s().wsMail, [share.id]: share.mail } : s().wsMail });
         note(share.email && share.mail === "sent" ? `Share link emailed to ${share.email}.` : "Share link made. Copy the link below and send it.", true);
       },
@@ -842,7 +840,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     void wsRun(
       "ws-form",
       async () => {
-        await api("PATCH", `/api/workspaces/${encodeURIComponent(w.id)}`, { name: form.name });
+        await api("PATCH", `/api/porticos/${encodeURIComponent(w.id)}`, { name: form.name });
         page.set({ wsForm: null });
       },
       formError,
@@ -856,7 +854,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     void wsRun(
       "ws-form",
       async () => {
-        for (const id of form.agentIds) await api("PUT", `/api/workspaces/${encodeURIComponent(w.id)}/agents/${encodeURIComponent(id)}`);
+        for (const id of form.agentIds) await api("PUT", `/api/porticos/${encodeURIComponent(w.id)}/agents/${encodeURIComponent(id)}`);
         page.set({ wsForm: null });
       },
       formError,
@@ -865,7 +863,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
 
   const setWorkspaceAgent = (workspaceId: string, agentId: string, on: boolean, busy: string) =>
     wsRun(busy, async () => {
-      await api(on ? "PUT" : "DELETE", `/api/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`);
+      await api(on ? "PUT" : "DELETE", `/api/porticos/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`);
     });
 
   const removeWorkspacePerson = (personId: string) => {
@@ -874,13 +872,13 @@ function startHome(root: HTMLElement, data: HomeData): void {
     const leaving = personId === s().me.id;
     const person = w.people.find((p) => p.id === personId);
     void wsRun("ws-confirm", async () => {
-      await api("DELETE", `/api/workspaces/${encodeURIComponent(w.id)}/people/${encodeURIComponent(personId)}`);
+      await api("DELETE", `/api/porticos/${encodeURIComponent(w.id)}/people/${encodeURIComponent(personId)}`);
       page.set({ wsConfirm: null });
       if (leaving) {
         await loadWorkspaces();
         go("/");
-        note(`Left ${w.name}.`);
-      } else note(`${person?.name ?? "The person"} removed from ${w.name}.`);
+        note(`Left ${w.phrase}.`);
+      } else note(`${person?.name ?? "The person"} removed from ${w.phrase}.`);
     });
   };
 
@@ -888,11 +886,11 @@ function startHome(root: HTMLElement, data: HomeData): void {
     const w = pageWorkspace();
     if (!w) return;
     void wsRun("ws-confirm", async () => {
-      await api("DELETE", `/api/workspaces/${encodeURIComponent(w.id)}`);
+      await api("DELETE", `/api/porticos/${encodeURIComponent(w.id)}`);
       page.set({ wsConfirm: null });
       await loadWorkspaces();
       go("/");
-      note(`${w.name} deleted.`);
+      note(`Deleted ${w.phrase}.`);
     });
   };
 
@@ -933,7 +931,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     try {
       await api("POST", `/api/approvals/joins/${encodeURIComponent(id)}`, { decision });
       page.set({ joins: s().joins.filter((j) => j.id !== id) });
-      note(decision === "approve" ? `${join.agent.label} is in ${join.workspace.name} now.` : `${join.agent.label} wasn't let into ${join.workspace.name}.`, decision === "approve");
+      note(decision === "approve" ? `${join.agent.label} is in ${join.workspace.phrase} now.` : `${join.agent.label} wasn't let into ${join.workspace.phrase}.`, decision === "approve");
       refresh(["approvals", "workspaces", "agents"]);
     } catch (err) {
       fail(err);
@@ -953,9 +951,12 @@ function startHome(root: HTMLElement, data: HomeData): void {
       if (decision !== "approve") note(`Not allowed. ${ask.agent.label} sees the answer.`);
       else if (ask.kind === "share") {
         if (answer?.share?.mail) page.set({ wsMail: { ...s().wsMail, [answer.share.id]: answer.share.mail } });
-        go(`/w/${ask.workspace.id}`);
-        note(answer?.share?.mail === "sent" ? `Share link emailed to ${ask.email}.` : `Share link made for ${ask.workspace.name}. ${ask.agent.label} has the link too.`, true);
-      } else note(`${ask.person?.name ?? "The person"} removed from ${ask.workspace.name}.`, true);
+        go(`/p/${ask.workspace.id}`);
+        note(answer?.share?.mail === "sent" ? `Share link emailed to ${ask.email}.` : `Share link made for ${ask.workspace.phrase}. ${ask.agent.label} has the link too.`, true);
+      } else if (ask.kind === "delete") {
+        if (s().route.page === "workspace") go("/");
+        note(`Deleted ${ask.workspace.phrase}.`, true);
+      } else note(`${ask.person?.name ?? "The person"} removed from ${ask.workspace.phrase}.`, true);
       refresh(["approvals", "workspaces", "agents"]);
     } catch (err) {
       fail(err);
@@ -1113,7 +1114,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
         case "ws-share-open": {
           const w = pageWorkspace();
           if (!w) return;
-          // Personal can't be shared: sharing from there starts a shared workspace first.
+          // The person's own Portico can't be shared: sharing from there starts a new Portico first.
           if (w.kind === "personal") return openNewWorkspace(true);
           return page.set({ wsForm: { kind: "share", email: "", error: "" } });
         }
@@ -1122,7 +1123,13 @@ function startHome(root: HTMLElement, data: HomeData): void {
         case "ws-agents-open":
           return page.set({ wsForm: { kind: "agents", agentIds: [], error: "" } });
         case "ws-rename-open":
-          return page.set({ wsForm: { kind: "rename", name: pageWorkspace()?.name ?? "", error: "" } });
+          return page.set({ wsForm: { kind: "rename", name: pageWorkspace()?.named ? pageWorkspace()!.name : "", error: "" } });
+        case "ws-agent-add": {
+          // Back into the person's own Portico, from its page.
+          const w = pageWorkspace();
+          if (w) void setWorkspaceAgent(w.id, id, true, `ws-agent:${id}`);
+          return;
+        }
         case "ws-agent-remove": {
           const w = pageWorkspace();
           if (w) void setWorkspaceAgent(w.id, id, false, `ws-agent:${id}`);

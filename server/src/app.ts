@@ -42,13 +42,13 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
   app.route("/api/agent/stream", streamRoutes({ agents, messages, streams: core.agentStreams, resolver, heartbeatMs: opts.heartbeatMs }));
   app.route(
     "/api/agent",
-    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, views, resolver, changes: core.changes, now: core.now, workspaceTools: toolDeps }),
+    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, views, resolver, changes: core.changes, now: core.now, porticoTools: toolDeps }),
   );
   app.route("/files", fileRoutes(core));
   app.route("/api/computer", computerApi(core));
   app.route("/api/sign-in-requests", signInRequestApi(core));
   app.route("/api/share-requests", shareRequestApi(core));
-  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, views, resolver, workspaceTools: toolDeps }));
+  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, views, resolver, porticoTools: toolDeps }));
   // Resend reports bounces and complaints here. The signature is the only credential; the body is read as sent.
   app.post("/api/mail/resend", async (c) => {
     const ok = core.mail.webhook(

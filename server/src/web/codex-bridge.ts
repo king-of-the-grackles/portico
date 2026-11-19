@@ -42,7 +42,7 @@ export function codexBridgeRoutes(): Hono {
       file = await served();
     } catch (err) {
       log("error", "codex_bridge_build_failed", { error: errorName(err) });
-      return c.json({ error: "internal", message: "The Codex bridge isn't available on this Portico." }, 500);
+      return c.json({ error: "internal", message: "The Codex bridge isn't available on this Portico server." }, 500);
     }
     if (c.req.header("if-none-match") === file.etag) return c.body(null, 304, { ETag: file.etag });
     const headers = { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache", ETag: file.etag };

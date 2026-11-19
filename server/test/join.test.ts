@@ -385,7 +385,7 @@ describe("/join", () => {
     expect(html).toContain(`${PUBLIC_URL}/api/sign-in-requests`);
     expect(html).toContain(`${PUBLIC_URL}/api/agent/openapi.json`);
     expect(html).toContain("Notes for an AI agent reading this page");
-    expect(html).not.toContain("Ask the person who runs Portico for the source");
+    expect(html).not.toContain("Ask the person who runs the server for the source");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
 
@@ -429,7 +429,7 @@ describe("/join", () => {
 
   test("without a plugin source, the page says who to ask", async () => {
     const html = await (await makePortico().app.request("/join")).text();
-    expect(html).toContain("Ask the person who runs Portico for the source");
+    expect(html).toContain("Ask the person who runs the server for the source");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
 });

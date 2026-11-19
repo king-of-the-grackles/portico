@@ -11,22 +11,32 @@ interface WorkspaceRow {
   created_at: string;
 }
 
-function toWorkspace(row: WorkspaceRow): Workspace {
-  return { id: row.id, name: row.name, kind: row.kind as WorkspaceKind, ownerId: row.owner_id, createdAt: row.created_at };
-}
-
+/**
+ * What the directory stores as the name of a person's own Portico. Never shown: everyone sees "Chris's Portico", and
+ * its owner sees "Your Portico" on the pages.
+ */
 export const PERSONAL_NAME = "Personal";
 export const MAX_WORKSPACE_NAME = 60;
 
-/** A workspace's name as typed: trimmed, on one line, 1 to 60 characters. */
+/**
+ * A Portico's name as typed: trimmed, on one line, at most 60 characters. A name is optional: without one ("" here)
+ * the Portico is named after the people in it.
+ */
 export function cleanWorkspaceName(value: unknown): string {
+  if (value === undefined || value === null) return "";
   if (typeof value !== "string") throw new PorticoError("bad_request", "name must be a string.");
   const name = value.replace(/\s+/g, " ").trim();
-  if (name === "" || /[\u0000-\u001f\u007f]/.test(name)) throw new PorticoError("bad_request", "Enter a name for the workspace.");
+  if (/[\u0000-\u001f\u007f]/.test(name)) throw new PorticoError("bad_request", "A Portico's name is plain text on one line.");
   if (Array.from(name).length > MAX_WORKSPACE_NAME) {
-    throw new PorticoError("bad_request", `A workspace name can be at most ${MAX_WORKSPACE_NAME} characters.`);
+    throw new PorticoError("bad_request", `A Portico's name can be at most ${MAX_WORKSPACE_NAME} characters.`);
   }
   return name;
+}
+
+/** "Chris", "Chris and Robert", "Chris, Robert and Bill". */
+export function listNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /** Personal first, then the oldest: the order every list of workspaces comes in. */
@@ -97,7 +107,7 @@ export class Workspaces {
          WHERE w.archived_at IS NULL ${ORDER}`,
       )
       .all({ agentId, otherId }) as WorkspaceRow[];
-    return rows.map(toWorkspace);
+    return rows.map((row) => this.view(row));
   }
 
   /** Whether the workspace joins the two agents now: both are in the workspace, and the workspace isn't deleted. */
@@ -151,18 +161,66 @@ export class Workspaces {
     return new Set([personId, ...rows.map((row) => row.id)]);
   }
 
+  /**
+   * Whether the two agents were ever in one Portico together, in or out of it now. A refusal may say "no longer share
+   * a Portico" only to an agent that already knew the other.
+   */
+  everShared(agentId: string, otherId: string): boolean {
+    return (
+      this.db
+        .query(
+          `SELECT 1 FROM workspace_agents x JOIN workspace_agents y ON y.workspace_id = x.workspace_id
+           WHERE x.agent_id = $agentId AND y.agent_id = $otherId LIMIT 1`,
+        )
+        .get({ agentId, otherId }) !== null
+    );
+  }
+
   // ---- reads ----
+
+  /**
+   * A Portico as everyone names it. A person's own is "Chris's Portico". A shared one has the name someone gave it, or
+   * is named after the people in it ("Chris and Robert"), which follows them as they come and go. `phrase` is how a
+   * sentence names it: "the Launch Portico".
+   */
+  private view(row: WorkspaceRow): Workspace {
+    const base = { id: row.id, kind: row.kind as WorkspaceKind, ownerId: row.owner_id, createdAt: row.created_at };
+    const personName = (id: string) => (this.db.query("SELECT name FROM people WHERE id = $id").get({ id }) as { name: string } | null)?.name ?? "";
+    if (base.kind === "personal") {
+      const owner = personName(row.owner_id);
+      const name = owner === "" ? "A Portico" : `${owner}'s Portico`;
+      return { ...base, name, named: false, phrase: owner === "" ? "a Portico" : name };
+    }
+    if (row.name !== "") {
+      return { ...base, name: row.name, named: true, phrase: /\bportico$/i.test(row.name) ? `the ${row.name}` : `the ${row.name} Portico` };
+    }
+    // A deleted Portico has nobody in it any more: its owner's name stands in.
+    const people = this.peopleIn(row.id).map(personName).filter((name) => name !== "");
+    if (people.length >= 2) {
+      const name = listNames(people);
+      return { ...base, name, named: false, phrase: `the ${name} Portico` };
+    }
+    const owner = people[0] ?? personName(row.owner_id);
+    const name = owner === "" ? "A new Portico" : `${owner}'s new Portico`;
+    return { ...base, name, named: false, phrase: owner === "" ? "a new Portico" : name };
+  }
 
   /** The workspace, unless deleted: a deleted workspace answers the same as one that never existed. */
   get(id: string): Workspace | null {
     const row = this.db.query("SELECT * FROM workspaces WHERE id = $id AND archived_at IS NULL").get({ id }) as WorkspaceRow | null;
-    return row ? toWorkspace(row) : null;
+    return row ? this.view(row) : null;
+  }
+
+  /** The workspace whether or not it was deleted: for naming where a message went. Null once its row is gone. */
+  known(id: string): Workspace | null {
+    const row = this.db.query("SELECT * FROM workspaces WHERE id = $id").get({ id }) as WorkspaceRow | null;
+    return row ? this.view(row) : null;
   }
 
   /** The workspace, for a person in it. One the person isn't in answers the same as one that doesn't exist. */
   requireFor(personId: string, id: string): Workspace {
     const workspace = this.get(id);
-    if (!workspace || !this.hasPerson(id, personId)) throw new PorticoError("not_found", "No such workspace.");
+    if (!workspace || !this.hasPerson(id, personId)) throw new PorticoError("not_found", "No such Portico.");
     return workspace;
   }
 
@@ -171,7 +229,7 @@ export class Workspaces {
     const rows = this.db
       .query(`SELECT w.* FROM workspaces w JOIN workspace_people p ON p.workspace_id = w.id WHERE p.person_id = $personId AND w.archived_at IS NULL ${ORDER}`)
       .all({ personId }) as WorkspaceRow[];
-    return rows.map(toWorkspace);
+    return rows.map((row) => this.view(row));
   }
 
   /** The workspaces the agent is in now, personal first. */
@@ -182,7 +240,7 @@ export class Workspaces {
          WHERE a.agent_id = $agentId AND a.left_at IS NULL AND w.archived_at IS NULL ${ORDER}`,
       )
       .all({ agentId }) as WorkspaceRow[];
-    return rows.map(toWorkspace);
+    return rows.map((row) => this.view(row));
   }
 
   /** The IDs of the people in the workspace, the owner first, then as they came in. */
@@ -236,20 +294,23 @@ export class Workspaces {
     const row = this.db.query("SELECT * FROM workspaces WHERE owner_id = $personId AND kind = 'personal' AND archived_at IS NULL").get({ personId }) as
       | WorkspaceRow
       | null;
-    if (row) return toWorkspace(row);
+    if (row) return this.view(row);
     const at = this.iso();
-    const workspace: Workspace = { id: this.newId(), name: PERSONAL_NAME, kind: "personal", ownerId: personId, createdAt: at };
+    const id = this.newId();
     this.db.transaction(() => {
-      this.insert(workspace);
+      this.insert({ id, name: PERSONAL_NAME, kind: "personal", ownerId: personId, createdAt: at });
       this.db
         .query("INSERT INTO workspace_agents (workspace_id, agent_id, added_at) SELECT $id, id, $at FROM agents WHERE owner_id = $personId")
-        .run({ id: workspace.id, personId, at });
+        .run({ id, personId, at });
     })();
-    this.log("workspace_created", { workspace_id: workspace.id, kind: "personal" });
-    return workspace;
+    this.log("workspace_created", { workspace_id: id, kind: "personal" });
+    return this.get(id)!;
   }
 
-  /** A new agent joins its owner's personal workspace. */
+  /**
+   * A new agent joins its owner's own Portico. Its owner can take the agent out afterwards (`removeAgent`), so only the
+   * agent's other Porticos reach it, and put it back (`addAgent`).
+   */
   agentCreated(agentId: string, ownerId: string): void {
     const personal = this.personal(ownerId);
     this.db
@@ -259,23 +320,21 @@ export class Workspaces {
 
   // ---- shared ----
 
-  /** A new shared workspace, owned by the person, who is its first member. No agents yet: the person puts them in. */
-  create(personId: string, rawName: unknown): Workspace {
+  /**
+   * A new shared workspace, owned by the person, who is its first member. No agents yet: the person puts them in. The
+   * name is optional: without one the workspace is named after the people in it, until someone names it.
+   */
+  create(personId: string, rawName?: unknown): Workspace {
     this.requireHandle(personId);
-    const workspace: Workspace = {
-      id: this.newId(),
-      name: cleanWorkspaceName(rawName),
-      kind: "shared",
-      ownerId: personId,
-      createdAt: this.iso(),
-    };
-    this.db.transaction(() => this.insert(workspace))();
-    this.log("workspace_created", { workspace_id: workspace.id, kind: "shared" });
+    const id = this.newId();
+    const name = cleanWorkspaceName(rawName);
+    this.db.transaction(() => this.insert({ id, name, kind: "shared", ownerId: personId, createdAt: this.iso() }))();
+    this.log("workspace_created", { workspace_id: id, kind: "shared" });
     this.changes.emit("workspaces");
-    return workspace;
+    return this.get(id)!;
   }
 
-  /** Only the workspace's owner renames it. Personal keeps its name. */
+  /** Only the workspace's owner renames it. A person's own keeps its name. An empty name goes back to the people's names. */
   rename(byId: string, workspaceId: string, rawName: unknown): Workspace {
     const workspace = this.requireOwned(byId, workspaceId);
     this.db.query("UPDATE workspaces SET name = $name WHERE id = $id").run({ id: workspace.id, name: cleanWorkspaceName(rawName) });
@@ -319,12 +378,12 @@ export class Workspaces {
     // Whether the person is in the workspace comes first, so a stranger learns nothing about what kind it is.
     this.requireFor(byId, workspaceId);
     const workspace = this.requireShared(workspaceId);
-    if (!this.hasPerson(workspace.id, byId)) throw new PorticoError("not_found", "No such workspace.");
+    if (!this.hasPerson(workspace.id, byId)) throw new PorticoError("not_found", "No such Portico.");
     if (byId !== personId && byId !== workspace.ownerId) {
-      throw new PorticoError("not_allowed", "Only the owner of the workspace can remove another person.");
+      throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can remove another person.`);
     }
     if (personId === workspace.ownerId) {
-      throw new PorticoError("not_allowed", "The owner of a workspace can't leave. Delete the workspace instead.");
+      throw new PorticoError("not_allowed", `The owner of ${workspace.phrase} can't leave. Delete the Portico instead.`);
     }
     // The agents' rows stay, marked as left, so the conversations each had here stay readable to its owner.
     this.db.transaction(() => {
@@ -343,14 +402,14 @@ export class Workspaces {
     this.onPersonRemoved?.(workspace.id, personId);
   }
 
-  /** Puts one of the person's own agents into a shared workspace the person is in. */
+  /**
+   * Puts one of the person's own agents into a workspace the person is in: a shared one, or back into the person's own
+   * after the agent was taken out.
+   */
   addAgent(byId: string, workspaceId: string, agentId: string): void {
-    // Whether the person is in the workspace comes first, so a stranger learns nothing about what kind it is.
-    this.requireFor(byId, workspaceId);
-    const workspace = this.requireShared(workspaceId);
-    if (!this.hasPerson(workspace.id, byId)) throw new PorticoError("not_found", "No such workspace.");
+    const workspace = this.requireFor(byId, workspaceId);
     if (!this.owns(byId, agentId)) {
-      throw new PorticoError("not_allowed", "Only the person who manages an agent can add the agent to a workspace.");
+      throw new PorticoError("not_allowed", "Only the person who manages an agent can add the agent to a Portico.");
     }
     // An agent that was here before comes back on the same row.
     this.db
@@ -364,17 +423,15 @@ export class Workspaces {
   }
 
   /**
-   * Takes an agent out of a shared workspace: the person who manages the agent can, and so can the workspace's owner.
-   * Every agent stays in its owner's personal workspace. The row stays, marked as left: the agent reaches nobody through
-   * the workspace, and the conversations the agent had there stay readable.
+   * Takes an agent out of a workspace: the person who manages the agent can, and so can the workspace's owner. Out of
+   * its owner's own, the agent is reached only through its other workspaces: the way to keep a sensitive agent apart.
+   * The row stays, marked as left: the agent reaches nobody through the workspace, and the conversations the agent had
+   * there stay readable.
    */
   removeAgent(byId: string, workspaceId: string, agentId: string): void {
-    // Whether the person is in the workspace comes first, so a stranger learns nothing about what kind it is.
-    this.requireFor(byId, workspaceId);
-    const workspace = this.requireShared(workspaceId);
-    if (!this.hasPerson(workspace.id, byId)) throw new PorticoError("not_found", "No such workspace.");
+    const workspace = this.requireFor(byId, workspaceId);
     if (!this.owns(byId, agentId) && byId !== workspace.ownerId) {
-      throw new PorticoError("not_allowed", "Only the person who manages the agent, or the owner of the workspace, can remove the agent.");
+      throw new PorticoError("not_allowed", `Only the person who manages the agent, or the owner of ${workspace.phrase}, can remove the agent.`);
     }
     this.db
       .query("UPDATE workspace_agents SET left_at = $at WHERE workspace_id = $workspaceId AND agent_id = $agentId AND left_at IS NULL")
@@ -400,7 +457,7 @@ export class Workspaces {
 
   // ---- helpers ----
 
-  private insert(workspace: Workspace): void {
+  private insert(workspace: { id: string; name: string; kind: WorkspaceKind; ownerId: string; createdAt: string }): void {
     this.db
       .query("INSERT INTO workspaces (id, name, kind, owner_id, created_at) VALUES ($id, $name, $kind, $ownerId, $createdAt)")
       .run({ ...workspace });
@@ -415,7 +472,7 @@ export class Workspaces {
 
   private requireHandle(personId: string): void {
     if (this.handleOf(personId) === null) {
-      throw new PorticoError("wrong_status", "Pick a handle first: agents in a shared workspace are addressed by the handle.");
+      throw new PorticoError("wrong_status", "Pick a handle first: other people's agents in a Portico address agents by the handle.");
     }
   }
 
@@ -424,9 +481,12 @@ export class Workspaces {
 
   private requireShared(workspaceId: string): Workspace {
     const workspace = this.get(workspaceId);
-    if (!workspace) throw new PorticoError("not_found", "No such workspace.");
+    if (!workspace) throw new PorticoError("not_found", "No such Portico.");
     if (workspace.kind === "personal") {
-      throw new PorticoError("not_allowed", "A personal workspace holds only the agents of one person and can't be shared.");
+      throw new PorticoError(
+        "not_allowed",
+        `${workspace.name} holds only the agents of one person: it can't be shared, renamed or deleted. Make a new Portico to bring someone else's agents in.`,
+      );
     }
     return workspace;
   }
@@ -434,8 +494,8 @@ export class Workspaces {
   private requireOwned(byId: string, workspaceId: string): Workspace {
     this.requireFor(byId, workspaceId);
     const workspace = this.requireShared(workspaceId);
-    if (!this.hasPerson(workspace.id, byId)) throw new PorticoError("not_found", "No such workspace.");
-    if (workspace.ownerId !== byId) throw new PorticoError("not_allowed", "Only the owner of the workspace can do this.");
+    if (!this.hasPerson(workspace.id, byId)) throw new PorticoError("not_found", "No such Portico.");
+    if (workspace.ownerId !== byId) throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can do this.`);
     return workspace;
   }
 

@@ -205,7 +205,7 @@ describe("/sign-in", () => {
     expect(page).toContain('autocomplete="current-password"');
     expect(page).toContain('name="next" value="/settings"');
     expect(page).toContain("Sign in with a passkey");
-    expect(page).toContain("No account yet? Ask the person who runs this Portico for an invite link.");
+    expect(page).toContain("No account yet? Ask the person who runs this Portico server for an invite link.");
     expect(page).toContain('src="/assets/forms.js"');
     expect(page).toContain('src="/assets/passkey.js"');
     expect(copyProblems(visibleCopy(page))).toEqual([]);

@@ -19,8 +19,6 @@ export interface HelloEvent {
   name: string;
   /** The computer's name for a session, otherwise null. */
   computer: string | null;
-  /** Always true: the plugin offers the workspace tools when the hello says so. */
-  workspaces: true;
 }
 
 export interface StreamConnection {
@@ -175,7 +173,7 @@ export class AgentStreams {
 }
 
 export function helloFor(agents: Agents, agent: Agent): HelloEvent {
-  return { address: agents.address(agent), name: agents.display(agent), computer: agent.computer, workspaces: true };
+  return { address: agents.address(agent), name: agents.display(agent), computer: agent.computer };
 }
 
 /** Below the server's 60-second idle timeout, so quiet streams stay open through proxies. */

@@ -54,7 +54,7 @@ export type Route =
   | { page: "today" }
   | { page: "activity" }
   | { page: "agent"; id: string }
-  /** One workspace's page (/w/:id), and every agent with its workspaces (/agents). */
+  /** One Portico's page (/p/:id), and every agent with its Porticos (/agents). */
   | { page: "workspace"; id: string }
   | { page: "agents" };
 
@@ -78,7 +78,7 @@ export interface HomeData {
   publicUrl: string;
   agents: AgentView[];
   approvals: { held: HeldCard[]; signIns: SignInView[]; joins: JoinView[]; asks: AskView[] };
-  /** The person's workspaces, Personal first. */
+  /** The person's Porticos, the person's own first. */
   workspaces: WorkspaceView[];
   workspacePage: WorkspacePageData | null;
   route: Route;
@@ -148,13 +148,13 @@ export interface WakeEditState {
   error: string;
 }
 
-/** The form open on a workspace's page or the Agents page. */
+/** The form open on a Portico's page or the Agents page. */
 export type WorkspaceForm =
-  /** A new shared workspace. `thenShare` opens Share on it afterwards: sharing from Personal starts here. */
+  /** A new Portico. `thenShare` opens Share on it afterwards: sharing from the person's own Portico starts here. */
   | { kind: "new"; name: string; agentIds: string[]; thenShare: boolean; error: string }
   | { kind: "rename"; name: string; error: string }
   | { kind: "share"; email: string; error: string }
-  /** My agents not in the workspace yet, ticked to put in. */
+  /** My agents not in the Portico yet, ticked to put in. */
   | { kind: "agents"; agentIds: string[]; error: string };
 
 /** What Today, Activity and the agent pages render. */
@@ -170,7 +170,7 @@ export interface HomeState {
   workspaces: WorkspaceView[];
   workspacePage: WorkspacePageData | null;
   wsForm: WorkspaceForm | null;
-  /** The People list on a workspace's page. */
+  /** The People list on a Portico's page. */
   peopleOpen: boolean;
   /** What waits for a second press: `delete`, `leave`, `person:<id>` or `share:<id>`. */
   wsConfirm: string | null;

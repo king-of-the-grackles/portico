@@ -8,10 +8,10 @@ import { type InboxSocket, SocketError } from "./socket";
 import type { SessionWatcher } from "./status";
 import { StreamClient, type StreamClientOptions } from "./stream";
 import { inboxText, runTool, TOOLS, WAIT_HINT, WAKE_HINT } from "./tools";
-import { WORKSPACE_TOOLS } from "./workspace-tools";
+import { PORTICO_TOOLS } from "./portico-tools";
 
 export const SERVER_NAME = "portico";
-export const SERVER_VERSION = "0.9.0";
+export const SERVER_VERSION = "0.10.0";
 
 /**
  * A Codex conversation whose status Codex doesn't report shows available after this long with no Portico tool call, in
@@ -168,7 +168,7 @@ export interface PorticoPlugin {
 const SAFE_NAME = /^[a-z0-9][a-z0-9@.-]{0,120}$/;
 
 /**
- * The plugin's MCP server: the seven Portico tools, and delivery through Claude Code's inbox socket. In a folder that
+ * The plugin's MCP server: the agent tools and the Portico tools, and delivery through Claude Code's inbox socket. In a folder that
  * is off Portico, the session stays quiet: no tools, a short note for any call, and no retries.
  */
 export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
@@ -198,10 +198,9 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
       },
     }) ?? null;
   // These replace a waiting server's handlers.
-  /** Whether this Portico has workspaces, as its hello said: the workspace tools show only there. */
-  let workspacesOn = false;
+  // The whole list from the start: every Portico server has Porticos. Quiet (not joined, or the folder is off) offers none.
   server.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: quiet === null || host.client === "codex" ? (workspacesOn ? [...TOOLS, ...WORKSPACE_TOOLS] : TOOLS) : [],
+    tools: quiet === null || host.client === "codex" ? [...TOOLS, ...PORTICO_TOOLS] : [],
   }));
   server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
@@ -308,16 +307,10 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     : null;
 
   const onHello = (data: unknown) => {
-    const { address, name, workspaces } = (data ?? {}) as { address?: unknown; name?: unknown; workspaces?: unknown };
+    const { address, name } = (data ?? {}) as { address?: unknown; name?: unknown };
     if (typeof address === "string") log("info", "session_registered", { address });
-    const workspacesChanged = (workspaces === true) !== workspacesOn;
-    workspacesOn = workspaces === true;
     // Portico registered the session, so the folder is on there, whatever the local copy said.
     if (quiet === host.folderOffNote) deps.folder?.record(false);
-    // One notice per hello: lifting the quiet already tells Claude Code that the list changed.
-    if (workspacesChanged && quiet === null) {
-      server.sendToolListChanged().catch((err) => log("warn", "tool_list_notice_failed", { error: errorName(err) }));
-    }
     setQuiet(null);
     if (deps.joining && !announced && typeof name === "string" && SAFE_NAME.test(name)) {
       announced = true;
@@ -412,7 +405,7 @@ export function createWaitingServer(host: Host = CLAUDE_CODE_HOST): Server {
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: { listChanged: true } }, ...(codex ? { instructions: host.instructions } : {}) },
   );
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: codex ? TOOLS : [] }));
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: codex ? [...TOOLS, ...PORTICO_TOOLS] : [] }));
   server.setRequestHandler(CallToolRequestSchema, (request) =>
     isStopHook(host, request.params.name, (request.params.arguments ?? {}) as Record<string, unknown>)
       ? NO_DECISION

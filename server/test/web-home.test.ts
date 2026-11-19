@@ -119,6 +119,9 @@ const SIGN_IN: SignInView = { id: "s1", kind: "muse", name: "muse-work", code: "
 
 function task(o: Partial<TaskView> & { id: string; from: AgentView; to: AgentView }): TaskView {
   return {
+    workspaceId: "w-personal",
+    portico: "Your Portico",
+    readOnly: false,
     subject: "A task",
     outcome: "in_progress",
     reason: null,
@@ -205,10 +208,12 @@ const TASKS: TaskListData = {
   projects: ["portico"],
 };
 
-/** Chris's own workspace, holding every agent of Chris's. */
+/** Chris's own Portico, holding every agent of Chris's. */
 const PERSONAL: WorkspaceView = {
   id: "w-personal",
-  name: "Personal",
+  name: "Your Portico",
+  phrase: "your Portico",
+  named: false,
   kind: "personal",
   owner: CHRIS,
   isOwner: true,
@@ -386,7 +391,7 @@ describe("an agent's page", () => {
         agent: a,
         allowList: a.mine ? [] : null,
         taskCounts: { needs_approval: 1, in_progress: 1, done: 1, failed: 0 },
-        worksWith: [{ agent: ref(codex), tasks: 3, lastAt: at(9, 17) }],
+        worksWith: [{ agent: ref(codex), tasks: 3, lastAt: at(9, 17), parts: [{ workspaceId: "w-personal", portico: "Your Portico", readOnly: false, tasks: 3, lastAt: at(9, 17) }] }],
         runs: [],
         runCount: 0,
         woken: false,
@@ -484,13 +489,13 @@ describe("an agent's page", () => {
 });
 
 describe("the navigation", () => {
-  test("Home with its count, Activity, the workspaces with who else is there, Agents and Settings", () => {
-    const launch: WorkspaceView = { id: "w-launch", name: "Launch", kind: "shared", owner: CHRIS, isOwner: true, people: [CHRIS, MAYA], agentIds: [], needs: true };
+  test("Home with its count, Activity, the Porticos with who else is there, Agents and Settings", () => {
+    const launch: WorkspaceView = { id: "w-launch", name: "Launch", phrase: "the Launch Portico", named: true, kind: "shared", owner: CHRIS, isOwner: true, people: [CHRIS, MAYA], agentIds: [], needs: true };
     const html = render(state({ workspaces: [PERSONAL, launch] }));
     const t = text(html);
-    inOrder(t, "Home 3 waiting for a decision", "Activity", "Workspaces", "Personal", "Launch", "Something here needs a decision", "New workspace", "Agents", "Settings");
+    inOrder(t, "Home 3 waiting for a decision", "Activity", "Porticos", "Your Portico", "Launch", "Something here needs a decision", "New Portico", "Agents", "Settings");
     expect(html).toContain('aria-label="With Maya Okafor"');
-    expect(html).toMatch(/href="\/w\/w-launch" data-action="go"/);
+    expect(html).toMatch(/href="\/p\/w-launch" data-action="go"/);
     // No list of every agent on the server, and no shortcut to invites: people come in by sharing a workspace.
     expect(html).not.toContain('data-key="n-a-gone"');
     expect(html).not.toContain("Invite a person");

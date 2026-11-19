@@ -174,6 +174,38 @@ export function together(p: Portico, ...agents: Agent[]): Workspace {
 }
 
 /** A browser sign-in for the person: the Cookie header value to send. */
+/**
+ * The plan's worked example. Chris has grok-bot, claude-code and muse. Three Porticos: his own (all three), an unnamed
+ * one with Robert, so "Chris and Robert" (grok-bot, robert/dots), and "Launch" with Robert, Bill and Dana (grok-bot,
+ * robert/dots, bill/scout, dana/muse).
+ */
+export async function workedExample(p: Portico) {
+  const person = async (name: string, owner = false) =>
+    p.people.setHandle((owner ? await addOwner(p, name) : await addMember(p, name)).id, name.toLowerCase());
+  const chris = await person("Chris", true);
+  const robert = await person("Robert");
+  const bill = await person("Bill");
+  const dana = await person("Dana");
+  const grok = addAppAgent(p, chris, "grok-bot", { kind: "grok-bot" });
+  const claude = addAppAgent(p, chris, "claude-code", { kind: "other" });
+  const muse = addAppAgent(p, chris, "muse");
+  const dots = addAppAgent(p, robert, "dots", { kind: "dots" });
+  const scout = addAppAgent(p, bill, "scout", { kind: "other" });
+  const dmuse = addAppAgent(p, dana, "muse");
+  const own = p.workspaces.personal(chris.id);
+  const pair = p.workspaces.create(chris.id);
+  p.workspaces.admit(pair.id, robert.id);
+  p.workspaces.addAgent(chris.id, pair.id, grok.agent.id);
+  p.workspaces.addAgent(robert.id, pair.id, dots.agent.id);
+  const launch = p.workspaces.create(chris.id, "Launch");
+  for (const other of [robert, bill, dana]) p.workspaces.admit(launch.id, other.id);
+  p.workspaces.addAgent(chris.id, launch.id, grok.agent.id);
+  p.workspaces.addAgent(robert.id, launch.id, dots.agent.id);
+  p.workspaces.addAgent(bill.id, launch.id, scout.agent.id);
+  p.workspaces.addAgent(dana.id, launch.id, dmuse.agent.id);
+  return { chris, robert, bill, dana, grok, claude, muse, dots, scout, dmuse, own, pair: p.workspaces.get(pair.id)!, launch };
+}
+
 export function signIn(p: Portico, person: Person): string {
   const { token } = p.accounts.startSession(person.id);
   return `portico_session=${token}`;
@@ -377,12 +409,18 @@ export function sseReader(res: Response) {
 
 // ---- copy sweeps ----
 
+import { wordProblems } from "./copy-source";
+export { wordProblems };
+
 /** Pronouns Portico's copy never uses. Errs strict: it also flags "i.e.". */
 export const PRONOUNS =
   /\b(i|me|my|mine|myself|we|us|our|ours|ourselves|you|your|yours|yourself|yourselves|it|its|itself|they|them|their|theirs|themselves)\b/i;
 
-/** The one phrase the owner chose to keep: the empty-state heading. */
-const ALLOWED_PHRASES = [/\badd your first agent\b/gi];
+/**
+ * The phrases the owner chose to keep: the empty-state heading, and the name of a person's own Portico on that person's
+ * pages.
+ */
+const ALLOWED_PHRASES = [/\badd your first agent\b/gi, /\byour portico\b/gi];
 
 /** The retired word. */
 export const HUB = /\bhubs?\b/i;
@@ -403,9 +441,12 @@ export function visibleCopy(page: string): string {
   return text;
 }
 
-/** The words that break the copy rules in a piece of copy: pronouns and "hub". Empty when the copy is clean. */
+/**
+ * The words that break the copy rules in a piece of copy: pronouns, "hub", and the word rule for Porticos (never
+ * "workspace" or "Personal"; an installation is a Portico server). Empty when the copy is clean.
+ */
 export function copyProblems(copy: string): string[] {
-  const problems: string[] = [];
+  const problems: string[] = wordProblems(copy);
   for (const re of [new RegExp(PRONOUNS.source, "gi"), new RegExp(HUB.source, "gi")]) {
     for (const match of copy.matchAll(re)) {
       const start = Math.max(0, match.index! - 30);

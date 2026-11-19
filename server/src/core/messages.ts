@@ -245,7 +245,7 @@ export class Messages {
       key?: unknown;
       attachments?: unknown;
     },
-  ): { message: Message; delivery: DeliveryTier; note: string | null } {
+  ): { message: Message; delivery: DeliveryTier; note: string | null; workspace: Workspace | null } {
     const subject = checkSubject(input.subject);
     const text = checkText(input.text);
     const summary = checkSummary(input.summary);
@@ -291,6 +291,7 @@ export class Messages {
           message: first,
           delivery: first.status === "held" || !receiver ? "held" : this.agents.tier(receiver),
           note: "Already sent with this key, so nothing new was sent. This is the first message.",
+          workspace: this.workspaces.known(first.workspaceId),
         };
       }
     }
@@ -323,8 +324,8 @@ export class Messages {
     if (shared.length === 0) {
       throw new PorticoError(
         "not_allowed",
-        `${this.agents.nameFor(receiver, caller.ownerId)} no longer shares a workspace with this agent, so the ` +
-          "conversation is read-only. list_agents shows who can be reached now.",
+        `You and \`${this.agents.nameFor(receiver, caller.ownerId)}\` no longer share a Portico, so the conversation is ` +
+          "read-only. list_agents shows who can be reached now.",
       );
     }
     // A reply stays where the conversation is while that workspace still joins the two. Otherwise the conversation is
@@ -383,8 +384,8 @@ export class Messages {
     const notes: string[] = [];
     if (moved) {
       notes.push(
-        `The message reply_to names is in a conversation whose workspace no longer joins this agent and ${name}, so ` +
-          `that conversation is read-only. This message started a new conversation in the ${workspace.name} workspace, ` +
+        `The message reply_to names is in a conversation whose Portico no longer joins this agent and ${name}, so ` +
+          `that conversation is read-only. This message started a new conversation in ${workspace.phrase}, ` +
           "with no reply_to.",
       );
     }
@@ -396,7 +397,7 @@ export class Messages {
           "was delivered, declined or expired.",
       );
     }
-    return { message, delivery, note: notes.length > 0 ? notes.join(" ") : null };
+    return { message, delivery, note: notes.length > 0 ? notes.join(" ") : null, workspace };
   }
 
   /**
@@ -809,7 +810,7 @@ export class Messages {
 
   private attachable(caller: Agent, attachments: unknown): { id: string }[] {
     if (attachments === undefined || attachments === null) return [];
-    if (!this.files) throw new PorticoError("bad_request", "This Portico doesn't take attachments.");
+    if (!this.files) throw new PorticoError("bad_request", "This Portico server doesn't take attachments.");
     return this.files.attachable(caller, attachments);
   }
 

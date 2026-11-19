@@ -1,4 +1,4 @@
-// The navigation beside every control-plane page: Home (with what needs a decision), Activity, the workspaces, Agents
+// The navigation beside every control-plane page: Home (with what needs a decision), Activity, the Porticos, Agents
 // and Settings. On phones it opens over the page. Pure: state in, HTML out.
 import { esc, HOMEMARK, ICON, monogram, personColor, when } from "./common.js";
 import { waitingAgents } from "./tasks.js";
@@ -10,20 +10,20 @@ export function decisionCount(s: HomeState): number {
   return s.held.length + s.signIns.length + s.joins.length + s.asks.length + waitingAgents(s).length;
 }
 
-/** The workspaces: Personal first, then each shared one with the other people's initials and a dot when something waits. */
+/** The Porticos: the person's own first, then each shared one with the other people's initials and a dot when something waits. */
 function workspacesNav(s: HomeState): string {
   const route = s.route;
   const row = (w: WorkspaceView) => {
-    const href = `/w/${encodeURIComponent(w.id)}`;
+    const href = `/p/${encodeURIComponent(w.id)}`;
     const who = initials(w, s.me.id);
     const current = route.page === "workspace" && route.id === w.id;
     return `<li data-key="nw-${esc(w.id)}"><a class="npage" href="${href}" data-action="go" data-href="${href}"${when(current, ` aria-current="page"`)}><span class="nrow-name">${esc(w.name)}</span>${when(who, `<span class="nws-who" aria-label="With ${esc(w.people.filter((p) => p.id !== s.me.id).map((p) => p.name).join(", "))}">${esc(who)}</span>`)}${when(w.needs, `<span class="ndot"><span class="sr">Something here needs a decision</span></span>`)}</a></li>`;
   };
   return `<div class="nav-agents">
-      <h2 class="nav-h">Workspaces</h2>
+      <h2 class="nav-h">Porticos</h2>
       <ul class="nav-list">
         ${s.workspaces.map(row).join("")}
-        <li><button type="button" class="npage npage-add" data-action="ws-new-open">${ICON.plus()}New workspace</button></li>
+        <li><button type="button" class="npage npage-add" data-action="ws-new-open">${ICON.plus()}New Portico</button></li>
       </ul>
       <ul class="nav-pages">
         <li><a class="npage" href="/agents" data-action="go" data-href="/agents"${when(route.page === "agents", ` aria-current="page"`)}>Agents</a></li>

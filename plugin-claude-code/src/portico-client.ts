@@ -16,6 +16,14 @@ export interface AgentEntry {
   doing: string | null;
   last_seen: string | null;
   approval_required: boolean;
+  /** The Porticos this agent and the caller are both in. */
+  porticos?: PorticoRef[];
+}
+
+/** A Portico, the place: a named list of people and agents. Two agents message each other only while both are in one. */
+export interface PorticoRef {
+  id: string;
+  name: string;
 }
 
 export type MessageStatus = "held" | "pending" | "delivered" | "declined" | "expired";
@@ -33,7 +41,12 @@ export interface MessageView {
   id: string;
   thread_id: string;
   from: string;
+  /** The name of the person who manages the sender, and whether that person also manages this agent. */
+  from_owner?: string;
+  from_own_person?: boolean;
   to: string;
+  /** The Portico the message went through. */
+  portico?: PorticoRef;
   subject: string;
   text: string;
   reply_to: string | null;
@@ -166,8 +179,9 @@ export class PorticoClient {
     this.timeoutMs = opts.timeoutMs ?? 15_000;
   }
 
-  listAgents(): Promise<{ agents: AgentEntry[] }> {
-    return this.call("GET", "/api/agent/agents");
+  /** The agents this one reaches. With `portico` (an ID or name), only those in that one Portico. Sent as given: Portico checks it. */
+  listAgents(portico?: string): Promise<{ agents: AgentEntry[]; portico?: PorticoRef; note?: string }> {
+    return this.call("GET", `/api/agent/agents${portico ? `?portico=${encodeURIComponent(portico)}` : ""}`);
   }
 
   sendMessage(body: {
@@ -181,7 +195,7 @@ export class PorticoClient {
     key?: string;
     /** File IDs. Sent as given: Portico checks the value. */
     attachments?: unknown;
-  }): Promise<{ message: MessageView; delivery: DeliveryTier; note?: string }> {
+  }): Promise<{ message: MessageView; delivery: DeliveryTier; portico?: PorticoRef; note?: string }> {
     return this.call("POST", "/api/agent/messages", body);
   }
 
@@ -213,9 +227,9 @@ export class PorticoClient {
     return this.call("PATCH", "/api/agent/profile", body);
   }
 
-  /** Runs one of the workspace tools on Portico: the arguments go as given, and Portico checks them. */
-  workspaceTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-    return this.call("POST", `/api/agent/workspace-tools/${encodeURIComponent(name)}`, args);
+  /** Runs one of the Portico tools (list_porticos and the rest): the arguments go as given, and Portico checks them. */
+  porticoTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+    return this.call("POST", `/api/agent/portico-tools/${encodeURIComponent(name)}`, args);
   }
 
   /**
