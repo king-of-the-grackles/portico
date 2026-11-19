@@ -238,6 +238,13 @@ export class Accounts {
     return this.people.get(row.person_id);
   }
 
+  /** Whether the session with this token still stands for the person: read only, so a page left open keeps nothing alive. */
+  sessionLive(token: string | undefined, personId: string): boolean {
+    if (!token) return false;
+    const row = this.db.query("SELECT person_id, expires_at FROM web_sessions WHERE token_hash = $hash").get({ hash: hashSecret(token) }) as { person_id: string; expires_at: string } | null;
+    return row !== null && row.person_id === personId && Date.parse(row.expires_at) > this.now().getTime();
+  }
+
   endSession(token: string | undefined): void {
     if (!token) return;
     this.db.query("DELETE FROM web_sessions WHERE token_hash = $hash").run({ hash: hashSecret(token) });

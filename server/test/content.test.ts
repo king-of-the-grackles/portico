@@ -180,7 +180,7 @@ describe("where a conversation goes", () => {
     expect(next.message.threadId).not.toBe(first.threadId);
     expect(next.note).toContain("no longer joins this agent and robert/dots");
     expect(next.note).toContain("read-only");
-    expect(next.note).toContain("new conversation in the Launch Portico");
+    expect(next.note).toContain("new conversation in the Portico “Launch”");
     // The same from the other side, and over the API the note comes back with the message.
     const res = await callAs(p, dots, "POST", "/api/agent/messages", { reply_to: first.id, subject: "Late answer", text: "x" });
     expect(res.status).toBe(201);

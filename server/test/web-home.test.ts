@@ -119,7 +119,7 @@ const inPortico = (p: { id: string; name: string }) => ({ ...p, agents: "self" a
 
 const HELD: HeldCard = {
   ...message({ id: "m-held", from: grok, to: claude, subject: "Deploy the People export to staging", status: "held", deliveredAt: null, createdAt: at(11, 58), expiresAt: at(18, 0) }),
-  facts: { managedBy: CHRIS, heldFor: "approval", replyToRecipient: false, earlier: [] },
+  facts: { managedBy: CHRIS, heldFor: "approval", newSender: false, replyToRecipient: false, earlier: [] },
 };
 const ASKED: ConsentCard = {
   id: "s1",
@@ -508,7 +508,7 @@ describe("an agent's page", () => {
 
 describe("the navigation", () => {
   test("Home with its count, Activity, the Porticos with who else is there, Agents and Settings", () => {
-    const launch: WorkspaceView = { id: "w-launch", name: "Launch", phrase: "the Launch Portico", named: true, kind: "shared", owner: CHRIS, isOwner: true, people: [inPortico(CHRIS), inPortico(MAYA)], pausedAt: null, agentIds: [], needs: true };
+    const launch: WorkspaceView = { id: "w-launch", name: "Launch", phrase: "the Portico “Launch”", named: true, kind: "shared", owner: CHRIS, isOwner: true, people: [inPortico(CHRIS), inPortico(MAYA)], pausedAt: null, agentIds: [], needs: true };
     const html = render(state({ workspaces: [PERSONAL, launch] }));
     const t = text(html);
     inOrder(t, "Home 3 waiting for a decision", "Activity", "Porticos", "Your Portico", "Launch", "Something here needs a decision", "New Portico", "Agents", "Settings");

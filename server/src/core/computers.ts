@@ -100,7 +100,7 @@ export class Computers {
       .run({ id: computer.id, ownerId, name: computer.name, tokenHash: hashSecret(token), createdAt: computer.createdAt });
     this.log("computer_added", { computer: computer.name });
     this.activity?.record("computer_joined", { personId: ownerId, detail: { computer: computer.name } });
-    this.changes.emit("computers", "agents");
+    this.changes.about({ people: [ownerId] }, "computers", "agents");
     return { computer, token };
   }
 
@@ -148,13 +148,14 @@ export class Computers {
    * IDs of the sessions it had, so their streams can be closed.
    */
   remove(id: string): string[] {
+    const ownerId = this.get(id)?.ownerId;
     const sessions = (this.db.query("SELECT id FROM agents WHERE computer_id = $id").all({ id }) as { id: string }[]).map((row) => row.id);
     const clearContent = this.content.gather(sessions);
     const removed = this.db.query("DELETE FROM computers WHERE id = $id").run({ id }).changes;
     if (removed === 0) return sessions;
     clearContent();
     this.log("computer_removed", { computer_id: id, sessions: sessions.length });
-    this.changes.emit("computers", "agents", "threads", "approvals");
+    this.changes.about({ people: [ownerId] }, "computers", "agents", "threads", "approvals");
     return sessions;
   }
 
@@ -174,7 +175,7 @@ export class Computers {
          ON CONFLICT (computer_id, folder_id) DO UPDATE SET name = $name, joins = $joins, updated_at = $at`,
       )
       .run({ computerId, folderId, name, joins: joins ? 1 : 0, at: this.iso() });
-    this.changes.emit("agents", "computers");
+    this.changes.about({ people: [this.get(computerId)?.ownerId] }, "agents", "computers");
   }
 
   // ---- sweeps ----

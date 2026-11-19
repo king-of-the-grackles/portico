@@ -7,15 +7,17 @@ const UNKNOWN_ID = "00000000-0000-4000-8000-000000000000";
 test("a shared Portico joins two people's agents, and each person's own conversations stay private", async ({ world, browserAs }) => {
   const alice = await world.person("alice");
   const probe = await world.agent("alice", "probe");
+  await world.agent("alice", "helper");
   await world.dropShared();
 
-  // ---- Alice makes a Portico with probe in it, on the pages ----
+  // ---- Alice makes a Portico with her two agents in it, on the pages ----
   const page = await browserAs(alice);
   const porticoName = unique(`E2E Launch ${world.runId}`);
   await page.goto("/");
   await page.getByRole("link", { name: "New Portico" }).or(page.getByRole("button", { name: "New Portico" })).first().click();
   await page.getByLabel("Name").fill(porticoName);
   await page.getByRole("checkbox", { name: "probe" }).click();
+  await page.getByRole("checkbox", { name: "helper" }).click();
   await page.getByRole("button", { name: "Create Portico" }).click();
   await expect(page.getByRole("heading", { level: 1, name: porticoName })).toBeVisible();
   await expect(page).toHaveURL(/\/p\/[0-9a-f-]+$/);

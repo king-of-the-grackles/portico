@@ -374,13 +374,27 @@ export class People {
   remove(id: string): void {
     const agentIds = (this.db.query("SELECT id FROM agents WHERE owner_id = $id").all({ id }) as { id: string }[]).map((row) => row.id);
     const clearContent = this.content?.gather(agentIds);
+    // The workspaces that go with the person, and the other people's agents in each, who are told and whose waiting
+    // messages there are withdrawn, as when a workspace is deleted.
+    const gone = (this.db.query("SELECT id FROM workspaces WHERE owner_id = $id AND archived_at IS NULL").all({ id }) as { id: string }[]).map((row) => ({
+      workspaceId: row.id,
+      agentIds: (
+        this.db
+          .query("SELECT wa.agent_id AS id FROM workspace_agents wa JOIN agents a ON a.id = wa.agent_id WHERE wa.workspace_id = $workspaceId AND wa.left_at IS NULL AND a.owner_id != $id")
+          .all({ workspaceId: row.id, id }) as { id: string }[]
+      ).map((agent) => agent.id),
+    }));
     this.db.transaction(() => {
       archiveWorkspaces(this.db, "owner_id = $id", { id }, this.iso());
       this.db.query("DELETE FROM people WHERE id = $id").run({ id });
     })();
     clearContent?.();
+    this.onWorkspacesGone?.(gone);
     this.changes.emit("people", "agents", "threads", "approvals", "computers");
   }
+
+  /** Set by portico.ts: the workspaces a removed person owned are gone, with the other people's agents that were in each. */
+  onWorkspacesGone: ((gone: { workspaceId: string; agentIds: string[] }[]) => void) | null = null;
 
   require(id: string): Person {
     const person = this.get(id);

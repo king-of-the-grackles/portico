@@ -1,7 +1,11 @@
 // The cast every scenario shares: test people and their agents, made the first time a scenario asks and reused after
 // that, because the server lets one address start only 10 joins per 15 minutes.
 //
-//   alice: probe, helper        bob: scout (comes into alice's shared Portico), owl
+//   alice: probe, helper        bob: scout, owl
+//   The shared Portico holds probe, helper and scout; owl stays in bob's own Portico.
+//
+// The server also stops a pair of agents at 12 messages in 10 minutes (the loop guard), so scenarios spread their
+// messages over the pairs probe-scout and helper-scout: at most 6 each per run, which leaves room for one rerun.
 import type { APIRequestContext, Browser, BrowserContext } from "@playwright/test";
 import { AgentClient, allowOnConsentPage, joinThroughPage, startJoin } from "./agent";
 import { createUser } from "./descope";
@@ -155,20 +159,23 @@ export class World {
     } finally {
       await api.dispose();
     }
+    // People who share no Portico any more are strangers again: the server drops each one's allowance for the other.
     this.state.shared = null;
+    this.state.introduced = false;
     saveState(this.state);
   }
 
   /**
-   * The Portico alice made and shared, with alice's probe and bob's scout in it. The two-people scenario makes it on
+   * The Portico alice made and shared, with alice's probe and helper and bob's scout in it. The two-people scenario makes it on
    * the pages; when that hasn't run, this makes it with the agent tools.
    */
   async shared(): Promise<{ id: string; name: string }> {
     if (this.state.shared) return this.state.shared;
     const alice = await this.person("alice");
     const probe = await this.agent("alice", "probe");
+    await this.agent("alice", "helper");
     const name = `E2E Shared ${this.runId} ${nonce(3)}`;
-    const { portico } = await probe.call("create_portico", { name });
+    const { portico } = await probe.call("create_portico", { name, agents: ["probe", "helper"] });
     const asked = await probe.call("share_portico", { portico: portico.id });
     const context = await this.contextFor(alice);
     try {
@@ -197,17 +204,17 @@ export class World {
   }
 
   /**
-   * Alice and bob each allow the other's agents for good, so later messages between probe and scout aren't held as
+   * Alice and bob each allow the other's agents for good, so later messages between their agents aren't held as
    * first contact. The first-contact scenario undoes this for itself.
    */
   async introduce(): Promise<void> {
     if (this.state.introduced) return;
     const [alice, bob] = [await this.person("alice"), await this.person("bob")];
-    const [probe, scout] = [await this.agent("alice", "probe"), await this.agent("bob", "scout")];
+    const [helper, scout] = [await this.agent("alice", "helper"), await this.agent("bob", "scout")];
     const stamp = Date.now().toString(36);
-    const there = await scout.send({ to: `${alice.handle}/probe`, subject: `Introduction ${stamp}`, text: "Hello from scout." });
+    const there = await scout.send({ to: `${alice.handle}/helper`, subject: `Introduction ${stamp}`, text: "Hello from scout." });
     if (there.delivery === "held") await this.decide("alice", there.message.id, "always_allow");
-    const back = await probe.send({ to: `${bob.handle}/scout`, subject: `Introduction back ${stamp}`, text: "Hello from probe." });
+    const back = await helper.send({ to: `${bob.handle}/scout`, subject: `Introduction back ${stamp}`, text: "Hello from helper." });
     if (back.delivery === "held") await this.decide("bob", back.message.id, "always_allow");
     this.state.introduced = true;
     saveState(this.state);

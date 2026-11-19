@@ -310,12 +310,15 @@ const DIRECTORY_SCHEMA = [
   // presses Allow, and join only once the asker hands back the code that page then shows; `enter` is an agent of the person's coming into a workspace with a share link; `share`,
   // `remove_person` and `delete` are what an agent asks its person to confirm about a workspace; `add_agent` is an agent
   // asking to put one of its person's agents into a workspace someone else owns; `admit_agent` is the same waiting
-  // for the workspace's owner, who chose to be asked. `person_id` is who has to confirm, when that is known (never for a
+  // for the workspace's owner, who chose to be asked. `create`, `remove_agent` and `rename` are what an agent nobody
+  // vouched for asks before changing its person's workspaces: a vouched-for agent does those at once. `person_id` is who has to confirm, when that is known (never for a
   // join): only that person can open the page. `poll_hash` is for an asker with no token yet. A join goes from
   // `pending` to `allowed` when a person presses Allow, which makes `code`; `tries` counts the asker's wrong codes.
+  // `opened_at` is when a signed-in person first opened a join's page: one nobody opened stops counting toward the
+  // limit on waiting joins after a few minutes.
   `CREATE TABLE consent_requests (
     id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL CHECK (kind IN ('computer', 'agent', 'enter', 'share', 'remove_person', 'delete', 'add_agent', 'admit_agent')),
+    kind TEXT NOT NULL CHECK (kind IN ('computer', 'agent', 'enter', 'share', 'remove_person', 'delete', 'add_agent', 'admit_agent', 'create', 'remove_agent', 'rename')),
     status TEXT NOT NULL CHECK (status IN ('pending', 'allowed', 'approved', 'denied', 'expired')),
     code TEXT,
     tries INTEGER NOT NULL DEFAULT 0,
@@ -334,7 +337,8 @@ const DIRECTORY_SCHEMA = [
     expires_at TEXT NOT NULL,
     decided_at TEXT,
     decided_by TEXT REFERENCES people (id) ON DELETE CASCADE,
-    issued_at TEXT
+    issued_at TEXT,
+    opened_at TEXT
   )`,
   `CREATE INDEX consent_requests_person ON consent_requests (person_id, status)`,
   `CREATE INDEX consent_requests_agent ON consent_requests (agent_id)`,

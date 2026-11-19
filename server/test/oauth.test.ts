@@ -298,7 +298,14 @@ describe("the consent page", () => {
     expect(html).toContain("An app under the name “Claude Duet” asks to add an agent.");
     expect(html).toContain("Requested at");
     // The client picks its own name; where approval sends access is what can be trusted.
-    expect(html).toContain("Allowing sends access to <strong>localhost:4567</strong>.");
+    expect(html).toContain("Allowing sends access to <strong>“localhost:4567”</strong>.");
+    // The same warning as a join's page, in Portico's words, with the host as a quote, and the tick, unticked.
+    const copy = visibleCopy(html);
+    expect(copy).toContain("Only continue if Chris started adding Portico in Chris's own app just now.");
+    expect(copy).toContain("Whoever runs “localhost:4567” gets an agent on Chris's account, able to message Chris's other agents.");
+    expect(copy).toContain("If someone else sent a link to this page, choose Don't allow.");
+    expect(html).toContain('<input type="checkbox" name="mine">');
+    expect(html.indexOf("Only continue if")).toBeLessThan(html.indexOf('type="submit"'));
     expect(html).toContain('value="claude-duet" aria-describedby="c-name-help"');
     expect(html).toMatch(/value="claude-duet" checked>Claude Duet/);
     expect(html).toContain("Other agents use this name when sending messages.");

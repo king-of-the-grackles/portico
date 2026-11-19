@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { quote } from "./framing";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
 import { posesAsOwnPortico, titleKey } from "./names";
@@ -215,7 +216,8 @@ export class Workspaces {
   /**
    * A Portico as everyone names it. A person's own is "Chris's Portico". A shared one has the name someone gave it, or
    * is named after the people in it ("Chris and Robert"), which follows them as they come and go. `phrase` is how a
-   * sentence names it: "the Launch Portico".
+   * sentence names it, with the name as a quote, since a person typed it or it is made of people's names: the Portico
+   * “Launch”. A sentence an agent reads can then never take a name for Portico's own words.
    */
   private view(row: WorkspaceRow): Workspace {
     const base = { id: row.id, kind: row.kind as WorkspaceKind, ownerId: row.owner_id, createdAt: row.created_at, pausedAt: row.paused_at };
@@ -223,20 +225,20 @@ export class Workspaces {
     if (base.kind === "personal") {
       const owner = personName(row.owner_id);
       const name = owner === "" ? "A Portico" : `${owner}'s Portico`;
-      return { ...base, name, named: false, phrase: owner === "" ? "a Portico" : name };
+      return { ...base, name, named: false, phrase: owner === "" ? "a Portico" : quote(name) };
     }
     if (row.name !== "") {
-      return { ...base, name: row.name, named: true, phrase: /\bportico$/i.test(row.name) ? `the ${row.name}` : `the ${row.name} Portico` };
+      return { ...base, name: row.name, named: true, phrase: `the Portico ${quote(row.name)}` };
     }
     // A deleted Portico has nobody in it any more: its owner's name stands in.
     const people = this.peopleIn(row.id).map(personName).filter((name) => name !== "");
     if (people.length >= 2) {
       const name = listNames(people);
-      return { ...base, name, named: false, phrase: `the ${name} Portico` };
+      return { ...base, name, named: false, phrase: `the Portico ${quote(name)}` };
     }
     const owner = people[0] ?? personName(row.owner_id);
     const name = owner === "" ? "A new Portico" : `${owner}'s new Portico`;
-    return { ...base, name, named: false, phrase: owner === "" ? "a new Portico" : name };
+    return { ...base, name, named: false, phrase: owner === "" ? "a new Portico" : quote(name) };
   }
 
   /** The workspace, unless deleted: a deleted workspace answers the same as one that never existed. */
@@ -336,7 +338,7 @@ export class Workspaces {
     this.db
       .query("UPDATE workspace_people SET agents_policy = $policy WHERE workspace_id = $workspaceId AND person_id = $personId")
       .run({ workspaceId: workspace.id, personId, policy: cleanAgentsPolicy(policy) });
-    this.changes.emit("workspaces");
+    this.changes.about({ people: [personId], workspaces: [workspaceId] }, "workspaces");
   }
 
   /** The agents of one person that are in the workspace now. */
@@ -430,7 +432,7 @@ export class Workspaces {
     this.requireFreeName(name, [personId]);
     this.db.transaction(() => this.insert({ id, name, kind: "shared", ownerId: personId, createdAt: this.iso() }))();
     this.log("workspace_created", { workspace_id: id, kind: "shared" });
-    this.changes.emit("workspaces");
+    this.changes.about({ people: [personId] }, "workspaces");
     return this.get(id)!;
   }
 
@@ -440,7 +442,7 @@ export class Workspaces {
     const name = cleanWorkspaceName(rawName);
     this.requireFreeName(name, this.peopleIn(workspace.id), workspace.id);
     this.db.query("UPDATE workspaces SET name = $name WHERE id = $id").run({ id: workspace.id, name });
-    this.changes.emit("workspaces");
+    this.changes.about({ workspaces: [workspace.id] }, "workspaces");
     return this.get(workspace.id)!;
   }
 
@@ -455,7 +457,7 @@ export class Workspaces {
     const personIds = this.peopleIn(workspace.id);
     this.db.transaction(() => archiveWorkspaces(this.db, "id = $id", { id: workspace.id }, this.iso()))();
     this.log("workspace_removed", { workspace_id: workspace.id });
-    this.changes.emit("workspaces", "agents", "threads");
+    this.changes.about({ people: personIds }, "workspaces", "agents", "threads");
     this.onEvent?.({ kind: "deleted", workspace, byId, agentIds, personIds });
     return workspace;
   }
@@ -470,7 +472,7 @@ export class Workspaces {
     if (workspace.pausedAt !== null) return workspace;
     this.db.query("UPDATE workspaces SET paused_at = $at WHERE id = $id AND paused_at IS NULL").run({ id: workspace.id, at: this.iso() });
     this.log("workspace_paused", { workspace_id: workspace.id });
-    this.changes.emit("workspaces", "agents", "threads", "approvals");
+    this.changes.about({ workspaces: [workspaceId] }, "workspaces", "agents", "threads", "approvals");
     const paused = this.get(workspace.id)!;
     this.onEvent?.({ kind: "paused", workspace: paused, byId });
     return paused;
@@ -482,7 +484,7 @@ export class Workspaces {
     if (workspace.pausedAt === null) return workspace;
     this.db.query("UPDATE workspaces SET paused_at = NULL WHERE id = $id").run({ id: workspace.id });
     this.log("workspace_resumed", { workspace_id: workspace.id });
-    this.changes.emit("workspaces", "agents", "threads");
+    this.changes.about({ workspaces: [workspaceId] }, "workspaces", "agents", "threads");
     const resumed = this.get(workspace.id)!;
     this.onEvent?.({ kind: "resumed", workspace: resumed, byId });
     return resumed;
@@ -507,7 +509,7 @@ export class Workspaces {
       )
       .run({ workspaceId: workspace.id, personId, at: this.iso(), policy });
     this.log("workspace_person_added", { workspace_id: workspace.id });
-    this.changes.emit("workspaces", "people");
+    this.changes.about({ people: [personId], workspaces: [workspace.id] }, "workspaces", "people");
     this.onEvent?.({ kind: "person_joined", workspace: this.get(workspace.id)!, personId, byId: personId });
   }
 
@@ -540,7 +542,7 @@ export class Workspaces {
         .run({ workspaceId: workspace.id, personId });
     })();
     this.log("workspace_person_removed", { workspace_id: workspace.id });
-    this.changes.emit("workspaces", "people", "agents", "threads");
+    this.changes.about({ people: [personId], workspaces: [workspace.id] }, "workspaces", "people", "agents", "threads");
     this.onPersonRemoved?.(workspace.id, personId);
     this.onEvent?.({ kind: "person_left", workspace, personId, byId, agentIds });
   }
@@ -569,7 +571,7 @@ export class Workspaces {
       )
       .run({ workspaceId: workspace.id, agentId, at: this.iso() });
     this.log("workspace_agent_added", { workspace_id: workspace.id, agent_id: agentId });
-    this.changes.emit("workspaces", "agents");
+    this.changes.about({ workspaces: [workspace.id], agents: [agentId] }, "workspaces", "agents");
     this.onEvent?.({ kind: "agent_joined", workspace, agentId, byId, ownerAllowed: opts.ownerAllowed === true });
   }
 
@@ -588,7 +590,7 @@ export class Workspaces {
       .query("UPDATE workspace_agents SET left_at = $at WHERE workspace_id = $workspaceId AND agent_id = $agentId AND left_at IS NULL")
       .run({ workspaceId: workspace.id, agentId, at: this.iso() }).changes;
     this.log("workspace_agent_removed", { workspace_id: workspace.id, agent_id: agentId });
-    this.changes.emit("workspaces", "agents", "threads");
+    this.changes.about({ workspaces: [workspaceId], agents: [agentId] }, "workspaces", "agents", "threads");
     if (left > 0) this.onEvent?.({ kind: "agent_left", workspace, agentId, byId });
   }
 
@@ -599,7 +601,7 @@ export class Workspaces {
   agentRevoked(agentId: string, byId: string): Workspace[] {
     const left = this.ofAgent(agentId);
     this.db.query("UPDATE workspace_agents SET left_at = $at WHERE agent_id = $agentId AND left_at IS NULL").run({ agentId, at: this.iso() });
-    this.changes.emit("workspaces", "agents", "threads");
+    this.changes.about({ people: [byId], agents: [agentId], workspaces: left.map((w) => w.id) }, "workspaces", "agents", "threads");
     for (const workspace of left) this.onEvent?.({ kind: "agent_left", workspace, agentId, byId });
     return left;
   }

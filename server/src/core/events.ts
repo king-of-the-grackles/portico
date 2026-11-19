@@ -239,7 +239,7 @@ export class EventSubscriptions {
         verifiedNow: verified ? 0 : 1,
       });
     this.log("event_subscribed", { agent_id: agent.id, subscription_id: id, refresh: Boolean(existing) });
-    this.changes.emit("agents");
+    this.changes.about({ agents: [agent.id] }, "agents");
     const result: Record<string, unknown> = { id, refreshBefore, cursor: null, truncated: false };
     if (existing) {
       result.deliveryStatus = {
@@ -282,7 +282,7 @@ export class EventSubscriptions {
     const id = this.subscriptionId(agent.id, url, name, args);
     if (this.db.query("DELETE FROM event_subscriptions WHERE id = $id").run({ id }).changes > 0) {
       this.log("event_unsubscribed", { agent_id: agent.id, subscription_id: id });
-      this.changes.emit("agents");
+      this.changes.about({ agents: [agent.id] }, "agents");
     }
   }
 

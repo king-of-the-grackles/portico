@@ -238,7 +238,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       before.doing !== after.doing ||
       before.repo !== after.repo ||
       before.branch !== after.branch;
-    if (changed) deps.changes.emit("agents");
+    if (changed) deps.changes.about({ agents: [agent.id] }, "agents");
     return c.json({ ok: true });
   });
 

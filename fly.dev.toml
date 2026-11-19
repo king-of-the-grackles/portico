@@ -10,7 +10,7 @@ primary_region = "iad"
   dockerfile = "Dockerfile"
 
 [env]
-  PORTICO_DATA_DIR = "/data/dev-3"
+  PORTICO_DATA_DIR = "/data/dev-4"
   PORTICO_PUBLIC_URL = "https://dev.portico.chat"
   # The dev sign-in project. A project ID is public: the sign-in page shows the same value.
   PORTICO_DESCOPE_PROJECT_ID = "P3MJNT5ZQa28nKZ4hv7GP4Jqo4Ic"

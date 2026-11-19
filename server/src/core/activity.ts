@@ -139,7 +139,7 @@ export class Activity {
         subjectId: fields.subjectId ?? null,
         detail: JSON.stringify(fields.detail ?? {}),
       });
-    this.changes.emit("activity");
+    this.changes.about({ people: [fields.personId, fields.subjectId], agents: [fields.agentId, fields.otherId], workspaces: [fields.workspaceId] }, "activity");
   }
 
   /**

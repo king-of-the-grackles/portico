@@ -549,7 +549,7 @@ describe("what an agent asks its person, through the page", () => {
     const sharing = await tool(p, muse.token, "share_portico", { portico: "Launch", email: "Dana@Example.com" });
     expect(sharing.status).toBe("waiting_for_person");
     expect(sharing.show).toBe(
-      `Waiting for Chris: sharing the Launch Portico with dana@example.com happens only once Chris opens ${PUBLIC_URL}/c/${share.id} in a browser, signs in and presses Allow. Only Chris can open that page. The request runs out at ${share.expires_at}.`,
+      `Waiting for “Chris”: sharing the Portico “Launch” with dana@example.com happens only once “Chris” opens ${PUBLIC_URL}/c/${share.id} in a browser, signs in and presses Allow. Only “Chris” can open that page. The request runs out at ${share.expires_at}.`,
     );
     expect(copyProblems(sharing.show)).toEqual([]);
     expect(sharing.note).not.toMatch(/\bcode\b/);

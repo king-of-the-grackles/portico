@@ -1,4 +1,5 @@
 import type { Agents } from "../core/agents";
+import { quote } from "../core/framing";
 import { PorticoError } from "../core/errors";
 import { LIMITS } from "../core/limits";
 import type { People } from "../core/people";
@@ -36,7 +37,7 @@ export function porticoTools() {
       description:
         "Make a Portico for the person who manages this agent, holding some of that person's agents: this agent, unless " +
         "agents says otherwise. Nobody else is in the Portico until share_portico brings someone in. Without a name, the " +
-        "Portico is named after the people there.",
+        "Portico is named after the people there. An agent that joined Portico lately, before that person vouched for the agent, gets waiting_for_person instead: that person allows the change on Portico's page.",
       inputSchema: {
         type: "object",
         properties: {
@@ -58,7 +59,7 @@ export function porticoTools() {
         "the answer is waiting_for_person: that person allows the request on Portico's page, or, " +
         "where the Portico's owner asked to allow each agent, the owner does (waiting_for_owner). " +
         "An agent that person took out of that person's own Portico stays out: only the person " +
-        "puts such an agent anywhere, on Portico's pages.",
+        "puts such an agent anywhere, on Portico's pages. An agent that joined Portico lately, before that person vouched for the agent, gets waiting_for_person instead: that person allows the change on Portico's page.",
       inputSchema: {
         type: "object",
         properties: { portico: str(PORTICO), agent: str(AGENT) },
@@ -73,7 +74,7 @@ export function porticoTools() {
         "leaves the Portico at once, and nobody reaches the agent through that Portico any more. With person: that " +
         "person leaves with every agent that person has there, once the person who manages this agent allows that on " +
         "Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link, which only " +
-        "that person can open. Only a Portico's owner removes someone else; anyone can leave. Give agent or person, not both.",
+        "that person can open. Only a Portico's owner removes someone else; anyone can leave. Give agent or person, not both. An agent that joined Portico lately, before that person vouched for the agent, gets waiting_for_person instead: that person allows the change on Portico's page.",
       inputSchema: {
         type: "object",
         properties: {
@@ -89,7 +90,7 @@ export function porticoTools() {
       name: "rename_portico",
       description:
         "Give a Portico a name, or a new one. Only the Portico's owner can. An empty name goes back to naming the Portico " +
-        "after the people there.",
+        "after the people there. An agent that joined Portico lately, before that person vouched for the agent, gets waiting_for_person instead: that person allows the change on Portico's page.",
       inputSchema: {
         type: "object",
         properties: { portico: str(PORTICO), name: str("Required. The new name, such as Launch.") },
@@ -191,6 +192,7 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
   const { agents, people, workspaces, shares, consents } = deps;
   const ownerId = agent.ownerId;
   const owner = people.require(ownerId);
+  const me = quote(owner.name);
   const text = (key: string) => (typeof args[key] === "string" ? (args[key] as string).trim() : "");
   const list = (key: string) => (Array.isArray(args[key]) ? (args[key] as unknown[]).filter((item): item is string => typeof item === "string") : []);
   const portico = () => findPortico(workspaces, ownerId, args.portico);
@@ -202,7 +204,7 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
     const wanted = named.trim();
     const mine = agents.ownedBy(ownerId);
     const found = mine.filter((a) => a.id === wanted || a.name === wanted || agents.addressFor(a, ownerId) === wanted || agents.nameFor(a, ownerId) === wanted);
-    if (found.length !== 1) throw new PorticoError("unknown_agent", `"${wanted}" isn't one agent of ${owner.name}'s. Use a name from list_agents.`);
+    if (found.length !== 1) throw new PorticoError("unknown_agent", `"${wanted}" isn't one agent of ${me}'s. Use a name from list_agents.`);
     return found[0]!;
   };
   /** An agent its owner took out of the owner's own Portico is kept apart: no agent puts it anywhere. */
@@ -211,9 +213,14 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
     if (workspaces.hasAgent(home.id, a.id)) return;
     throw new PorticoError(
       "not_allowed",
-      `${owner.name} took \`${addr(a)}\` out of ${home.name}, so only ${owner.name} can put \`${addr(a)}\` into ${into?.phrase ?? "a Portico"}: ` +
+      `${me} took \`${addr(a)}\` out of ${home.phrase}, so only ${me} can put \`${addr(a)}\` into ${into?.phrase ?? "a Portico"}: ` +
         `on Portico's pages, ${deps.publicUrl()}/${into ? `p/${into.id}` : "agents"}.`,
     );
+  };
+  /** A person's name as a sentence carries it: a quote, since a person typed it. */
+  const nameOf = (id: string, fallback: string) => {
+    const name = people.get(id)?.name ?? "";
+    return name === "" ? fallback : quote(name);
   };
   const cap = (sentence: string) => sentence.charAt(0).toUpperCase() + sentence.slice(1);
   const person = (id: string) => {
@@ -262,6 +269,7 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
       ...(request.detail.email ? { email: request.detail.email } : {}),
       ...(request.detail.agents ? { more_agents: request.detail.agents === "ask" ? "ask_owner" : "self" } : {}),
       ...(subject ? { agent: addr(subject) } : {}),
+      ...(request.detail.name !== undefined ? { name: request.detail.name } : {}),
       ...(request.detail.personId && !forOwner ? { person: person(request.detail.personId).handle } : {}),
       ...(pending && !forOwner ? { link: pageFor(request) } : {}),
       ...(pending && forOwner ? { waiting_for: "the Portico's owner" } : {}),
@@ -276,8 +284,8 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
   const waiting = (what: string, request: ConsentRequest) => ({
     status: "waiting_for_person",
     show:
-      `Waiting for ${owner.name}: ${what} happens only once ${owner.name} opens ${pageFor(request)} in a browser, signs in ` +
-      `and presses Allow. Only ${owner.name} can open that page. The request runs out at ${request.expiresAt}.`,
+      `Waiting for ${me}: ${what} happens only once ${me} opens ${pageFor(request)} in a browser, signs in ` +
+      `and presses Allow. Only ${me} can open that page. The request runs out at ${request.expiresAt}.`,
     request: requestView(request),
     note: "Nothing has changed yet. Show the sentence in show as it is: the link and the time. list_porticos shows the outcome; the same call again gives a fresh link once this one has run out.",
   });
@@ -286,8 +294,8 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
   const waitingForOwner = (w: Workspace, a: Agent, request: ConsentRequest) => ({
     status: "waiting_for_owner",
     show:
-      `Waiting for ${person(w.ownerId).name || "the owner"}, who made ${w.phrase} and asked to allow each agent ${owner.name} adds there: ` +
-      `\`${addr(a)}\` comes in once ${person(w.ownerId).name || "the owner"} allows the request on Portico's page. The request waits until ${request.expiresAt}.`,
+      `Waiting for ${nameOf(w.ownerId, "the owner")}, who made ${w.phrase} and asked to allow each agent ${me} adds there: ` +
+      `\`${addr(a)}\` comes in once ${nameOf(w.ownerId, "the owner")} allows the request on Portico's page. The request waits until ${request.expiresAt}.`,
     request: requestView(request),
     note: "Nothing has changed yet. Portico tells the owner. list_porticos shows the outcome.",
   });
@@ -305,6 +313,7 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
     case "create_portico": {
       const chosen = args.agents === undefined || args.agents === null ? [agent] : list("agents").map(own);
       for (const a of chosen) requireNotApart(a, null);
+      if (agent.unproven) return waiting("making the Portico", consents.askChange(agent, { kind: "create", name: args.name, agents: chosen }));
       const made = workspaces.create(ownerId, args.name);
       for (const a of chosen) workspaces.addAgent(ownerId, made.id, a.id);
       const inside = chosen.length === 0 ? "no agents" : chosen.map((a) => `\`${addr(a)}\``).join(", ");
@@ -326,6 +335,7 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
           ? { portico: ref(w), ...waitingForOwner(w, a, ask) }
           : { portico: ref(w), ...waiting(`\`${addr(a)}\` coming into ${w.phrase}`, ask) };
       }
+      if (agent.unproven) return { portico: ref(w), ...waiting(`\`${addr(a)}\` coming into ${w.phrase}`, consents.askChange(agent, { kind: "add_agent", workspaceId: w.id, subject: a })) };
       workspaces.addAgent(ownerId, w.id, a.id);
       return { portico: view(w), note: `\`${addr(a)}\` is in ${w.phrase}: everyone there can message \`${addr(a)}\`.` };
     }
@@ -336,21 +346,23 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
       if ((who === "") === (which === "")) throw new PorticoError("bad_request", "Give agent or person: one of the two.");
       if (who !== "") {
         const ask = consents.ask(agent, "remove_person", w.id, { person: who });
-        return { portico: ref(w), ...waiting(`taking ${person(ask.detail.personId!).name || who} out of ${w.phrase}`, ask) };
+        return { portico: ref(w), ...waiting(`taking ${nameOf(ask.detail.personId!, quote(who))} out of ${w.phrase}`, ask) };
       }
       if (which.includes("/") && !agents.ownedBy(ownerId).some((a) => addr(a) === which || agents.addressFor(a, ownerId) === which)) {
         throw new PorticoError(
           "not_allowed",
-          `\`${which}\` is another person's agent. ${owner.name} can take the agent out on the Portico's page, ${deps.publicUrl()}/p/${w.id}, ` +
+          `\`${which}\` is another person's agent. ${me} can take the agent out on the Portico's page, ${deps.publicUrl()}/p/${w.id}, ` +
             "or remove_from_portico with person takes that person out with every agent that person has there.",
         );
       }
       const a = own(which);
+      if (agent.unproven) return { portico: ref(w), ...waiting(`taking \`${addr(a)}\` out of ${w.phrase}`, consents.askChange(agent, { kind: "remove_agent", workspaceId: w.id, subject: a })) };
       workspaces.removeAgent(ownerId, w.id, a.id);
       return { portico: view(w), note: `\`${addr(a)}\` is out of ${w.phrase}: nobody reaches \`${addr(a)}\` through ${w.phrase} any more.` };
     }
     case "rename_portico": {
       const w = portico();
+      if (agent.unproven) return { portico: ref(w), ...waiting(`renaming ${w.phrase}`, consents.askChange(agent, { kind: "rename", workspaceId: w.id, name: args.name ?? "" })) };
       const renamed = workspaces.rename(ownerId, w.id, args.name ?? "");
       return { portico: view(renamed), note: cap(`${w.phrase} is now ${renamed.phrase}.`) };
     }

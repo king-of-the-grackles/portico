@@ -12,6 +12,10 @@ import { createPortico, type Portico } from "../src/portico";
 import type { WebhookRequest, WebhookResult } from "../src/core/webhooks";
 import type { HelloEvent, StreamConnection } from "../src/agent-api/stream";
 
+// The tests stand behind a proxy of their own: each names its client's address in X-Forwarded-For, which Portico reads
+// only where the deploy says a proxy writes that header.
+process.env.PORTICO_TRUST_FORWARDED_FOR = "1";
+
 export const T0 = new Date("2026-10-27T12:00:00.000Z");
 export const MINUTE = 60_000;
 export const HOUR = 3_600_000;

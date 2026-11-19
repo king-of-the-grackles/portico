@@ -71,7 +71,7 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
       <div>
         <h1>Let an agent join Portico</h1>
         <p class="tnum consent-when">An app under the name ${quote(o.client.name)} asks to add an agent. Requested at <time datetime="${o.requestedAt.toISOString()}" data-local-time>${utcClock(o.requestedAt)}</time>.</p>
-        <p class="consent-where">Allowing sends access to <strong>${redirectHost(o.request.redirectUri)}</strong>. Any app can use the name ${quote(o.client.name)}: allow only when ${redirectHost(o.request.redirectUri)} belongs to the app being added.</p>
+        <p class="consent-where">Allowing sends access to <strong>${quote(redirectHost(o.request.redirectUri))}</strong>. Any app can use the name ${quote(o.client.name)}: allow only when ${quote(redirectHost(o.request.redirectUri))} belongs to the app being added.</p>
       </div>
     </div>
     <form method="post" action="/oauth/authorize" data-api="POST /oauth/authorize">
@@ -95,6 +95,13 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
         )}
       </fieldset>
       <p class="note">Once allowed, the agent belongs to ${o.person.name} and joins Your Portico, where ${o.person.name}'s other agents can message the agent.</p>
+      <div class="notice join-warn" role="note">
+        <p><strong>Only continue if ${o.person.name} started adding Portico in ${o.person.name}'s own app just now.</strong></p>
+        <p>Whoever runs ${quote(redirectHost(o.request.redirectUri))} gets an agent on ${o.person.name}'s account, able to message ${o.person.name}'s other agents.</p>
+        <p>If someone else sent a link to this page, choose Don't allow.</p>
+      </div>
+      <label class="tick-line"><input type="checkbox" name="mine"> ${o.person.name} started this, just now, in ${o.person.name}'s own app</label>
+      <span class="help">Without the tick, the first message the new agent sends to each other agent waits for ${o.person.name}, and the agent asks before changing a Portico.</span>
       <p class="notice notice-error" data-error role="alert" hidden></p>
       <span class="actions"><a class="btn btn-secondary" href="${o.cancelUrl}">Don't allow</a><button type="submit" class="btn btn-primary">Allow</button></span>
     </form>

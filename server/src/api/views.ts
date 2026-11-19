@@ -117,7 +117,7 @@ export interface MessageView {
 
 /** A held message as its approval card shows it, with the facts Portico checks itself (managedBy: the sender's manager). */
 export interface HeldCard extends MessageView {
-  facts: { managedBy: PersonRef; heldFor: HeldFor; replyToRecipient: boolean; earlier: { decision: Decision; at: string }[] };
+  facts: { managedBy: PersonRef; heldFor: HeldFor; newSender: boolean; replyToRecipient: boolean; earlier: { decision: Decision; at: string }[] };
 }
 
 /** One side of a thread, with who manages the agent: the panel names managers when two people's agents talk. */
@@ -361,7 +361,7 @@ export function personViews(deps: ViewDeps, me: Person) {
             createdAt: previous.createdAt,
           }
         : view.replyTo,
-      facts: { managedBy: personRef(facts.managedBy.id), heldFor: facts.heldFor, replyToRecipient: facts.replyToRecipient, earlier: facts.earlier },
+      facts: { managedBy: personRef(facts.managedBy.id), heldFor: facts.heldFor, newSender: facts.newSender, replyToRecipient: facts.replyToRecipient, earlier: facts.earlier },
     };
   };
 
@@ -376,9 +376,8 @@ export function personViews(deps: ViewDeps, me: Person) {
   const notYetSent = (m: Pick<Message, "status" | "heldFor" | "fromId">): boolean => neverSent(m) && agents.get(m.fromId)?.ownerId !== me.id;
 
   const thread = (t: Thread): ThreadView => {
-    const found = messages.threadSummary(t);
-    // The one filter for what the receiving side may read: used here, for a thread's page, and by the task route.
-    const summary = found.last && notYetSent(found.last) ? { ...found, last: null, count: Math.max(0, found.count - 1), held: Math.max(0, found.held - (found.last.status === "held" ? 1 : 0)) } : found;
+    // What never left someone else's side is neither the newest message nor counted, wherever in the thread it is.
+    const summary = messages.threadSummary(t, agents.ownedBy(me.id).map((a) => a.id));
     return {
       id: t.id,
       ...place(t.workspaceId, t.aId, t.bId),

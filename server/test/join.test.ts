@@ -88,7 +88,11 @@ describe("computers in the person API", () => {
     const { p, chris, owner, member } = await setup();
     const { computer, token } = addComputer(p, chris);
     const stream = await openSessionStream(p, token, { key: "removed-session" });
-    expect((await callPerson(p, member, "DELETE", `/api/computers/${computer.id}`)).status).toBe(403);
+    // Someone else's computer answers exactly as one that doesn't exist.
+    const theirs = await callPerson(p, member, "DELETE", `/api/computers/${computer.id}`);
+    const none = await callPerson(p, member, "DELETE", "/api/computers/nope");
+    expect([theirs.status, await theirs.text()]).toEqual([404, await none.text()]);
+    expect(p.computers.get(computer.id)).not.toBeNull();
     expect((await callPerson(p, owner, "DELETE", "/api/computers/nope")).status).toBe(404);
     expect((await callPerson(p, owner, "DELETE", `/api/computers/${computer.id}`)).status).toBe(204);
     expect(p.computers.byToken(token)).toBeNull();

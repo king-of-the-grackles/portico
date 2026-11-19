@@ -201,6 +201,12 @@ export interface MessagesDeps {
 }
 
 /**
+ * The start of the SQL for "not a message that never left someone else's side": close with the test for whose side
+ * reads, and a parenthesis. The same rule as `neverSent` in tasks.ts.
+ */
+const NEVER_SENT_ELSEWHERE = "NOT (held_for IS 'outbound' AND status NOT IN ('pending', 'delivered')";
+
+/**
  * Messages between agents, the threads they form, holds for approval, and what each agent picks up. Every thread and
  * message lives in one workspace's content database. A read names whose content to look in (a scope), or starts from
  * a thread or message already found, which says which workspace it is in. Nothing here searches every workspace for a
@@ -393,8 +399,10 @@ export class Messages {
     const content = this.content.for(workspace.id);
     const message = content.db.transaction(() => {
       const thread = this.threadIn(content, caller.id, receiver.id) ?? this.startThread(content, caller.id, receiver.id, at);
+      // A newly joined agent nobody vouched for is held on its way out too, whatever its switch says: its own person
+      // sees what it sends to other people's agents before anyone on the receiving side is asked anything.
       const heldFor: HeldFor | null =
-        caller.outboundHold && caller.ownerId !== receiver.ownerId ? "outbound" : this.arrivalHold(content.db, caller, receiver, replyTo);
+        (caller.outboundHold || caller.unproven) && caller.ownerId !== receiver.ownerId ? "outbound" : this.arrivalHold(content.db, caller, receiver, replyTo);
       const held = heldFor !== null;
       const id = this.newId();
       const m: Message = {
@@ -432,7 +440,7 @@ export class Messages {
     const delivery: DeliveryTier = message.status === "held" ? "held" : this.agents.tier(receiver);
     this.log("message_sent", { message_id: message.id, workspace_id: workspace.id, from: caller.id, to: receiver.id, delivery, moved });
     this.notify({ kind: "message_sent", message });
-    this.changes.emit(...(message.status === "held" ? (["threads", "approvals"] as const) : (["threads"] as const)));
+    this.changes.about({ agents: [message.fromId, message.toId] }, ...(message.status === "held" ? (["threads", "approvals"] as const) : (["threads"] as const)));
     const name = this.agents.nameFor(receiver, caller.ownerId);
     const notes: string[] = [];
     if (moved) {
@@ -684,21 +692,28 @@ export class Messages {
     };
   }
 
-  /** The thread's newest message, its count, and how many are held. */
-  threadSummary(thread: Pick<Thread, "id" | "workspaceId">): { last: Message | null; count: number; held: number } {
+  /**
+   * The thread's newest message, its count, and how many are held. With `reader`, the agents of the person reading:
+   * a message that never left someone else's side (see `neverSent`) is not the newest, and is not counted.
+   */
+  threadSummary(thread: Pick<Thread, "id" | "workspaceId">, reader: string[] | null = null): { last: Message | null; count: number; held: number } {
     const content = this.content.find(thread.workspaceId);
     if (!content) return { last: null, count: 0, held: 0 };
-    const threadId = thread.id;
+    const bindings: Record<string, string | number> = { threadId: thread.id };
+    const sent = reader === null ? "" : `AND ${NEVER_SENT_ELSEWHERE} AND from_id NOT IN (${reader.length > 0 ? among(reader, "r", bindings) : "''"}))`;
     const last = content.db
-      .query("SELECT * FROM messages WHERE thread_id = $threadId ORDER BY created_at DESC, rowid DESC LIMIT 1")
-      .get({ threadId }) as MessageRow | null;
+      .query(`SELECT * FROM messages WHERE thread_id = $threadId ${sent} ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+      .get(bindings) as MessageRow | null;
     const counts = content.db
-      .query("SELECT COUNT(*) AS n, SUM(status = 'held') AS held FROM messages WHERE thread_id = $threadId")
-      .get({ threadId }) as { n: number; held: number | null };
+      .query(`SELECT COUNT(*) AS n, SUM(status = 'held') AS held FROM messages WHERE thread_id = $threadId ${sent}`)
+      .get(bindings) as { n: number; held: number | null };
     return { last: last ? toMessage(last, content.workspaceId) : null, count: counts.n, held: counts.held ?? 0 };
   }
 
-  /** The message sent just before this one in its thread. */
+  /**
+   * The message sent just before this one in its thread, as the people deciding this one may know it: a message of
+   * the other agent that never left that agent's side (`neverSent`) is passed over, as if it weren't there.
+   */
   previous(message: Message): Message | null {
     const content = this.content.find(message.workspaceId);
     if (!content) return null;
@@ -706,9 +721,10 @@ export class Messages {
       .query(
         `SELECT * FROM messages WHERE thread_id = $threadId
            AND (created_at < $at OR (created_at = $at AND rowid < (SELECT rowid FROM messages WHERE id = $id)))
+           AND ${NEVER_SENT_ELSEWHERE} AND from_id IS NOT $fromId)
          ORDER BY created_at DESC, rowid DESC LIMIT 1`,
       )
-      .get({ threadId: message.threadId, at: message.createdAt, id: message.id }) as MessageRow | null;
+      .get({ threadId: message.threadId, at: message.createdAt, id: message.id, fromId: message.fromId }) as MessageRow | null;
     return row ? toMessage(row, content.workspaceId) : null;
   }
 
@@ -832,7 +848,7 @@ export class Messages {
       this.log("message_withdrawn", { message_id: message.id, workspace_id: workspaceId });
       this.notify({ kind: "message_withdrawn", message });
     }
-    if (withdrawn.length > 0) this.changes.emit("threads", "approvals");
+    if (withdrawn.length > 0) this.changes.about({ agents: withdrawn.flatMap((m) => [m.fromId, m.toId]), workspaces: [workspaceId] }, "threads", "approvals");
     return withdrawn;
   }
 
@@ -907,7 +923,7 @@ export class Messages {
       this.log("message_expired", { message_id: message.id, held: message.heldAt !== null });
       this.notify({ kind: "message_expired", message });
     }
-    if (expired.length > 0) this.changes.emit("threads", "approvals");
+    if (expired.length > 0) this.changes.about({ agents: expired.flatMap((m) => [m.fromId, m.toId]) }, "threads", "approvals");
     return expired;
   }
 
@@ -958,8 +974,11 @@ export class Messages {
     if (message.heldFor === "outbound") {
       const person = this.personName(caller.ownerId);
       const where = this.heldLink ? ` on Portico's page, ${this.heldLink(message.id)}` : " on Portico's pages";
+      const why = caller.outboundHold
+        ? `${person} asked to see each message this agent sends to other people's agents first`
+        : `this agent joined Portico lately, so until ${person} vouches for this agent, ${person} sees each message this agent sends to other people's agents first`;
       return (
-        `Held for ${person}: ${person} asked to see each message this agent sends to other people's agents first, and decides${where}. ` +
+        `Held for ${person}: ${why}, and decides${where}. ` +
         `Once allowed, the message goes on to ${name}, whose own person may be asked too. ${outcome}`
       );
     }
@@ -1092,7 +1111,7 @@ export class Messages {
   private afterDelivery(delivered: Message[]): void {
     if (delivered.length === 0) return;
     for (const message of delivered) this.notify({ kind: "message_delivered", message });
-    this.changes.emit("threads");
+    this.changes.about({ agents: delivered.flatMap((m) => [m.fromId, m.toId]) }, "threads");
   }
 
   private iso(offsetMs = 0): string {

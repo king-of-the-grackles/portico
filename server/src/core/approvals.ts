@@ -95,6 +95,8 @@ export interface HeldFacts {
   managedBy: Person;
   /** Why the message is held: whose decision it waits on. */
   heldFor: HeldFor;
+  /** Held on its way out because the sender joined lately and nobody vouched for it: Always vouches. */
+  newSender: boolean;
   /** The previous message in the thread came from the recipient. */
   replyToRecipient: boolean;
   /** Earlier decisions on messages from this sender to this recipient, newest first. */
@@ -202,16 +204,27 @@ export class Approvals {
       });
 
     if (held.heldFor === "outbound") {
-      if (choice === "always_allow") {
+      const from = this.agents.get(held.fromId);
+      // Always is for a newly joined agent only: the person vouches for the agent, and nothing more of it is held for
+      // being new. An agent with its own switch is asked about one message at a time.
+      if (choice === "always_allow" && !from?.unproven) {
         throw new PorticoError("bad_request", "A message held on the way out is allowed one at a time. To stop being asked, switch the hold off on the agent's page.");
+      }
+      let more: Message[] = [];
+      if (choice === "always_allow" && from) {
+        this.agents.proven(from.id);
+        if (!from.outboundHold) more = this.messages.heldFor(personId).filter((m) => m.id !== held.id && m.fromId === from.id && m.heldFor === "outbound");
       }
       const message = choice === "deny" ? this.messages.decideHeld([held], choice, personId, at)[0] : this.messages.releaseOutbound(held, personId, at);
       if (!message) throw new PorticoError("wrong_status", "The message was decided a moment ago.");
-      this.log("message_decided", { message_id: message.id, decision: choice, outbound: true });
-      // Still held: now it waits on the receiver's person, who is told as for any held message.
-      this.notify(message.status === "held" ? { kind: "message_sent", message } : { kind: "message_decided", message });
-      record(1);
-      this.changes.emit("approvals", "threads", "agents");
+      const released = [message, ...more.map((m) => this.messages.releaseOutbound(m, personId, at)).filter((m): m is Message => m !== null)];
+      for (const m of released) {
+        this.log("message_decided", { message_id: m.id, decision: choice, outbound: true });
+        // Still held: now it waits on the receiver's person, who is told as for any held message.
+        this.notify(m.status === "held" ? { kind: "message_sent", message: m } : { kind: "message_decided", message: m });
+      }
+      record(released.length);
+      this.changes.about({ people: [personId], agents: released.flatMap((m) => [m.fromId, m.toId]) }, "approvals", "threads", "agents");
       return message;
     }
 
@@ -250,7 +263,7 @@ export class Approvals {
       this.notify({ kind: "message_decided", message: m });
     }
     record(decided.length);
-    this.changes.emit("approvals", "threads", "agents", "people");
+    this.changes.about({ people: [personId], agents: decided.flatMap((m) => [m.fromId, m.toId]) }, "approvals", "threads", "agents", "people");
     return message;
   }
 
@@ -265,7 +278,7 @@ export class Approvals {
     this.agents.requireManaged(personId, agentId);
     if (!this.allowList.remove(agentId, senderId)) throw new PorticoError("not_found", "That sender isn't on the list.");
     this.activity?.record("allow_removed", { agentId, otherId: senderId, personId });
-    this.changes.emit("agents");
+    this.changes.about({ people: [personId], agents: [agentId, senderId] }, "agents");
   }
 
   /** The people whose agents get through to this person's agents. */
@@ -277,7 +290,7 @@ export class Approvals {
   removeAllowedPerson(personId: string, senderPersonId: string): void {
     if (!this.contacts.remove(personId, senderPersonId)) throw new PorticoError("not_found", "That person isn't on the list.");
     this.activity?.record("allow_removed", { personId, subjectId: senderPersonId, detail: { person: true } });
-    this.changes.emit("agents", "people");
+    this.changes.about({ people: [personId, senderPersonId] }, "agents", "people");
   }
 
   facts(message: Message): HeldFacts {
@@ -286,6 +299,7 @@ export class Approvals {
     return {
       managedBy: this.people.require(sender.ownerId),
       heldFor: message.heldFor ?? "approval",
+      newSender: message.heldFor === "outbound" && sender.unproven,
       replyToRecipient: previous !== null && previous.fromId === message.toId,
       earlier: this.messages.decisionsBetween(message.fromId, message.toId, message.id),
     };

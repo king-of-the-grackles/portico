@@ -427,19 +427,19 @@ describe("the Portico tools", () => {
 
     const made = await tool(p, muse.token, "create_portico", { name: "Design" });
     expect(made.body.portico).toMatchObject({ name: "Design", agents: ["muse"], owned_by_this_person: true });
-    expect(made.body.note).toBe("Made the Design Portico with `muse` in it. Nobody else is in the Design Portico until share_portico brings someone in.");
+    expect(made.body.note).toBe("Made the Portico “Design” with `muse` in it. Nobody else is in the Portico “Design” until share_portico brings someone in.");
     // By name or by ID, and one agent to a call.
     const added = await tool(p, muse.token, "add_to_portico", { portico: "Design", agent: "grok-bot" });
     expect(added.body.portico.agents).toEqual(["muse", "grok-bot"]);
-    expect(added.body.note).toBe("`grok-bot` is in the Design Portico: everyone there can message `grok-bot`.");
+    expect(added.body.note).toBe("`grok-bot` is in the Portico “Design”: everyone there can message `grok-bot`.");
     const removed = await tool(p, muse.token, "remove_from_portico", { portico: made.body.portico.id, agent: "muse" });
     expect(removed.body.portico.agents).toEqual(["grok-bot"]);
-    expect(removed.body.note).toContain("out of the Design Portico");
+    expect(removed.body.note).toContain("out of the Portico “Design”");
     expect((await tool(p, muse.token, "add_to_portico", { portico: "Design", agents: ["muse", "grok-bot"] })).status).toBe(400);
     expect((await tool(p, muse.token, "remove_from_portico", { portico: "Design" })).status).toBe(400);
     expect((await tool(p, muse.token, "remove_from_portico", { portico: "Design", agent: "muse", person: "robert" })).status).toBe(400);
-    const renamed = await tool(p, muse.token, "rename_portico", { portico: "the Design Portico", name: "Studio" });
-    expect(renamed.body).toMatchObject({ portico: { name: "Studio" }, note: "The Design Portico is now the Studio Portico." });
+    const renamed = await tool(p, muse.token, "rename_portico", { portico: "the Portico “Design”", name: "Studio" });
+    expect(renamed.body).toMatchObject({ portico: { name: "Studio" }, note: "The Portico “Design” is now the Portico “Studio”." });
     // Another person's agent, and another person's Portico, are out of reach.
     expect((await tool(p, muse.token, "add_to_portico", { portico: launch.id, agent: "robert/muse" })).status).toBe(400);
     expect((await tool(p, muse.token, "remove_from_portico", { portico: launch.id, agent: "robert/muse" })).status).toBe(403);
@@ -458,7 +458,7 @@ describe("the Portico tools", () => {
     for (const portico of [own.id, launch.id]) {
       const back = await tool(p, grok.token, "add_to_portico", { portico, agent: "muse" });
       expect(back.status).toBe(403);
-      expect(back.body.message).toContain("Chris took `muse` out of Chris's Portico, so only Chris can put `muse` into");
+      expect(back.body.message).toContain("“Chris” took `muse` out of “Chris's Portico”, so only “Chris” can put `muse` into");
     }
     expect((await tool(p, grok.token, "create_portico", { name: "Side door", agents: ["grok-bot", "muse"] })).status).toBe(403);
     expect(p.workspaces.forPerson(chris.id).map((w) => w.name)).toEqual(["Chris's Portico", "Launch"]);
@@ -479,7 +479,7 @@ describe("the Portico tools", () => {
     expect(JSON.stringify(asked.body)).not.toMatch(/\bcode\b/);
     // The exact sentence to show: the link and when the request runs out.
     expect(asked.body.show).toBe(
-      `Waiting for Chris: sharing the Launch Portico with one more person happens only once Chris opens ${page} in a browser, signs in and presses Allow. Only Chris can open that page. The request runs out at ${expiresAt}.`,
+      `Waiting for “Chris”: sharing the Portico “Launch” with one more person happens only once “Chris” opens ${page} in a browser, signs in and presses Allow. Only “Chris” can open that page. The request runs out at ${expiresAt}.`,
     );
     expect(asked.body.request.share_link).toBeUndefined();
     // Asking again while the request waits answers the same one.
@@ -502,7 +502,7 @@ describe("the Portico tools", () => {
     expect(joining.body.request.code).toBeUndefined();
     expect(joining.body).toMatchObject({ status: "waiting_for_person", portico: { id: launch.id, name: "Launch" } });
     expect(joining.body.show).toBe(
-      `Waiting for Robert: this agent coming into the Launch Portico happens only once Robert opens https://portico.example.com/c/${joining.body.request.id} in a browser, signs in and presses Allow. Only Robert can open that page. The request runs out at ${joining.body.request.expires_at}.`,
+      `Waiting for “Robert”: this agent coming into the Portico “Launch” happens only once “Robert” opens https://portico.example.com/c/${joining.body.request.id} in a browser, signs in and presses Allow. Only “Robert” can open that page. The request runs out at ${joining.body.request.expires_at}.`,
     );
     expect((await tool(p, rmuse.token, "list_porticos")).body.waiting).toMatchObject([{ kind: "join", status: "pending", portico: { name: "Launch" }, link: `https://portico.example.com/c/${joining.body.request.id}` }]);
     const waiting = (await (await callPerson(p, cookies.robert, "GET", "/api/approvals")).json()) as { consents: { id: string }[] };
@@ -534,14 +534,14 @@ describe("the Portico tools", () => {
     p.workspaces.addAgent(robert.id, launch.id, rmuse.agent.id);
     const out = await tool(p, muse.token, "remove_from_portico", { portico: "Launch", person: "robert" });
     expect(out.body).toMatchObject({ status: "waiting_for_person", request: { kind: "remove_person", person: "robert" } });
-    expect(out.body.show).toStartWith(`Waiting for Chris: taking Robert out of the Launch Portico happens only once Chris opens https://portico.example.com/c/${out.body.request.id} `);
+    expect(out.body.show).toStartWith(`Waiting for “Chris”: taking “Robert” out of the Portico “Launch” happens only once “Chris” opens https://portico.example.com/c/${out.body.request.id} `);
     expect(p.workspaces.hasPerson(launch.id, robert.id)).toBe(true);
     // Only the owner deletes, and a person's own Portico is never deleted.
-    expect(await tool(p, rmuse.token, "delete_portico", { portico: "Launch" })).toMatchObject({ status: 403, body: { message: "Only the owner of the Launch Portico can delete it." } });
+    expect(await tool(p, rmuse.token, "delete_portico", { portico: "Launch" })).toMatchObject({ status: 403, body: { message: "Only the owner of the Portico “Launch” can delete it." } });
     expect((await tool(p, muse.token, "delete_portico", { portico: "Chris's Portico" })).status).toBe(403);
     const gone = await tool(p, muse.token, "delete_portico", { portico: "Launch" });
     expect(gone.body).toMatchObject({ status: "waiting_for_person", portico: { name: "Launch" }, request: { kind: "delete" } });
-    expect(gone.body.show).toStartWith("Waiting for Chris: deleting the Launch Portico happens only once Chris opens ");
+    expect(gone.body.show).toStartWith("Waiting for “Chris”: deleting the Portico “Launch” happens only once “Chris” opens ");
     expect(p.workspaces.get(launch.id)).not.toBeNull();
     expect((await answerConsent(p, cookies.chris, gone.body.request.id, { decision: "approve" })).status).toBe(200);
     expect(p.workspaces.get(launch.id)).toBeNull();

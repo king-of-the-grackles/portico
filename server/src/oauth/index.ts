@@ -229,7 +229,12 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
         core.people.setHandle(person.id, handle);
         core.workspaces.personal(person.id);
       }
-      const agent = core.agents.create({ ownerId: person.id, name: fields.name, kind, type: "connector" });
+      const made = core.agents.create({ ownerId: person.id, name: fields.name, kind, type: "connector" });
+      // Without the page's tick ("started this myself") the connector starts unproven, like any agent that just joined:
+      // its first messages wait for the person, and it asks before changing a Portico. A plain form post sends "on".
+      const mine = (fields as Record<string, unknown>).mine;
+      if (mine !== true && mine !== "on" && mine !== "true") core.agents.markUnproven({ agentId: made.id });
+      const agent = core.agents.require(made.id);
       core.agents.onJoined?.(agent);
       const code = store.issueCode({ clientId: client.clientId, agentId: agent.id, redirectUri, challenge: rest.request.challenge });
       return { agent, code };

@@ -10,7 +10,7 @@ import { AllowList, Approvals, Contacts } from "./core/approvals";
 import { AgentNotices } from "./core/notices";
 import { recordWords } from "./core/record-words";
 import { DAY_MS, MINUTE_MS } from "./core/limits";
-import { Changes } from "./core/changes";
+import { Changes, type Topic } from "./core/changes";
 import { Computers } from "./core/computers";
 import { consentWords, quote } from "./core/consent-words";
 import { Consents } from "./core/consents";
@@ -110,7 +110,29 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const agentStreams = new AgentStreams();
   const inboxWaits = new InboxWaits();
   const personStreams = new PersonStreams();
-  changes.on((topics) => personStreams.broadcast(topics));
+  // Each person's pages hear only what concerns that person: the people a change names, the people who manage the
+  // agents it names, the people in the Porticos it names, and whoever shares a Portico with any of them (their lists
+  // show each other's agents). A change nobody narrowed goes to everyone.
+  changes.on((topics, batch) => {
+    const audience = new Map<Topic, Set<string> | null>();
+    for (const topic of topics) {
+      const about = batch.get(topic) ?? null;
+      if (about === null) {
+        audience.set(topic, null);
+        continue;
+      }
+      const named = new Set(about.people);
+      for (const id of about.agents) {
+        const owner = agents.get(id)?.ownerId;
+        if (owner) named.add(owner);
+      }
+      for (const id of about.workspaces) for (const personId of workspaces.peopleIn(id)) named.add(personId);
+      const all = new Set(named);
+      for (const personId of named) for (const w of workspaces.forPerson(personId)) for (const other of workspaces.peopleIn(w.id)) all.add(other);
+      audience.set(topic, all);
+    }
+    personStreams.broadcast(topics, (personId) => topics.filter((topic) => audience.get(topic) === null || audience.get(topic)!.has(personId)));
+  });
 
   // Two ways to sign in, one Portico after that: an outside account (Descope) where a project is configured, otherwise
   // this server's own passwords, passkeys, setup link and invites.
@@ -245,7 +267,11 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     workspaces,
     alwaysAllows: (agentId, senderId) => allowList.has(agentId, senderId),
     peopleAllowed: (personId, senderPersonId) => contacts.has(personId, senderPersonId),
-    personName: (personId) => people.get(personId)?.name ?? "that agent's person",
+    // A name a person typed reaches an agent only as a quote.
+    personName: (personId) => {
+      const name = people.get(personId)?.name;
+      return name ? quote(name) : "that agent's person";
+    },
     heldLink: (messageId) => `${settings.publicUrl()}/held/${messageId}`,
     onRefused: (refusal) => refused(refusal),
     changes,
@@ -327,6 +353,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     const to = quote(agents.addressFor(receiver, person.id));
     const why = m.heldFor === "new_agent"
       ? `A message from ${from} to ${to} is held: ${from} joined Portico lately, and this is that agent's first message to ${to}.`
+      : outbound && sender.unproven
+      ? `A message from ${from} to ${to} is held: ${from} joined Portico lately, and ${person.name} hasn't vouched for that agent yet.`
       : outbound
       ? `A message from ${from} to ${to} is held: ${person.name} asked to see what that agent sends to other people's agents first.`
       : m.heldFor === "first_contact"
@@ -339,7 +367,13 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         subject: "A message waits for a decision on Portico",
         lines: [why, "To read the message and decide, open this page and sign in to Portico:"],
         link: `${settings.publicUrl()}/held/${m.id}`,
-        after: [`The message waits ${LIMITS.messageExpiryHours / 24} days, then lapses.`],
+        after: [
+          `The message waits ${LIMITS.messageExpiryHours / 24} days, then lapses.`,
+          // Revoking a session stops one agent; the computer's token could start another from a different folder.
+          ...((outbound || m.heldFor === "new_agent") && sender.computerId
+            ? [`That agent is a session on a computer. To stop every session started there, remove the computer in one step in Settings: ${settings.publicUrl()}/settings`]
+            : []),
+        ],
         stop: outbound || m.heldFor === "new_agent"
           ? { line: "To stop that agent for good, revoke the agent in one step on the agent's page:", link: `${settings.publicUrl()}/a/${sender.id}` }
           : { line: "To stop the sender, take the sender's person out, or pause the Portico, in one step on the Portico's page:", link: porticoPage(m.workspaceId) },
@@ -530,6 +564,19 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         messages.withdraw(workspace.id, null);
         for (const id of event.agentIds) tellAgent(id, `${place.charAt(0).toUpperCase()}${place.slice(1)} was deleted. This agent reaches nobody through that Portico any more.`);
         return;
+    }
+  };
+  // A person's account was removed: each Portico that person owned went too, as if deleted.
+  people.onWorkspacesGone = (gone) => {
+    for (const { workspaceId, agentIds } of gone) {
+      try {
+        messages.withdraw(workspaceId, null);
+        const workspace = workspaces.known(workspaceId);
+        const place = workspace ? placeWords(workspace) : "a Portico";
+        for (const id of agentIds) tellAgent(id, `${place.charAt(0).toUpperCase()}${place.slice(1)} was deleted: the owner's account was removed. This agent reaches nobody through that Portico any more.`);
+      } catch (err) {
+        log("error", "workspace_event_failed", { kind: "owner_removed", error: errorName(err) });
+      }
     }
   };
   workspaces.onEvent = (event) => {

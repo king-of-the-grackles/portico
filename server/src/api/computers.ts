@@ -24,8 +24,8 @@ export function computerRoutes(core: Core): Hono<PersonEnv> {
   route.delete("/:id", (c) => {
     const me = currentPerson(c);
     const computer = core.computers.get(c.req.param("id"));
-    if (!computer) throw new PorticoError("not_found", "No such computer.");
-    if (computer.ownerId !== me.id) throw new PorticoError("not_allowed", "Only the person who added this computer can remove the computer.");
+    // Someone else's computer answers exactly as one that doesn't exist: an ID tells nothing.
+    if (!computer || computer.ownerId !== me.id) throw new PorticoError("not_found", "No such computer.");
     core.agents.forget(core.computers.remove(computer.id));
     return c.body(null, 204);
   });

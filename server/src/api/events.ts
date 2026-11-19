@@ -1,5 +1,7 @@
 import { Hono } from "hono";
+import { getCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
+import { SESSION_COOKIE } from "../core/accounts";
 import type { Topic } from "../core/changes";
 import type { Core } from "../core/core";
 import { errorName, log } from "../log";
@@ -9,11 +11,14 @@ export interface PersonConnection {
   /** Throws if the stream has closed. */
   send(event: "hello" | "changed", data: Record<string, unknown>): void;
   close(): void;
+  /** Whether the sign-in session the page opened the stream with still stands. */
+  live?(): boolean;
 }
 
 /**
- * People's open pages, by person: any number of tabs each. Every change goes to everyone as topics only, never data,
- * so a page fetches again through the person API, which applies what that person may see.
+ * People's open pages, by person: any number of tabs each. A change goes out as topics only, never data, so a page
+ * fetches again through the person API, which applies what that person may see. Each person hears only the topics
+ * that concern that person, and a page whose sign-in session has ended hears nothing more: its stream is closed.
  */
 export class PersonStreams {
   private readonly open = new Map<string, Set<PersonConnection>>();
@@ -28,14 +33,33 @@ export class PersonStreams {
     };
   }
 
-  /** Sends `changed` to every open page. */
-  broadcast(topics: Topic[]): void {
-    for (const set of this.open.values()) {
+  /** Sends `changed` to each person's open pages, with the topics `topicsFor` gives that person. */
+  broadcast(topics: Topic[], topicsFor: (personId: string) => Topic[] = () => topics): void {
+    for (const [personId, set] of this.open) {
+      const mine = topicsFor(personId);
       for (const conn of [...set]) {
+        if (conn.live && !conn.live()) {
+          set.delete(conn);
+          conn.close();
+          continue;
+        }
+        if (mine.length === 0) continue;
         try {
-          conn.send("changed", { topics });
+          conn.send("changed", { topics: mine });
         } catch {
           set.delete(conn);
+        }
+      }
+    }
+  }
+
+  /** Closes every stream whose sign-in session has ended: called when someone signs out. */
+  closeEnded(): void {
+    for (const set of this.open.values()) {
+      for (const conn of [...set]) {
+        if (conn.live && !conn.live()) {
+          set.delete(conn);
+          conn.close();
         }
       }
     }
@@ -63,6 +87,7 @@ export function eventRoutes(core: Core, opts: { heartbeatMs?: number } = {}): Ho
   const route = new Hono<PersonEnv>();
   route.get("/", (c) => {
     const person = currentPerson(c, { pending: true });
+    const session = getCookie(c, SESSION_COOKIE);
     return streamSSE(c, async (stream) => {
       let open = true;
       let end!: () => void;
@@ -78,6 +103,7 @@ export function eventRoutes(core: Core, opts: { heartbeatMs?: number } = {}): Ho
           stream.writeSSE({ event, data: JSON.stringify(data) }).catch(() => end());
         },
         close: () => end(),
+        live: () => core.accounts.sessionLive(session, person.id),
       };
       stream.onAbort(() => end());
       const disconnect = core.personStreams.connect(person.id, conn);
@@ -88,6 +114,8 @@ export function eventRoutes(core: Core, opts: { heartbeatMs?: number } = {}): Ho
           let timer: ReturnType<typeof setTimeout> | undefined;
           await Promise.race([new Promise<void>((resolve) => (timer = setTimeout(resolve, heartbeatMs))), ended]);
           clearTimeout(timer);
+          // A session that ended while the page stayed open (signed out elsewhere, run out, the person removed) ends the stream.
+          if (open && !conn.live!()) end();
           if (open) await stream.write(": ping\n\n").catch(() => end());
         }
       } catch (err) {

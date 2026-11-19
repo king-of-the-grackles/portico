@@ -13,7 +13,7 @@ import { addOwner, callAs, copyProblems, makePortico, PUBLIC_URL, signIn, visibl
  * Porticos, on every page and in agent-facing text. Each track adds its pages and renderers to PAGES or its own sweep
  * test, using copyProblems(visibleCopy(html)).
  *
- * The word rule: "Portico" with no article is the service; "a Portico", "your Portico", "the Launch Portico" is the
+ * The word rule: "Portico" with no article is the service; "a Portico", "your Portico", "the Portico “Launch”" is the
  * place; an installation is a "Portico server". Nothing a person or an agent sees says "workspace" or "Personal". The
  * code keeps the name `workspace`, since `Portico` there names the running app.
  */
@@ -138,7 +138,7 @@ describe("copy sweeps", () => {
       expect(wordProblems(text)).toEqual([]);
     }
     // And each one names the Portico in question.
-    expect(seen.filter((text) => /the Launch Portico|Chris's Portico|the Growth Portico|the Marketing Portico/.test(text)).length).toBeGreaterThan(12);
+    expect(seen.filter((text) => /the Portico “Launch”|Chris's Portico|the Portico “Growth”|the Portico “Marketing”/.test(text)).length).toBeGreaterThan(12);
   });
 
   test("the share email", () => {
@@ -180,7 +180,7 @@ describe("copy sweeps", () => {
   });
 
   test("the word rule", () => {
-    expect(wordProblems("Share the Launch Portico. Your Portico holds every agent. Join Portico with one line.")).toEqual([]);
+    expect(wordProblems("Share the Portico “Launch”. Your Portico holds every agent. Join Portico with one line.")).toEqual([]);
     expect(wordProblems("Ask the person who runs this Portico server.")).toEqual([]);
     expect(wordProblems("Delete workspace")).toHaveLength(1);
     expect(wordProblems("Workspaces")).toHaveLength(1);

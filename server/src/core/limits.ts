@@ -26,6 +26,8 @@ export const LIMITS = {
   consentWaitingPerClient: 5,
   /** Joins waiting at once from every address together. */
   consentWaitingJoins: 1000,
+  /** A join whose page no signed-in person has opened counts toward that limit only this long. */
+  consentUnopenedMinutes: 3,
   inviteDays: 7,
   /** A share link lets one person into a workspace for this long. */
   shareDays: 7,

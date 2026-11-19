@@ -33,22 +33,22 @@ test("the plugin's Portico tools match Portico's exactly, and Portico runs them"
   const client = clientFor(p, token, key);
   const made = await runTool(client, "create_portico", { name: "Design" });
   expect(made.isError).toBeFalsy();
-  expect(data(made).note).toStartWith("Made the Design Portico with `api-claude` in it.");
+  expect(data(made).note).toStartWith("Made the Portico “Design” with `api-claude` in it.");
   expect(data(await runTool(client, "add_to_portico", { portico: "Design", agent: "muse" })).portico.agents).toEqual(["api-claude@macbook", "muse"]);
   expect(data(await runTool(client, "remove_from_portico", { portico: "Design", agent: "muse" })).portico.agents).toEqual(["api-claude@macbook"]);
-  expect(data(await runTool(client, "rename_portico", { portico: "Design", name: "Studio" })).note).toBe("The Design Portico is now the Studio Portico.");
+  expect(data(await runTool(client, "rename_portico", { portico: "Design", name: "Studio" })).note).toBe("The Portico “Design” is now the Portico “Studio”.");
   const listed = data(await runTool(client, "list_porticos", {}));
   expect(listed.porticos.map((w: { name: string }) => w.name)).toEqual(["Chris's Portico", "Studio"]);
   // A call that waits for the person says so, in a sentence to show.
   const shared = data(await runTool(client, "share_portico", { portico: "Studio" }));
   expect(shared).toMatchObject({ status: "waiting_for_person", portico: { name: "Studio" } });
   expect(shared.show).toBe(
-    `Waiting for Chris: sharing the Studio Portico with one more person happens only once Chris opens ${shared.request.link} in a browser, signs in and presses Allow. Only Chris can open that page. The request runs out at ${shared.request.expires_at}.`,
+    `Waiting for “Chris”: sharing the Portico “Studio” with one more person happens only once “Chris” opens ${shared.request.link} in a browser, signs in and presses Allow. Only “Chris” can open that page. The request runs out at ${shared.request.expires_at}.`,
   );
   expect(shared.request.code).toBeUndefined(
   );
   expect(shared.request.link).toMatch(/^https:\/\/portico\.example\.com\/c\//);
-  expect(data(await runTool(client, "delete_portico", { portico: "Studio" })).show).toContain("deleting the Studio Portico");
+  expect(data(await runTool(client, "delete_portico", { portico: "Studio" })).show).toContain("deleting the Portico “Studio”");
   const refused = await runTool(client, "share_portico", { portico: "nope" });
   expect(refused.isError).toBe(true);
   expect((refused.content[0] as { text: string }).text).toBe('not_found: No Portico "nope". list_porticos shows each Portico\'s ID and name.');

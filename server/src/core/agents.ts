@@ -255,6 +255,9 @@ export interface AgentsDeps {
   log?: (msg: string, fields: Record<string, unknown>) => void;
 }
 
+const REVOKED_SESSION = (repo: string, computer: string) =>
+  `The agent for ${repo} on ${computer} was revoked, so sessions there stay off Portico. The person who manages the agent can remove the agent on Portico's pages; the next session in the folder then joins as a new agent.`;
+
 /**
  * Every agent on Portico: sessions on joined computers, apps that signed in, and connectors. Addresses, the live agent
  * list, session registration, credentials, and the changes an agent's manager can make.
@@ -559,6 +562,8 @@ export class Agents {
         .query("SELECT agent_id, id FROM agent_runs WHERE computer_id = $computerId AND session_key = $key")
         .get({ computerId: computer.id, key: reg.key }) as { agent_id: string; id: string } | null;
       if (same) {
+        // A revoked agent's own session comes back with the key it had: refused like any new session in the folder.
+        if (this.get(same.agent_id)?.revokedAt) throw new PorticoError("folder_off", REVOKED_SESSION(reg.repo, computer.name));
         this.presence.startRun(same.id);
         this.db.query("UPDATE agent_runs SET last_seen_at = $at, ended_at = NULL WHERE id = $id").run({ id: same.id, at });
         this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: same.agent_id, at });
@@ -579,10 +584,7 @@ export class Agents {
         )
         .get({ computerId: computer.id, folderId: reg.folderId, kind: reg.client }) as { id: string; revoked_at: string | null } | null;
       if (existing?.revoked_at) {
-        throw new PorticoError(
-          "folder_off",
-          `The agent for ${reg.repo} on ${computer.name} was revoked, so sessions there stay off Portico. The person who manages the agent can remove the agent on Portico's pages; the next session in the folder then joins as a new agent.`,
-        );
+        throw new PorticoError("folder_off", REVOKED_SESSION(reg.repo, computer.name));
       }
       let agentId = existing?.id;
       if (!agentId) {
@@ -624,7 +626,7 @@ export class Agents {
       this.log("run_started", { agent_id: agentId, run_id: runId });
       return { agent: this.require(agentId), runId, created: !existing };
     })();
-    this.changes.emit("agents");
+    this.changes.about({ people: [computer.ownerId] }, "agents");
     return outcome;
   }
 
@@ -684,7 +686,7 @@ export class Agents {
     this.db.query("UPDATE agent_runs SET last_seen_at = $at, ended_at = $at WHERE id = $id").run({ id: runId, at });
     this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: agentId, at });
     this.presence.endRun(agentId, runId);
-    this.changes.emit("agents");
+    this.changes.about({ agents: [agentId] }, "agents");
   }
 
   /** Writes a session's last_seen_at for a status report, at most once a minute, on the agent and its run. */
@@ -724,7 +726,7 @@ export class Agents {
     });
     this.log("agent_added", { agent_id: id, kind: input.kind, type: input.type });
     this.activity?.record("agent_joined", { agentId: id, personId: input.ownerId, detail: { via: input.type } });
-    this.changes.emit("agents");
+    this.changes.about({ people: [input.ownerId] }, "agents");
     return this.require(id);
   }
 
@@ -880,7 +882,7 @@ export class Agents {
       this.log("agent_renamed", { agent_id: agent.id });
       this.renamed(updated);
     }
-    this.changes.emit("agents", "threads", "approvals");
+    this.changes.about({ agents: [agent.id] }, "agents", "threads", "approvals");
     return updated;
   }
 
@@ -911,7 +913,7 @@ export class Agents {
     this.db.query(`UPDATE agents SET ${sets.join(", ")} WHERE id = $id`).run(bindings);
     if (described) this.activity?.record("description_changed", { agentId: agent.id, detail: { by: "agent" } });
     this.log("agent_profile_updated", { agent_id: agent.id, description: described, doing: changes.doing !== undefined });
-    this.changes.emit("agents");
+    this.changes.about({ agents: [agent.id] }, "agents");
     return this.require(agent.id);
   }
 
@@ -939,7 +941,7 @@ export class Agents {
     this.activity?.record("agent_removed", { personId, detail: { name: addressOf(agent), kind: agent.kind } });
     this.forget([agent.id]);
     this.log("agent_removed", { agent_id: agent.id });
-    this.changes.emit("agents", "threads", "approvals", "computers");
+    this.changes.about({ people: [personId, agent.ownerId] }, "agents", "threads", "approvals", "computers");
     return agent;
   }
 
@@ -963,7 +965,7 @@ export class Agents {
     this.activity?.record("agent_revoked", { agentId: agent.id, personId, detail: { name: addressOf(agent) } });
     this.forget([agent.id]);
     this.log("agent_revoked", { agent_id: agent.id });
-    this.changes.emit("agents", "threads", "approvals", "computers", "workspaces");
+    this.changes.about({ people: [personId, agent.ownerId] }, "agents", "threads", "approvals", "computers", "workspaces");
     return this.require(agent.id);
   }
 
@@ -1032,7 +1034,7 @@ export class Agents {
   /** The person vouched for the agent: nothing more of it is held for being new. */
   proven(agentId: string): void {
     this.db.query("UPDATE agents SET unproven = 0 WHERE id = $id").run({ id: agentId });
-    this.changes.emit("agents");
+    this.changes.about({ agents: [agentId] }, "agents");
   }
 
   /**

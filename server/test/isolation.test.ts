@@ -179,7 +179,8 @@ function routesOf(p: TestPortico): { method: string; path: string }[] {
 async function call(w: World, method: string, path: string): Promise<Answer> {
   const body = method === "GET" || method === "HEAD" ? undefined : BODY;
   if (path.startsWith("/api/agent/") || path.startsWith("/mcp")) return answerOf(await callAs(w.p, w.b1, method, path, body));
-  if (path.startsWith("/api/computer")) return answerOf(await callAs(w.p, { token: w.bobBox.token }, method, path, body));
+  // The computer's own API is /api/computer; /api/computers is the person's, and takes the browser's cookie.
+  if (path === "/api/computer" || path.startsWith("/api/computer/")) return answerOf(await callAs(w.p, { token: w.bobBox.token }, method, path, body));
   return answerOf(await callPerson(w.p, w.cookie, method, path, body));
 }
 

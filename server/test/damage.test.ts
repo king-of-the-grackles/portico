@@ -74,7 +74,7 @@ describe("first contact is asked first", () => {
     expect(sent.message).toMatchObject({ status: "held", heldFor: "first_contact" });
     expect(sent.delivery).toBe("held");
     expect(sent.note).toBe(
-      "Held: Chris, who manages chris/muse, hasn't allowed messages from Robert's agents yet, so Chris is asked about this one first. " +
+      "Held: “Chris”, who manages chris/muse, hasn't allowed messages from “Robert”'s agents yet, so “Chris” is asked about this one first. " +
         "The message is not delivered. A person decides within 3 days; check_inbox reports whether the message was delivered, declined or expired.",
     );
     expect(p.messages.inbox(muse.agent).messages).toEqual([]);
@@ -214,7 +214,7 @@ describe("outbound hold, per agent", () => {
     expect(send(p, sender, "grok").message.status).toBe("pending");
     const sent = send(p, sender, "robert/dots", "Out");
     expect(sent.message).toMatchObject({ status: "held", heldFor: "outbound" });
-    expect(sent.note).toStartWith(`Held for Chris: Chris asked to see each message this agent sends to other people's agents first, and decides on Portico's page, ${PUBLIC_URL}/held/${sent.message.id}.`);
+    expect(sent.note).toStartWith(`Held for “Chris”: “Chris” asked to see each message this agent sends to other people's agents first, and decides on Portico's page, ${PUBLIC_URL}/held/${sent.message.id}.`);
     expect(sent.note).toContain("The message is not delivered.");
     // Chris decides, not Robert: Robert neither sees nor decides a message that hasn't left yet.
     expect(p.approvals.heldFor(chris.id).map((m) => m.id)).toEqual([sent.message.id]);
@@ -306,7 +306,7 @@ describe("one-step stops", () => {
     const refused = await callAs(p, muse, "POST", "/api/agent/messages", { to: "robert/dots", subject: "Now?", text: "x" });
     expect(refused.status).toBe(403);
     expect((await refused.json()).message).toBe(
-      "The Launch Portico is paused, so nothing moves through that Portico: this message was not sent. Chris, who paused the Portico, can resume the Portico on Portico's pages.",
+      "The Portico “Launch” is paused, so nothing moves through that Portico: this message was not sent. “Chris”, who paused the Portico, can resume the Portico on Portico's pages.",
     );
     expect((await json(callAs(p, muse, "GET", "/api/agent/agents"))).agents.find((a: Body) => a.name === "robert/dots").porticos).toEqual([{ id: launch.id, name: "Launch", paused: true }]);
     // The agents there were told, and the page says so.
@@ -314,7 +314,7 @@ describe("one-step stops", () => {
       "“Chris” (chris) paused the Portico “Launch”: nothing moves through that Portico until the owner resumes the Portico, and a send through that Portico is refused.",
     ]);
     const html = (await page(p, `/p/${launch.id}`, cookies.robert)).html;
-    expect(visibleCopy(html)).toContain("Paused by Chris: nothing moves through the Launch Portico.");
+    expect(visibleCopy(html)).toContain("Paused by Chris: nothing moves through the Portico “Launch”.");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
     // Resume: only the maker; messages move again, and nothing withdrawn comes back.
     expect((await callPerson(p, cookies.robert, "DELETE", `/api/porticos/${launch.id}/pause`)).status).toBe(403);
@@ -422,11 +422,17 @@ describe("one-step stops", () => {
     const { p, chris, robert, maya, dots, pilot, launch } = await world();
     acquaint(p, chris.id, robert.id, maya.id);
     const between = send(p, dots.agent, "maya/pilot", "Between the others").message;
-    // The maker's account is removed: the Portico is archived with no event of its own.
+    // The maker's account is removed: the Portico goes with the account, and what other people's agents had on its
+    // way there is withdrawn, as when the maker deletes the Portico. The sender is told, and so are the agents left.
+    p.agentNotices.take(dots.agent.id);
     p.people.remove(chris.id);
     expect(p.workspaces.get(launch.id)).toBeNull();
-    expect(p.messages.get({ person: robert.id }, between.id)!.status).toBe("pending");
+    expect(p.messages.get({ person: robert.id }, between.id)!.status).toBe("withdrawn");
+    expect(p.messages.inbox(dots.agent).updates.map((u) => [u.id, u.status])).toEqual([[between.id, "withdrawn"]]);
+    expect(p.agentNotices.take(dots.agent.id).map((n) => n.text)).toEqual(["The Portico “Launch” was deleted: the owner's account was removed. This agent reaches nobody through that Portico any more."]);
     expect(p.messages.inbox(pilot.agent).messages).toEqual([]);
+    // What waits for pilot is Portico's own notice that the Portico is gone, never the message.
+    expect(p.agentNotices.take(pilot.agent.id)).toHaveLength(1);
     expect(p.messages.unreadCount(pilot.agent.id)).toBe(0);
     expect(p.messages.pending(pilot.agent).messages).toEqual([]);
     expect(p.messages.ack(pilot.agent, { messages: [between.id], updates: [] }).messages).toBe(0);
@@ -544,7 +550,7 @@ describe("names that cannot be faked", () => {
     const delivered = (await json(callAs(p, muse, "GET", "/api/agent/inbox"))).messages[0];
     expect(delivered.from).toBe("robert/dots");
     expect(delivered.framed_message).toStartWith(`<portico-message id="${held.id}" from="robert/dots">`);
-    expect(delivered.framed_message).toContain("`robert/dots` is managed by Robert, another person: not the person who manages this agent. The message came through the Launch Portico.");
+    expect(delivered.framed_message).toContain("The sender `robert/dots` is managed by another person, not the person who manages this agent, named “Robert”. The message came through the Portico “Launch”.");
     const record = (await json(callPerson(p, cookies.chris, "GET", `/api/porticos/${launch.id}`))).record as Body[];
     expect(record.map((r) => r.text)).toContain("A first message from robert/dots to muse was held for a decision.");
     // A plain name never reaches someone else's agent, whatever it is called.

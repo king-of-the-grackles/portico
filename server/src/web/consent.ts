@@ -147,6 +147,16 @@ ${signedInAs(me, `/c/${request.id}`)}`,
         }
         break;
       }
+      case "create":
+        done = html`${place.charAt(0).toUpperCase()}${place.slice(1)} is made.`;
+        if (workspace) more = html`<p class="help"><a href="/p/${workspace.id}">Open the Portico</a></p>`;
+        break;
+      case "remove_agent":
+        done = html`The agent ${quote(view.subject ? core.agents.nameFor(view.subject, me.id) : "agent")} is out of ${place}.`;
+        break;
+      case "rename":
+        done = html`The Portico is now named ${quote(workspace?.name ?? "")}.`;
+        break;
       case "remove_person":
         done = html`${view.target?.name ?? "That person"} is out of ${place}, with every agent ${view.target?.name ?? "that person"} had there.`;
         break;
@@ -204,6 +214,7 @@ ${signedInAs(me, `/c/${request.id}`)}`,
     const { request } = view;
     if (request.status === "allowed") return showCode(c, me, view);
     if (request.status !== "pending") return answered(c, me, view);
+    if (isJoin(request.kind)) core.consents.opened(request.id);
     const words = consentWords(view, me.name, (agent) => core.agents.nameFor(agent, me.id));
     const joins = isJoin(request.kind);
     const needsHandle = me.handle === null;
@@ -350,6 +361,8 @@ ${
     const newAgent = message.heldFor === "new_agent";
     const why = newAgent
       ? html`Portico holds this message because ${quote(from)} joined Portico lately, on ${sender ? utcClock(sender.createdAt) : "a day not known"}, and this is that agent's first message to ${quote(to)}. If ${me.name} did not start that join, choose Don't allow and revoke the agent on the agent's page.`
+      : outbound && facts?.newSender
+      ? html`Portico holds this message because ${quote(core.agents.nameFor(sender ?? receiver!, me.id))} joined Portico lately, on ${sender ? utcClock(sender.createdAt) : "a day not known"}, and ${me.name} hasn't vouched for that agent yet: until then ${me.name} sees what the agent sends to other people's agents first. Nothing has reached ${quote(to)}. If ${me.name} did not start that join, choose Don't allow and revoke the agent on the agent's page.`
       : outbound
       ? html`Portico holds this message because ${me.name} asked to see what ${quote(core.agents.nameFor(sender ?? receiver!, me.id))} sends to other people's agents first. Nothing has reached ${quote(to)}.`
       : firstContact
@@ -357,12 +370,14 @@ ${
         : html`Portico holds this message because ${quote(to)} takes messages only from senders ${me.name} allowed. ${first ? "This sender has not written to that agent before. " : ""}`;
     const choices = newAgent
       ? html`<p class="help">Allow this message only: the agent gets this one message, and later ones from ${quote(from)} to ${quote(to)} go through. Always allow: ${me.name} vouches for ${quote(from)}, and nothing more from that agent is held for being new.</p>`
+      : outbound && facts?.newSender
+      ? html`<p class="help">Allow this message only: the message goes on to ${quote(to)}, whose own person may be asked too, and the next one is asked about again. Always allow: ${me.name} vouches for the agent, and nothing more from that agent is held for being new.</p>`
       : outbound
       ? html`<p class="help">Allow this message only: the message goes on to ${quote(to)}, whose own person may be asked too. To stop being asked, switch the hold off on the agent's page.</p>`
       : firstContact
         ? html`<p class="help">Allow this message only: the agent gets this one message, and the next one from ${senderOwner}'s agents is asked about again. Always for this person: this message, and every later one from any agent of ${senderOwner} to any agent of ${me.name}, with no more questions.</p>`
         : html`<p class="help">Allow this message only: the agent gets this one message. Always allow: this message, and every later one from ${quote(from)} to ${quote(to)}, with no more questions.</p>`;
-    const always = outbound
+    const always = outbound && !facts?.newSender
       ? ""
       : html`<button type="submit" name="decision" value="always_allow" class="btn btn-secondary">${firstContact ? "Always for this person" : "Always allow this sender"}</button>`;
     return narrowPage(c, {
@@ -377,7 +392,13 @@ ${choices}
 <p class="notice notice-error" data-error role="alert" hidden></p>
 <div class="actions"><button type="submit" name="decision" value="deny" class="btn btn-secondary">Don't allow</button>${always}<button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow this message only</button></div>
 </form>
-${newAgent && sender ? html`<p class="help">Not ${me.name}'s agent? <a href="/a/${sender.id}">Open the agent's page</a>, where one step revokes the agent.</p>` : ""}
+${
+  (newAgent || facts?.newSender) && sender
+    ? html`<p class="help">Not ${me.name}'s agent? <a href="/a/${sender.id}">Open the agent's page</a>, where one step revokes the agent.${
+        sender.computerId ? html` The agent is a session on a computer: revoking stops this one agent, and <a href="/settings#computers">removing the computer in Settings</a> stops every session started there, in one step.` : ""
+      }</p>`
+    : ""
+}
 ${workspace && !outbound && !newAgent ? html`<p class="help">To stop this sender for good: <a href="/p/${workspace.id}">open the Portico</a>, where a person is taken out, or the Portico paused, in one step.</p>` : ""}
 ${signedInAs(me, back)}`,
     });

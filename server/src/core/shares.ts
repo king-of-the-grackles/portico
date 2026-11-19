@@ -83,6 +83,9 @@ export interface SharesDeps {
  * page by that person, signed in (core/consents.ts); `enter` here is the only caller of
  * `workspaces.admit`.
  */
+/** What a person already in the workspace hears when a share link is used again for one more agent. */
+export const IN_ALREADY = (phrase: string) => `The person who manages this agent is already in ${phrase}, and a share link only brings a new person in. To put an agent there, use add_to_portico.`;
+
 export class Shares {
   private readonly db: Database;
   private readonly workspaces: Workspaces;
@@ -148,7 +151,7 @@ export class Shares {
         expiresAt: share.expiresAt,
       });
     this.log("share_created", { share_id: share.id, workspace_id: workspace.id, emailed: email !== null });
-    this.changes.emit("workspaces");
+    this.changes.about({ workspaces: [workspace.id] }, "workspaces");
     this.onShared?.(share, workspace);
     return { share, secret };
   }
@@ -200,7 +203,7 @@ export class Shares {
         .query("UPDATE consent_requests SET status = 'expired' WHERE workspace_id = $workspaceId AND person_id = $personId AND status = 'pending'")
         .run({ workspaceId, personId });
     })();
-    this.changes.emit("approvals", "workspaces");
+    this.changes.about({ people: [personId], workspaces: [workspaceId] }, "approvals", "workspaces");
   }
 
   /**
@@ -241,7 +244,7 @@ export class Shares {
       this.db.query("UPDATE consent_requests SET status = 'expired' WHERE share_id = $id AND status = 'pending'").run({ id: share.id });
     })();
     this.log("share_revoked", { share_id: share.id });
-    this.changes.emit("workspaces", "approvals");
+    this.changes.about({ workspaces: [workspace.id] }, "workspaces", "approvals");
     if (share.revokedAt === null) this.onEnded?.(share, workspace, byId);
     return { ...share, revokedAt: share.revokedAt ?? at };
   }
@@ -280,6 +283,8 @@ export class Shares {
   enter(share: Share, person: Person, agents: Agent[]): Workspace {
     const workspace = this.workspaces.get(share.workspaceId);
     if (!workspace || !this.worksFor(share, person)) throw new PorticoError("not_found", DEAD_LINK);
+    // A link brings a person in. Someone already there adds agents the way the owner chose for that person, never by a link.
+    if (this.workspaces.hasPerson(workspace.id, person.id)) throw new PorticoError("wrong_status", IN_ALREADY(workspace.phrase));
     if (agents.some((agent) => agent.ownerId !== person.id)) throw new PorticoError("not_allowed", "Only the person who manages an agent can add the agent to a Portico.");
     const claimed = this.db
       .query("UPDATE shares SET claimed_by = $personId, claimed_at = $at WHERE id = $id AND claimed_by IS NULL")

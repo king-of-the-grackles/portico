@@ -87,6 +87,8 @@ export function sessionRoutes(core: Core): Hono<PersonEnv> {
   // Signing out works for anyone, signed in or not, including a claim still waiting for approval.
   route.delete("/", (c) => {
     accounts.endSession(getCookie(c, SESSION_COOKIE));
+    // The pages that were open with that sign-in stop hearing changes at once.
+    core.personStreams.closeEnded();
     deleteCookie(c, SESSION_COOKIE, sessionCookieGone(core));
     return c.body(null, 204);
   });

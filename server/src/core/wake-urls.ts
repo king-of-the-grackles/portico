@@ -128,7 +128,7 @@ export class WakeUrls {
       .run({ agentId: agent.id, url, key, personId, at: this.now().toISOString() });
     this.reset(agent.id);
     this.activity.record("wake_set", { agentId: agent.id, personId, detail: { host: new URL(url).host, by_agent: personId === null } });
-    this.changes.emit("agents");
+    this.changes.about({ agents: [agent.id] }, "agents");
     return this.view(agent.id)!;
   }
 
@@ -139,7 +139,7 @@ export class WakeUrls {
     this.db.query("DELETE FROM wake_urls WHERE agent_id = $agentId").run({ agentId: agent.id });
     this.reset(agent.id);
     this.activity.record("wake_removed", { agentId: agent.id, personId, detail: { host: new URL(row.url).host, by_agent: personId === null } });
-    this.changes.emit("agents");
+    this.changes.about({ agents: [agent.id] }, "agents");
     return true;
   }
 
@@ -188,7 +188,7 @@ export class WakeUrls {
         const at = sentAt.toISOString();
         this.db.query("UPDATE wake_urls SET last_at = $at, last_status = $status WHERE agent_id = $agentId").run({ agentId, at, status });
         // The page shows the outcome and the minute: refresh it only when either changes.
-        if (before?.last_status !== status || before?.last_at?.slice(0, 16) !== at.slice(0, 16)) this.changes.emit("agents");
+        if (before?.last_status !== status || before?.last_at?.slice(0, 16) !== at.slice(0, 16)) this.changes.about({ agents: [agentId] }, "agents");
       },
       onEnd: () => {
         if (current()) this.sending.delete(agentId);

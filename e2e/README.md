@@ -46,29 +46,43 @@ Keep it that way: point it only at a deployment whose data may be thrown away, w
   management API (`e2e-<role>-<run id>@dev.portico.chat`), a real session JWT comes from an embedded sign-in link, and
   `POST /api/session { token }` sets the `portico_session` cookie, exactly as the sign-in page does once Descope's
   component finishes. The suite checks that the sign-in pages load the component, but it does not type into it.
-- **Agents** (`lib/agent.ts`): `POST /api/join`, then the person allows the join on the real consent page in a browser
-  (`joinThroughPage`: a handle the first time, the code, Allow, the token). That helper handles both ways the code
-  can change hands, so a change to the join flow is made there and nowhere else. `allowOnConsentPage` and
-  `decideHeld` are the two page helpers. `AgentClient` wraps the REST
-  agent API: `call(tool, args)`, `send`, `inbox`, `receive(subject)`, `outcome(messageId)`, `task`, `upload`,
-  `download`, and `raw` for checking refusals.
+- **Agents** (`lib/agent.ts`): `POST /api/join`, then the person presses Allow on the real consent page in a browser
+  (a handle the first time, the "started this myself" tick), the page shows a 4-digit code, and the agent hands the
+  code in with its poll secret and gets its token. `joinThroughPage` is that whole flow, so a change to joining is
+  made there and nowhere else. `allowOnConsentPage` answers any consent page and `decideHeld` a held message's page.
+  `AgentClient` wraps the REST agent API: `call(tool, args)`, `send`, `inbox`, `receive(subject)`,
+  `outcome(messageId)`, `task`, `upload`, `download`, and `raw` for checking refusals.
 - **The cast** (`lib/world.ts`): alice (agents `probe`, `helper`) and bob (`scout`, `owl`), made the first time a
-  scenario asks and reused by every scenario after it. The server lets one address start 10 joins per 15 minutes, and a
-  fresh run uses 4, so the suite runs with one worker and never joins twice for the same agent. While editing
-  scenarios, use `E2E_KEEP=1`: a rerun then starts a single join.
+  scenario asks and reused by every scenario after it. `world.shared()` is the Portico alice shares with bob, holding
+  `probe`, `helper` and `scout`; `world.introduce()` has the two people allow each other's agents.
 - **Cleanup** (`lib/teardown.ts`): after the run, the Descope users it made are deleted, along with the agents and
   Porticos they made. The people's rows stay in the dev deployment's database: Portico has no way to delete a person.
+
+## Two server limits the suite lives with
+
+- **Joins: 10 starts per address per 15 minutes.** A fresh run starts 7 (the four cast agents, plus three scenarios
+  that are about joining). So: one worker, no agent joined twice, and about one fresh run per 15 minutes from one
+  address, fewer when someone else is testing from the same address. While editing scenarios use `E2E_KEEP=1`: a
+  rerun then starts 4, and a single scenario mostly none. A used-up limit fails with a message that says so.
+- **Loop guard: 12 messages between two agents per 10 minutes.** Scenarios spread their messages over the pairs
+  `probe`-`scout` and `helper`-`scout`, at most 6 each per run, which leaves room for one immediate rerun. A new
+  scenario that sends between people should pick the less used pair, or it will trip the guard for the others.
 
 ## Scenarios
 
 | File | What it covers |
 | --- | --- |
 | `tests/01-sign-in.spec.ts` | A new person signs in, picks a handle on the welcome page, sees their Portico. |
-| `tests/02-agent-join.spec.ts` | An agent-started join on the consent page: signed-out view, wrong code, Allow, token, `list_porticos`. |
+| `tests/02-agent-join.spec.ts` | A join on the consent page: signed-out view, Allow, the code on the page, wrong code, token once. And a join someone else started: Allow without the code reaching them joins nothing, another person can't see the code, "Don't allow after all". |
 | `tests/03-own-agents.spec.ts` | Two agents of one person message each other; Activity and the Portico's page show the conversation. |
 | `tests/04-two-people.spec.ts` | Alice makes and shares a Portico on the pages; Bob comes in with the link and an agent; a DM; Bob's own conversations answer Alice like unknown IDs. |
-| `tests/05-held-message.spec.ts` | A held message allowed, and another turned down, on `/held/<id>`; the other person can't open that page. |
+| `tests/05-held-message.spec.ts` | An agent that requires approval: a message allowed and another turned down on `/held/<id>`, which the other person can't open. And the outbound switch: an agent's messages to other people wait for its own person. |
 | `tests/06-files.spec.ts` | A file uploaded to the bucket, sent, downloaded by the receiver, and passed on into another Portico. |
+| `tests/07-new-agent.spec.ts` | An agent joined without the "started this myself" tick is held once towards the person's other agent; revoking an agent kills its token and withdraws what it had on the way. |
+| `tests/08-first-contact.spec.ts` | First contact between two people's agents: "this message only" asks again next time, "always for this person" doesn't. |
+| `tests/09-second-portico.spec.ts` | A share link works once; the maker is asked for each later agent; the record shows who came and went with no message text; a removed person is out. |
+| `tests/10-pause.spec.ts` | A paused Portico: sends refused, the undelivered message withdrawn, resume. |
+| `tests/11-mcp.spec.ts` | `/mcp` with an agent token: initialize, tools/list, `list_agents`, `send_message`. |
 
 ## Adding a scenario
 
@@ -92,6 +106,7 @@ test("what a person would say happened", async ({ world, browserAs }) => {
 });
 ```
 
-Scenarios that need two people call `await world.shared()` for the Portico that joins alice's `probe` and bob's
-`scout`. Stick to the cast's agents where possible: every new agent name is one more join against the limit. Find
+Scenarios that need two people call `await world.shared()` for the Portico that joins alice's `probe` and `helper`
+with bob's `scout`. Stick to the cast's agents where possible: every new agent name is one more join against the
+limit. A scenario that changes a setting (a hold switch, a pause) puts it back in a `finally`. Find
 elements by role, label and visible text, so a scenario reads like the page.

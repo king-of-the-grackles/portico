@@ -22,7 +22,7 @@ import {
 const MAIL: MailConfig = { apiKey: "re_test", from: "Portico <notices@mail.portico.example>", webhookSecret: null };
 
 /**
- * Chris made the Launch Portico and put muse in. Robert (dots, scout) and Maya (pilot) have accounts and are in nothing
+ * Chris made the Portico “Launch” and put muse in. Robert (dots, scout) and Maya (pilot) have accounts and are in nothing
  * of Chris's yet.
  */
 async function world(p: TestPortico = makePortico()) {
@@ -76,7 +76,7 @@ describe("only the maker brings a new person in", () => {
     expect((await callPerson(p, cookies.robert, "POST", `/api/porticos/${launch.id}/shares`, {})).status).toBe(403);
     const asked = await tool(p, dots, "share_portico", { portico: "Launch" });
     expect(asked.status).toBe(403);
-    expect(asked.body.message).toBe("Only the owner of the Launch Portico can share that Portico: the owner decides who comes in.");
+    expect(asked.body.message).toBe("Only the owner of the Portico “Launch” can share that Portico: the owner decides who comes in.");
     expect((await callPerson(p, cookies.chris, "POST", `/api/porticos/${launch.id}/shares`, {})).status).toBe(201);
     const html = (await page(p, `/p/${launch.id}`, cookies.robert)).html;
     expect(visibleCopy(html)).toContain("Only Chris, who made the Portico, brings another person in.");
@@ -159,7 +159,7 @@ describe("adding more agents later", () => {
     expect(p.workspaces.policyOf(launch.id, robert.id)).toBe("self");
     const asked = await tool(p, dots, "add_to_portico", { portico: "Launch", agent: "scout" });
     expect(asked.body.status).toBe("waiting_for_person");
-    expect(asked.body.show).toContain("signs in and presses Allow. Only Robert can open that page.");
+    expect(asked.body.show).toContain("signs in and presses Allow. Only “Robert” can open that page.");
     expect(asked.body.request.code).toBeUndefined();
     expect(p.workspaces.hasAgent(launch.id, scout.agent.id)).toBe(false);
     const consent = await page(p, `/c/${asked.body.request.id}`, cookies.robert);
@@ -194,7 +194,7 @@ describe("adding more agents later", () => {
     hooks.sent.length = 0;
     const asked = await tool(p, dots, "add_to_portico", { portico: "Launch", agent: "scout" });
     expect(asked.body.status).toBe("waiting_for_owner");
-    expect(asked.body.show).toStartWith("Waiting for Chris, who made the Launch Portico and asked to allow each agent Robert adds there: `scout` comes in once Chris allows the request");
+    expect(asked.body.show).toStartWith("Waiting for “Chris”, who made the Portico “Launch” and asked to allow each agent “Robert” adds there: `scout` comes in once “Chris” allows the request");
     // The asking side gets no link and no code: the answer is the maker's alone.
     expect(asked.body.request).toMatchObject({ kind: "admit_agent", status: "pending", agent: "scout", waiting_for: "the Portico's owner" });
     expect(asked.body.request.code).toBeUndefined();

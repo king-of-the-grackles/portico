@@ -21,7 +21,7 @@ export function accountRoutes(core: Core): Hono<PersonEnv> {
       let changed = body.name === undefined ? me : core.people.rename(me.id, body.name as string);
       if (body.handle !== undefined) {
         changed = core.people.setHandle(me.id, typeof body.handle === "string" ? body.handle.trim().toLowerCase() : body.handle);
-        core.changes.emit("agents", "people", "me");
+        core.changes.about({ people: [me.id] }, "agents", "people", "me");
       }
       return changed;
     })();
@@ -33,7 +33,7 @@ export function accountRoutes(core: Core): Hono<PersonEnv> {
     const body = await jsonObject(c);
     const { token, expiresAt } = await core.accounts.changePassword(me.id, { current: body.current, next: body.next });
     setCookie(c, SESSION_COOKIE, token, sessionCookie(core, expiresAt));
-    core.changes.emit("me");
+    core.changes.about({ people: [me.id] }, "me");
     return c.body(null, 204);
   });
 

@@ -118,7 +118,7 @@ describe("workspaces", () => {
     expect(p.workspaces.forPerson(chris.id)).toEqual([]);
     const { agent: muse } = addAppAgent(p, chris, "muse");
     const [personal] = p.workspaces.forPerson(chris.id);
-    expect(personal).toMatchObject({ name: "Chris's Portico", phrase: "Chris's Portico", named: false, kind: "personal", ownerId: chris.id });
+    expect(personal).toMatchObject({ name: "Chris's Portico", phrase: "“Chris's Portico”", named: false, kind: "personal", ownerId: chris.id });
     // The stored name is internal: nothing reads it back.
     expect((p.db.query("SELECT name FROM workspaces WHERE id = $id").get({ id: personal!.id }) as { name: string }).name).toBe("Personal");
     const { computer } = addComputer(p, chris);
@@ -371,7 +371,7 @@ describe("the reach rule", () => {
     expect(next.message).toMatchObject({ workspaceId: second.id, replyTo: null, rootId: next.message.id });
     expect(next.message.threadId).not.toBe(first.threadId);
     expect(next.note).toContain("read-only");
-    expect(next.note).toContain("a new conversation in the Second Portico");
+    expect(next.note).toContain("a new conversation in the Portico “Second”");
     expect(p.messages.threadsBetween(muse.agent.id, rmuse.agent.id).map((t) => t.workspaceId)).toEqual([second.id, launch.id]);
     // The old thread is still read, with nothing new in it.
     expect(p.messages.inThread(old!).messages.map((m) => m.id)).toEqual([first.id, reply.message.id]);

@@ -161,13 +161,14 @@ export function decideButtons(s: HomeState, m: HeldCard): string {
   const busy = s.busy === `decide:${m.id}`;
   const id = esc(m.id);
   return `<button type="button" class="btn btn-text" data-action="decide" data-id="${id}" data-decision="deny"${when(busy, " disabled")}>Don't allow</button>
-      ${when(m.facts.heldFor !== "outbound", () => `<button type="button" class="btn btn-secondary" data-action="decide" data-id="${id}" data-decision="always_allow"${when(busy, " disabled")}>${m.facts.heldFor === "first_contact" ? `Always for ${esc(m.facts.managedBy.name)}` : `Always allow ${esc(m.from.label)}`}</button>`)}
+      ${when(m.facts.heldFor !== "outbound" || m.facts.newSender, () => `<button type="button" class="btn btn-secondary" data-action="decide" data-id="${id}" data-decision="always_allow"${when(busy, " disabled")}>${m.facts.heldFor === "first_contact" ? `Always for ${esc(m.facts.managedBy.name)}` : `Always allow ${esc(m.from.label)}`}</button>`)}
       <button type="button" class="btn btn-primary" data-action="decide" data-id="${id}" data-decision="allow_once"${when(busy, " disabled")}>Allow once</button>`;
 }
 
 /** Why the message waits, in Portico's own words: never anything the sender wrote. */
 function heldReason(s: HomeState, m: HeldCard): string {
   const parts: string[] = [];
+  if (m.facts.heldFor === "outbound" && m.facts.newSender) return `${m.from.label} joined Portico lately, so ${s.me.name} sees what ${m.from.label} sends to other people's agents first. Nothing has reached ${m.to.label}. Always allow vouches for ${m.from.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
   if (m.facts.heldFor === "outbound") return `${m.from.label} sends to other people's agents only once ${s.me.name} has seen each message. Nothing has reached ${m.to.label}.`;
   if (m.facts.heldFor === "new_agent") return `${m.from.label} joined Portico lately, and this is the first message from ${m.from.label} to ${m.to.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
   if (m.facts.heldFor === "first_contact") parts.push(`${s.me.name} hasn't allowed messages from ${m.facts.managedBy.name}'s agents yet.`);

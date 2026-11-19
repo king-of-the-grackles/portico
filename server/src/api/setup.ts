@@ -21,7 +21,7 @@ export function setupRoutes(core: Core): Hono<PersonEnv> {
       // opened before the recovery close too.
       core.agents.forget(core.agents.ownedBy(person.id).map((agent) => agent.id));
       core.personStreams.closeFor(person.id);
-      core.changes.emit("agents", "computers", "approvals");
+      core.changes.about({ people: [person.id] }, "agents", "computers", "approvals");
     }
     startBrowserSession(c, core, person.id);
     return c.json({ next: "/" });

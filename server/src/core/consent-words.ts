@@ -1,21 +1,13 @@
 import { computerSlug } from "./computers";
 import type { ConsentView } from "./consents";
-import { defang } from "./framing";
+import { quote } from "./framing";
+
+export { quote };
 import { LIMITS } from "./limits";
 import type { Agent } from "./types";
 
-const MAX_QUOTE = 80;
-
-/**
- * Text someone else supplied (a name an agent asked for, a Portico's name, an email address), made safe to show inside
- * Portico's own sentence: no control or format characters, no terminal escapes, no tag that poses as a frame, on one
- * line, cut to a length, and inside quotation marks so it reads as a quote and never as Portico speaking.
- */
-export function quote(text: string): string {
-  const clean = defang(text).replace(/\s+/g, " ").replace(/[“”"]/g, "'").trim();
-  const chars = Array.from(clean);
-  return `“${chars.length > MAX_QUOTE ? `${chars.slice(0, MAX_QUOTE).join("")}…` : clean}”`;
-}
+/** Why an agent that could act at once asks first. */
+const NEW_ASKER = (me: string) => `Portico asks because the agent joined lately and ${me} hasn't vouched for the agent yet. Not an agent ${me} started? Choose Don't allow and revoke the agent on the agent's page.`;
 
 const KIND_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
@@ -43,6 +35,13 @@ export interface ConsentWords {
  * person knows the asking agent, for the kinds an agent of the person's asks.
  */
 export function consentWords(view: ConsentView, me: string, agentName: (agent: Agent) => string): ConsentWords {
+  const words = wordsFor(view, me, agentName);
+  // An agent nobody vouched for asks: the page says so, whatever is asked.
+  const asks = view.agent?.unproven && view.request.agentId === view.agent.id && view.request.personId === view.agent.ownerId;
+  return asks ? { ...words, then: [...words.then, NEW_ASKER(me)] } : words;
+}
+
+function wordsFor(view: ConsentView, me: string, agentName: (agent: Agent) => string): ConsentWords {
   const { request, workspace, sharedBy, target } = view;
   const asker = view.agent && request.kind !== "agent" ? `The agent ${quote(agentName(view.agent))}` : "An agent";
   const place = workspace ? `the Portico ${quote(workspace.name)}` : "a Portico";
@@ -131,6 +130,31 @@ export function consentWords(view: ConsentView, me: string, agentName: (agent: A
         allow: "Allow",
       };
     }
+    case "create": {
+      const count = request.detail.agentIds?.length ?? 0;
+      return {
+        title: "Make a Portico",
+        asks: `${asker} asks to make a Portico named ${quote(request.detail.name || "after the people there")}, with ${count === 1 ? "1 agent" : `${count} agents`} of ${me}'s inside.`,
+        then: [`Once allowed, the Portico is ${me}'s, and nobody else is in that Portico until ${me} shares the Portico.`],
+        allow: "Allow",
+      };
+    }
+    case "remove_agent": {
+      const subject = view.subject ? quote(agentName(view.subject)) : "an agent";
+      return {
+        title: "Take an agent out of a Portico",
+        asks: `${asker} asks to take the agent ${subject} out of ${place}.`,
+        then: ["Once allowed, nobody reaches the agent through that Portico any more."],
+        allow: "Allow",
+      };
+    }
+    case "rename":
+      return {
+        title: "Rename a Portico",
+        asks: `${asker} asks to rename ${place} to ${quote(request.detail.name || "the names of the people there")}.`,
+        then: ["Once allowed, everyone in that Portico sees the new name."],
+        allow: "Allow",
+      };
     case "delete":
       return {
         title: "Delete a Portico",
