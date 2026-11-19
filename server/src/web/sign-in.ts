@@ -17,7 +17,7 @@ export function localSignInCard(next: string): Html {
       <div style="display: flex; align-items: center; gap: 12px; margin: 8px 0; font-size: 12px; line-height: 16px; color: var(--muted)"><span aria-hidden="true" style="flex: 1 1 auto; height: 1px; background: #d5dbd3"></span>or<span aria-hidden="true" style="flex: 1 1 auto; height: 1px; background: #d5dbd3"></span></div>
     </div>
   </div>
-  <form data-api="POST /api/session" style="display: flex; flex-direction: column; gap: 8px">
+  <form method="dialog" data-api="POST /api/session" style="display: flex; flex-direction: column; gap: 8px">
     <label for="in-name" class="lbl">Name</label>
     <input id="in-name" name="name" class="field" autocomplete="username" autocapitalize="words" spellcheck="false" required>
     <label for="in-pw" class="lbl">Password</label>

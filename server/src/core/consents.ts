@@ -238,7 +238,9 @@ export class Consents {
     // Across every client, a request nobody signed in to look at stops counting after a few minutes: requests made
     // only to use the limit up can't keep everyone else from joining for the full time a request waits.
     const fresh = new Date(this.now().getTime() - LIMITS.consentUnopenedMinutes * MINUTE_MS).toISOString();
-    if (waiting("client = $client", { client }) >= LIMITS.consentWaitingPerClient || waiting("(opened_at IS NOT NULL OR created_at > $fresh)", { fresh }) >= LIMITS.consentWaitingJoins) {
+    // "local" stands for every client without an address of its own, so it has no limit of its own to use up.
+    const perClient = client !== "local" && waiting("client = $client", { client }) >= LIMITS.consentWaitingPerClient;
+    if (perClient || waiting("(opened_at IS NOT NULL OR created_at > $fresh)", { fresh }) >= LIMITS.consentWaitingJoins) {
       throw new PorticoError("rate_limited", "Too many requests to join are waiting. Finish one on Portico's page, or try again in a few minutes.");
     }
     const pollSecret = newToken("ps_");

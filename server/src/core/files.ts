@@ -113,7 +113,7 @@ const ATTACHED_UPLOAD_MS = DAY_MS;
 function checkName(value: unknown): string {
   if (typeof value !== "string" || value.trim() === "") throw new PorticoError("bad_request", "name is required: the file's name, such as report.pdf.");
   const name = value.trim();
-  if (/[\u0000-\u001f\u007f/\\]/.test(name)) throw new PorticoError("bad_request", "name must be a plain file name: one line, no folders.");
+  if (/[\u0000-\u001f\u007f\u0085\u2028\u2029/\\]/.test(name)) throw new PorticoError("bad_request", "name must be a plain file name: one line, no folders.");
   if (name === "." || name === "..") throw new PorticoError("bad_request", "name must be a plain file name.");
   if (Array.from(name).length > MAX_NAME_CHARS) throw new PorticoError("bad_request", `name can be at most ${MAX_NAME_CHARS} characters.`);
   return name;

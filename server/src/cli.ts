@@ -28,6 +28,7 @@ const io: CliIo = {
   env: process.env,
   cwd: process.cwd(),
   out: (line) => console.log(line),
+  tty: process.stdout.isTTY === true,
   err: (line) => console.error(line),
 };
 

@@ -91,13 +91,16 @@ describe("POST /api/session", () => {
     expect((await postSession(p, { name: "Chris", password: PASSWORD }, { "fly-client-ip": "1.2.3.4" })).status).toBe(200);
   });
 
-  test("a name gets at most 30 failures in 15 minutes from all addresses together", async () => {
+  test("wrong guesses from other addresses never lock a person out of signing in from a clean one", async () => {
     const p = makePortico();
     await addOwner(p);
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 60; i++) {
       expect((await postSession(p, { name: "Chris", password: "wrong-password" }, { "x-forwarded-for": `10.0.${i}.1` })).status).toBe(401);
     }
-    expect((await postSession(p, { name: "Chris", password: PASSWORD }, { "x-forwarded-for": "10.9.9.9" })).status).toBe(429);
+    expect((await postSession(p, { name: "Chris", password: PASSWORD }, { "x-forwarded-for": "10.9.9.9" })).status).toBe(200);
+    // Each guessing address is still stopped at its own 10 for the name.
+    for (let i = 0; i < 9; i++) await postSession(p, { name: "Chris", password: "wrong-password" }, { "x-forwarded-for": "10.0.0.1" });
+    expect((await postSession(p, { name: "Chris", password: PASSWORD }, { "x-forwarded-for": "10.0.0.1" })).status).toBe(429);
   });
 
   test("parallel guesses can't slip past the limit while the password check runs", async () => {

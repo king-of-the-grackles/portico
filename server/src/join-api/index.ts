@@ -50,8 +50,12 @@ export function joinApi(core: Core): Hono {
     const body = (await readJson(c)) as { kind?: unknown; name?: unknown; client?: unknown; link?: unknown; replaces?: unknown } | null;
     const address = clientIp(c);
     // Nothing awaits between the check and the count (bun:sqlite is synchronous), so a burst can't all pass the check first.
-    if (starts.blocked(address)) throw new PorticoError("rate_limited", "Too many requests to join from this address. Try again in 15 minutes.");
-    starts.record(address);
+    // "local" is every client no proxy reported an address for: counting them as one would let one client keep everyone
+    // else from joining, so only the limit on joins waiting from all addresses together holds there.
+    if (address !== "local") {
+      if (starts.blocked(address)) throw new PorticoError("rate_limited", "Too many requests to join from this address. Try again in 15 minutes.");
+      starts.record(address);
+    }
     const { request, pollSecret } = core.consents.startJoin(body ?? {}, address);
     const publicUrl = core.settings.publicUrl();
     c.header("Cache-Control", "no-store");

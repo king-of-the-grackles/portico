@@ -5,7 +5,7 @@ import { createInterface } from "node:readline";
 import { hostname as systemHostname } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { type ComputerFile, ComputerFileError, readComputerFile, writeComputerFile, writeFileAtomically } from "./computer";
-import { callPortico, CommandError, refusal, withoutControls } from "./computer-api";
+import { callPortico, CommandError, isComputerName, refusal } from "./computer-api";
 import { switchFolder } from "./folders";
 
 /**
@@ -199,9 +199,13 @@ export async function joinComputer(opts: JoinOptions, deps: JoinDeps): Promise<J
     const answer = await callPortico(url, "POST", `/api/join/${pending.id}/code`, { token: pending.pollSecret, body: { code }, fetch: deps.fetch });
     if (answer.ok && answer.body?.status === "approved") {
       const answered = (answer.body.computer as { name?: unknown } | undefined)?.name;
-      const computer = typeof answered === "string" ? withoutControls(answered) : "";
+      // The name goes into computer.json and into what this command prints: only a name of Portico's own shape is taken.
+      const computer = isComputerName(answered) ? answered : "";
       const token = answer.body.token;
       forget();
+      if (typeof answered === "string" && !computer) {
+        throw new CommandError(`Portico at ${url} finished the join with a computer name that isn't one Portico makes. Nothing was written. Remove the new computer in Settings › Computers, then run the join again.`);
+      }
       if (!computer || typeof token !== "string" || !token) {
         throw new CommandError(`Portico at ${url} finished the join but sent no token (the token is handed over once). Run the join again to ask anew.`);
       }

@@ -26,6 +26,11 @@ export class Settings {
     return this.config.publicUrl ?? this.get("public_url") ?? `http://localhost:${this.config.port}`;
   }
 
+  /** The public URL someone set or confirmed: PORTICO_PUBLIC_URL, else the address confirmed at setup. Null before either. */
+  knownPublicUrl(): string | null {
+    return this.config.publicUrl ?? this.get("public_url");
+  }
+
   /** Until setup is done, Portico and joining stay closed. */
   setupDone(): boolean {
     return this.get("setup_done_at") !== null;

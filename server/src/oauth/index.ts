@@ -18,11 +18,12 @@ import { type AuthorizeRequest, badRequestPage, CONNECTOR_CHOICES, consentPage, 
 import { OAuthProblem, type OAuthClient, OAuthStore, validChallenge } from "./store";
 
 /**
- * Registrations are open to anyone, so they're capped: this many an hour per address, this many an hour from all
- * addresses together, and no new ones while this many clients are still unused (no code and no token yet).
+ * Registrations are open to anyone, so they're capped: this many an hour per address, and at most this many clients
+ * kept unused (no code and no token yet). A registration past that takes the place of the oldest unused client rather
+ * than being refused, so registering in bulk can't close registration for everyone else. "local" (no proxy reported
+ * an address) is every client at once and gets no cap of its own.
  */
 const REGISTRATIONS_PER_HOUR = 20;
-const ALL_REGISTRATIONS_PER_HOUR = 500;
 const MAX_UNUSED_CLIENTS = 1000;
 const MAX_STATE = 1000;
 
@@ -72,7 +73,6 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
   const route = new Hono<PersonEnv>();
   const store = opts.store ?? new OAuthStore({ db: core.db, agents: core.agents, now: core.now, newId: core.newId });
   const registrations = new WindowLimiter(core.now, REGISTRATIONS_PER_HOUR, HOUR_MS);
-  const allRegistrations = new WindowLimiter(core.now, ALL_REGISTRATIONS_PER_HOUR, HOUR_MS);
   const base = () => core.settings.publicUrl();
 
   // Discovery, registration and tokens carry no cookies, so browser-based MCP clients may call them from anywhere.
@@ -127,12 +127,13 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     if (typeof body !== "object" || body === null) throw new OAuthProblem("invalid_client_metadata", "The registration must be a JSON object.");
     const address = clientIp(c);
     // Nothing awaits from the checks to the counts (bun:sqlite is synchronous), so a burst can't all pass the checks first.
-    if (registrations.blocked(address) || allRegistrations.blocked("all") || store.unusedClients() >= MAX_UNUSED_CLIENTS) {
+    const counted = address !== "local";
+    if (counted && registrations.blocked(address)) {
       throw new OAuthProblem("temporarily_unavailable", "Too many client registrations. Try again later.", 429);
     }
     const client = store.register(body as Fields);
-    registrations.record(address);
-    allRegistrations.record("all");
+    if (counted) registrations.record(address);
+    store.evictUnused(MAX_UNUSED_CLIENTS);
     return c.json(
       {
         client_id: client.clientId,
@@ -210,7 +211,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
   // The consent form: from the page's own script as JSON (answered with `next`), or as a plain form post (redirected).
   route.post("/oauth/authorize", loadPerson(core), jsonBodyLimit(), async (c) => {
     if (!core.settings.setupDone()) throw setupRequired();
-    if (!sameOrigin(c, base())) throw new PorticoError("not_allowed", "Requests from other sites aren't accepted.");
+    if (!sameOrigin(c, core.settings.knownPublicUrl())) throw new PorticoError("not_allowed", "Requests from other sites aren't accepted.");
     const person = currentPerson(c);
     const json = (c.req.header("content-type") ?? "").includes("application/json");
     const fields = (json ? await readJson(c) : await c.req.parseBody()) as Fields | null;

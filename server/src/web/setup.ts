@@ -31,7 +31,7 @@ export function setupPage(core: Core): Hono<PersonEnv> {
   <h1>Reset the owner password</h1>
   <p class="lead">Set a new password for the owner account. Every browser signed in as the owner is signed out, and the owner's computers and agents have to join again.</p>
 </div>
-<form class="form-card" data-api="POST /api/setup">
+<form class="form-card" method="dialog" data-api="POST /api/setup">
   <label for="reset-pw" class="lbl">New password</label>
   <input id="reset-pw" name="password" class="field" type="password" autocomplete="new-password" minlength="12" required aria-describedby="reset-pw-help">
   <span id="reset-pw-help" class="help">12 characters or more.</span>
@@ -50,7 +50,7 @@ export function setupPage(core: Core): Hono<PersonEnv> {
   <h1>Set up Portico</h1>
   <p class="lead">Create the owner account. The owner adds agents, invites people and approves each new account.</p>
 </div>
-<form class="form-card" data-api="POST /api/setup">
+<form class="form-card" method="dialog" data-api="POST /api/setup">
   <label for="setup-name" class="lbl">Name</label>
   <input id="setup-name" name="name" class="field" autocomplete="name" required aria-describedby="setup-name-help">
   <span id="setup-name-help" class="help">Shown to invited people.</span>

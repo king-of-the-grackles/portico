@@ -282,7 +282,7 @@ describe("an agent that isn't on Portico joins with a link", () => {
     expect(errorCode(() => p.consents.startJoin({ kind: "computer", name: "studio", link: secret }, "test"))).toBe("bad_request");
     expect(errorCode(() => p.consents.startJoin({ kind: "agent", name: "helper", link: "A".repeat(32) }, "test"))).toBe("not_found");
     // Guessing links from one address stops after ten.
-    const guess = () => p.app.request("/api/join", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ link: "B".repeat(32), name: "helper" }) });
+    const guess = () => p.app.request("/api/join", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.9" }, body: JSON.stringify({ link: "B".repeat(32), name: "helper" }) });
     for (let i = 0; i < 10; i++) expect((await guess()).status).toBe(404);
     expect((await guess()).status).toBe(429);
   });

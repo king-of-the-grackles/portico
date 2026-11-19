@@ -23,7 +23,11 @@ export interface PageOptions {
   body: Html;
   /** The page's first data, read in the browser with firstData(). */
   data?: unknown;
-  /** Browser modules under /assets, e.g. "forms.js". */
+  /**
+   * Browser modules under /assets, e.g. "forms.js". A form the modules handle carries `method="dialog"`, so a press
+   * before the modules have run does nothing, and no field ever goes into the address. forms.js's one import is
+   * fetched alongside, so that moment is short.
+   */
   scripts?: string[];
   /** Stylesheets under /assets besides base.css, e.g. "app.css". */
   styles?: string[];
@@ -47,6 +51,7 @@ export function sendPage(c: Context, opts: PageOptions): Response | Promise<Resp
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400..700&amp;display=swap">
 ${styles.map((s) => html`<link rel="stylesheet" href="/assets/${s}">`)}
 ${opts.data === undefined ? "" : html`<script type="application/json" id="first-data">${raw(scriptJson(opts.data))}</script>`}
+${(opts.scripts ?? []).includes("forms.js") ? html`<link rel="modulepreload" href="/assets/api.js">` : ""}
 ${(opts.scripts ?? []).map((s) => html`<script type="module" src="${s.startsWith("https://") ? s : `/assets/${s}`}"></script>`)}
 </head><body>${opts.body}</body></html>`;
   return c.html(page, opts.status ?? 200);

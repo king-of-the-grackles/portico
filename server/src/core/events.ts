@@ -16,6 +16,11 @@ const ROTATION_MS = 10 * MINUTE_MS;
 /** A callback verified this recently for the same agent isn't challenged again. */
 const VERIFIED_FOR_MS = DAY_MS;
 const MAX_SUBSCRIPTIONS_PER_AGENT = 10;
+/**
+ * A verification makes Portico post to an address the agent names, so an agent gets this many an hour, one at a time:
+ * subscribing can't be used to make Portico post to other people's servers over and over.
+ */
+const VERIFICATIONS_PER_HOUR = 10;
 
 /** The definition events/list returns. */
 export function eventDefinitions() {
@@ -45,7 +50,7 @@ export function eventDefinitions() {
 /** Why a subscribe failed, as the events extension names the reasons. mcp.ts picks the JSON-RPC code. */
 export class EventsError extends Error {
   constructor(
-    readonly kind: "invalid_params" | "callback",
+    readonly kind: "invalid_params" | "callback" | "limited",
     message: string,
     readonly reason?: string,
   ) {
@@ -119,6 +124,9 @@ export class EventSubscriptions {
   private readonly schedule: (fn: () => void, ms: number) => void;
   private readonly newNonce: () => string;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
+  /** Agents with a verification on its way, and each agent's recent verification times, in memory. */
+  private readonly verifying = new Set<string>();
+  private readonly verified = new Map<string, number[]>();
 
   constructor(deps: EventSubscriptionsDeps) {
     this.db = deps.db;
@@ -210,7 +218,14 @@ export class EventSubscriptions {
     const verified = this.db
       .query("SELECT 1 FROM event_subscriptions WHERE agent_id = $agentId AND url = $url AND verified_at > $since LIMIT 1")
       .get({ agentId: agent.id, url, since: verifiedSince });
-    if (!verified) await this.verify(id, url, secret);
+    if (!verified) {
+      this.startVerification(agent.id);
+      try {
+        await this.verify(id, url, secret);
+      } finally {
+        this.verifying.delete(agent.id);
+      }
+    }
 
     const refreshBefore = new Date(now.getTime() + this.grantMs(params.ttlMs)).toISOString();
     const rotating = existing && existing.secret !== secret;
@@ -249,6 +264,20 @@ export class EventSubscriptions {
       };
     }
     return result;
+  }
+
+  /** Counts a verification for the agent, or throws EventsError("limited"): one at a time, VERIFICATIONS_PER_HOUR an hour. */
+  private startVerification(agentId: string): void {
+    const now = this.now().getTime();
+    const recent = (this.verified.get(agentId) ?? []).filter((at) => now - at < HOUR_MS);
+    if (this.verifying.has(agentId)) {
+      throw new EventsError("limited", "Portico is still checking another callback URL for this agent. Try again once that check is done.");
+    }
+    if (recent.length >= VERIFICATIONS_PER_HOUR) {
+      throw new EventsError("limited", `Portico checks at most ${VERIFICATIONS_PER_HOUR} callback URLs an hour for one agent. Try again later.`);
+    }
+    this.verified.set(agentId, [...recent, now]);
+    this.verifying.add(agentId);
   }
 
   /** Posts a signed challenge and requires it echoed back; throws EventsError("callback") otherwise. */
@@ -352,6 +381,8 @@ export class EventSubscriptions {
 
   /** Drops subscriptions past their refreshBefore. Returns how many. */
   sweep(): number {
+    const now = this.now().getTime();
+    for (const [agentId, times] of this.verified) if (times.every((at) => now - at >= HOUR_MS)) this.verified.delete(agentId);
     const removed = this.db.query("DELETE FROM event_subscriptions WHERE refresh_before <= $now").run({ now: this.now().toISOString() }).changes;
     if (removed > 0) this.changes.emit("agents");
     return removed;

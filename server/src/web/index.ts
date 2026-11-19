@@ -20,6 +20,9 @@ const OPEN_BEFORE_SETUP = new Set(["/setup"]);
 /** Paths that aren't pages: the APIs and well-known documents answer for themselves. */
 const NOT_PAGES = /^\/(api|mcp|oauth|\.well-known|healthz|assets|codex|favicon\.ico)(\/|$)/;
 
+/** A page's path with nothing in it a browser could read as another site: single slashes and plain segments. */
+const PLAIN_PATH = /^(\/[A-Za-z0-9._~-]+)+$/;
+
 /** Every page. Pages read who is signed in; each page decides whether it needs someone. */
 export function webRoutes(core: Core): Hono<PersonEnv> {
   const web = new Hono<PersonEnv>();
@@ -27,6 +30,10 @@ export function webRoutes(core: Core): Hono<PersonEnv> {
   web.route("/codex", codexBridgeRoutes());
   web.use("*", async (c, next) => {
     const page = c.req.method === "GET" && !NOT_PAGES.test(c.req.path);
+    // No page takes a password in its address. One that arrives there anyway (a form submitted without the page's
+    // script) is sent to the same page without it, so the address doesn't stay in the bar with the password in it.
+    // Only a plain path of Portico's own is answered that way, so the redirect can't lead anywhere else.
+    if (page && c.req.query("password") !== undefined) return c.redirect(PLAIN_PATH.test(c.req.path) ? c.req.path : "/", 303);
     if (page && !core.settings.setupDone() && !OPEN_BEFORE_SETUP.has(c.req.path)) return notSetUpPage(c);
     await next();
   });

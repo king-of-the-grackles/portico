@@ -37,7 +37,7 @@ function ticks(s: HomeState, agents: AgentView[], chosen: string[]): string {
 
 function renderNewForm(s: HomeState, f: Extract<WorkspaceForm, { kind: "new" }>): string {
   const mine = s.agents.filter((a) => a.mine);
-  return `<form class="sform enter" data-form="ws-create" data-key="ws-new" novalidate>
+  return `<form class="sform enter" method="dialog" data-form="ws-create" data-key="ws-new" novalidate>
     ${when(f.thenShare, `<p class="sec-help">Your Portico holds only ${esc(s.me.name)}'s own agents and can't be shared. Bringing someone else's agents in starts with a new Portico and a pick of agents to put there.</p>`)}
     <label for="ws-name" class="lbl">Name</label>
     <input id="ws-name" class="field field-narrow${when(f.error, " is-invalid")}" value="${esc(f.name)}" data-input="ws-name" maxlength="60" autocomplete="off" aria-describedby="ws-name-help" aria-invalid="${Boolean(f.error)}" data-autofocus>
@@ -54,7 +54,7 @@ function renderShareForm(s: HomeState, w: WorkspaceView, f: Extract<WorkspaceFor
   // An address binds a link only where signing in verifies addresses. With Portico's own accounts the field is left
   // out: the link is for whoever uses it first, once.
   const byEmail = w.linksByEmail !== false;
-  return `<form class="sform enter" data-form="ws-share" data-key="ws-share" novalidate>
+  return `<form class="sform enter" method="dialog" data-form="ws-share" data-key="ws-share" novalidate>
     ${
       byEmail
         ? `<label for="ws-email" class="lbl">Email address</label>
@@ -74,7 +74,7 @@ function renderShareForm(s: HomeState, w: WorkspaceView, f: Extract<WorkspaceFor
 }
 
 function renderRenameForm(s: HomeState, f: Extract<WorkspaceForm, { kind: "rename" }>): string {
-  return `<form class="sform enter" data-form="ws-rename" data-key="ws-rename" novalidate>
+  return `<form class="sform enter" method="dialog" data-form="ws-rename" data-key="ws-rename" novalidate>
     <label for="ws-rename-name" class="lbl">Name</label>
     <input id="ws-rename-name" class="field field-narrow${when(f.error, " is-invalid")}" value="${esc(f.name)}" data-input="ws-name" maxlength="60" autocomplete="off" aria-describedby="ws-rename-help" aria-invalid="${Boolean(f.error)}" data-autofocus>
     <span id="ws-rename-help" class="help">Left empty, the Portico is named after the people in it.</span>
@@ -85,7 +85,7 @@ function renderRenameForm(s: HomeState, f: Extract<WorkspaceForm, { kind: "renam
 
 function renderAgentsForm(s: HomeState, w: WorkspaceView, f: Extract<WorkspaceForm, { kind: "agents" }>): string {
   const out = s.agents.filter((a) => a.mine && !w.agentIds.includes(a.id));
-  return `<form class="sform enter" data-form="ws-agents" data-key="ws-agents" novalidate>
+  return `<form class="sform enter" method="dialog" data-form="ws-agents" data-key="ws-agents" novalidate>
     <span class="lbl" id="ws-add-lbl">Agents to put in ${esc(w.phrase)}</span>
     <div role="group" aria-labelledby="ws-add-lbl">${ticks(s, out, f.agentIds)}</div>
     ${when(f.error, `<span role="alert" class="field-error">${esc(f.error)}</span>`)}

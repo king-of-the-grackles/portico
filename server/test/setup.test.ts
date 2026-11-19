@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setupCommand } from "../src/commands/setup";
-import { localSetupLink } from "../src/commands/serve";
+import { localBeforeSetup, localSetupLink, SETUP_LINK_HINT } from "../src/commands/serve";
 import type { CliIo } from "../src/commands/io";
 import { hostUrl, platformUrl } from "../src/config";
 import type { Topic } from "../src/core/changes";
@@ -463,7 +463,7 @@ describe("portico setup", () => {
 describe("portico serve", () => {
   test("running locally before setup, the first start makes a setup link", async () => {
     const p = makePortico({ setup: false, config: { publicUrl: null, port: 8802 } });
-    const link = localSetupLink(p, {});
+    const link = localSetupLink(p, {}, true);
     expect(link).toMatch(/^http:\/\/localhost:8802\/setup#[A-Za-z0-9_-]{22}$/);
     const res = await p.app.request("http://localhost:8802/api/setup", {
       method: "POST",
@@ -471,13 +471,32 @@ describe("portico serve", () => {
       body: JSON.stringify({ token: link!.split("#")[1], name: "Chris", password: PASSWORD, publicUrl: "http://localhost:8802" }),
     });
     expect(res.status).toBe(200);
-    expect(localSetupLink(p, {})).toBeNull();
+    expect(localSetupLink(p, {}, true)).toBeNull();
+  });
+
+  test("a start whose output isn't a terminal makes no link, and each link a start prints ends the ones before", async () => {
+    const p = makePortico({ setup: false, config: { publicUrl: null, port: 8802 } });
+    // A container's log, a pipe: nothing is made, so nothing can be read out of a log.
+    expect(localSetupLink(p, {}, false)).toBeNull();
+    expect((p.db.query("SELECT COUNT(*) AS n FROM setup_links").get() as { n: number }).n).toBe(0);
+    expect(localBeforeSetup(p, {})).toBe(true);
+    expect(copyProblems(SETUP_LINK_HINT)).toEqual([]);
+    const first = localSetupLink(p, {}, true)!;
+    const second = localSetupLink(p, {}, true)!;
+    const setUp = (link: string) =>
+      p.app.request("http://localhost:8802/api/setup", {
+        method: "POST",
+        headers: { origin: "http://localhost:8802", host: "localhost:8802", "content-type": "application/json" },
+        body: JSON.stringify({ token: link.split("#")[1], name: "Chris", password: PASSWORD, publicUrl: "http://localhost:8802" }),
+      });
+    expect((await setUp(first)).status).toBe(404);
+    expect((await setUp(second)).status).toBe(200);
   });
 
   test("a public URL elsewhere, or a cloud platform, prints no link", () => {
-    expect(localSetupLink(makePortico({ setup: false }), {})).toBeNull();
-    expect(localSetupLink(makePortico({ setup: false, config: { publicUrl: null } }), { RENDER_EXTERNAL_URL: "https://a.onrender.com" })).toBeNull();
-    expect(localSetupLink(makePortico({ setup: false, config: { publicUrl: "http://127.0.0.1:8802" } }), {})).toContain(
+    expect(localSetupLink(makePortico({ setup: false }), {}, true)).toBeNull();
+    expect(localSetupLink(makePortico({ setup: false, config: { publicUrl: null } }), { RENDER_EXTERNAL_URL: "https://a.onrender.com" }, true)).toBeNull();
+    expect(localSetupLink(makePortico({ setup: false, config: { publicUrl: "http://127.0.0.1:8802" } }), {}, true)).toContain(
       "http://127.0.0.1:8802/setup#",
     );
   });

@@ -221,34 +221,44 @@ describe("registration", () => {
     expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.13")).status).toBe(201);
   });
 
-  test("at most 500 an hour from all addresses together", async () => {
+  test("registrations from many addresses never close registration for everyone else", async () => {
     const p = makePortico();
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 520; i++) {
       expect((await register(p, { redirect_uris: [REDIRECT] }, `10.0.${i >> 8}.${i & 255}`)).status).toBe(201);
     }
-    expect((await register(p, { redirect_uris: [REDIRECT] }, "10.9.9.9")).status).toBe(429);
-    p.clock.advance(HOUR + MINUTE);
     expect((await register(p, { redirect_uris: [REDIRECT] }, "10.9.9.9")).status).toBe(201);
   });
 
-  test("no new registrations while 1000 clients are unused; clients holding a code or token don't count", async () => {
+  test("clients no proxy reported an address for aren't counted as one address", async () => {
+    const p = makePortico();
+    for (let i = 0; i < 25; i++) expect((await register(p, { redirect_uris: [REDIRECT] })).status).toBe(201);
+  });
+
+  test("past 1000 unused clients, a new registration takes the oldest one's place; clients holding a code or token stay", async () => {
     const { p, clientId, code, verifier } = await authorized();
     await exchange(p, clientId, code, verifier);
     // As after a restart: unused clients already stored, the in-memory limits empty.
     const insert = p.db.query(
       "INSERT INTO oauth_clients (id, client_id, name, redirect_uris, created_at) VALUES ($id, $id, 'Flood', '[]', $at)",
     );
-    for (let i = 0; i < 999; i++) insert.run({ id: `flood-${i}`, at: p.now().toISOString() });
-    expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.1")).status).toBe(201);
-    const refused = await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.2");
-    expect(refused.status).toBe(429);
-    expect(await refused.json()).toMatchObject({ error: "temporarily_unavailable" });
+    for (let i = 0; i < 1000; i++) {
+      insert.run({ id: `flood-${i}`, at: p.now().toISOString() });
+      p.clock.advance(1);
+    }
+    const res = await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.1");
+    expect(res.status).toBe(201);
+    const fresh = (await json<{ client_id: string }>(res)).client_id;
+    const has = (id: string) => p.db.query("SELECT 1 FROM oauth_clients WHERE client_id = $id").get({ id }) !== null;
+    // 1000 unused are kept, and the one with a token besides.
     expect(clientCount(p)).toBe(1001);
-    // An hour on, the minute sweep clears the unused ones and registration opens again.
+    expect(has("flood-0")).toBe(false);
+    expect(has("flood-1")).toBe(true);
+    expect(has(fresh)).toBe(true);
+    expect(has(clientId)).toBe(true);
+    // An hour on, the minute sweep clears the unused ones.
     p.clock.advance(HOUR + MINUTE);
     p.sweepMinute();
     expect(clientCount(p)).toBe(1);
-    expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.2")).status).toBe(201);
   });
 
   test("redirect URIs are bounded by the bytes stored, so escaped control characters can't pad a client", async () => {
@@ -471,9 +481,8 @@ describe("tokens", () => {
     const second = await json<Tokens>(token(p, { grant_type: "refresh_token", client_id: clientId, refresh_token: first.refresh_token }));
     expect(second.access_token).toStartWith("pt_");
     expect((await mcpTools(p, second.access_token)).status).toBe(200);
-    expect(await json(token(p, { grant_type: "refresh_token", client_id: clientId, refresh_token: first.refresh_token }))).toMatchObject({
-      error: "invalid_grant",
-    });
+    // The access token the client held before the swap stops with it.
+    expect((await mcpTools(p, first.access_token)).status).toBe(401);
     const other = await client(p, "Other");
     expect(await json(token(p, { grant_type: "refresh_token", client_id: other, refresh_token: second.refresh_token }))).toMatchObject({
       error: "invalid_grant",
@@ -482,6 +491,22 @@ describe("tokens", () => {
     const basic = `Basic ${Buffer.from(`${clientId}:ignored`).toString("base64")}`;
     const third = await token(p, { grant_type: "refresh_token", refresh_token: second.refresh_token }, { authorization: basic });
     expect(third.status).toBe(200);
+  });
+
+  test("a refresh token handed in a second time ends every token of that agent and client", async () => {
+    const { p, clientId, code, verifier } = await authorized();
+    const first = await json<Tokens>(exchange(p, clientId, code, verifier));
+    // Whoever copied the refresh token uses it first, and refreshes again.
+    const thief = await json<Tokens>(token(p, { grant_type: "refresh_token", refresh_token: first.refresh_token }));
+    const thiefNext = await json<Tokens>(token(p, { grant_type: "refresh_token", refresh_token: thief.refresh_token }));
+    expect((await mcpTools(p, thiefNext.access_token)).status).toBe(200);
+    // The app the person added then hands in the one it holds: the same answer as any bad token, and the line ends.
+    const replay = await token(p, { grant_type: "refresh_token", client_id: clientId, refresh_token: first.refresh_token });
+    expect(replay.status).toBe(400);
+    expect(await replay.json()).toMatchObject({ error: "invalid_grant" });
+    expect((await mcpTools(p, thiefNext.access_token)).status).toBe(401);
+    expect(await json(token(p, { grant_type: "refresh_token", refresh_token: thiefNext.refresh_token }))).toMatchObject({ error: "invalid_grant" });
+    expect((p.db.query("SELECT COUNT(*) AS n FROM agent_tokens").get() as { n: number }).n).toBe(0);
   });
 
   test("refresh tokens last 90 days", async () => {

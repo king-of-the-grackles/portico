@@ -399,8 +399,13 @@ interface Tool {
   inputSchema: Record<string, unknown>;
 }
 
+/** The tools the agent is offered and may call: sessions get messages pushed, so no set_wake_url for them. */
+function toolsFor(agent: Agent, all: Tool[]): Tool[] {
+  return agent.type === "session" ? all.filter((tool) => tool.name !== "set_wake_url") : all;
+}
+
 async function handle(deps: McpDeps, all: Tool[], agent: Agent, req: JsonRpcRequest, call: Call) {
-  const tools = agent.type === "session" ? all.filter((tool) => tool.name !== "set_wake_url") : all;
+  const tools = toolsFor(agent, all);
   const id = req.id ?? null;
   const params = (req.params ?? {}) as Record<string, unknown>;
   switch (req.method) {
@@ -514,7 +519,7 @@ async function handleModern(
     case "ping":
       return complete({});
     case "tools/list":
-      return complete({ tools, ttlMs: HOUR_MS, cacheScope: "public" });
+      return complete({ tools: toolsFor(agent, tools), ttlMs: HOUR_MS, cacheScope: "public" });
     case "tools/call": {
       const answer = await handle(deps, tools, agent, req, call);
       return "result" in answer ? complete(answer.result as Record<string, unknown>) : { status: 200, body: answer };
@@ -532,6 +537,8 @@ async function handleModern(
       } catch (err) {
         if (!(err instanceof EventsError)) throw err;
         if (err.kind === "invalid_params") return { status: 200, body: rpcError(id, -32602, err.message) };
+        // Too many callback checks for this agent: a server-side refusal, nothing wrong with the request itself.
+        if (err.kind === "limited") return { status: 200, body: rpcError(id, -32000, err.message, { reason: "rate_limited" }) };
         // ChatGPT follows the working group's sketch (-32015); a client declaring the extension gets SEP-3415's code.
         const extensions = clientCapabilities.extensions as Record<string, unknown> | undefined;
         const code = extensions && EVENTS_EXTENSION in extensions ? -32027 : -32015;

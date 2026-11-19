@@ -131,7 +131,7 @@ describe("join", () => {
     const odd = await cli(["join", "--code", "48211"], { path, cwd: dir, deps: noPrompt });
     expect([odd.code, odd.err[0]]).toEqual([1, `--code takes the 4 digits Portico's page shows. Usage: ${"join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>] | join --code <4 digits> [--no-allow]"}`]);
     const wrong = await cli(["join", "--code", "0000"], { path, cwd: dir, deps: noPrompt });
-    expect([wrong.code, wrong.err[0]]).toEqual([1, "That code doesn't match the one Portico's page shows. 4 tries are left."]);
+    expect([wrong.code, wrong.err[0]]).toEqual([1, `Portico at ${server.url} answered: "That code doesn't match the one Portico's page shows. 4 tries are left."`]);
     // The same first call again, once Allow was pressed, says the code is showing and makes no new request.
     const again = await cli(["join", server.url, "--wait", "100"], { path, cwd: dir, deps: noPrompt });
     expect(again.out.slice(0, 4)).toEqual(asked.out.slice(0, 4));
@@ -206,8 +206,10 @@ describe("join", () => {
         ? Response.json({ id: "r1", link: "https://portico.example.com/c/r1", poll_secret: "ps_x", expires_at: new Date(Date.now() + 60_000).toISOString() }, { status: 201 })
         : Response.json({ status: "approved", computer: { id: "c1", name: `studio${String.fromCharCode(27)}[2J` }, token: "pc_x" })) as unknown as typeof globalThis.fetch;
     const run = await cli(["join", "https://portico.example.com"], { path, cwd: dir, deps: { fetch, readCode: async () => "1234" } });
-    expect(run.code).toBe(0);
-    expect(run.out[4]).toBe('Joined Portico at https://portico.example.com as computer "studio[2J".');
+    // A name that isn't one Portico makes is never written or printed.
+    expect(run.code).toBe(1);
+    expect(run.err).toEqual(["Portico at https://portico.example.com finished the join with a computer name that isn't one Portico makes. Nothing was written. Remove the new computer in Settings › Computers, then run the join again."]);
+    expect(existsSync(path)).toBe(false);
     for (const line of run.lines) expect(line).not.toMatch(/\p{Cc}/u);
   });
 });

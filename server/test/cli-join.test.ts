@@ -97,7 +97,7 @@ describe("portico join and portico leave", () => {
     expect(statSync(waiting).mode & 0o777).toBe(0o600);
     // A wrong code says so and keeps the join waiting; the right one finishes it.
     expect(await joinCommand(["--code", "0000"], joinIo, { pollMs: 1 })).toBe(1);
-    expect(joined.at(-1)).toBe("That code doesn't match the one Portico's page shows. 4 tries are left.");
+    expect(joined.at(-1)).toBe(`Portico at ${api.url} answered: "That code doesn't match the one Portico's page shows. 4 tries are left."`);
     expect(existsSync(waiting)).toBe(true);
     expect(await joinCommand(["--code", "4821"], joinIo, { pollMs: 1 })).toBe(0);
     expect(api.requests.at(-1)).toEqual({ method: "POST", path: "/api/join/r1/code", auth: "Bearer ps_poll", body: { code: "4821" } });
@@ -131,7 +131,7 @@ describe("portico join and portico leave", () => {
     const asked: string[] = [];
     expect(await joinCommand([api.url, "--name", "studio"], joinIo, { pollMs: 1, readCode: async (question) => (asked.push(question), typed.shift() ?? null) })).toBe(0);
     expect(asked).toEqual(["Code from the page: ", "Code from the page: "]);
-    expect(lines[4]).toBe("That code doesn't match the one Portico's page shows. 4 tries are left.");
+    expect(lines[4]).toBe(`Portico at ${api.url} answered: "That code doesn't match the one Portico's page shows. 4 tries are left."`);
     expect(lines[5]).toBe(`Joined Portico at ${api.url} as computer "studio".`);
     // The prompt needs no poll: the code is what finishes the join.
     expect(api.requests.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /api/join", "POST /api/join/r1/code", "POST /api/join/r1/code"]);

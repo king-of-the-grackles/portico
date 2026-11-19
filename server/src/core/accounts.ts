@@ -61,8 +61,6 @@ const TOUCH_INTERVAL_MS = 60_000;
 
 /** Sign in allows this many failures per address and name within the window, */
 const SIGN_IN_FAILURES = 10;
-/** and this many per name from all addresses together, since a client can choose the address it reports, */
-const SIGN_IN_FAILURES_PER_NAME = 30;
 /** and this many attempts per address whatever the names, successes included. */
 const SIGN_IN_ATTEMPTS_PER_ADDRESS = 30;
 const SIGN_IN_WINDOW_MS = 15 * MINUTE_MS;
@@ -188,7 +186,6 @@ export class Accounts {
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly signInFailures: FailureLimiter;
-  private readonly nameFailures: FailureLimiter;
   private readonly addressAttempts: FailureLimiter;
   /** Every sign-in password check, server-wide. */
   private readonly passwordChecks: PasswordChecks;
@@ -202,7 +199,6 @@ export class Accounts {
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.signInFailures = new FailureLimiter(SIGN_IN_FAILURES, SIGN_IN_WINDOW_MS, this.now);
-    this.nameFailures = new FailureLimiter(SIGN_IN_FAILURES_PER_NAME, SIGN_IN_WINDOW_MS, this.now);
     this.addressAttempts = new FailureLimiter(SIGN_IN_ATTEMPTS_PER_ADDRESS, SIGN_IN_WINDOW_MS, this.now);
     this.passwordChecks = new PasswordChecks(MAX_PASSWORD_CHECKS, MAX_PASSWORD_CHECKS_WAITING);
     this.passkeys = new Passkeys({ db: this.db, people: this.people, now: this.now, newId: this.newId });
@@ -262,11 +258,15 @@ export class Accounts {
   /**
    * The person with this name and password. A wrong name and a wrong password get the same answer, and so does a name
    * or password longer than any person's, without being counted or checked. 10 failures in 15 minutes from one address
-   * for one name, 30 for one name from anywhere, or 30 attempts of any kind from one address stop further attempts
-   * until the oldest leaves the window. Each attempt counts before the slow check, so parallel attempts can't all slip
-   * past the limits; a success clears the counts per name, not the one per address. "local" (no proxy reported an
-   * address) is every client at once, so it gets no per-address cap: one client could lock out everyone. While every
-   * place for a password check is taken, an attempt is refused at once and not counted.
+   * for one name, or 30 attempts of any kind from one address, stop further attempts from that address until the
+   * oldest leaves the window. Failures from other addresses never refuse a sign-in: a count of one name's failures
+   * from everywhere would let anyone lock that person out by guessing wrong. What holds guessing from many addresses
+   * back is the password checks themselves: two at once, server-wide. Each attempt counts before the slow check, so
+   * parallel attempts can't all slip past the limits; a success clears the count for the name, not the one per
+   * address. "local" (no proxy reported an address) is every client at once, so it gets no per-address cap: one
+   * client could lock out everyone. The count for a name is then shared by every client too, which is the one brake
+   * on guessing there is without addresses. While every place for a password check is taken, an attempt is refused at
+   * once and not counted.
    */
   async signIn(input: { name: unknown; password: unknown; ip: string }): Promise<Person> {
     const name = typeof input.name === "string" ? input.name.replace(/\s+/g, " ").trim() : "";
@@ -278,11 +278,9 @@ export class Accounts {
     const address = input.ip.slice(0, MAX_SIGN_IN_ADDRESS_CHARS);
     const addressKey = `sign-in-address\n${address}`;
     const key = `sign-in\n${address}\n${name.toLowerCase()}`;
-    const nameKey = `sign-in\n${name.toLowerCase()}`;
     const perAddress = address !== "local";
     if (perAddress) this.addressAttempts.check(addressKey, "sign in");
     this.signInFailures.check(key, "sign in");
-    this.nameFailures.check(nameKey, "sign in");
     // A place first, so an attempt refused while every place is taken stores nothing.
     const check = this.passwordChecks.run(async () => {
       const person = this.people.byName(name);
@@ -292,11 +290,9 @@ export class Accounts {
     });
     if (perAddress) this.addressAttempts.fail(addressKey);
     this.signInFailures.fail(key);
-    this.nameFailures.fail(nameKey);
     const person = await check;
     if (!person) throw new PorticoError("unauthorized", "Wrong name or password.");
     this.signInFailures.clear(key);
-    this.nameFailures.clear(nameKey);
     return person;
   }
 
@@ -447,14 +443,12 @@ export class Accounts {
   sweepLimiters(): void {
     this.addressAttempts.sweep();
     this.signInFailures.sweep();
-    this.nameFailures.sweep();
   }
 
   /** Daily: deletes expired browser sessions and setup links, and forgets old sign-in failures. */
   sweep(): number {
     const now = this.now().toISOString();
     this.signInFailures.sweep();
-    this.nameFailures.sweep();
     this.passkeys.sweep();
     const sessions = this.db.query("DELETE FROM web_sessions WHERE expires_at <= $now").run({ now }).changes;
     const links = this.db.query("DELETE FROM setup_links WHERE expires_at <= $now").run({ now }).changes;

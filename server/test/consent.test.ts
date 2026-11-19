@@ -480,6 +480,13 @@ describe("anyone can ask to join, so asking is limited and tells nothing", () =>
     expect((await p.app.request("/api/join/no-such-request", { headers: { authorization: `Bearer ${asked.poll_secret}` } })).status).toBe(401);
   });
 
+  test("clients no proxy reported an address for aren't counted as one address, so one can't keep the rest from joining", async () => {
+    const p = makePortico();
+    await addOwner(p);
+    const start = () => p.app.request("/api/join", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "agent", name: "helper" }) });
+    for (let i = 0; i < LIMITS.consentStartsPerClient + 5; i++) expect((await start()).status).toBe(201);
+  });
+
   test("starts are limited per address, and so is how many wait at once", async () => {
     const p = makePortico();
     await addOwner(p);

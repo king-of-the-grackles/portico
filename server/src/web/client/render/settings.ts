@@ -59,7 +59,7 @@ function inviteRow(s: SettingsState, i: InviteView): string {
 
 function renderInviteForm(s: SettingsState): string {
   const f = s.invite!;
-  return `<form class="sform enter" data-form="invite-create" data-key="invite-form" novalidate>
+  return `<form class="sform enter" method="dialog" data-form="invite-create" data-key="invite-form" novalidate>
     <label for="invite-name" class="lbl">Name</label>
     <input id="invite-name" class="field field-narrow${when(f.error, " is-invalid")}" value="${esc(f.name)}" data-input="invite-name" aria-describedby="invite-help" aria-invalid="${Boolean(f.error)}" autocomplete="off" data-autofocus>
     <span id="invite-help" class="help">One link per person. Single use, expires in 7 days.</span>
@@ -146,7 +146,7 @@ function passkeyRow(s: SettingsState, k: PasskeyView): string {
 
 export function renderAccount(s: SettingsState): string {
   const nameRow = s.nameForm
-    ? `<li class="srow srow-stack" data-key="acct-name"><form class="sform-inline" data-form="name-save" novalidate>
+    ? `<li class="srow srow-stack" data-key="acct-name"><form class="sform-inline" method="dialog" data-form="name-save" novalidate>
         <label for="acct-name" class="lbl">Name</label>
         <input id="acct-name" class="field field-narrow${when(s.nameForm.error, " is-invalid")}" value="${esc(s.nameForm.name)}" data-input="name-field" aria-invalid="${Boolean(s.nameForm.error)}" autocomplete="name" data-autofocus>
         ${when(s.nameForm.error, `<span role="alert" class="field-error">${esc(s.nameForm.error)}</span>`)}
@@ -154,7 +154,7 @@ export function renderAccount(s: SettingsState): string {
       </form></li>`
     : `<li class="srow" data-key="acct-name"><span class="row-text"><strong>Name</strong><span class="row-help">${esc(s.me.name)}</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="name-open">Change name</button></span></li>`;
   const handleRow = s.handleForm
-      ? `<li class="srow srow-stack" data-key="acct-handle"><form class="sform-inline" data-form="handle-save" novalidate>
+      ? `<li class="srow srow-stack" data-key="acct-handle"><form class="sform-inline" method="dialog" data-form="handle-save" novalidate>
         <label for="acct-handle" class="lbl">Handle</label>
         <input id="acct-handle" class="field field-narrow${when(s.handleForm.error, " is-invalid")}" value="${esc(s.handleForm.handle)}" data-input="handle-field" aria-describedby="acct-handle-help" aria-invalid="${Boolean(s.handleForm.error)}" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="20" data-autofocus>
         <span id="acct-handle-help" class="help">3 to 20 lowercase letters, digits and hyphens. Other people's agents have to use the new handle from then on, and the old one stays held back from everyone else.</span>
@@ -165,7 +165,7 @@ export function renderAccount(s: SettingsState): string {
   const emailRow = s.me.email ? `<li class="srow" data-key="acct-email"><span class="row-text"><strong>Email</strong><span class="row-help">${esc(s.me.email)}. The address signed in with. A share link sent by email works only for this address.</span></span></li>` : "";
   const pw = s.passwordForm;
   const passwordRow = pw
-    ? `<li class="srow srow-stack" data-key="acct-password"><form class="sform-inline" data-form="password-save" novalidate>
+    ? `<li class="srow srow-stack" data-key="acct-password"><form class="sform-inline" method="dialog" data-form="password-save" novalidate>
         <label for="pw-current" class="lbl">Current password</label>
         <input id="pw-current" type="password" class="field field-narrow" value="${esc(pw.current)}" data-input="pw-current" autocomplete="current-password" data-autofocus>
         <label for="pw-next" class="lbl mt8">New password</label>
@@ -188,7 +188,7 @@ export function renderAccount(s: SettingsState): string {
       )}</div>
       ${
         pk
-          ? `<form class="sform-inline inner-form" data-form="passkey-add" novalidate>
+          ? `<form class="sform-inline inner-form" method="dialog" data-form="passkey-add" novalidate>
         <label for="pk-name" class="lbl">Passkey name</label>
         <input id="pk-name" class="field field-narrow${when(pk.error, " is-invalid")}" value="${esc(pk.name)}" data-input="pk-name" aria-describedby="pk-help" autocomplete="off" data-autofocus>
         <span id="pk-help" class="help">Shown in this list, such as MacBook Touch ID.</span>

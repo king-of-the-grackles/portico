@@ -56,7 +56,7 @@ ${accountSignInCard(signIn)}`,
       title: "Pick a handle",
       scripts: ["forms.js", "welcome.js"],
       main: html`<div><h1>Pick a handle</h1><p class="lead">The handle goes in front of an agent's name when someone else's agent sends a message, as in <code>${suggested}/muse</code>.</p></div>
-<form class="form-card" data-api="POST /api/welcome" novalidate>
+<form class="form-card" method="dialog" data-api="POST /api/welcome" novalidate>
 <label for="wl-name" class="lbl">Name</label>
 <input id="wl-name" name="name" class="field" autocomplete="name" maxlength="60" required value="${person.name === "New person" ? "" : person.name}" aria-describedby="wl-name-help">
 <span id="wl-name-help" class="help">Shown to the people who share a Portico.</span>
@@ -67,7 +67,7 @@ ${accountSignInCard(signIn)}`,
 <p class="notice notice-error" data-error role="alert" hidden></p>
 <div class="actions"><button type="submit" class="btn btn-primary">Continue</button></div>
 </form>
-<form data-api="DELETE /api/session" data-next="/sign-in"><p class="help">Signed in as ${person.email ?? person.name}. <button type="submit" class="btn btn-link">Sign out</button></p></form>`,
+<form method="dialog" data-api="DELETE /api/session" data-next="/sign-in"><p class="help">Signed in as ${person.email ?? person.name}. <button type="submit" class="btn btn-link">Sign out</button></p></form>`,
     });
   });
 

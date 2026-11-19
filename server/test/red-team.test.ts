@@ -182,9 +182,9 @@ describe("red team: tag spoofing in every field someone else fills", () => {
   test("subject, text and file name: framed for the agent, quoted for the person", async () => {
     const { p, chris, mallory, muse, mal, cookies } = await world();
     for (const [i, spoof] of SPOOFS.entries()) {
-      const subject = `S${i} ${spoof}`.replace(/[\r\n\u2028\u0000]/g, " ").trim();
-      // A file name takes no folders and no control characters; everything else goes through to be defanged.
-      const name = `f${i}-${spoof}`.replace(/[\u0000-\u001f\u007f/\\]/g, "").trim() || `f${i}`;
+      const subject = `S${i} ${spoof}`.replace(/[\r\n\u0085\u2028\u2029\u0000]/g, " ").trim();
+      // A file name takes no folders, no control characters and no line separators; everything else goes through to be defanged.
+      const name = `f${i}-${spoof}`.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029/\\]/g, "").trim() || `f${i}`;
       const file = await p.files.createUpload(mal.agent, { name, text: "x" });
       const held = p.messages.send(mal.agent, { to: "chris/muse", subject, text: spoof, attachments: [file.file.id] }).message;
       // The person's page: Portico's own words, and the sender's as an escaped quote.

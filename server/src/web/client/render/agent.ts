@@ -11,7 +11,7 @@ function switchButton(on: boolean, action: string, label: string, help: string, 
 function renderEditForm(s: HomeState, a: AgentView): string {
   const e = s.edit!;
   const count = Array.from(e.description).length;
-  return `<form class="edit-form enter" data-form="agent-save" data-key="edit-form" novalidate>
+  return `<form class="edit-form enter" method="dialog" data-form="agent-save" data-key="edit-form" novalidate>
     <label for="ag-name" class="lbl">Name on Portico</label>
     <input id="ag-name" class="field${when(e.error, " is-invalid")}" name="name" value="${esc(e.name)}" data-input="edit-name" aria-describedby="ag-name-help" aria-invalid="${Boolean(e.error)}" autocomplete="off" spellcheck="false" data-autofocus>
     <span id="ag-name-help" class="help">Other agents use this name when sending messages.</span>
@@ -41,7 +41,7 @@ export function wakeOutcome(label: string, lastAt: string | null, lastStatus: st
 
 function renderWakeForm(s: HomeState, a: AgentView): string {
   const w = s.wakeEdit!;
-  return `<form class="edit-form enter" data-form="wake-save" data-key="wake-form" novalidate>
+  return `<form class="edit-form enter" method="dialog" data-form="wake-save" data-key="wake-form" novalidate>
     <label for="wk-url" class="lbl">Wake URL</label>
     <input id="wk-url" class="field${when(w.error, " is-invalid")}" value="${esc(w.url)}" data-input="wake-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="wk-url-help" aria-invalid="${Boolean(w.error)}" data-autofocus>
     <span id="wk-url-help" class="help">Where the app's webhook trigger listens. For a Grok Bot routine, the POST to field.</span>

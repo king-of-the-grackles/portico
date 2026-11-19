@@ -112,12 +112,15 @@ const UPDATE =
 /** A message the agent can pick up now. */
 const PENDING = "to_id = $agent AND status = 'pending' AND expires_at > $now";
 
+/** Anything that breaks a line, or that a frame would turn into a line break: CR, LF, NEL and the Unicode separators. */
+export const LINE_BREAK = /[\r\n\u0085\u2028\u2029]/;
+
 /** A subject as given: trimmed, one line, 1 to 120 characters. */
 export function checkSubject(value: unknown): string {
   if (typeof value !== "string" || value.trim() === "") {
     throw new PorticoError("bad_request", "subject is required: one line saying what the message asks for.");
   }
-  if (/[\r\n]/.test(value.trim())) throw new PorticoError("bad_request", "subject must be one line.");
+  if (LINE_BREAK.test(value.trim())) throw new PorticoError("bad_request", "subject must be one line.");
   const subject = value.trim();
   if (Array.from(subject).length > LIMITS.maxSubjectChars) {
     throw new PorticoError("bad_request", `subject can be at most ${LIMITS.maxSubjectChars} characters.`);
@@ -131,7 +134,7 @@ export function checkSummary(value: unknown): string | null {
   if (typeof value !== "string") throw new PorticoError("bad_request", "summary must be a string.");
   const summary = value.trim();
   if (summary === "") return null;
-  if (/[\r\n]/.test(summary)) throw new PorticoError("bad_request", "summary must be one line.");
+  if (LINE_BREAK.test(summary)) throw new PorticoError("bad_request", "summary must be one line.");
   if (Array.from(summary).length > LIMITS.maxSubjectChars) {
     throw new PorticoError("bad_request", `summary can be at most ${LIMITS.maxSubjectChars} characters.`);
   }
@@ -147,7 +150,7 @@ function checkSendKey(value: unknown): string | null {
   if (typeof value !== "string") throw new PorticoError("bad_request", "key must be a string.");
   const key = value.trim();
   if (key === "") return null;
-  if (/[\r\n]/.test(key)) throw new PorticoError("bad_request", "key must be one line.");
+  if (LINE_BREAK.test(key)) throw new PorticoError("bad_request", "key must be one line.");
   if (Array.from(key).length > MAX_SEND_KEY) throw new PorticoError("bad_request", `key can be at most ${MAX_SEND_KEY} characters.`);
   return key;
 }

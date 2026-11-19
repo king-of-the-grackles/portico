@@ -131,3 +131,30 @@ describe("PorticoClient", () => {
     expect(seen[0]!.headers).toMatchObject({ authorization: "Bearer pc_x", "x-portico-session": "key-0001", "x-portico-folder": "f".repeat(64) });
   });
 });
+
+describe("a redirect from Portico's address", () => {
+  test("is never followed: nothing of the session's reaches another address, and the call fails", async () => {
+    const seen: { path: string; session: string | null; body: string }[] = [];
+    const other = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: async (req) => {
+        seen.push({ path: new URL(req.url).pathname, session: req.headers.get("x-portico-session"), body: await req.text() });
+        return Response.json({ agents: [], messages: [], updates: [], message: { id: "forged" }, delivery: "pushed" });
+      },
+    });
+    // Another origin: localhost, where the redirecting server is 127.0.0.1.
+    const moved = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => Response.redirect(`http://localhost:${other.port}${new URL(req.url).pathname}`, 307) });
+    try {
+      const client = new PorticoClient({ url: `http://127.0.0.1:${moved.port}`, token: "pc_x", sessionKey: "key-0001" });
+      expect((await apiError(client.listAgents())).code).toBe("unreachable");
+      expect((await apiError(client.sendMessage({ to: "grok", subject: "Plan", text: "the text" }))).code).toBe("unreachable");
+      expect((await apiError(client.pendingDeliveries())).code).toBe("unreachable");
+      await expect(client.openStream(new AbortController().signal)).rejects.toThrow();
+      expect(seen).toEqual([]);
+    } finally {
+      moved.stop(true);
+      other.stop(true);
+    }
+  });
+});

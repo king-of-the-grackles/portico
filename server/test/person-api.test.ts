@@ -49,6 +49,41 @@ describe("conventions", () => {
     expect(res.status).toBe(403);
   });
 
+  test("an X-Forwarded-Host a client sends doesn't make another site's request Portico's own", async () => {
+    const { p, owner } = await setup();
+    const from = (headers: Record<string, string>) =>
+      p.app.request(`${PUBLIC_URL}/api/agents/x`, { method: "DELETE", headers: { cookie: owner, ...headers } });
+    expect((await from({ origin: "https://evil.example", host: "portico.example.com", "x-forwarded-host": "evil.example" })).status).toBe(403);
+    // Nor does the request's own Host, once a public URL is known.
+    expect((await from({ origin: "https://evil.example", host: "evil.example" })).status).toBe(403);
+    // Behind a proxy that passes its own Host along, the public URL still decides.
+    expect((await from({ origin: PUBLIC_URL, host: "10.0.0.5:8790" })).status).toBe(404);
+  });
+
+  test("a public URL on this computer takes each loopback name, with the same scheme and port, and nothing else", async () => {
+    const p = makePortico({ config: { publicUrl: "http://localhost:8790" } });
+    const cookie = signIn(p, await addOwner(p));
+    const from = (origin: string) => p.app.request("http://localhost:8790/api/agents/x", { method: "DELETE", headers: { cookie, origin } });
+    for (const origin of ["http://localhost:8790", "http://127.0.0.1:8790", "http://[::1]:8790"]) expect((await from(origin)).status).toBe(404);
+    for (const origin of ["http://127.0.0.1:3000", "https://127.0.0.1:8790", "http://127.0.0.2:8790", "http://evil.example:8790", "http://localhost.evil.example:8790"]) {
+      expect((await from(origin)).status).toBe(403);
+    }
+    // A public URL elsewhere stays exact.
+    const hosted = makePortico();
+    const owner = signIn(hosted, await addOwner(hosted));
+    const res = await hosted.app.request(`${PUBLIC_URL}/api/agents/x`, { method: "DELETE", headers: { cookie: owner, origin: "http://127.0.0.1" } });
+    expect(res.status).toBe(403);
+  });
+
+  test("before a public URL is known, the request's own Host decides", async () => {
+    const p = makePortico({ setup: false, config: { publicUrl: null } });
+    const post = (headers: Record<string, string>) =>
+      p.app.request("http://localhost:8790/api/setup", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: "{}" });
+    expect((await post({ origin: "http://192.168.1.5:8790", host: "192.168.1.5:8790" })).status).toBe(404);
+    expect((await post({ origin: "https://evil.example", host: "192.168.1.5:8790" })).status).toBe(403);
+    expect((await post({ origin: "https://evil.example", host: "192.168.1.5:8790", "x-forwarded-host": "evil.example" })).status).toBe(403);
+  });
+
   test("a claim waiting for approval reads only /api/me", async () => {
     const p = makePortico();
     await addOwner(p);

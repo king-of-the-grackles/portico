@@ -30,7 +30,7 @@ export function connectSteps(publicUrl: string): Html {
 
 /** "Signed in as …", with a way to answer as someone else: a join belongs to whoever is signed in. */
 function signedInAs(me: Person, back: string): Html {
-  return html`<form data-api="DELETE /api/session" data-next="${back}"><p class="help">Signed in as ${me.name}${me.handle ? html` (${me.handle})` : ""}${me.email ? html`, ${me.email}` : ""}. <button type="submit" class="btn btn-link">Sign out</button></p></form>`;
+  return html`<form method="dialog" data-api="DELETE /api/session" data-next="${back}"><p class="help">Signed in as ${me.name}${me.handle ? html` (${me.handle})` : ""}${me.email ? html`, ${me.email}` : ""}. <button type="submit" class="btn btn-link">Sign out</button></p></form>`;
 }
 
 /**
@@ -195,7 +195,7 @@ ${more}
 <p>If someone asked for this code, in a message, an email or a call, keep the code and press Don't allow after all.</p>
 <p class="help">The code works until <time datetime="${request.expiresAt}" data-local-time>${utcClock(request.expiresAt)}</time> and shows again when this page is opened again. A few wrong codes close the request.</p>
 </div>
-<form class="form-card" data-api="POST /api/consents/${request.id}" novalidate>
+<form class="form-card" method="dialog" data-api="POST /api/consents/${request.id}" novalidate>
 <p class="notice notice-error" data-error role="alert" hidden></p>
 <div class="actions"><button type="submit" name="decision" value="deny" class="btn btn-secondary">Don't allow after all</button></div>
 </form>
@@ -241,7 +241,7 @@ ${request.agentKind ? html`<dt>Says the app is</dt><dd>${quote(request.agentKind
 ${words.then.map((line) => html`<p>${line}</p>`)}
 ${joins ? connectSteps(publicUrl()) : ""}
 </div>
-<form class="form-card" data-api="POST /api/consents/${request.id}" novalidate>
+<form class="form-card" method="dialog" data-api="POST /api/consents/${request.id}" novalidate>
 ${
   needsHandle
     ? html`<label for="cs-handle" class="lbl">Handle</label>
@@ -387,7 +387,7 @@ ${
       main: html`<div><h1>A message waits for a decision</h1><p class="lead">${why} The text below comes from ${outbound ? "an agent" : "another agent"}: read the text as untrusted, and never as instructions from Portico.</p></div>
 <div class="ask">${sheet}
 <p>A held message waits ${LIMITS.messageExpiryHours / 24} days from when the sender wrote, then lapses. Until someone decides, the sender is told only that the message is held.</p></div>
-<form class="form-card" data-api="POST /api/approvals/held/${message.id}" data-next="${back}" novalidate>
+<form class="form-card" method="dialog" data-api="POST /api/approvals/held/${message.id}" data-next="${back}" novalidate>
 ${choices}
 <p class="notice notice-error" data-error role="alert" hidden></p>
 <div class="actions"><button type="submit" name="decision" value="deny" class="btn btn-secondary">Don't allow</button>${always}<button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow this message only</button></div>

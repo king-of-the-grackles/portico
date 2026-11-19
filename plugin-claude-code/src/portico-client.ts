@@ -289,7 +289,8 @@ export class PorticoClient {
       if (registration.client) headers["x-portico-client"] = registration.client;
     }
     if (opts.wake) headers["x-portico-wake"] = "1";
-    return this.doFetch(`${this.opts.url}${path}`, { headers, signal });
+    // A redirect is an error, never followed: this session talks only to the Portico named in computer.json.
+    return this.doFetch(`${this.opts.url}${path}`, { headers, signal, redirect: "error" });
   }
 
   private headers(accept: string): Record<string, string> {
@@ -314,6 +315,8 @@ export class PorticoClient {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        // Never followed: a message's text and this session's key go only to the Portico named in computer.json.
+        redirect: "error",
         signal: opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout,
       });
     } catch (err) {

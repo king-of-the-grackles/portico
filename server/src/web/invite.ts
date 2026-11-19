@@ -21,7 +21,7 @@ function claimTemplates() {
   const owner = html`<span data-owner></span>`;
   const claim = html`<template id="invite-claim">
 <div><h1>Join ${owner} on Portico</h1><p class="lead">Invited by ${owner}. Joining makes an account on this Portico server.</p></div>
-<form class="form-card" method="post" novalidate data-api="POST /api/invites/claim">
+<form class="form-card" method="dialog" novalidate data-api="POST /api/invites/claim">
 <label for="join-name" class="lbl">Name</label>
 <input id="join-name" name="name" class="field" autocomplete="name" maxlength="60" required aria-describedby="join-name-help">
 <span id="join-name-help" class="help">Shown to other people on Portico.</span>

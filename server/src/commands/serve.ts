@@ -8,15 +8,24 @@ import type { CliIo } from "./io";
 
 export const SETUP_LINK_LINE = "Open this link in a browser to set up Portico. The link works once and expires in 1 hour.";
 
+/** What a local start says instead of the link when its output isn't a terminal: the link is a secret, and output that is kept is a log. */
+export const SETUP_LINK_HINT = "Portico isn't set up yet. Run portico setup for a one-time setup link.";
+
+/** Whether this start is a local one before setup: no cloud platform, and no public URL or a localhost one. */
+export function localBeforeSetup(core: Pick<Core, "config" | "settings">, env: CliIo["env"]): boolean {
+  if (core.settings.setupDone() || platformUrl(env)) return false;
+  return !core.config.publicUrl || isLocalUrl(core.config.publicUrl);
+}
+
 /**
- * Running locally (no cloud platform, and no public URL or a localhost one) before setup, each start makes a setup
- * link, so nobody has to run `portico setup` on their own computer. On a server, `portico setup` prints one instead, so
- * the link never lands in a platform's logs.
+ * Running locally before setup, in a terminal, each start makes a setup link, so nobody has to run `portico setup` on
+ * their own computer. The links earlier starts made stop working, so only the one on screen opens setup. Anywhere the
+ * output is kept instead of read (a container's log, a service manager's, a pipe), and on a server, `portico setup`
+ * prints one instead, so the link never lands in a log.
  */
-export function localSetupLink(core: Pick<Core, "config" | "settings" | "accounts">, env: CliIo["env"]): string | null {
-  if (core.settings.setupDone() || platformUrl(env)) return null;
-  if (core.config.publicUrl && !isLocalUrl(core.config.publicUrl)) return null;
-  const { token } = core.accounts.createSetupLink();
+export function localSetupLink(core: Pick<Core, "config" | "settings" | "accounts">, env: CliIo["env"], tty: boolean): string | null {
+  if (!tty || !localBeforeSetup(core, env)) return null;
+  const { token } = core.accounts.createSetupLink({ reset: true });
   return `${core.settings.publicUrl()}/setup#${token}`;
 }
 
@@ -57,11 +66,13 @@ export async function serveCommand(io: CliIo): Promise<number | "running"> {
   }
   try {
     const running = startServer(config);
-    const link = localSetupLink(running.portico, io.env);
+    const link = localSetupLink(running.portico, io.env, io.tty === true);
     if (link) {
       // A plain line on the terminal, never a log line: the link is a secret.
       io.out(`Portico isn't set up yet. ${SETUP_LINK_LINE}`);
       io.out(`  ${link}`);
+    } else if (localBeforeSetup(running.portico, io.env)) {
+      io.out(SETUP_LINK_HINT);
     }
     const shutdown = () => {
       running.stop();
