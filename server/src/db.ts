@@ -609,6 +609,9 @@ function open(kind: DbKind, path: string, log?: DbLog): Database {
     db.run("PRAGMA busy_timeout = 5000");
     // Off by default in SQLite: removing a row cascades to what depends on the row, inside the one database.
     db.run("PRAGMA foreign_keys = ON");
+    // The directory holds what must not outlive its row: a deleted or replaced value's bytes are zeroed in the file,
+    // not left in the page's free space for whoever reads the file later.
+    if (kind === DIRECTORY) db.run("PRAGMA secure_delete = ON");
     prepare(db, { kind, path, log });
   } catch (err) {
     db.close();

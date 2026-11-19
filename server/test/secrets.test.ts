@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -329,10 +330,7 @@ describe("wake URL keys and event secrets at rest", () => {
     await flush();
     expect(hooks.sent.filter((req) => req.url === HOOK)).toHaveLength(hooks.sent.slice(0, sent).filter((req) => req.url === HOOK).length);
     expect(stored(p).wake!.last_status).toBe("secret_unreadable");
-    p.db.run("PRAGMA wal_checkpoint(TRUNCATE)");
-    p.db.run("VACUUM");
     shut(p);
-    expect(filesIn(dir).some((file) => file.bytes.includes(Buffer.from(WAKE_KEY)))).toBe(false);
   });
 
   test("a change of key: with the old key given, a start moves every value to the new one", async () => {
@@ -505,6 +503,143 @@ describe("invite and share link secrets at rest", () => {
     expect(back.people.inviteSecret(first.invite.invite.id)).toBe(first.invite.secret);
     expect(back.shares.secretFor(first.chris.id, first.share.share.id)).toBe(first.share.secret);
     shut(back);
+  });
+});
+
+describe("what a start replaces doesn't stay readable in the files", () => {
+  const SESSION_KEY = "session-key-kept-secret-7f3a";
+  /** Which of the values some file in the folder still holds, in any of their forms. */
+  const found = (dir: string, values: Record<string, string>) =>
+    Object.entries(values)
+      .filter(([, value]) => filesIn(dir).some((file) => forms(value).some((needle) => file.bytes.includes(needle))))
+      .map(([name]) => name);
+
+  /**
+   * A data folder as an earlier Portico left one: the wake key, the event secrets and the session key as they were,
+   * and the link secrets sealed with the signing key that lies beside them. Written through a plain connection, the
+   * way that Portico wrote, and checkpointed into the main file.
+   */
+  async function oldFolder() {
+    const dir = folder();
+    const first = await world(dir);
+    const { computer } = addComputer(first.p, first.chris);
+    addSession(first.p, computer, { key: "placeholder-session-key" });
+    await first.p.wakeUrls.set(first.grok.agent, first.chris.id, { url: HOOK, key: "placeholder" });
+    await subscribe(first.p, first.dot.token);
+    await subscribe(first.p, first.dot.token, OTHER_SECRET);
+    const invite = first.p.people.createInvite(first.chris.id, "Maya");
+    const share = first.p.shares.create(first.chris.id, first.p.workspaces.create(first.chris.id, "Launch").id);
+    const signingKey = first.p.config.signingKey;
+    shut(first.p);
+    writeFileSync(join(dir, "signing.key"), `${signingKey}\n`);
+    const old = {
+      wakeKey: WAKE_KEY,
+      eventSecret: OTHER_SECRET,
+      eventSecretBefore: EVENT_SECRET,
+      sessionKey: SESSION_KEY,
+      inviteBox: seal(signingKey, INVITE_SEAL, invite.secret),
+      shareBox: seal(signingKey, SHARE_SEAL, share.secret),
+    };
+    const raw = new Database(join(dir, "portico.db"), { strict: true });
+    raw.run("PRAGMA secure_delete = OFF");
+    raw.query("UPDATE wake_urls SET key = $key").run({ key: old.wakeKey });
+    raw.query("UPDATE event_subscriptions SET secret = $secret, previous_secret = $before").run({ secret: old.eventSecret, before: old.eventSecretBefore });
+    raw.query("UPDATE agent_runs SET session_key = $key").run({ key: old.sessionKey });
+    raw.query("UPDATE invites SET secret_box = $box").run({ box: old.inviteBox });
+    raw.query("UPDATE shares SET secret_box = $box").run({ box: old.shareBox });
+    // A table that came and went, as tables do: its pages return to the free list with their bytes.
+    raw.run("DELETE FROM settings WHERE key IN ('scrubbed_at', 'scrub_pending')");
+    raw.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    raw.close();
+    return { dir, old, invite, share };
+  }
+
+  /**
+   * Bytes of a value in pages the database no longer uses, as replacing a row leaves them in a file of real size: rows
+   * that held the value and are gone, in pages of their own that went back to the free list as they were.
+   */
+  function leaveBehind(raw: Database, value: string): void {
+    raw.run("CREATE TABLE gone (v TEXT)");
+    const insert = raw.query("INSERT INTO gone (v) VALUES ($v)");
+    for (let i = 0; i < 200; i++) insert.run({ v: value });
+    raw.run("DROP TABLE gone");
+  }
+
+  test("after the start that encrypts them, no file in the data folder holds the old values, running or stopped", async () => {
+    const { dir, old, invite, share } = await oldFolder();
+    expect(found(dir, old).sort()).toEqual(Object.keys(old).sort());
+
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    const { p, hooks, grok, muse } = await restart(dir);
+    expect(lines.some((line) => line.includes("database_scrubbed") && line.includes("stored_secrets_replaced"))).toBe(true);
+    // While the server runs: the database, its write-ahead log and everything beside them.
+    expect(found(dir, { ...old, invite: invite.secret, share: share.secret })).toEqual([]);
+    // Everything still works with what the rows hold now.
+    send(p, muse, "grok");
+    await flush();
+    expect(hooks.sent.find((req) => req.url === HOOK)!.headers.authorization).toBe(`Bearer ${WAKE_KEY}`);
+    expect(p.people.inviteSecret(invite.invite.id)).toBe(invite.secret);
+    expect(p.agents.sessionByKey((p.db.query("SELECT id FROM computers").get() as { id: string }).id, SESSION_KEY)).not.toBeNull();
+
+    // What the agent replaces or removes later goes the same way: the freed bytes are zeroed, encrypted or not.
+    const before = stored(p).wake!.key;
+    expect((await callAs(p, grok, "PUT", "/api/agent/wake", { url: HOOK, key: "k_second" })).status).toBe(200);
+    const second = stored(p).wake!.key;
+    expect((await callAs(p, grok, "DELETE", "/api/agent/wake")).status).toBe(204);
+    p.db.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    expect(found(dir, { ...old, before, second, wakeKey2: "k_second" })).toEqual([]);
+    shut(p);
+    expect(found(dir, { ...old, before, second })).toEqual([]);
+
+    // The next start has nothing to replace and rewrites nothing.
+    lines.length = 0;
+    const again = await restart(dir);
+    expect(lines.some((line) => line.includes("database_scrubbed"))).toBe(false);
+    shut(again.p);
+  });
+
+  test("a database an earlier start already encrypted, leaving the old bytes behind, is rewritten once", async () => {
+    const { dir, old } = await oldFolder();
+    // That start's pass, as it was: the rows replaced, the freed bytes left in the pages, nothing rewritten.
+    const raw = new Database(join(dir, "portico.db"), { strict: true });
+    raw.run("PRAGMA secure_delete = OFF");
+    const secrets = Secrets.from(TEST_SECRETS_KEY);
+    const agentId = (raw.query("SELECT agent_id FROM wake_urls").get() as { agent_id: string }).agent_id;
+    raw.query("UPDATE wake_urls SET key = $key").run({ key: await secrets.seal(WakeUrls.place(agentId), WAKE_KEY) });
+    leaveBehind(raw, old.wakeKey);
+    raw.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    raw.close();
+    expect(found(dir, { wakeKey: old.wakeKey })).toEqual(["wakeKey"]);
+
+    const lines: string[] = [];
+    captureLogs((line) => lines.push(line));
+    const { p } = await restart(dir);
+    expect(lines.some((line) => line.includes("database_scrubbed"))).toBe(true);
+    expect(found(dir, old)).toEqual([]);
+    shut(p);
+    expect(found(dir, old)).toEqual([]);
+  });
+
+  test("a rewrite that didn't happen is tried again at the next start", async () => {
+    const { dir, old } = await oldFolder();
+    // The passes ran and the server stopped before the rewrite: the note they left is still there.
+    const raw = new Database(join(dir, "portico.db"), { strict: true });
+    raw.run("PRAGMA secure_delete = OFF");
+    raw.query("UPDATE wake_urls SET key = 'enc:v1:00000000:AAAA:AAAA'").run();
+    raw.query("UPDATE event_subscriptions SET secret = 'enc:v1:00000000:AAAA:AAAA', previous_secret = NULL").run();
+    raw.query("UPDATE agent_runs SET session_key = 'h:' || session_key").run();
+    raw.query("UPDATE invites SET secret_box = NULL").run();
+    raw.query("DELETE FROM shares").run();
+    leaveBehind(raw, old.wakeKey);
+    raw.run("INSERT INTO settings (key, value) VALUES ('scrub_pending', '1'), ('scrubbed_at', '2026-01-01T00:00:00.000Z')");
+    raw.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    raw.close();
+    expect(found(dir, old)).toContain("wakeKey");
+    const { p } = await restart(dir);
+    expect(found(dir, { wakeKey: old.wakeKey, eventSecret: old.eventSecret, inviteBox: old.inviteBox, shareBox: old.shareBox })).toEqual([]);
+    expect(p.db.query("SELECT 1 FROM settings WHERE key = 'scrub_pending'").get()).toBeNull();
+    shut(p);
   });
 });
 
