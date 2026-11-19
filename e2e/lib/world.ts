@@ -107,7 +107,7 @@ export class World {
    * With a share link, a new agent joins straight into that Portico, and an agent already on Portico comes in with
    * join_portico; either way the person allows it on the consent page, picking a handle there the first time.
    */
-  async agent(role: string, name: string, opts: { shareLink?: string } = {}): Promise<AgentClient> {
+  async agent(role: string, name: string, opts: { shareLink?: string; mine?: boolean } = {}): Promise<AgentClient> {
     // A newcomer picks the handle on the consent page, with the first Allow.
     const person = await this.newcomer(role);
     const handle = this.handleFor(role);
@@ -124,7 +124,7 @@ export class World {
         return agent;
       }
       const join = await startJoin(name, opts.shareLink);
-      const token = await joinThroughPage(await context!.newPage(), join, { handle });
+      const token = await joinThroughPage(await context!.newPage(), join, { handle, mine: opts.mine });
       this.tookHandle(role);
       return this.adopt(role, name, token);
     } finally {
@@ -181,6 +181,57 @@ export class World {
     if (!shareLink) throw new Error("share_portico was allowed but list_porticos shows no share link.");
     await this.agent("bob", "scout", { shareLink });
     this.rememberShared({ id: portico.id, name });
+    await this.introduce();
     return this.state.shared!;
+  }
+
+  /** The person's answer to a held message, by the API: for arranging. Scenarios about holds use the page. */
+  async decide(role: string, messageId: string, decision: "allow_once" | "always_allow" | "deny"): Promise<void> {
+    const api = await this.apiFor(await this.person(role));
+    try {
+      const res = await api.post(`/api/approvals/held/${messageId}`, { data: { decision } });
+      if (!res.ok()) throw new Error(`POST /api/approvals/held/${messageId} answered ${res.status()}: ${await res.text()}`);
+    } finally {
+      await api.dispose();
+    }
+  }
+
+  /**
+   * Alice and bob each allow the other's agents for good, so later messages between probe and scout aren't held as
+   * first contact. The first-contact scenario undoes this for itself.
+   */
+  async introduce(): Promise<void> {
+    if (this.state.introduced) return;
+    const [alice, bob] = [await this.person("alice"), await this.person("bob")];
+    const [probe, scout] = [await this.agent("alice", "probe"), await this.agent("bob", "scout")];
+    const stamp = Date.now().toString(36);
+    const there = await scout.send({ to: `${alice.handle}/probe`, subject: `Introduction ${stamp}`, text: "Hello from scout." });
+    if (there.delivery === "held") await this.decide("alice", there.message.id, "always_allow");
+    const back = await probe.send({ to: `${bob.handle}/scout`, subject: `Introduction back ${stamp}`, text: "Hello from probe." });
+    if (back.delivery === "held") await this.decide("bob", back.message.id, "always_allow");
+    this.state.introduced = true;
+    saveState(this.state);
+  }
+
+  /** The person API's ID for one of the person's own agents. */
+  async agentId(role: string, name: string): Promise<string> {
+    const api = await this.apiFor(await this.person(role));
+    try {
+      const found = (await (await api.get("/api/agents")).json()).agents.find((a: any) => a.mine && a.name === name);
+      if (!found) throw new Error(`${role} has no agent named ${name}.`);
+      return found.id;
+    } finally {
+      await api.dispose();
+    }
+  }
+
+  /** The person's ID. */
+  async personId(role: string): Promise<string> {
+    const api = await this.apiFor(await this.person(role));
+    try {
+      return (await (await api.get("/api/me")).json()).person.id;
+    } finally {
+      await api.dispose();
+    }
   }
 }

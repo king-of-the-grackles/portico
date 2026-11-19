@@ -29,6 +29,8 @@ export interface RunState {
   agents: Record<string, StoredAgent>;
   /** The Portico alice shares with bob, once a spec or helper made it. */
   shared: { id: string; name: string } | null;
+  /** Whether alice and bob have each allowed the other's agents (first contact). */
+  introduced?: boolean;
 }
 
 export const stateFile = (id = runId()) => path.join(STATE_DIR, `${id}.json`);

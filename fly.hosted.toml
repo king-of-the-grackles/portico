@@ -1,13 +1,13 @@
-# Fly.io config for hosted Portico: one server for every account, at <domain>.
-# Pass the app's name with -a on each fly command, and set PORTICO_HOSTED_DOMAIN to the domain:
+# Fly.io config for hosted Portico: one server for every account, at one address, with Descope sign-in.
+# Pass the app's name with -a on each fly command:
 #   fly deploy -c fly.hosted.toml -a <app name> --ha=false
 # Secrets (fly secrets set): PORTICO_FILES_BUCKET and the bucket's keys, which `fly storage create` sets as
 # BUCKET_NAME, AWS_ENDPOINT_URL_S3, AWS_REGION, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
-# To email share links, also set PORTICO_RESEND_API_KEY (and PORTICO_RESEND_WEBHOOK_SECRET for bounces and
-# complaints, posted by Resend to https://<domain>/api/mail/resend). The sender defaults to invites@mail.<domain>.
-# The domain needs a certificate for itself and one for *.<domain> (fly certs add).
-# Moving from a database per workspace to one database: deploy once with `-e PORTICO_HOLD=1` (nothing is served and
-# no database is opened), run `portico workspace unite <name>` on the host, then deploy again without it.
+# To email consent links and notices, also set PORTICO_RESEND_API_KEY (and PORTICO_RESEND_WEBHOOK_SECRET for bounces
+# and complaints, posted by Resend to https://<address>/api/mail/resend). The sender defaults to
+# invites@mail.<address's host>.
+# The data folder holds portico.db (people, agents and Porticos), porticos/<id>/content.db (each Portico's messages)
+# and signing.key. A database made by an earlier Portico is refused: point PORTICO_DATA_DIR at a new folder.
 app = "portico-hosted"
 primary_region = "iad"
 
@@ -15,10 +15,10 @@ primary_region = "iad"
   dockerfile = "Dockerfile"
 
 [env]
-  PORTICO_HOSTED_DOMAIN = "portico.chat"
-  # Everything lives on the volume: the one database in main/, and what came before it.
-  PORTICO_HOSTED_DATA = "/data/hosted"
-  # People sign in with Descope on the base domain. A project ID is public: the sign-in page shows the same value.
+  PORTICO_PUBLIC_URL = "https://portico.chat"
+  # A new folder beside what earlier versions kept under /data/hosted, which stays untouched.
+  PORTICO_DATA_DIR = "/data/portico"
+  # People sign in with Descope. A project ID is public: the sign-in page shows the same value.
   PORTICO_DESCOPE_PROJECT_ID = "P3MD7hNBI7xhF3svzdJQHDkFRcYe"
   PORTICO_PLUGIN_SOURCE = "king-of-the-grackles/portico"
 

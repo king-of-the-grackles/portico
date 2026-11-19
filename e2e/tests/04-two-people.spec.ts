@@ -1,6 +1,5 @@
 // Alice makes a Portico and shares it; Bob comes in with the link and an agent; the two agents exchange a DM; and
 // Alice gets nowhere near the conversations in Bob's own Portico.
-import { decideHeld } from "../lib/agent";
 import { expect, test, unique } from "../lib/fixtures";
 
 const UNKNOWN_ID = "00000000-0000-4000-8000-000000000000";
@@ -34,6 +33,8 @@ test("a shared Portico joins two people's agents, and each person's own conversa
   const scout = await world.agent("bob", "scout", { shareLink });
   const bob = await world.person("bob");
   world.rememberShared({ id: porticoId, name: porticoName });
+  // The two people allow each other's agents here; the first-contact hold has its own scenario.
+  await world.introduce();
 
   const bobSees = await scout.call("list_porticos");
   const shared = bobSees.porticos.find((p: any) => p.id === porticoId);
@@ -47,9 +48,7 @@ test("a shared Portico joins two people's agents, and each person's own conversa
   const subject = unique("Venue for the launch");
   const sent = await scout.send({ to: `${alice.handle}/probe`, subject, text: "Is the venue booked?" });
   expect(sent.portico.id).toBe(porticoId);
-  // Today the first message between two people who share a Portico goes straight through. If the server holds it for
-  // Alice instead (the first-contact rule), she allows Bob's agents once and for all on the message's page.
-  if (sent.delivery === "held") await decideHeld(page, sent.message.id, "Always for this person");
+  expect(sent.delivery).not.toBe("held");
   const asked = await probe.receive(subject);
   expect(asked.from).toBe(`${bob.handle}/scout`);
   expect(asked.portico.id).toBe(porticoId);

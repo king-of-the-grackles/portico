@@ -33,10 +33,9 @@ export interface Join {
   id: string;
   /** The consent page the person opens. */
   link: string;
-  /** Only while the agent is the one that shows the code. */
-  code?: string;
   poll_secret: string;
   expires_at: string;
+  /** The sentence the agent shows its person. */
   show: string;
 }
 
@@ -48,37 +47,58 @@ export async function startJoin(name: string, shareLink?: string): Promise<Join>
   return body;
 }
 
-const AFTER_ALLOW = /^(Allowed|Joined|Give this code to the agent)$/;
+/** GET /api/join/:id with the poll secret: the status and nothing else (pending, allowed, approved, denied, expired). */
+export async function joinStatus(join: Join): Promise<any> {
+  const { status, body } = await http("GET", `/api/join/${join.id}`, { token: join.poll_secret });
+  if (status !== 200) throw new ApiError(status, body, "GET /api/join/:id");
+  return body;
+}
+
+/** POST /api/join/:id/code: the agent hands in the code its person read on the page. `{ status, body }`, never throws. */
+export function submitJoinCode(join: Join, code: string) {
+  return http("POST", `/api/join/${join.id}/code`, { token: join.poll_secret, body: { code } });
+}
+
+export interface AllowOptions {
+  /** A handle for a person who has none yet: the page asks with the first Allow. */
+  handle?: string;
+  /** On a join: tick "started this join myself". Default true; without it the newcomer's first messages are held once. */
+  mine?: boolean;
+}
 
 /**
- * The consent page, as the signed-in person answers it: a handle the first time, the code when the page asks for one,
- * Allow. Works for a join and for anything else an agent asks (share, come in with a link, delete). Returns the code
- * the page shows after Allow, on a server where the person carries the code to the agent; null otherwise.
+ * The consent page, as the signed-in person answers it: a handle the first time, the "started this myself" tick on a
+ * join, Allow. Works for a join and for anything an agent the person already has asks (share, come in with a link,
+ * delete): those end on "Allowed". A join ends on the page that shows the code, and the code is returned.
  */
-export async function allowOnConsentPage(page: Page, ask: { link: string; code?: string }, opts: { handle?: string } = {}): Promise<string | null> {
+export async function allowOnConsentPage(page: Page, ask: { link: string }, opts: AllowOptions = {}): Promise<string | null> {
   await page.goto(ask.link);
   const handle = page.getByLabel("Handle");
   if (opts.handle && (await handle.count()) > 0) await handle.fill(opts.handle);
-  const code = page.getByLabel("Code the agent shows");
-  if (ask.code && (await code.count()) > 0) await code.fill(ask.code);
+  const mine = page.locator('input[name="mine"]');
+  if (opts.mine !== false && (await mine.count()) > 0) await mine.check();
   await page.locator('button[name="decision"][value="approve"]').click();
-  const heading = page.getByRole("heading", { level: 1, name: AFTER_ALLOW });
+  const heading = page.getByRole("heading", { level: 1, name: /^(Allowed|Joined|Give this code to the agent)$/ });
   await expect(heading).toBeVisible();
   if ((await heading.innerText()).trim() !== "Give this code to the agent") return null;
+  return readJoinCode(page);
+}
+
+/** The 4-digit code on the page a join shows after Allow. */
+export async function readJoinCode(page: Page): Promise<string> {
   const shown = (await page.locator(".join-code").innerText()).replace(/\D/g, "");
   expect(shown, "the code the page shows after Allow").toMatch(/^\d{4}$/);
   return shown;
 }
 
 /**
- * A whole join, whichever way the server does the code. Today: the agent shows the code, the person types it on the
- * page, and the agent's poll carries the token. Next: the person presses Allow, the page shows the code, and the agent
- * hands it in with its poll secret. The one place to change when the join flow changes.
+ * A whole join: the person presses Allow on the page, the page shows a code, and the agent hands the code in with its
+ * poll secret and gets its token. The one place to change when the join flow changes.
  */
-export async function joinThroughPage(page: Page, join: Join, opts: { handle?: string } = {}): Promise<string> {
-  const shown = await allowOnConsentPage(page, join, opts);
-  if (shown === null) return pollJoin(join);
-  const { status, body } = await http("POST", `/api/join/${join.id}/code`, { token: join.poll_secret, body: { code: shown } });
+export async function joinThroughPage(page: Page, join: Join, opts: AllowOptions = {}): Promise<string> {
+  const code = await allowOnConsentPage(page, join, opts);
+  if (code === null) throw new Error("The consent page showed no code after Allow.");
+  const { status, body } = await submitJoinCode(join, code);
   if (status >= 400 || !body?.token) throw new ApiError(status, body, "POST /api/join/:id/code");
   return body.token;
 }
@@ -89,22 +109,6 @@ export async function decideHeld(page: Page, messageId: string, button: "Allow t
   await expect(page.getByRole("heading", { level: 1, name: "A message waits for a decision" })).toBeVisible();
   await page.getByRole("button", { name: button }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Already decided" })).toBeVisible();
-}
-
-/** GET /api/join/:id until the person has answered. The token comes once. */
-export async function pollJoin(join: Join, timeoutMs = 20_000): Promise<string> {
-  const until = Date.now() + timeoutMs;
-  for (;;) {
-    const { status, body } = await http("GET", `/api/join/${join.id}`, { token: join.poll_secret });
-    if (status !== 200) throw new ApiError(status, body, "GET /api/join/:id");
-    if (body.status === "approved") {
-      if (!body.token) throw new Error("The join was allowed but the token was already handed out.");
-      return body.token;
-    }
-    if (body.status !== "pending") throw new Error(`The join ended as ${body.status}.`);
-    if (Date.now() > until) throw new Error("The join stayed pending.");
-    await new Promise((r) => setTimeout(r, 1000));
-  }
 }
 
 // ---- the agent API ----
