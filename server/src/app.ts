@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { makeResolver } from "./agent-api/auth";
 import { mcpRoutes } from "./agent-api/mcp";
 import { openApiDocument } from "./agent-api/openapi";
-import { popupAnswerRoutes } from "./agent-api/popup-answers";
 import { agentRestRoutes, handleError } from "./agent-api/rest";
 import { streamRoutes } from "./agent-api/stream";
 import { agentViews } from "./agent-api/views";
@@ -41,7 +40,6 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/api/agent/openapi.json", (c) => c.json(openApiDocument(core.settings.publicUrl())));
   app.route("/api/agent/stream", streamRoutes({ agents, messages, streams: core.agentStreams, resolver, heartbeatMs: opts.heartbeatMs }));
-  app.route("/api/agent/approvals", popupAnswerRoutes({ approvals: core.approvals, desk: core.desk, views, resolver }));
   app.route(
     "/api/agent",
     agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, views, resolver, changes: core.changes, now: core.now, workspaceTools: toolDeps }),
@@ -49,7 +47,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono 
   app.route("/files", fileRoutes(core));
   app.route("/api/computer", computerApi(core));
   app.route("/api/sign-in-requests", signInRequestApi(core));
-  if (core.workspaces.enabled) app.route("/api/share-requests", shareRequestApi(core));
+  app.route("/api/share-requests", shareRequestApi(core));
   app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, views, resolver, workspaceTools: toolDeps }));
   // Resend reports bounces and complaints here. The signature is the only credential; the body is read as sent.
   app.post("/api/mail/resend", async (c) => {

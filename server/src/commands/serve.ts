@@ -1,9 +1,9 @@
-import { ConfigError, type HostedConfig, hostedEnv, loadConfig, platformUrl } from "../config";
+import { ConfigError, loadConfig, platformUrl } from "../config";
 import type { Core } from "../core/core";
 import { isLocalUrl } from "../core/settings";
 import type { PorticoConfig } from "../core/types";
 import { SchemaMismatchError } from "../db";
-import { startHold, startHosted, startServer } from "../server";
+import { startServer } from "../server";
 import type { CliIo } from "./io";
 
 export const SETUP_LINK_LINE = "Open this link in a browser to set up Portico. The link works once and expires in 1 hour.";
@@ -36,38 +36,14 @@ export function startupProblem(err: unknown, config: Pick<PorticoConfig, "port" 
   const code = (err as { code?: unknown } | null)?.code;
   if (code === "EADDRINUSE") return `Port ${config.port} is already in use. Stop the other process, or set PORT to a free port.`;
   if (code === "SQLITE_CANTOPEN") {
-    return `The database at ${config.dbPath} can't be opened. Check that the folder exists and is writable, or set PORTICO_DB_PATH.`;
+    return `The database at ${config.dbPath} can't be opened. Check that the data folder is writable, or set PORTICO_DATA_DIR to another folder.`;
   }
   return null;
-}
-
-function serveHosted(hosted: HostedConfig, io: CliIo): number | "running" {
-  try {
-    // PORTICO_HOLD: answer the health check and nothing else, with every database closed.
-    const holding = /^(1|true|yes)$/i.test(io.env.PORTICO_HOLD?.trim() ?? "");
-    const running = holding ? startHold(hosted.port) : startHosted(hosted);
-    if (holding) io.out("Portico is holding: nothing is served and no database is open. Unset PORTICO_HOLD to serve again.");
-    else io.out(`Hosted Portico at ${hosted.baseUrl}.`);
-    const shutdown = () => {
-      running.stop();
-      process.exit(0);
-    };
-    process.on("SIGINT", shutdown);
-    process.on("SIGTERM", shutdown);
-    return "running";
-  } catch (err) {
-    const problem = startupProblem(err, { port: hosted.port, dbPath: `${hosted.dataDir}/control.db` });
-    if (!problem) throw err;
-    io.err(problem);
-    return 1;
-  }
 }
 
 export async function serveCommand(io: CliIo): Promise<number | "running"> {
   let config: PorticoConfig;
   try {
-    const hosted = hostedEnv(io.env);
-    if (hosted) return serveHosted(hosted, io);
     config = loadConfig(io.env);
   } catch (err) {
     if (err instanceof ConfigError) {

@@ -1,7 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { AgentStreams } from "../agent-api/stream";
 import type { PersonStreams } from "../api/events";
-import type { Desk } from "../desk";
 import type { Accounts } from "./accounts";
 import type { Activity } from "./activity";
 import type { Agents } from "./agents";
@@ -15,7 +14,7 @@ import type { People } from "./people";
 import type { Presence } from "./presence";
 import type { Settings } from "./settings";
 import type { Tasks } from "./tasks";
-import type { AccountSignIn, CentralSignIn, PorticoConfig } from "./types";
+import type { AccountSignIn, PorticoConfig } from "./types";
 import type { WakeUrls } from "./wake-urls";
 import type { ShareMail } from "./mail";
 import type { Shares } from "./shares";
@@ -46,12 +45,9 @@ export interface Core {
   presence: Presence;
   agentStreams: AgentStreams;
   personStreams: PersonStreams;
-  desk: Desk;
   wakeUrls: WakeUrls;
   events: EventSubscriptions;
-  /** Hosted Portico's sign-in on the base domain; null where people sign in with a password. */
-  central: CentralSignIn | null;
-  /** Set where people sign in with an outside account at this Portico's own address (hosted, one database). */
+  /** Set where people sign in with an outside account (hosted Portico). Null: this server's own passwords and passkeys. */
   accountSignIn: AccountSignIn | null;
   now: () => Date;
   newId: () => string;

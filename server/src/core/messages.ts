@@ -205,7 +205,7 @@ export class Messages {
    * sender used before isn't sent again: the first one comes back. Attachments are file IDs: finished uploads of the
    * sender's own, or files the sender received.
    *
-   * With workspaces, the two agents must be in one workspace now. A name (`to`) finds only agents the sender reaches;
+   * The two agents must be in one workspace now. A name (`to`) finds only agents the sender reaches;
    * a reply (`reply_to`) to an agent the sender no longer reaches is refused, so a conversation between two agents that
    * stopped sharing a workspace stays readable and takes nothing new. The thread records the workspace it runs through.
    */

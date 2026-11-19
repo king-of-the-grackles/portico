@@ -19,6 +19,7 @@ import {
   type TestPortico,
   waitFor,
   writeSessionFile,
+  computerNamed,
 } from "./helpers";
 
 const MAIN = join(import.meta.dir, "../src/main.ts");
@@ -42,8 +43,7 @@ function tempFolder(prefix: string): string {
 
 /**
  * The child's environment, built from scratch: never the test run's own, which inside a Claude Code session carries
- * CLAUDE_CODE_MESSAGING_SOCKET and would post into that session. PORTICO_POPUP=off: a launched plugin never starts a
- * real approval panel.
+ * CLAUDE_CODE_MESSAGING_SOCKET and would post into that session.
  */
 function childEnv(extra: Record<string, string> = {}): Record<string, string> {
   const home = tempFolder("portico-home-");
@@ -52,7 +52,6 @@ function childEnv(extra: Record<string, string> = {}): Record<string, string> {
     HOME: home,
     PORTICO_CLAUDE_HOME: join(home, ".claude"),
     PORTICO_COMPUTER_CONFIG: join(home, ".portico", "computer.json"),
-    PORTICO_POPUP: "off",
     ...extra,
   };
 }
@@ -123,12 +122,7 @@ describe("the plugin over stdio", () => {
       await waitFor(() => sock!.posts.length === 1, 5000);
       expect(sock.posts[0]).toEqual({ auth: "stdio-inbox-token", content: expect.stringContaining("Over stdio\n</portico-message>") });
       expect(channel).toEqual([]);
-      // PORTICO_POPUP=off: no pop-ups, said once at start, and the stream never declares them.
-      expect(logged(stderr(), "approval_popup_unavailable")).toEqual([
-        expect.objectContaining({ level: "warn", platform: process.platform, reason: "off" }),
-      ]);
-      expect(logged(stderr(), "plugin_started")).toEqual([expect.objectContaining({ computer: "macbook", popup: false, folder_off: false })]);
-      expect(p.agentStreams.popupSessions(p.computers.byName("macbook")!.id)).toEqual([]);
+      expect(logged(stderr(), "plugin_started")).toEqual([expect.objectContaining({ computer: "macbook", folder_off: false })]);
       expect(errors).toEqual([]);
       for (const secret of [token, project, "Over stdio"]) expect(stderr()).not.toContain(secret);
     } finally {
@@ -174,7 +168,7 @@ describe("the plugin over stdio", () => {
       const address = `${sessionBaseName(basename(project))}@macbook`;
       await waitFor(() => connected(p!, address), 8000);
       await waitFor(() => changes === 1, 5000);
-      expect((await host.listTools()).tools).toHaveLength(7);
+      expect((await host.listTools()).tools).toHaveLength(13);
       await waitFor(() => sock!.posts.length === 1, 5000);
       expect(sock.posts[0]!.content).toContain(`Joined Portico as \`${sessionBaseName(basename(project))}\`.`);
       expect(logged(stderr(), "computer_joined")).toEqual([expect.objectContaining({ computer: "macbook" })]);
@@ -197,7 +191,7 @@ describe("the plugin over stdio", () => {
   test("in a folder that is off Portico, stays quiet: no tools, no notice, no path in the log", async () => {
     sock = await fakeInboxSocket();
     const { p, token, project, env, address } = await joinedComputer();
-    p.computers.setFolder(p.computers.byName("macbook")!.id, folderId(token, project), basename(project), false);
+    p.computers.setFolder(computerNamed(p, "macbook")!.id, folderId(token, project), basename(project), false);
     env.CLAUDE_CODE_MESSAGING_SOCKET = sock.path;
     registerSession(env, { sessionId: "s-off", cwd: project, status: "busy" });
     const { host, stderr } = await launch(env);

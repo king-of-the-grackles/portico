@@ -10,12 +10,14 @@ import {
   callAs,
   callPerson,
   errorCode,
+  fakeAccounts,
   makePortico,
   signIn,
+  together,
   type TestPortico,
 } from "./helpers";
 
-const on = () => makePortico({ config: { workspaces: true } });
+const on = () => makePortico();
 
 /**
  * Chris (handle chris) with muse and grok-bot, Robert (handle robert) with muse and dots, Maya (handle maya) with
@@ -144,7 +146,8 @@ describe("workspaces", () => {
   });
 
   test("a shared workspace needs a handle from its maker and from everyone let in", async () => {
-    const p = on();
+    // Signing in with an outside account makes a person with no handle yet.
+    const p = makePortico({ accountCheck: fakeAccounts });
     const chris = await addOwner(p);
     const maya = await addMember(p);
     expect(errorCode(() => p.workspaces.create(chris.id, "Launch"))).toBe("wrong_status");
@@ -214,18 +217,31 @@ describe("workspaces", () => {
     expect(p.workspaces.agentsIn(launch.id)).toEqual([]);
   });
 
-  test("with workspaces off there are none, and every agent reaches every other", async () => {
-    const p = makePortico();
+  test("a person made on a server with its own sign-in has a handle from the name, unique and changeable", async () => {
+    const p = on();
+    const chris = await addOwner(p, "Chris");
+    expect(chris.handle).toBe("chris");
+    expect((await addMember(p, "Chris!")).handle).toBe("chris-2");
+    expect((await addMember(p, "Admin")).handle).toBe("admin-2");
+    expect((await addMember(p, "李")).handle).toMatch(/^[a-z0-9-]{3,20}$/);
+    expect(p.people.setHandle(chris.id, "ivester").handle).toBe("ivester");
+    // Nobody waits for a handle, so sharing works at once.
+    expect(p.workspaces.create(chris.id, "Launch").kind).toBe("shared");
+  });
+
+  test("agents of different people reach each other only once they share a workspace", async () => {
+    const p = on();
     const chris = await addOwner(p);
     const maya = await addMember(p);
     const { agent: muse } = addAppAgent(p, chris, "muse");
     const { agent: scout } = addAppAgent(p, maya, "scout");
-    expect(p.workspaces.forPerson(chris.id)).toEqual([]);
-    expect(p.workspaces.reach(muse.id, scout.id)).toBe(true);
-    expect(p.workspaces.reachable(muse.id)).toBeNull();
-    expect(errorCode(() => p.workspaces.create(chris.id, "Launch"))).toBe("bad_request");
-    expect(say(p, muse, "scout").toId).toBe(scout.id);
-    expect(p.messages.threadBetween(muse.id, scout.id)?.workspaceId).toBeNull();
+    expect(p.workspaces.forPerson(chris.id).map((w) => w.kind)).toEqual(["personal"]);
+    expect(p.workspaces.reach(muse.id, scout.id)).toBe(false);
+    expect(p.workspaces.reachable(muse.id)).toEqual(new Set());
+    expect(errorCode(() => say(p, muse, "maya/scout"))).toBe("unknown_agent");
+    together(p, muse, scout);
+    expect(say(p, muse, "maya/scout").toId).toBe(scout.id);
+    expect(p.messages.threadBetween(muse.id, scout.id)?.workspaceId).not.toBeNull();
   });
 });
 
@@ -388,16 +404,6 @@ describe("names with workspaces", () => {
     expect(p.agents.create({ ownerId: robert.id, name: "grok-bot", kind: "grok-bot", type: "app" }).ownerId).toBe(robert.id);
   });
 
-  test("without workspaces a name stays unique across everyone", async () => {
-    const p = makePortico();
-    const chris = await addOwner(p);
-    const maya = await addMember(p);
-    addAppAgent(p, chris, "muse");
-    expect(errorCode(() => p.agents.create({ ownerId: maya.id, name: "muse", kind: "muse", type: "app" }))).toBe("conflict");
-    const { agent: scout } = addAppAgent(p, maya, "scout");
-    expect(errorCode(() => p.agents.update(maya.id, scout.id, { name: "muse" }))).toBe("conflict");
-  });
-
   test("a session is addressed by its short name, or name@computer when its owner has two of the name", async () => {
     const { p, chris, robert, muse, rmuse, launch } = await world();
     const { computer: macbook } = addComputer(p, chris, "macbook");
@@ -477,8 +483,10 @@ describe("what a person reads with workspaces", () => {
     expect((await get(p, maya, `/api/agents/${scout.agent.id}`)).status).toBe(200);
 
     const people = async (person: Person) => (await get<{ people: { name: string }[] }>(p, person, "/api/people")).body.people.map((x) => x.name).sort();
-    expect(await people(chris)).toEqual(["Chris", "Robert"]);
+    expect(await people(robert)).toEqual(["Chris", "Robert"]);
     expect(await people(maya)).toEqual(["Maya"]);
+    // Chris owns this server, with its own sign-in, so Chris also lists every account: accounts, not conversations.
+    expect(await people(chris)).toEqual(["Chris", "Maya", "Robert"]);
   });
 
   test("a file is read by the people whose agents sent or received it, the owner included", async () => {

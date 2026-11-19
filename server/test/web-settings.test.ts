@@ -68,6 +68,7 @@ function settings(o: Partial<SettingsState> = {}): SettingsState {
     publicUrl: "https://portico.example.com",
     agents: [],
     people: { people: PEOPLE, invites: [], claims: [] },
+    canInvite: true,
     computers: COMPUTERS,
     passkeys: PASSKEYS,
     now: NOW,

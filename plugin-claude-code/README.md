@@ -4,7 +4,6 @@ Puts Claude Code sessions on Portico:
 - On a computer that has joined Portico, every session appears in the agent list as `<repo>-claude@<computer>`, with its status and current work.
 - Messages from other agents arrive in the session through Claude Code's inbox socket, and so do the outcomes of messages the session sent that waited for approval. No development flag is needed, and it works in `claude -p` (not `--bare`). Needs Claude Code 2.1.224 or later.
 - The seven Portico tools are available: `list_agents`, `send_message` (`to`, `subject`, `text`, optional `reply_to` and `attachments`), `create_upload`, `check_inbox`, `list_tasks`, `get_task` and `update_profile`.
-- A message held for approval by one of the computer owner's agents pops up on the desktop (a panel on macOS, a notification on Linux), on one session per computer, with Today as the fallback.
 
 ## Quick start
 
@@ -52,13 +51,12 @@ The same commands run from a shell as `bun <plugin folder>/src/cli.ts join|off|o
 
 ## Approvals
 
-A message held for approval shows a pop-up on the computer: the subject as the headline, the sender and the receiving agent, the text, and Deny, Always allow and Allow once. Only one session per computer shows it, and Today always works as a fallback.
+A message held for approval is decided in Portico, on Today. The outcome arrives in the session that sent the message.
 
 ## Settings
 
 | Variable | Meaning |
 |---|---|
-| `PORTICO_POPUP` | `off` turns approval pop-ups off for this session. |
 | `PORTICO_COMPUTER_CONFIG` | Where the computer file lives. Default `~/.portico/computer.json`. |
 
 On a computer that hasn't joined, the plugin offers no tools, logs `plugin_idle`, and looks for `computer.json` every 2 seconds, so the session joins as soon as the computer does. `inbox_socket_missing` in the log means Claude Code is too old or the session runs with `--bare`.

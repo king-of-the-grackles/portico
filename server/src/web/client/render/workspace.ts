@@ -196,7 +196,7 @@ function shareRow(s: HomeState, sh: ShareView): string {
 
 export function renderWorkspace(s: HomeState, id: string): string {
   const data = s.workspacePage?.workspace.id === id ? s.workspacePage : null;
-  const w = data?.workspace ?? s.workspaces?.find((x) => x.id === id) ?? null;
+  const w = data?.workspace ?? s.workspaces.find((x) => x.id === id) ?? null;
   if (!w) return `<div class="page" data-key="page-ws-${esc(id)}"><p class="empty">Loading the workspace.</p></div>`;
   const inside = s.agents.filter((a) => w.agentIds.includes(a.id));
   const mine = inside.filter((a) => a.mine);
@@ -285,7 +285,7 @@ export function renderWorkspace(s: HomeState, id: string): string {
 /** Every agent of the signed-in person once, with a tick for each shared workspace the agent is in. */
 export function renderAgentsPage(s: HomeState): string {
   const mine = s.agents.filter((a) => a.mine);
-  const shared = (s.workspaces ?? []).filter((w) => w.kind === "shared");
+  const shared = s.workspaces.filter((w) => w.kind === "shared");
   const f = s.wsForm;
   const row = (a: AgentView) => {
     const st = agentState(a, s.now);

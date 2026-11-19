@@ -27,6 +27,7 @@ import {
   PUBLIC_URL,
   signIn,
   sseReader,
+  together,
   testConfig,
   visibleCopy,
 } from "./helpers";
@@ -227,8 +228,8 @@ describe("owner recovery", () => {
     expect((await callAs(p, { token: mayaBot.token }, "GET", "/api/agent/agents")).status).toBe(200);
   });
 
-  test("the owner's open streams, waiting check_inbox calls and pages close, so a pop-up can't decide as the owner", async () => {
-    const p = makePortico({ newNonce: () => "nonce-1" });
+  test("the owner's open streams, waiting check_inbox calls and pages close, and the owner's computer token stops working", async () => {
+    const p = makePortico();
     const chris = await addOwner(p);
     const maya = await addMember(p);
     const stolen = signIn(p, chris);
@@ -236,14 +237,14 @@ describe("owner recovery", () => {
     const notes = addAppAgent(p, chris, "notes", { approvalRequired: true });
     const mayaBot = addAppAgent(p, maya, "maya-bot");
     const mayaComputer = addComputer(p, maya, "maya-linux");
-    const popup = await openSessionStream(p, pc, { key: "attacker-run-0001", repo: "api", popup: true });
+    const stream = await openSessionStream(p, pc, { key: "attacker-run-0001", repo: "api" });
+    together(p, mayaBot.agent, notes.agent);
     const mayaSession = await openSessionStream(p, mayaComputer.token, { key: "maya-run-0001", repo: "web" });
     const page = sseReader(await callPerson(p, stolen, "GET", "/api/events"));
     expect((await page.next()).event).toBe("hello");
     const sent = await json<{ message: { id: string } }>(
-      callAs(p, { token: mayaBot.token }, "POST", "/api/agent/messages", { to: "notes", subject: "Held subject", text: "Held text." }),
+      callAs(p, { token: mayaBot.token }, "POST", "/api/agent/messages", { to: "chris/notes", subject: "Held subject", text: "Held text." }),
     );
-    expect(await popup.events.next()).toMatchObject({ event: "approval_request", data: { messageId: sent.message.id, nonce: "nonce-1" } });
     const waiting = callAs(p, { token: notes.token }, "GET", "/api/agent/inbox?wait=5");
     await flush();
     const topics: Topic[][] = [];
@@ -251,15 +252,11 @@ describe("owner recovery", () => {
 
     await recover(p);
 
-    await expect(popup.events.next(500)).rejects.toThrow("stream ended");
+    await expect(stream.events.next(500)).rejects.toThrow("stream ended");
     await expect(besidesChanges(page)).rejects.toThrow("stream ended");
     const woken = await Promise.race([waiting, Bun.sleep(1000).then(() => null)]);
     expect(woken?.status).toBe(401);
-    const answer = await callAs(p, { token: pc, key: "attacker-run-0001" }, "POST", `/api/agent/approvals/${sent.message.id}`, {
-      nonce: "nonce-1",
-      decision: "always_allow",
-    });
-    expect(answer.status).toBe(401);
+    expect((await callAs(p, { token: pc, key: "attacker-run-0001" }, "GET", "/api/agent/inbox")).status).toBe(401);
     expect(p.messages.get(sent.message.id)?.status).toBe("held");
     expect(p.approvals.allowListFor(chris.id, notes.agent.id)).toEqual([]);
     const reopened = await p.app.request("/api/agent/stream?repo=api", {
@@ -267,7 +264,6 @@ describe("owner recovery", () => {
         authorization: `Bearer ${pc}`,
         "x-portico-session": "attacker-run-0002",
         "x-portico-folder": "a".repeat(64),
-        "x-portico-popup": "1",
       },
     });
     expect(reopened.status).toBe(401);
@@ -365,7 +361,7 @@ describe("portico setup", () => {
     const dir = dataDir();
     const dbPath = join(dir, "portico.db");
     openDb(dbPath).close();
-    const { io, out, err } = testIo({ PORTICO_DB_PATH: dbPath, PORTICO_PUBLIC_URL: PUBLIC_URL, PORT: "8802" });
+    const { io, out, err } = testIo({ PORTICO_DATA_DIR: dir, PORTICO_PUBLIC_URL: PUBLIC_URL, PORT: "8802" });
     expect(await setupCommand([], io)).toBe(0);
     expect(err).toEqual([]);
     expect(out[0]).toBe("Open this link in a browser to set up Portico. The link works once and expires in 1 hour.");
@@ -382,7 +378,7 @@ describe("portico setup", () => {
     expect(res.status).toBe(200);
     p.db.close();
 
-    const after = testIo({ PORTICO_DB_PATH: dbPath, PORTICO_PUBLIC_URL: PUBLIC_URL });
+    const after = testIo({ PORTICO_DATA_DIR: dir, PORTICO_PUBLIC_URL: PUBLIC_URL });
     expect(await setupCommand([], after.io)).toBe(1);
     expect(after.err.join("\n")).toBe("Portico is already set up. To set a new owner password, run portico setup --reset.");
     expect(after.out).toEqual([]);
@@ -392,7 +388,7 @@ describe("portico setup", () => {
     const dir = dataDir();
     const dbPath = join(dir, "portico.db");
     openDb(dbPath).close();
-    const env = { PORTICO_DB_PATH: dbPath, PORTICO_PUBLIC_URL: PUBLIC_URL };
+    const env = { PORTICO_DATA_DIR: dir, PORTICO_PUBLIC_URL: PUBLIC_URL };
     const first = testIo(env);
     await setupCommand([], first.io);
     const second = testIo(env);
@@ -421,13 +417,13 @@ describe("portico setup", () => {
   test("refuses without a database, and with an unknown option", async () => {
     const dir = dataDir();
     const dbPath = join(dir, "portico.db");
-    const missing = testIo({ PORTICO_DB_PATH: dbPath });
+    const missing = testIo({ PORTICO_DATA_DIR: dir });
     expect(await setupCommand([], missing.io)).toBe(1);
     expect(missing.err.join("\n")).toBe(
-      `No Portico database at ${dbPath}. Start Portico with portico serve first, or set PORTICO_DB_PATH to the database Portico uses.`,
+      `No Portico database at ${dbPath}. Start Portico with portico serve first, or set PORTICO_DATA_DIR to the data folder Portico uses.`,
     );
     expect(existsSync(dbPath)).toBe(false);
-    const unknown = testIo({ PORTICO_DB_PATH: dbPath });
+    const unknown = testIo({ PORTICO_DATA_DIR: dir });
     expect(await setupCommand(["--force"], unknown.io)).toBe(1);
     expect(unknown.err.join("\n")).toBe("Unknown option: --force. Usage: portico setup [--reset]");
     expect(copyProblems([...missing.err, ...unknown.err].join("\n"))).toEqual([]);
@@ -437,13 +433,13 @@ describe("portico setup", () => {
     const dir = dataDir();
     const dbPath = join(dir, "portico.db");
     openDb(dbPath).close();
-    const local = testIo({ PORTICO_DB_PATH: dbPath, PORT: "8802" });
+    const local = testIo({ PORTICO_DATA_DIR: dir, PORT: "8802" });
     expect(await setupCommand([], local.io)).toBe(0);
     expect(local.out.find((l) => l.includes("/setup#"))).toMatch(/^ {2}http:\/\/localhost:8802\/setup#/);
     expect(local.out.at(-1)).toBe("If a browser reaches Portico at another address, use that address in place of http://localhost:8802.");
     expect(copyProblems(local.out.filter((l) => !l.includes("/setup#")).join("\n"))).toEqual([]);
 
-    const render = testIo({ PORTICO_DB_PATH: dbPath, RENDER_EXTERNAL_URL: "https://portico-x1.onrender.com" });
+    const render = testIo({ PORTICO_DATA_DIR: dir, RENDER_EXTERNAL_URL: "https://portico-x1.onrender.com" });
     await setupCommand([], render.io);
     expect(render.out.find((l) => l.includes("/setup#"))).toContain("https://portico-x1.onrender.com/setup#");
     expect(render.out.join("\n")).not.toContain("in place of");

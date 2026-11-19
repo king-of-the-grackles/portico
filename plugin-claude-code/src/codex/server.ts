@@ -20,7 +20,6 @@ import {
 import { type PluginConfig, PluginConfigError, parsePluginConfig } from "../config";
 import { errorName, stderrLog as log } from "../log";
 import { createPorticoPlugin, createWaitingServer, type Host, porticoPrompt, type PorticoPlugin, SERVER_VERSION } from "../plugin";
-import { popupPlatform, systemRunner } from "../popup";
 import { MAX_INBOX_WAIT_SECONDS as MAX_WAIT, PorticoClient, type StreamRegistration } from "../portico-client";
 import { gitInfo } from "../status";
 import { connectAppServer, controlSocketPath } from "./app-server";
@@ -86,12 +85,9 @@ function joinedBridge(env: Env, config: PluginConfig, file: ComputerFile, opts: 
   const configPath = computerConfigPath(env);
   // Codex starts the server in the conversation's folder. PORTICO_FOLDER is for tests.
   const cwd = realFolder(env.PORTICO_FOLDER?.trim() || process.cwd());
-  const popupOff = (env.PORTICO_POPUP ?? "").trim().toLowerCase() === "off";
   // PORTICO_WAKE=off in the server's env in Codex's config.toml: Portico never starts turns, only the Stop hook delivers.
   const wakeOff = (env.PORTICO_WAKE ?? "").trim().toLowerCase() === "off";
-  const platform = popupPlatform(process.platform, env, existsSync);
-  const runner = !popupOff && platform ? systemRunner(platform, env) : null;
-  log("info", "bridge_started", { origin: new URL(config.url).origin, computer: config.computer, popup: runner !== null, wake: !wakeOff });
+  log("info", "bridge_started", { origin: new URL(config.url).origin, computer: config.computer, wake: !wakeOff });
 
   // Stable for this process: a reconnect is the same conversation, a new process a new one.
   const sessionKey = crypto.randomUUID();
@@ -102,7 +98,6 @@ function joinedBridge(env: Env, config: PluginConfig, file: ComputerFile, opts: 
     log,
     socket: null,
     host: CODEX_HOST,
-    popup: runner,
     server: opts.server,
     joining: opts.joining,
     folder: {

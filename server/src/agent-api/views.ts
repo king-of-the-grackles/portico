@@ -24,7 +24,7 @@ export interface AgentEntryView {
   last_seen: string | null;
   /** New senders' messages to this agent wait for a person's approval. */
   approval_required: boolean;
-  /** With workspaces: the names of the workspaces this agent and the caller are both in. */
+  /** The names of the workspaces this agent and the caller are both in. */
   workspaces?: string[];
 }
 
@@ -67,7 +67,7 @@ export const UNTRUSTED_PROFILES =
 
 /**
  * View builders for the agent API, which name agents by address and people by name. Every name is the one the viewing
- * agent addresses the other by: with workspaces, `<handle>/<name>` for another person's agent.
+ * agent addresses the other by: `<handle>/<name>` for another person's agent.
  */
 export function agentViews(agents: Agents, people: People, files: Files, workspaces: Workspaces, publicUrl: () => string) {
   // Read on every call: these builders live as long as the server, and people rename themselves.
@@ -92,7 +92,7 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
     doing: e.doing,
     last_seen: e.lastSeen,
     approval_required: e.agent.approvalRequired,
-    ...(workspaces.enabled && viewer ? { workspaces: workspaces.shared(viewer.id, e.agent.id).map((w) => w.name) } : {}),
+    ...(viewer ? { workspaces: workspaces.shared(viewer.id, e.agent.id).map((w) => w.name) } : {}),
   });
 
   const file = (f: StoredFile): FileOutView => ({

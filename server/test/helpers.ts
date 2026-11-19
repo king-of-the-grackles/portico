@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { hashPassword } from "../src/core/accounts";
 import { type FileStore, FolderStore } from "../src/core/file-store";
 import type { Registration } from "../src/core/agents";
+import type { AccountCheck } from "../src/core/descope";
+import type { Workspace } from "../src/core/types";
 import { PorticoError } from "../src/core/errors";
 import type { Agent, AgentKind, Computer, Notice, Person, PorticoConfig } from "../src/core/types";
 import { openDb } from "../src/db";
@@ -36,12 +38,25 @@ export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfi
     publicUrl: PUBLIC_URL,
     signingKey: "a".repeat(64),
     webhooksAllowPrivate: false,
-    workspaces: false,
     mail: null,
     files: null,
+    descopeProjectId: null,
     ...overrides,
   };
 }
+
+/**
+ * Stands in for Descope: sign-in tokens are `account:<id>:<email>:<name>`. Passed as `accountCheck`, it makes a Portico
+ * where signing in creates the person, who then picks a handle on the welcome page.
+ */
+export const fakeAccounts: AccountCheck = {
+  accountFor: async (token) => (await fakeAccounts.account!(token)).id,
+  account: async (token) => {
+    const [kind, id, email, name] = String(token).split(":");
+    if (kind !== "account" || !id) throw new PorticoError("unauthorized", "The sign-in didn't check out. Sign in again.");
+    return { id, email: email || null, name: name || null };
+  },
+};
 
 /** A hashed test password, made once: argon2id is slow on purpose. */
 let passwordHash: Promise<string> | null = null;
@@ -92,11 +107,12 @@ export function makePortico(
   opts: {
     config?: Partial<PorticoConfig>;
     setup?: boolean;
-    newNonce?: () => string;
     webhooks?: FakeWebhooks;
     fileStore?: FileStore;
     /** Where share emails go: a fake's `post`. */
     mailPost?: FakeWebhooks["post"];
+    /** Sign-in with an outside account, as Descope does it: who a sign-in token belongs to. */
+    accountCheck?: AccountCheck;
   } = {},
 ): TestPortico {
   const clock = testClock();
@@ -106,7 +122,6 @@ export function makePortico(
     db: openDb(":memory:"),
     now: clock.now,
     newId: () => `id-${String(++counter).padStart(4, "0")}`,
-    newNonce: opts.newNonce,
     heartbeatMs: 50,
     onNotice: (notice) => notices.push(notice),
     // A folder of its own per Portico, made only when a test writes a file.
@@ -115,17 +130,36 @@ export function makePortico(
     // Never the network: a test without a fake gets an email that didn't go out.
     mailPost: opts.mailPost ?? (async () => ({ status: null, error: "no_mail_in_tests" })),
     schedule: opts.webhooks?.schedule,
+    accountCheck: opts.accountCheck,
   });
   if (opts.setup !== false) portico.settings.set("setup_done_at", T0.toISOString());
   return Object.assign(portico, { clock, notices });
 }
 
+/**
+ * People made here get a handle from the name (`chris`, `maya`), as every person on a server with its own sign-in
+ * does. With `accountCheck`, a person starts without one, as before the welcome page.
+ */
 export async function addOwner(p: Portico, name = "Chris"): Promise<Person> {
   return p.people.create({ name, role: "owner", status: "active", passwordHash: await testPasswordHash() });
 }
 
 export async function addMember(p: Portico, name = "Maya", status: "active" | "pending" = "active"): Promise<Person> {
   return p.people.create({ name, role: "member", status, passwordHash: await testPasswordHash() });
+}
+
+/**
+ * Puts agents of different people where they reach each other: a shared workspace owned by the first agent's owner,
+ * with every other owner admitted and every agent added by its own owner. Agents of one person already reach each
+ * other through that person's personal workspace.
+ */
+export function together(p: Portico, ...agents: Agent[]): Workspace {
+  const [first, ...rest] = agents;
+  if (!first) throw new Error("together needs at least one agent");
+  const workspace = p.workspaces.create(first.ownerId, "Together");
+  for (const agent of rest) if (!p.workspaces.hasPerson(workspace.id, agent.ownerId)) p.workspaces.admit(workspace.id, agent.ownerId);
+  for (const agent of agents) p.workspaces.addAgent(agent.ownerId, workspace.id, agent.id);
+  return workspace;
 }
 
 /** A browser sign-in for the person: the Cookie header value to send. */
@@ -206,18 +240,17 @@ export async function callPerson(
   return await p.app.request(`${PUBLIC_URL}${path}`, { method, headers, body: payload });
 }
 
-/** Opens a session's live stream as the plugin does, and reads its hello. `popup` declares pop-ups, `wake` waking. */
+/** Opens a session's live stream as the plugin does, and reads its hello. `wake` declares waking. */
 export async function openSessionStream(
   p: { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } },
   token: string,
-  opts: { key: string; repo?: string; folderId?: string; popup?: boolean; wake?: boolean; client?: "claude-code" | "codex" },
+  opts: { key: string; repo?: string; folderId?: string; wake?: boolean; client?: "claude-code" | "codex" },
 ): Promise<{ res: Response; events: ReturnType<typeof sseReader>; hello: HelloEvent }> {
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
     "x-portico-session": opts.key,
     "x-portico-folder": opts.folderId ?? "a".repeat(64),
   };
-  if (opts.popup) headers["x-portico-popup"] = "1";
   if (opts.wake) headers["x-portico-wake"] = "1";
   if (opts.client) headers["x-portico-client"] = opts.client;
   const res = await p.app.request(`/api/agent/stream?repo=${encodeURIComponent(opts.repo ?? "api")}`, { headers });

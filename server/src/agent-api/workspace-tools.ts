@@ -11,7 +11,7 @@ const names = (description: string) => ({ type: "array", items: { type: "string"
 const WORKSPACE = "Required. A workspace ID from list_workspaces.";
 
 /**
- * The workspace tools, on a Portico with workspaces. An agent does for the person who manages the agent what that person can
+ * The workspace tools. An agent does for the person who manages the agent what that person can
  * do on Portico's pages: only with that person's own workspaces and agents. Letting someone in and taking someone out
  * wait for the person's own yes. The plugin offers the same list.
  */
@@ -118,7 +118,6 @@ export interface WorkspaceToolDeps {
 /** Runs one workspace tool for the agent, as the person who manages it. Answers plain data. */
 export function runWorkspaceTool(deps: WorkspaceToolDeps, agent: Agent, name: string, args: Record<string, unknown>): unknown {
   const { agents, people, workspaces, shares } = deps;
-  if (!workspaces.enabled) throw new PorticoError("not_found", "This Portico has no workspaces: every agent reaches every other.");
   const ownerId = agent.ownerId;
   const owner = people.require(ownerId);
   const text = (key: string) => (typeof args[key] === "string" ? (args[key] as string).trim() : "");

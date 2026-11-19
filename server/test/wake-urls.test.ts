@@ -13,6 +13,7 @@ import {
   makePortico,
   MINUTE,
   signIn,
+  together,
 } from "./helpers";
 
 const HOOK = "https://api.x.ai/routines/r_123/fire";
@@ -33,6 +34,9 @@ describe("wake URLs", () => {
   test("only the agent's manager sets one; the key never comes back", async () => {
     const { p, grok, cookie } = await setup();
     const maya = await addMember(p);
+    // An agent in none of the person's workspaces answers as one that isn't there; in a shared one, as not the person's.
+    expect((await callPerson(p, signIn(p, maya), "PUT", `/api/agents/${grok.agent.id}/wake`, { url: HOOK, key: "k_1" })).status).toBe(404);
+    together(p, grok.agent, addAppAgent(p, maya, "maya-dot").agent);
     const other = await callPerson(p, signIn(p, maya), "PUT", `/api/agents/${grok.agent.id}/wake`, { url: HOOK, key: "k_1" });
     expect(other.status).toBe(403);
 

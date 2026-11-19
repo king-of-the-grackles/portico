@@ -37,7 +37,7 @@ async function launch(entry = MAIN) {
   const { token, computer } = joinTestComputer(p, "macbook");
   const home = tempFolder("portico-home-");
   const project = tempFolder("portico-proj-");
-  const env = { PATH: process.env.PATH ?? "", HOME: home, PORTICO_COMPUTER_CONFIG: join(home, ".portico", "computer.json"), PORTICO_POPUP: "off" };
+  const env = { PATH: process.env.PATH ?? "", HOME: home, PORTICO_COMPUTER_CONFIG: join(home, ".portico", "computer.json") };
   writeComputerFile(env.PORTICO_COMPUTER_CONFIG, { url: p.url, computer, token, off: [] });
   const transport = new StdioClientTransport({ command: "bun", args: [entry], env, cwd: project, stderr: "pipe" });
   const stderr: string[] = [];

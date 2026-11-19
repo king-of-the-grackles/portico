@@ -1,16 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { workspaceTools } from "../src/agent-api/workspace-tools";
 import type { Agent } from "../src/core/types";
-import { addAppAgent, addMember, addOwner, callAs, callPerson, copyProblems, DAY, errorCode, makePortico, MINUTE, signIn, type TestPortico, visibleCopy } from "./helpers";
+import { addAppAgent, addMember, addOwner, callAs, callPerson, copyProblems, DAY, errorCode, fakeAccounts, makePortico, MINUTE, signIn, type TestPortico, visibleCopy } from "./helpers";
 
-const on = () => makePortico({ config: { workspaces: true } });
+const on = () => makePortico();
 
 /**
  * Chris (handle chris) with muse and grok-bot in his shared workspace "Launch". Robert (handle robert) with muse and
  * dots, and Maya (handle maya) with scout: neither is in Launch.
  */
-async function world() {
-  const p = on();
+async function world(p: TestPortico = on()) {
   const chris = p.people.setHandle((await addOwner(p, "Chris")).id, "chris");
   const robert = p.people.setEmail(p.people.setHandle((await addMember(p, "Robert")).id, "robert").id, "robert@example.com");
   const maya = p.people.setEmail(p.people.setHandle((await addMember(p, "Maya")).id, "maya").id, "maya@example.com");
@@ -164,8 +163,10 @@ describe("an agent on Portico comes in with a link", () => {
   });
 
   test("a person without a handle can't come in", async () => {
-    const { p, chris, launch } = await world();
+    // Signing in with an outside account makes a person with no handle yet.
+    const { p, chris, launch } = await world(makePortico({ accountCheck: fakeAccounts }));
     const ada = await addMember(p, "Ada");
+    expect(ada.handle).toBeNull();
     const helper = addAppAgent(p, ada, "helper");
     const request = p.shares.requestForAgent(helper.agent, p.shares.create(chris.id, launch.id).secret);
     expect(errorCode(() => p.shares.decide(ada.id, request.id, { decision: "approve" }))).toBe("wrong_status");
@@ -408,7 +409,7 @@ describe("the workspace tools", () => {
     expect(p.workspaces.hasPerson(launch.id, robert.id)).toBe(true);
   });
 
-  test("the tools are offered over MCP only on a Portico with workspaces, with copy that follows the rules", async () => {
+  test("the tools are offered over MCP, with copy that follows the rules", async () => {
     const { p, muse } = await world();
     const listed = (await mcp(p, muse.token, "tools/list")).tools.map((t: { name: string }) => t.name);
     for (const name of ["list_workspaces", "create_workspace", "set_workspace_agents", "share_workspace", "remove_from_workspace", "join_workspace"]) {
@@ -417,14 +418,6 @@ describe("the workspace tools", () => {
     const called = await mcp(p, muse.token, "tools/call", { name: "list_workspaces", arguments: {} });
     expect(JSON.parse(called.content[0].text).workspaces).toHaveLength(2);
     expect(copyProblems(JSON.stringify(workspaceTools()))).toEqual([]);
-
-    const plain = makePortico();
-    const owner = await addOwner(plain);
-    const solo = addAppAgent(plain, owner, "muse");
-    expect((await mcp(plain, solo.token, "tools/list")).tools.map((t: { name: string }) => t.name)).not.toContain("list_workspaces");
-    expect((await callAs(plain, { token: solo.token }, "POST", "/api/agent/workspace-tools/list_workspaces", {})).status).toBe(404);
-    expect((await plain.app.request("/api/share-requests", { method: "POST", body: "{}" })).status).toBe(404);
-    expect((await plain.app.request("/share")).status).toBe(404);
   });
 });
 

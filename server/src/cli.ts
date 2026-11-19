@@ -5,27 +5,19 @@ import { joinCommand } from "./commands/join";
 import { leaveCommand } from "./commands/leave";
 import { serveCommand } from "./commands/serve";
 import { setupCommand } from "./commands/setup";
-import { workspaceCommand } from "./commands/workspace";
 
 const USAGE = `Usage: portico <command>
 
 Commands:
-  serve             Run Portico. Every setting is optional: PORT, PORTICO_DB_PATH,
-                    PORTICO_PUBLIC_URL and PORTICO_PLUGIN_SOURCE.
+  serve             Run Portico. Every setting is optional: PORT, PORTICO_DATA_DIR (the
+                    data folder, ./data unless set), PORTICO_PUBLIC_URL and
+                    PORTICO_PLUGIN_SOURCE. With PORTICO_DESCOPE_PROJECT_ID, people sign
+                    in with Descope and signing in creates the account.
   setup [--reset]   Print a one-time link that creates the owner account. With --reset,
-                    print a new link.
+                    print a new link. Not used with Descope sign-in.
   doctor            Check that Portico answers at the public URL and that setup is done.
   join '<line>'     Join this computer to Portico with a join line from Add agent.
   leave             Take this computer off Portico and undo the join.
-  workspace create <name> | import <name> <folder> | link <name> <person> |
-            remove <name> | list | unite <name>
-                    Hosted Portico only (PORTICO_HOSTED_DOMAIN): make a workspace and print
-                    the workspace's setup link, make one from a single Portico's data
-                    folder (portico.db and signing.key), print a one-use link that moves a
-                    person from a password to sign-in on the base domain, remove a
-                    workspace for good (asks for --confirm <name> first), list the
-                    workspaces, or move to one database for every account, made as a
-                    copy of one workspace (unite; asks for --confirm <name> first).
   help              Show this message.
 `;
 
@@ -47,8 +39,6 @@ async function main(argv: string[]): Promise<number | "running"> {
       return doctorCommand(args, io);
     case "join":
       return joinCommand(args, io);
-    case "workspace":
-      return workspaceCommand(args, io);
     case "leave":
       return leaveCommand(args, io);
     case undefined:

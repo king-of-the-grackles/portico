@@ -9,10 +9,10 @@ import { Agents } from "./core/agents";
 import { AllowList, Approvals } from "./core/approvals";
 import { Changes } from "./core/changes";
 import { Computers } from "./core/computers";
+import { type AccountCheck, accountFrom, Descope } from "./core/descope";
 import { EventSubscriptions } from "./core/events";
 import { type FileStore, fileStoreFor } from "./core/file-store";
-import { Files, type StoredFile } from "./core/files";
-import { fileSize } from "./core/framing";
+import { Files } from "./core/files";
 import { InboxWaits } from "./core/inbox-waits";
 import type { Core } from "./core/core";
 import { ShareMail } from "./core/mail";
@@ -22,11 +22,10 @@ import { Presence } from "./core/presence";
 import { Settings } from "./core/settings";
 import { Shares } from "./core/shares";
 import { Tasks } from "./core/tasks";
-import type { AccountSignIn, CentralSignIn, Message, Notice, PorticoConfig } from "./core/types";
+import type { AccountSignIn, Message, Notice, PorticoConfig } from "./core/types";
 import { WakeUrls } from "./core/wake-urls";
 import { Workspaces } from "./core/workspaces";
 import { safePost, type WebhookPost } from "./core/webhooks";
-import { Desk } from "./desk";
 import { errorName, log } from "./log";
 
 export interface PorticoOptions {
@@ -35,8 +34,6 @@ export interface PorticoOptions {
   newId?: () => string;
   /** Both streams' heartbeat, for tests. */
   heartbeatMs?: number;
-  /** The pop-up nonces' random source, for tests. */
-  newNonce?: () => string;
   /** Tests observe notices here. */
   onNotice?: (notice: Notice) => void;
   /** Where wake URLs and event callbacks are posted; tests pass a fake. */
@@ -45,10 +42,11 @@ export interface PorticoOptions {
   mailPost?: WebhookPost;
   /** Where files' bytes live; by default the configured bucket, or the data folder. */
   fileStore?: FileStore;
-  /** Hosted Portico: people sign in on the base domain, and this Portico takes no passwords. */
-  central?: CentralSignIn;
-  /** Hosted Portico with one database: people sign in with an outside account at this Portico's own address. */
-  accountSignIn?: AccountSignIn;
+  /**
+   * Who a sign-in token belongs to, for tests: with one, people sign in with an outside account, as with
+   * PORTICO_DESCOPE_PROJECT_ID. By default Descope checks the token when the project ID is set.
+   */
+  accountCheck?: AccountCheck;
   /** When webhook retries run; tests run them by hand. */
   schedule?: (fn: () => void, ms: number) => void;
 }
@@ -63,12 +61,6 @@ export interface Portico extends Core {
   sweepDaily(): void;
   /** Deletes files no message carries. Part of the minute sweep; tests await it. */
   sweepFiles(): Promise<number>;
-}
-
-/** What a pop-up adds under a held message's text when files come with it. Portico's own words. */
-function attachedLine(files: StoredFile[]): string {
-  if (files.length === 0) return "";
-  return `\n\nFiles attached: ${files.map((f) => `${f.name} (${fileSize(f.size)})`).join(", ")}`;
 }
 
 const logInfo = (msg: string, fields: Record<string, unknown>) => log("info", msg, fields);
@@ -86,12 +78,16 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const personStreams = new PersonStreams();
   changes.on((topics) => personStreams.broadcast(topics));
 
+  // Two ways to sign in, one Portico after that: an outside account (Descope) where a project is configured, otherwise
+  // this server's own passwords, passkeys, setup link and invites.
+  const check = opts.accountCheck ?? (config.descopeProjectId ? new Descope(config.descopeProjectId, { now }) : null);
+
   // Its own IDs: activity rows never shift the IDs tests expect for everything else.
   const activity = new Activity({ db, changes, now });
-  const people = new People({ db, changes, signingKey: config.signingKey, sharedNames: config.workspaces, now, newId });
+  const people = new People({ db, changes, signingKey: config.signingKey, signInByName: check === null, now, newId });
   const accounts = new Accounts({ db, people, now, newId });
-  const workspaces = new Workspaces({ db, enabled: config.workspaces, changes, now, newId, log: logInfo });
-  const computers = new Computers({ db, changes, activity, namesPerOwner: config.workspaces, now, newId, log: logInfo });
+  const workspaces = new Workspaces({ db, changes, now, newId, log: logInfo });
+  const computers = new Computers({ db, changes, activity, now, newId, log: logInfo });
   const agents: Agents = new Agents({
     db,
     computers,
@@ -112,14 +108,12 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     },
     renamed: (agent) => agentStreams.sendAll(agent.id, "renamed", { ...helloFor(agents, agent) }),
   });
-  const desk = new Desk({ streams: agentStreams, now, newNonce: opts.newNonce, log: logInfo });
   const webhookPost = opts.webhookPost ?? safePost({ allowPrivate: config.webhooksAllowPrivate });
   const hooks = { db, post: webhookPost, changes, allowPrivate: config.webhooksAllowPrivate, now, schedule: opts.schedule, log: logInfo };
   const wakeUrls = new WakeUrls({ ...hooks, activity });
   const events = new EventSubscriptions(hooks);
-  agentStreams.onChange((change) => desk.streamChanged(change));
 
-  // Notices are raised as writes commit; their effects (nudges, pop-ups) run in a microtask and never throw.
+  // Notices are raised as writes commit; their effects (nudges, wake URLs) run in a microtask and never throw.
   const notify = (notice: Notice) => {
     opts.onNotice?.(notice);
     queueMicrotask(() => {
@@ -158,23 +152,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
           wake(m.toId);
           wakeApp(m);
         }
-        if (m.status !== "held") return;
-        const sender = agents.get(m.fromId);
-        const receiver = agents.get(m.toId);
-        if (!sender || !receiver) return;
-        desk.open({
-          messageId: m.id,
-          ownerId: receiver.ownerId,
-          from: agents.nameFor(sender, receiver.ownerId),
-          to: agents.display(receiver),
-          subject: m.subject,
-          text: m.text + attachedLine(files.of(m.id)),
-          expiresAt: m.expiresAt,
-        });
         return;
       }
       case "message_decided":
-        desk.close(m.id, m.status === "declined" ? "declined" : "allowed");
         if (m.status === "declined") {
           files.release(m.id).catch((err) => log("error", "file_release_failed", { message_id: m.id, error: errorName(err) }));
         }
@@ -186,7 +166,6 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         return;
       case "message_expired":
         // The sender hears about it on the next check, held or not.
-        if (m.heldAt !== null) desk.close(m.id, "expired");
         wake(m.fromId);
         return;
       case "message_delivered":
@@ -201,7 +180,6 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     store: opts.fileStore ?? fileStoreFor(config),
     agents,
     message: (id) => messages.get(id),
-    seesEverything: (person) => workspaces.seesEverything(person),
     publicUrl: () => settings.publicUrl(),
     signingKey: config.signingKey,
     now,
@@ -232,10 +210,15 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     newId,
     log: logInfo,
   });
-  // What an agent asks about a workspace is answered only in a signed-in browser, never in a pop-up: a pop-up's answer
-  // comes from the person's computer, which is where the asking agent runs.
+  // What an agent asks about a workspace is answered only in a signed-in browser.
   const shares = new Shares({ db, workspaces, agents, people, changes, signingKey: config.signingKey, now, newId, log: logInfo });
   const approvals = new Approvals({ db, agents, messages, people, allowList, changes, activity, now, notify, log: logInfo });
+
+  const accountSignIn: AccountSignIn | null = check
+    ? { projectId: config.descopeProjectId ?? "", account: (token) => accountFrom(check, token) }
+    : null;
+  // Signing in makes each account, so there is no setup link to open first.
+  if (accountSignIn && !settings.setupDone()) settings.set("setup_done_at", now().toISOString());
 
   const core: Core = {
     config,
@@ -258,11 +241,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     presence,
     agentStreams,
     personStreams,
-    desk,
     wakeUrls,
     events,
-    central: opts.central ?? null,
-    accountSignIn: opts.accountSignIn ?? null,
+    accountSignIn,
     now,
     newId,
   };
@@ -299,7 +280,6 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       void sweepFiles();
       sweep("messages_expired", () => messages.expireDue().length);
       sweep("event_subscriptions", () => events.sweep());
-      sweep("desk", () => desk.sweep());
       sweep("computers_minute", () => computers.sweepMinute());
       sweep("oauth_clients", () => computers.sweepUnusedClients());
       sweep("sign_in_limits", () => accounts.sweepLimiters());

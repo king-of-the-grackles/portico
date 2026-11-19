@@ -528,7 +528,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
     page.set({ held: r.held, signIns: r.signIns, joins: r.joins ?? [], asks: r.asks ?? [] });
   };
   const loadWorkspaces = async () => {
-    if (s().workspaces === null) return;
     page.set({ workspaces: (await api<{ workspaces: WorkspaceView[] }>("GET", "/api/workspaces")).workspaces });
   };
   const loadWorkspacePage = async () => {
@@ -775,7 +774,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
   const pageWorkspace = (): WorkspaceView | null => {
     const route = s().route;
     if (route.page !== "workspace") return null;
-    return s().workspacePage?.workspace.id === route.id ? s().workspacePage!.workspace : (s().workspaces?.find((w) => w.id === route.id) ?? null);
+    return s().workspacePage?.workspace.id === route.id ? s().workspacePage!.workspace : (s().workspaces.find((w) => w.id === route.id) ?? null);
   };
   const formError = (err: unknown) => {
     const form = s().wsForm;
@@ -1169,8 +1168,6 @@ function startHome(root: HTMLElement, data: HomeData): void {
           return page.set({ navOpen: true, acctOpen: false });
         case "nav-close":
           return page.set({ navOpen: false });
-        case "quiet-toggle":
-          return page.set({ quietOpen: !s().quietOpen });
         case "add-open":
           page.set({ navOpen: false });
           return add.open();

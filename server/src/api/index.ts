@@ -23,8 +23,8 @@ import { workspaceRoutes } from "./workspaces";
 /** Paths under /api that answer before setup is done: setup itself. */
 const OPEN_BEFORE_SETUP = /^\/api\/setup(\/|$)/;
 
-/** What a hosted workspace doesn't take: setup links, passwords and passkeys. Signing out (DELETE /session) stays. */
-const OFF_WITH_CENTRAL = /^\/api\/(setup|passkeys|me\/password|session\/passkey)(\/|$)/;
+/** What sign-in with an outside account doesn't take: setup links, passwords and passkeys. Signing out (DELETE /session) stays. */
+const OFF_WITH_ACCOUNTS = /^\/api\/(setup|passkeys|me\/password|session\/passkey)(\/|$)/;
 
 /**
  * Whether a request came from Portico's own pages: no Origin header (same-origin GETs, non-browser clients), or an
@@ -74,10 +74,10 @@ export function personApi(core: Core, opts: { heartbeatMs?: number } = {}): Hono
   const api = new Hono<PersonEnv>();
   api.use("*", requireSetupDone(core));
   api.use("*", requireSameOrigin(core));
-  if (core.central || core.accountSignIn) {
+  if (core.accountSignIn) {
     api.use("*", async (c, next) => {
-      if (OFF_WITH_CENTRAL.test(c.req.path) || (core.central && c.req.path === "/api/session" && c.req.method === "POST")) {
-        return c.json({ error: "not_found", message: "This workspace signs people in at the Sign in page." }, 404);
+      if (OFF_WITH_ACCOUNTS.test(c.req.path)) {
+        return c.json({ error: "not_found", message: "This Portico server signs people in at the Sign in page." }, 404);
       }
       await next();
     });

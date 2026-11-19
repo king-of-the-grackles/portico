@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
-import type { Person, Workspace, WorkspaceKind } from "./types";
+import type { Workspace, WorkspaceKind } from "./types";
 
 interface WorkspaceRow {
   id: string;
@@ -34,8 +34,6 @@ const ORDER = "ORDER BY w.kind = 'personal' DESC, w.created_at, w.id";
 
 export interface WorkspacesDeps {
   db: Database;
-  /** Off: one open network with no workspaces, where every agent reaches every other. */
-  enabled: boolean;
   changes: Changes;
   now?: () => Date;
   newId?: () => string;
@@ -49,7 +47,6 @@ export interface WorkspacesDeps {
  * always reach each other. A shared workspace holds people, and the agents each of those people put in.
  */
 export class Workspaces {
-  readonly enabled: boolean;
   private readonly db: Database;
   private readonly changes: Changes;
   private readonly now: () => Date;
@@ -58,7 +55,6 @@ export class Workspaces {
 
   constructor(deps: WorkspacesDeps) {
     this.db = deps.db;
-    this.enabled = deps.enabled;
     this.changes = deps.changes;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
@@ -69,7 +65,7 @@ export class Workspaces {
 
   /** Whether the two agents can see and message each other: both are in at least one workspace. */
   reach(agentId: string, otherId: string): boolean {
-    if (!this.enabled || agentId === otherId) return true;
+    if (agentId === otherId) return true;
     return (
       this.db
         .query(
@@ -80,9 +76,8 @@ export class Workspaces {
     );
   }
 
-  /** Every other agent the agent reaches. Null where there are no workspaces: everyone. */
-  reachable(agentId: string): Set<string> | null {
-    if (!this.enabled) return null;
+  /** Every other agent the agent reaches. */
+  reachable(agentId: string): Set<string> {
     const rows = this.db
       .query(
         `SELECT DISTINCT y.agent_id AS id FROM workspace_agents x JOIN workspace_agents y ON y.workspace_id = x.workspace_id
@@ -106,25 +101,15 @@ export class Workspaces {
 
   /**
    * The workspace a thread between the two runs through: the one it already has while both are still in it, otherwise
-   * the first they share. Null when they share none, or where there are no workspaces.
+   * the first they share. Null when they share none.
    */
   stamp(agentId: string, otherId: string, current: string | null = null): string | null {
-    if (!this.enabled) return null;
     const shared = this.shared(agentId, otherId);
     return shared.find((w) => w.id === current)?.id ?? shared[0]?.id ?? null;
   }
 
-  /**
-   * Whether the person reads everything on Portico: only the owner of a Portico with no workspaces. With workspaces, a
-   * person reads a conversation only when one of the person's own agents is in it, whoever owns the workspace.
-   */
-  seesEverything(person: Pick<Person, "role">): boolean {
-    return !this.enabled && person.role === "owner";
-  }
-
-  /** The agents a person sees: every agent in a workspace the person is in. Null where there are no workspaces: everyone. */
-  visibleAgents(personId: string): Set<string> | null {
-    if (!this.enabled) return null;
+  /** The agents a person sees: the person's own, and every agent in a workspace the person is in. */
+  visibleAgents(personId: string): Set<string> {
     const rows = this.db
       .query(
         `SELECT DISTINCT a.agent_id AS id FROM workspace_people p JOIN workspace_agents a ON a.workspace_id = p.workspace_id
@@ -135,9 +120,8 @@ export class Workspaces {
     return new Set(rows.map((row) => row.id));
   }
 
-  /** The people a person sees: everyone in a workspace the person is in, and the person. Null: everyone. */
-  visiblePeople(personId: string): Set<string> | null {
-    if (!this.enabled) return null;
+  /** The people a person sees: everyone in a workspace the person is in, and the person. */
+  visiblePeople(personId: string): Set<string> {
     const rows = this.db
       .query(
         `SELECT DISTINCT q.person_id AS id FROM workspace_people p JOIN workspace_people q ON q.workspace_id = p.workspace_id
@@ -241,9 +225,8 @@ export class Workspaces {
     return workspace;
   }
 
-  /** A new agent joins its owner's personal workspace. Does nothing where there are no workspaces. */
+  /** A new agent joins its owner's personal workspace. */
   agentCreated(agentId: string, ownerId: string): void {
-    if (!this.enabled) return;
     const personal = this.personal(ownerId);
     this.db
       .query("INSERT OR IGNORE INTO workspace_agents (workspace_id, agent_id, added_at) VALUES ($workspaceId, $agentId, $at)")
@@ -254,7 +237,6 @@ export class Workspaces {
 
   /** A new shared workspace, owned by the person, who is its first member. No agents yet: the person puts them in. */
   create(personId: string, rawName: unknown): Workspace {
-    this.requireEnabled();
     this.requireHandle(personId);
     const workspace: Workspace = {
       id: this.newId(),
@@ -385,10 +367,6 @@ export class Workspaces {
     return this.db.query("SELECT 1 FROM agents WHERE id = $agentId AND owner_id = $personId").get({ agentId, personId }) !== null;
   }
 
-  private requireEnabled(): void {
-    if (!this.enabled) throw new PorticoError("bad_request", "This Portico has no workspaces: every agent reaches every other.");
-  }
-
   private requireHandle(personId: string): void {
     if (this.handleOf(personId) === null) {
       throw new PorticoError("wrong_status", "Pick a handle first: agents in a shared workspace are addressed by the handle.");
@@ -399,7 +377,6 @@ export class Workspaces {
   onPersonRemoved: ((workspaceId: string, personId: string) => void) | null = null;
 
   private requireShared(workspaceId: string): Workspace {
-    this.requireEnabled();
     const workspace = this.get(workspaceId);
     if (!workspace) throw new PorticoError("not_found", "No such workspace.");
     if (workspace.kind === "personal") {

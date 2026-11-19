@@ -1,7 +1,7 @@
-import { PorticoError } from "../core/errors";
-import type { Account } from "../core/types";
+import { PorticoError } from "./errors";
+import type { Account } from "./types";
 
-/** Says whose account a sign-in token belongs to. Hosted Portico uses Descope; tests pass their own. */
+/** Says whose account a sign-in token belongs to. Descope where PORTICO_DESCOPE_PROJECT_ID is set; tests pass their own. */
 export interface AccountCheck {
   /** The account's ID, or `unauthorized` for a token that doesn't check out. */
   accountFor(token: unknown): Promise<string>;
@@ -43,7 +43,7 @@ function decodePart(part: string): Record<string, unknown> | null {
 
 /**
  * Checks a Descope session token: signed by the project's own key (RS256), issued by the project, not expired, and a
- * session token, not a refresh token. Portico checks the token once, when the browser signs in on the base domain,
+ * session token, not a refresh token. Portico checks the token once, when the browser signs in,
  * and uses its own cookie from then on. Only the account's ID is read, so Portico holds no Descope secret.
  */
 export class Descope implements AccountCheck {

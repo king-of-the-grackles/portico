@@ -54,7 +54,7 @@ export type Route =
   | { page: "today" }
   | { page: "activity" }
   | { page: "agent"; id: string }
-  /** With workspaces: one workspace's page (/w/:id), and every agent with its workspaces (/agents). */
+  /** One workspace's page (/w/:id), and every agent with its workspaces (/agents). */
   | { page: "workspace"; id: string }
   | { page: "agents" };
 
@@ -78,8 +78,8 @@ export interface HomeData {
   publicUrl: string;
   agents: AgentView[];
   approvals: { held: HeldCard[]; signIns: SignInView[]; joins: JoinView[]; asks: AskView[] };
-  /** The person's workspaces, Personal first. Null where Portico has no workspaces. */
-  workspaces: WorkspaceView[] | null;
+  /** The person's workspaces, Personal first. */
+  workspaces: WorkspaceView[];
   workspacePage: WorkspacePageData | null;
   route: Route;
   today: TodayData | null;
@@ -99,10 +99,10 @@ export interface SettingsData {
   people: { people: PersonRow[]; invites: InviteView[]; claims: ClaimView[] } | null;
   computers: ComputerView[] | null;
   passkeys: PasskeyView[] | null;
-  /** False on hosted Portico, where sign-in happens on the base domain: no password to change. */
+  /** False where people sign in with an outside account: no password to change. */
   passwords?: boolean;
-  /** With workspaces, people come and go by sharing a workspace, and each person has a handle. */
-  workspaces?: boolean;
+  /** True where this server signs people in itself: its owner invites people and approves each claim. */
+  canInvite?: boolean;
 }
 
 /** A join line just made by POST /api/join-lines. The line carries the secret, so it lives only in the page's memory. */
@@ -167,7 +167,7 @@ export interface HomeState {
   signIns: SignInView[];
   joins: JoinView[];
   asks: AskView[];
-  workspaces: WorkspaceView[] | null;
+  workspaces: WorkspaceView[];
   workspacePage: WorkspacePageData | null;
   wsForm: WorkspaceForm | null;
   /** The People list on a workspace's page. */
@@ -194,7 +194,6 @@ export interface HomeState {
   /** The agent page's folds. */
   detailsOpen: boolean;
   settingsOpen: boolean;
-  quietOpen: boolean;
   acctOpen: boolean;
   /** Phone: the navigation open over the page. */
   navOpen: boolean;
@@ -223,7 +222,8 @@ export interface SettingsState {
   passkeys: PasskeyView[] | null;
   /** Whether this Portico has passwords to change. */
   passwords: boolean;
-  workspaces: boolean;
+  /** Whether this server has invites: see SettingsData. */
+  canInvite: boolean;
   handleForm: { handle: string; error: string } | null;
   acctOpen: boolean;
   add: AddState | null;

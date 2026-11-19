@@ -11,6 +11,7 @@ import {
   PUBLIC_URL,
   signIn,
   sseReader,
+  together,
 } from "./helpers";
 
 async function setup() {
@@ -22,6 +23,8 @@ async function setup() {
   const grok = addAppAgent(p, chris, "grok", { kind: "grok-bot" }).agent;
   const muse = addAppAgent(p, chris, "muse", { approvalRequired: true }).agent;
   const mayaDot = addAppAgent(p, maya, "maya-dot", { kind: "dots" }).agent;
+  // grok and maya-dot share a workspace; muse stays in Chris's own.
+  together(p, grok, mayaDot);
   return { p, chris, maya, owner, member, grok, muse, mayaDot };
 }
 
@@ -64,7 +67,7 @@ describe("conventions", () => {
 });
 
 describe("agents", () => {
-  test("everyone sees every agent, the signed-in person's first, with what each may change", async () => {
+  test("a person sees the person's own agents first, then those sharing a workspace, and no others", async () => {
     const { p, member } = await setup();
     const { agents } = await json<{ agents: { name: string; mine: boolean; owner: { name: string } }[] }>(
       callPerson(p, member, "GET", "/api/agents"),
@@ -72,17 +75,19 @@ describe("agents", () => {
     expect(agents.map((a) => [a.name, a.mine, a.owner.name])).toEqual([
       ["maya-dot", true, "Maya"],
       ["grok", false, "Chris"],
-      ["muse", false, "Chris"],
     ]);
   });
 
   test("edits go live; a name in use is 409; another person's agent is 403 and has no allow list", async () => {
-    const { p, owner, member, muse, mayaDot } = await setup();
+    const { p, owner, member, grok, muse, mayaDot } = await setup();
     const res = await callPerson(p, owner, "PATCH", `/api/agents/${muse.id}`, { name: "muse-work", description: "Calendar" });
     expect(await res.json()).toMatchObject({ agent: { name: "muse-work", description: "Calendar" } });
     expect((await callPerson(p, owner, "PATCH", `/api/agents/${muse.id}`, { name: "grok" })).status).toBe(409);
     expect((await callPerson(p, owner, "PATCH", `/api/agents/${mayaDot.id}`, { approvalRequired: true })).status).toBe(403);
-    expect(await json(callPerson(p, member, "GET", `/api/agents/${muse.id}`))).toMatchObject({ allowList: null });
+    expect(await json(callPerson(p, member, "GET", `/api/agents/${grok.id}`))).toMatchObject({ allowList: null });
+    // An agent in none of the person's workspaces answers as one that isn't there.
+    expect((await callPerson(p, member, "GET", `/api/agents/${muse.id}`)).status).toBe(404);
+    expect((await callPerson(p, member, "PATCH", `/api/agents/${muse.id}`, { approvalRequired: false })).status).toBe(404);
   });
 
   test("a session's folder switch is part of the agent", async () => {
@@ -134,14 +139,19 @@ describe("held card quote", () => {
 });
 
 describe("threads", () => {
-  test("the owner sees every thread; a member sees threads with the member's agents; others are 404", async () => {
-    const { p, owner, member, grok, mayaDot } = await setup();
-    const ours = p.messages.send(grok, { to: "maya-dot", subject: "Churn", text: "Last quarter?" }).message;
+  test("a person sees threads with the person's own agents, the server's owner too; others are 404", async () => {
+    const { p, maya, owner, member, grok, mayaDot } = await setup();
+    const ours = p.messages.send(grok, { to: "maya/maya-dot", subject: "Churn", text: "Last quarter?" }).message;
     const private_ = p.messages.send(grok, { to: "muse", subject: "Flights", text: "Denver" }).message;
-    const all = await json<{ threads: { id: string }[] }>(callPerson(p, owner, "GET", "/api/threads"));
-    expect(all.threads).toHaveLength(2);
+    addAppAgent(p, maya, "maya-notes");
+    const theirs = p.messages.send(mayaDot, { to: "maya-notes", subject: "Diary", text: "Between Maya's own agents." }).message;
+    const all = await json<{ threads: { id: string; last: { subject: string } }[] }>(callPerson(p, owner, "GET", "/api/threads"));
+    expect(all.threads.map((t) => t.last.subject).sort()).toEqual(["Churn", "Flights"]);
+    // The owner runs the server and still reads no conversation between other people's agents.
+    expect((await callPerson(p, owner, "GET", `/api/threads/${theirs.threadId}`)).status).toBe(404);
+    expect((await callPerson(p, owner, "GET", `/api/tasks/${theirs.id}`)).status).toBe(404);
     const mine = await json<{ threads: { id: string; last: { subject: string } }[] }>(callPerson(p, member, "GET", "/api/threads"));
-    expect(mine.threads.map((t) => t.last.subject)).toEqual(["Churn"]);
+    expect(mine.threads.map((t) => t.last.subject).sort()).toEqual(["Churn", "Diary"]);
     expect((await callPerson(p, member, "GET", `/api/threads/${private_.threadId}`)).status).toBe(404);
     const thread = await json<{ messages: { subject: string; text: string }[] }>(callPerson(p, member, "GET", `/api/threads/${ours.threadId}`));
     expect(thread.messages.map((m) => m.text)).toEqual(["Last quarter?"]);
@@ -168,7 +178,7 @@ describe("threads", () => {
 
   test("filter by agent", async () => {
     const { p, owner, grok, muse } = await setup();
-    p.messages.send(grok, { to: "maya-dot", subject: "s", text: "t" });
+    p.messages.send(grok, { to: "maya/maya-dot", subject: "s", text: "t" });
     const { threads } = await json<{ threads: unknown[] }>(callPerson(p, owner, "GET", `/api/threads?agent=${muse.id}`));
     expect(threads).toEqual([]);
   });

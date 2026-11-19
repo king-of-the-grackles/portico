@@ -2,7 +2,6 @@ import type { Database } from "bun:sqlite";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS } from "./limits";
-import { namesOwnedBy, releaseNames } from "./released-names";
 import { hashSecret, LINK_SECRET, newLinkSecret, seal, unseal } from "./tokens";
 import type { Person, PersonStatus, Role } from "./types";
 import { slugify } from "./words";
@@ -135,7 +134,12 @@ export interface PeopleDeps {
   changes: Changes;
   /** Seals open invites' secrets, so their links can be copied again. */
   signingKey: string;
-  sharedNames?: boolean;
+  /**
+   * Whether people sign in here by name and password (a self-hosted server). Then a name belongs to one person, and
+   * each new person gets a handle made from the name. False with an outside sign-in: two people can have one name,
+   * and the welcome page asks each for a handle.
+   */
+  signInByName?: boolean;
   now?: () => Date;
   newId?: () => string;
 }
@@ -153,30 +157,32 @@ export class People {
   private readonly newId: () => string;
 
   private readonly signingKey: string;
-  /** With workspaces, two people can have one name: the handle tells people apart. */
-  private readonly sharedNames: boolean;
+  private readonly signInByName: boolean;
 
   constructor(deps: PeopleDeps) {
     this.db = deps.db;
     this.changes = deps.changes;
     this.signingKey = deps.signingKey;
-    this.sharedNames = deps.sharedNames ?? false;
+    this.signInByName = deps.signInByName ?? true;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
   }
 
-  /** Throws `conflict` when the name is taken by anyone, in any letter case. */
+  /**
+   * Makes a person. Where people sign in by name, throws `conflict` when the name is taken by anyone, in any letter
+   * case, and gives the person a handle made from the name (`maya`, then `maya-2`), which the person can change later.
+   */
   create(input: {
     name: string;
     role: Role;
     status: PersonStatus;
     passwordHash: string;
     inviteId?: string | null;
-    /** Hosted Portico: the person's account with the sign-in service. */
+    /** The person's account with the outside sign-in service, where there is one. */
     externalId?: string | null;
   }): Person {
     const name = cleanPersonName(input.name);
-    if (!this.sharedNames && this.byName(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
+    if (this.signInByName && this.byName(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
     if (input.role === "owner" && this.owner()) throw new PorticoError("conflict", "Portico already has an owner.");
     const externalId = input.externalId ?? null;
     if (externalId !== null && this.byExternalId(externalId)) {
@@ -211,7 +217,8 @@ export class People {
         externalId,
       });
     this.changes.emit("people");
-    return person;
+    // Everyone needs a handle: other people's agents address this person's agents by it.
+    return this.signInByName ? this.setHandle(person.id, this.suggestHandle(name)) : person;
   }
 
   get(id: string): Person | null {
@@ -253,16 +260,10 @@ export class People {
   rename(id: string, raw: string): Person {
     const name = cleanPersonName(raw);
     const taken = this.byName(name);
-    if (!this.sharedNames && taken && taken.id !== id) throw new PorticoError("conflict", `The name ${name} is already in use.`);
+    if (this.signInByName && taken && taken.id !== id) throw new PorticoError("conflict", `The name ${name} is already in use.`);
     this.db.query("UPDATE people SET name = $name WHERE id = $id").run({ id, name });
     this.changes.emit("people", "agents", "me");
     return this.require(id);
-  }
-
-  /** Ties the person to an account with an outside sign-in service, which then signs the person in. */
-  setExternalId(id: string, externalId: string): void {
-    this.db.query("UPDATE people SET external_id = $externalId WHERE id = $id").run({ id, externalId });
-    this.changes.emit("people");
   }
 
   // ---- handles ----
@@ -354,15 +355,9 @@ export class People {
     return this.require(id);
   }
 
-  /**
-   * Deletes the person and, by cascade, their sign-ins, computers and agents. The names of those agents and computers
-   * are released.
-   */
+  /** Deletes the person and, by cascade, their sign-ins, computers and agents. */
   remove(id: string): void {
-    this.db.transaction(() => {
-      releaseNames(this.db, id, namesOwnedBy(this.db, id), this.now());
-      this.db.query("DELETE FROM people WHERE id = $id").run({ id });
-    })();
+    this.db.query("DELETE FROM people WHERE id = $id").run({ id });
     this.changes.emit("people", "agents", "threads", "approvals", "computers");
   }
 
@@ -481,7 +476,7 @@ export class People {
    * Claims an open invite: creates a pending member with the chosen name and password, and uses the link up. Both
    * happen together or not at all, so a name in use leaves the link open for another try.
    */
-  claim(input: { secret: unknown; name: unknown; passwordHash: string; externalId?: string | null }): Person {
+  claim(input: { secret: unknown; name: unknown; passwordHash: string }): Person {
     return this.db.transaction(() => {
       const invite = this.openInvite(input.secret);
       const person = this.create({
@@ -490,7 +485,6 @@ export class People {
         status: "pending",
         passwordHash: input.passwordHash,
         inviteId: invite.id,
-        externalId: input.externalId ?? null,
       });
       this.db.query("UPDATE invites SET claimed_at = $at WHERE id = $id").run({ id: invite.id, at: person.createdAt });
       return person;

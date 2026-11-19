@@ -6,11 +6,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
-import type { Agent, AgentKind, Person } from "../../server/src/core/types";
+import type { Agent, AgentKind, Computer, Person } from "../../server/src/core/types";
 import { addAppAgent, addComputer, addOwner, makePortico } from "../../server/test/helpers";
 import type { Logger } from "../src/log";
 import { createPorticoPlugin, type FolderSwitch, type PorticoPlugin } from "../src/plugin";
-import type { ApprovalPrompt, DialogRunner, PanelOutcome } from "../src/popup";
 import { PorticoClient, type StreamRegistration } from "../src/portico-client";
 import { InboxSocket } from "../src/socket";
 import type { SessionWatcher } from "../src/status";
@@ -18,12 +17,9 @@ import { type AppServer, AppServerError } from "../src/codex/app-server";
 
 /**
  * A real Portico (in-memory database, fake clock, 50 ms heartbeats) on a random local port, set up, with its owner.
- * With `realTime`, its clock starts at the real time, so held messages expire a day from now: the plugin's panels
- * compare the expiry with the real clock, and a request already expired shows no panel.
  */
-export async function startPortico(opts: { newNonce?: () => string; realTime?: boolean } = {}) {
-  const p = makePortico({ newNonce: opts.newNonce });
-  if (opts.realTime) p.clock.advance(Date.now() - p.clock.now().getTime());
+export async function startPortico() {
+  const p = makePortico();
   const owner: Person = await addOwner(p);
   const server = Bun.serve({ port: 0, fetch: p.app.fetch, idleTimeout: 60 });
   return Object.assign(p, { owner, url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) });
@@ -35,6 +31,11 @@ export type TestPortico = Awaited<ReturnType<typeof startPortico>>;
 export function joinTestComputer(p: TestPortico, name = "macbook"): { token: string; computer: string; computerId: string } {
   const { computer, token } = addComputer(p, p.owner, name);
   return { token, computer: computer.name, computerId: computer.id };
+}
+
+/** The owner's computer with the name, or null. */
+export function computerNamed(p: TestPortico, name: string): Computer | null {
+  return p.computers.list(p.owner.id).find((computer) => computer.name === name) ?? null;
 }
 
 /** An app agent of the owner's, with its API token. */
@@ -109,7 +110,6 @@ export interface SessionOptions {
   folderId?: string;
   /** Replaces the registration made from repo and folderId. */
   registration?: () => Promise<StreamRegistration>;
-  runner?: DialogRunner | null;
   folder?: FolderSwitch;
   watcher?: Pick<SessionWatcher, "start" | "stop" | "resend"> | null;
   client?: PorticoClient;
@@ -131,10 +131,8 @@ export async function startSession(p: TestPortico, opts: SessionOptions) {
     log: opts.log ?? logs.log,
     socket: opts.socket ?? sock.socket,
     registration: opts.registration ?? (async () => ({ repo: opts.repo ?? "api", folderId: opts.folderId ?? "a".repeat(64) })),
-    popup: opts.runner ?? null,
     folder: opts.folder,
     watcher: opts.watcher ?? null,
-    answerRetryMs: [5],
     deliveryRetryMs: opts.deliveryRetryMs ?? [30],
     stream: { initialBackoffMs: 10 },
   });
@@ -228,31 +226,6 @@ export async function fakeInboxSocket(opts: { token?: string | null; settleMs?: 
   fake.socket = new InboxSocket({ path: () => path, token: () => token, settleMs: opts.settleMs ?? 20 });
   fake.close = () => new Promise<void>((resolve) => server.close(() => resolve()));
   return fake;
-}
-
-export interface FakePanel {
-  prompt: ApprovalPrompt;
-  killed: boolean;
-  answer(outcome: PanelOutcome): void;
-}
-
-/** A dialog runner that shows nothing: each panel waits for the test to answer it, or for a kill. */
-export function fakeRunner(): { runner: DialogRunner; panels: FakePanel[] } {
-  const panels: FakePanel[] = [];
-  const runner: DialogRunner = (prompt) => {
-    let settle!: (outcome: PanelOutcome) => void;
-    const result = new Promise<PanelOutcome>((resolve) => (settle = resolve));
-    const panel: FakePanel = { prompt, killed: false, answer: (outcome) => settle(outcome) };
-    panels.push(panel);
-    return {
-      result,
-      kill: () => {
-        panel.killed = true;
-        settle({ kind: "dismissed" });
-      },
-    };
-  };
-  return { runner, panels };
 }
 
 /**

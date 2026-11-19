@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
-import { parseEnv, hostedEnv, ConfigError } from "../src/config";
+import { parseEnv, ConfigError } from "../src/config";
 import { MAIL_LIMITS, shareEmail } from "../src/core/mail";
 import { addAppAgent, addMember, addOwner, callPerson, copyProblems, fakeWebhooks, HOUR, makePortico, MINUTE, signIn, visibleCopy } from "./helpers";
 
@@ -8,7 +8,7 @@ const MAIL = { apiKey: "re_test_key", from: "Portico <invites@mail.portico.examp
 
 async function world(mail: typeof MAIL | null = MAIL) {
   const hooks = fakeWebhooks();
-  const p = makePortico({ config: { workspaces: true, mail }, mailPost: hooks.post });
+  const p = makePortico({ config: { mail }, mailPost: hooks.post });
   const chris = p.people.setEmail(p.people.setHandle((await addOwner(p, "Chris")).id, "chris").id, "chris@example.com");
   const robert = p.people.setHandle((await addMember(p, "Robert")).id, "robert");
   const muse = addAppAgent(p, chris, "muse");
@@ -188,16 +188,15 @@ describe("the email and its settings", () => {
     expect(mail.text.split("\n\n")).toHaveLength(7);
   });
 
-  test("mail is on only with a key, and the sender defaults to the hosted domain", () => {
+  test("mail is on only with a key, and the sender defaults to the public address", () => {
     expect(parseEnv({}, "k").mail).toBeNull();
     expect(() => parseEnv({ PORTICO_RESEND_API_KEY: "re_x" }, "k")).toThrow(ConfigError);
     expect(parseEnv({ PORTICO_RESEND_API_KEY: "re_x", PORTICO_MAIL_FROM: "Team <hello@mail.example.com>" }, "k").mail).toEqual({ apiKey: "re_x", from: "Team <hello@mail.example.com>", webhookSecret: null });
-    expect(hostedEnv({ PORTICO_HOSTED_DOMAIN: "portico.example" })!.mail).toBeNull();
-    expect(hostedEnv({ PORTICO_HOSTED_DOMAIN: "portico.example", PORTICO_RESEND_API_KEY: "re_x", PORTICO_RESEND_WEBHOOK_SECRET: "whsec_abc" })!.mail).toEqual({
+    expect(parseEnv({ PORTICO_PUBLIC_URL: "https://portico.example", PORTICO_RESEND_API_KEY: "re_x", PORTICO_RESEND_WEBHOOK_SECRET: "whsec_abc" }, "k").mail).toEqual({
       apiKey: "re_x",
       from: "Portico <invites@mail.portico.example>",
       webhookSecret: "whsec_abc",
     });
-    expect(() => hostedEnv({ PORTICO_HOSTED_DOMAIN: "portico.example", PORTICO_RESEND_API_KEY: "re_x", PORTICO_MAIL_FROM: "not an address" })).toThrow(ConfigError);
+    expect(() => parseEnv({ PORTICO_PUBLIC_URL: "https://portico.example", PORTICO_RESEND_API_KEY: "re_x", PORTICO_MAIL_FROM: "not an address" }, "k")).toThrow(ConfigError);
   });
 });

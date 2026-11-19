@@ -5,7 +5,7 @@ import { copyProblems } from "../../server/test/helpers";
 import { readComputerFile, writeComputerFile } from "../src/computer";
 import { type CodexCliIo, runCodexCli } from "../src/codex/cli";
 import { STOP_HOOK } from "../src/codex-config";
-import { joinTestComputer, startPortico, type TestPortico, tempDir } from "./helpers";
+import { joinTestComputer, startPortico, type TestPortico, tempDir, computerNamed } from "./helpers";
 
 let p: TestPortico | null = null;
 afterEach(() => {
@@ -53,7 +53,7 @@ describe("the Codex bridge's join", () => {
     expect(err).toEqual([]);
     expect(code).toBe(0);
     expect(readComputerFile(h.configPath)).toMatchObject({ url: p.url, computer: "chris-macbook" });
-    expect(p.computers.joinLine(id)?.computerId).toBe(p.computers.byName("chris-macbook")!.id);
+    expect(p.computers.joinLine(id)?.computerId).toBe(computerNamed(p, "chris-macbook")!.id);
     const config = Bun.TOML.parse(readFileSync(join(h.codex, "config.toml"), "utf8")) as { mcp_servers: Record<string, unknown> };
     // Bun by full path, and the computer file the join used: Codex passes the bridge only a few variables.
     expect(config.mcp_servers.portico).toMatchObject({
@@ -76,7 +76,7 @@ describe("the Codex bridge's join", () => {
     const { code, out } = await cli(["join", line], h);
     expect(code).toBe(0);
     expect(out[0]).toBe(`This computer is already on Portico at ${p.url} as computer "macbook". Used the line here.`);
-    expect(p.computers.joinLine(id)?.computerId).toBe(p.computers.byName("macbook")!.id);
+    expect(p.computers.joinLine(id)?.computerId).toBe(computerNamed(p, "macbook")!.id);
     expect(readComputerFile(h.configPath)?.token).toBe(token);
     expect(existsSync(join(h.codex, "config.toml"))).toBe(true);
   });
@@ -109,7 +109,7 @@ describe("Claude Code after Codex", () => {
       err: (line: string) => out.push(line),
     };
     expect(await runCli(["join", `Join Portico: ${p.url}/join#${secret}`], io, { findClaude: () => null })).toBe(0);
-    expect(p.computers.joinLine(joinLine.id)?.computerId).toBe(p.computers.byName("chris-macbook")!.id);
+    expect(p.computers.joinLine(joinLine.id)?.computerId).toBe(computerNamed(p, "chris-macbook")!.id);
     expect(await runCli(["leave"], io, { findClaude: () => null })).toBe(0);
     expect(readFileSync(join(h.codex, "config.toml"), "utf8")).not.toContain("portico");
     expect(out).toContain(`Removed Portico's MCP server in ${join(h.codex, "config.toml")}.`);
@@ -136,7 +136,7 @@ describe("update and leave", () => {
     expect(code).toBe(0);
     expect(out[0]).toBe('Portico removed computer "chris-macbook" along with every session there.');
     expect(existsSync(h.configPath)).toBe(false);
-    expect(p.computers.byName("chris-macbook")).toBeNull();
+    expect(computerNamed(p, "chris-macbook")).toBeNull();
     expect(readFileSync(join(h.codex, "config.toml"), "utf8")).not.toContain("portico");
     expect(JSON.parse(readFileSync(join(h.codex, "hooks.json"), "utf8"))).toEqual({ hooks: {} });
   });

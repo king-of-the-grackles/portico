@@ -16,7 +16,6 @@ import {
 import { type PluginConfig, PluginConfigError, parsePluginConfig } from "./config";
 import { errorName, stderrLog as log } from "./log";
 import { createPorticoPlugin, createWaitingServer, type PorticoPlugin } from "./plugin";
-import { popupPlatform, systemRunner } from "./popup";
 import { PorticoClient, type StreamRegistration } from "./portico-client";
 import { SessionLocator } from "./registry";
 import { InboxSocket, socketTarget } from "./socket";
@@ -41,12 +40,8 @@ function sessionFolder(): string {
 /** The full plugin for a joined computer. With `server`, it takes over a waiting server the session already uses. */
 function joinedPlugin(config: PluginConfig, file: ComputerFile, opts: { server?: Server; joining?: boolean } = {}): PorticoPlugin {
   const cwd = sessionFolder();
-  const popupOff = (env.PORTICO_POPUP ?? "").trim().toLowerCase() === "off";
-  const platform = popupPlatform(process.platform, env, existsSync);
-  const runner = !popupOff && platform ? systemRunner(platform, env) : null;
-  if (!runner) log("warn", "approval_popup_unavailable", { platform: process.platform, reason: popupOff ? "off" : "no_desktop" });
   const startsOff = isOff(file, cwd);
-  log("info", "plugin_started", { origin: new URL(config.url).origin, computer: config.computer, popup: runner !== null, folder_off: startsOff });
+  log("info", "plugin_started", { origin: new URL(config.url).origin, computer: config.computer, folder_off: startsOff });
 
   // Stable for this process: a reconnect is the same session, a restart a new one.
   const sessionKey = crypto.randomUUID();
@@ -65,7 +60,6 @@ function joinedPlugin(config: PluginConfig, file: ComputerFile, opts: { server?:
     client,
     log,
     watcher,
-    popup: runner,
     server: opts.server,
     joining: opts.joining,
     folder: {

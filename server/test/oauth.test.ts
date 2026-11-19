@@ -603,7 +603,10 @@ describe("an MCP SDK client end to end", () => {
     const connected = new Client({ name: "portico-test", version: "1.0.0" });
     await connected.connect(transport);
     const { tools } = await connected.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "set_wake_url"]);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "set_wake_url",
+      "list_workspaces", "create_workspace", "set_workspace_agents", "share_workspace", "remove_from_workspace", "join_workspace",
+    ]);
     const listed = await connected.callTool({ name: "list_agents", arguments: {} });
     expect(listed.isError).toBeFalsy();
     expect(p.agents.byAddress("duet")?.type).toBe("connector");

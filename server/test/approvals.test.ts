@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addAppAgent, addMember, addOwner, errorCode, makePortico } from "./helpers";
+import { addAppAgent, addMember, addOwner, errorCode, makePortico, together } from "./helpers";
 
 async function setup() {
   const p = makePortico();
@@ -47,9 +47,10 @@ describe("decisions", () => {
 
 describe("card facts", () => {
   test("Managed by names the person who manages the sender", async () => {
-    const { p, maya } = await setup();
+    const { p, maya, muse } = await setup();
     const mayaDot = addAppAgent(p, maya, "maya-dot", { kind: "dots" }).agent;
-    const held = p.messages.send(mayaDot, { to: "muse", subject: "Churn numbers", text: "Last quarter?" }).message;
+    together(p, mayaDot, muse);
+    const held = p.messages.send(mayaDot, { to: "chris/muse", subject: "Churn numbers", text: "Last quarter?" }).message;
     expect(p.approvals.facts(held).managedBy.name).toBe("Maya");
   });
 

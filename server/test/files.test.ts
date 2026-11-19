@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addAppAgent, addMember, addOwner, callAs, callPerson, DAY, fakeBucket, flush, HOUR, makePortico, MINUTE, PUBLIC_URL, signIn } from "./helpers";
+import { addAppAgent, addMember, addOwner, callAs, callPerson, DAY, fakeBucket, flush, HOUR, makePortico, MINUTE, PUBLIC_URL, signIn, together } from "./helpers";
 import type { FileStore } from "../src/core/file-store";
 
 interface Slot {
@@ -210,7 +210,8 @@ describe("files in the data folder", () => {
     const file = (await upload(grok, { name: "a.txt", text: "a" })).body.file.id;
     await send(grok, { to: "muse", attachments: [file] });
     expect((await callPerson(p, signIn(p, maya), "GET", `/api/files/${file}`)).status).toBe(404);
-    await send(grok, { to: "maya-muse", attachments: [file] });
+    together(p, grok.agent, hers.agent);
+    await send(grok, { to: "maya/maya-muse", attachments: [file] });
     expect((await callPerson(p, signIn(p, maya), "GET", `/api/files/${file}`)).status).toBe(302);
     expect(hers.agent.ownerId).toBe(maya.id);
   });

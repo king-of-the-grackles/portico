@@ -16,11 +16,11 @@ import {
 } from "./views";
 
 /**
- * The agents whose tasks and activity the person sees: everyone's for the owner (null), a member's own otherwise. With
- * workspaces, always the person's own: a conversation is read by the people whose agents are in it.
+ * The agents whose tasks and activity the person sees: the person's own, whatever the person's role. A conversation is
+ * read by the people whose agents are in it, and by nobody else.
  */
-export function visibleAgents(core: Core, me: Person): string[] | null {
-  return core.workspaces.seesEverything(me) ? null : core.agents.ownedBy(me.id).map((a) => a.id);
+export function visibleAgents(core: Core, me: Person): string[] {
+  return core.agents.ownedBy(me.id).map((a) => a.id);
 }
 
 function sees(visible: string[] | null, task: Task): boolean {

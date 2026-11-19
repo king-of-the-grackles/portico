@@ -68,7 +68,6 @@ export function shareSteps(o: { publicUrl: string }): Html {
  */
 export function sharePages(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
-  if (!core.workspaces.enabled) return route;
 
   route.get("/share", (c) =>
     sendPage(c, {

@@ -1,14 +1,14 @@
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { readJson } from "../agent-api/rest";
-import { PASSKEY_CHALLENGE_MS, passkeyRp } from "../core/accounts";
+import { PASSKEY_CHALLENGE_MS, SESSION_COOKIE, passkeyRp } from "../core/accounts";
 import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
 import { sign, verifySigned } from "../core/tokens";
 import type { Person } from "../core/types";
 import { clientIp } from "../client-ip";
 import { safeNext } from "../web/layout";
-import { type PersonEnv, sessionCookie, sessionCookieGone, sessionCookieName } from "./context";
+import { type PersonEnv, sessionCookie, sessionCookieGone } from "./context";
 import { personViews } from "./views";
 
 /** A JSON object body, or 400. */
@@ -22,9 +22,9 @@ export async function jsonObject(c: Context): Promise<Record<string, unknown>> {
 
 /** Signs this browser in as the person: ends the browser's earlier session, if any, and sets the cookie. */
 export function startBrowserSession(c: Context, core: Core, personId: string): void {
-  core.accounts.endSession(getCookie(c, sessionCookieName(core)));
+  core.accounts.endSession(getCookie(c, SESSION_COOKIE));
   const { token, expiresAt } = core.accounts.startSession(personId);
-  setCookie(c, sessionCookieName(core), token, sessionCookie(core, expiresAt));
+  setCookie(c, SESSION_COOKIE, token, sessionCookie(core, expiresAt));
 }
 
 /** Where a person goes after signing in: a claim still waiting for approval goes to the waiting page. */
@@ -86,8 +86,8 @@ export function sessionRoutes(core: Core): Hono<PersonEnv> {
 
   // Signing out works for anyone, signed in or not, including a claim still waiting for approval.
   route.delete("/", (c) => {
-    accounts.endSession(getCookie(c, sessionCookieName(core)));
-    deleteCookie(c, sessionCookieName(core), sessionCookieGone(core));
+    accounts.endSession(getCookie(c, SESSION_COOKIE));
+    deleteCookie(c, SESSION_COOKIE, sessionCookieGone(core));
     return c.body(null, 204);
   });
 

@@ -16,7 +16,7 @@ export function threadRoutes(core: Core): Hono<PersonEnv> {
   route.get("/", (c) => {
     const me = currentPerson(c);
     const agentId = c.req.query("agent") || undefined;
-    const involving = core.workspaces.seesEverything(me) ? undefined : agents.ownedBy(me.id).map((a) => a.id);
+    const involving = agents.ownedBy(me.id).map((a) => a.id);
     const views = personViews(core, me);
     return c.json({ threads: messages.threads({ involving, agentId }).map(views.thread) });
   });

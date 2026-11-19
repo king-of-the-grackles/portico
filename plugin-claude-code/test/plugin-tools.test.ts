@@ -23,6 +23,7 @@ import {
   startSession,
   type TestPortico,
   waitFor,
+  computerNamed,
 } from "./helpers";
 
 let p: TestPortico;
@@ -241,7 +242,7 @@ describe("the plugin's MCP server", () => {
 describe("a folder that is off Portico", () => {
   test("Portico's folder_off refusal makes the session quiet: no tools, a note, no notice, one log line, no retry", async () => {
     const folderId = "c".repeat(64);
-    p.computers.setFolder(p.computers.byName("macbook")!.id, folderId, "api", false);
+    p.computers.setFolder(computerNamed(p, "macbook")!.id, folderId, "api", false);
     const recorded: boolean[] = [];
     let opens = 0;
     const client = new PorticoClient({ url: p.url, token, sessionKey: "key-quiet-0001" });
@@ -284,7 +285,7 @@ describe("a folder that is off Portico", () => {
     await waitFor(() => recorded.length === 1);
     expect(recorded).toEqual([false]);
     await waitFor(() => s.toolListChanges() === 1);
-    expect((await s.host.listTools()).tools).toHaveLength(7);
+    expect((await s.host.listTools()).tools).toHaveLength(13);
   });
 
   test("while quiet, a tool call gets the note", async () => {
@@ -349,7 +350,7 @@ describe("a computer that hasn't joined", () => {
     plugin.start(); // the handshake happened before the takeover, so the session starts the stream itself
     await waitFor(() => connected(p, ADDRESS));
     await waitFor(() => host.toolListChanges() === 1);
-    expect((await host.host.listTools()).tools).toHaveLength(7);
+    expect((await host.host.listTools()).tools).toHaveLength(13);
     await waitFor(() => sock.posts.length === 1);
     expect(sock.posts[0]!.content).toBe(`<portico-notice>\n${joinedNotice("api-claude")}\n</portico-notice>`);
     expect(copyProblems(joinedNotice("api-claude"))).toEqual([]);

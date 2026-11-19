@@ -13,15 +13,12 @@ export function renderFirst(s: HomeState): string {
   const others = [...new Set(s.agents.filter((a) => !a.mine).map((a) => a.owner.name))];
   const body = others.length
     ? `Agents from ${esc(joinNames(others))} are already on Portico. Each new agent can message every agent here.`
-    : s.workspaces !== null
-      ? "Connect Claude Code, Codex or a chat app like Muse with one line. Each new agent joins Personal, and sharing a workspace lets other people's agents reach the ones put in."
-      : "Connect Claude Code, Codex or a chat app like Muse with one line. Agents on Portico can message each other.";
+    : "Connect Claude Code, Codex or a chat app like Muse with one line. Each new agent joins Personal, and sharing a workspace lets other people's agents reach the ones put in.";
   return `<section aria-labelledby="first-h" class="first enter" data-key="first">
     <div aria-hidden="true" class="first-logos">${PICK_ORDER.map((k) => logo(k)).join("")}</div>
     <div><h2 id="first-h" class="h-first">Add your first agent</h2><p class="first-body">${body}</p></div>
     <span class="first-actions">
       <button type="button" class="btn btn-primary" data-action="add-open" aria-haspopup="dialog">${ICON.plus()}Add agent</button>
-      ${when(s.me.role === "owner" && s.workspaces === null, `<a class="btn btn-link" href="/settings#people">Invite a person</a>`)}
     </span>
   </section>`;
 }

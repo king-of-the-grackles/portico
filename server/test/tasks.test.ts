@@ -15,6 +15,7 @@ import {
   makePortico,
   MINUTE,
   signIn,
+  together,
 } from "./helpers";
 
 async function setup() {
@@ -26,7 +27,9 @@ async function setup() {
   const dot = addAppAgent(p, maya, "maya-dot", { kind: "dots" });
   const { computer } = addComputer(p, chris);
   const claude = addSession(p, computer, { repo: "portico" }).agent;
-  return { p, chris, maya, grok: grok.agent, muse: muse.agent, dot: dot.agent, claude };
+  // grok and maya-dot share a workspace; Chris's other agents stay in Chris's own.
+  const shared = together(p, grok.agent, dot.agent);
+  return { p, chris, maya, grok: grok.agent, muse: muse.agent, dot: dot.agent, claude, computer, shared };
 }
 
 const json = async <T>(res: Response | Promise<Response>) => (await (await res).json()) as T;
@@ -133,7 +136,7 @@ describe("a task's outcome", () => {
     const unanswered = p.messages.send(grok, { to: claude.name, subject: "Status?", text: "?" }).message;
     const updated = p.messages.send(grok, { to: claude.name, subject: "Migrate", text: "?" }).message;
     p.messages.inbox(claude);
-    const unread = p.messages.send(grok, { to: "maya-dot", subject: "Churn?", text: "?" }).message;
+    const unread = p.messages.send(grok, { to: "maya/maya-dot", subject: "Churn?", text: "?" }).message;
     p.clock.advance(2 * DAY);
     p.messages.send(claude, { replyTo: updated.id, subject: "Halfway", text: "…", done: false });
     p.clock.advance(DAY + MINUTE);
@@ -154,7 +157,7 @@ describe("a task's outcome", () => {
       sent.push(p.messages.send(grok, { to: claude.name, subject, text: "t" }).message.id);
       p.clock.advance(MINUTE);
     }
-    p.messages.send(dot, { to: "grok", subject: "Other", text: "t" });
+    p.messages.send(dot, { to: "chris/grok", subject: "Other", text: "t" });
     p.messages.send(grok, { to: "muse", subject: "Held", text: "t" });
     const all = p.tasks.list({ visible: null });
     expect(all.tasks.map((t) => t.subject)).toEqual(["Held", "Other", "Three", "Two", "One"]);
@@ -305,7 +308,7 @@ describe("the control plane's person API", () => {
     const owner = signIn(p, chris);
     const member = signIn(p, maya);
     const mine = p.messages.send(grok, { to: claude.name, subject: "Review", text: "Full text" }).message;
-    const theirs = p.messages.send(grok, { to: "maya-dot", subject: "Churn", text: "t" }).message;
+    const theirs = p.messages.send(grok, { to: "maya/maya-dot", subject: "Churn", text: "t" }).message;
     const list = await json<{ tasks: { id: string; project: string | null; to: { label: string } }[]; projects: string[] }>(
       callPerson(p, owner, "GET", "/api/tasks?project=portico"),
     );
@@ -322,8 +325,9 @@ describe("the control plane's person API", () => {
   });
 
   test("a long session that ended recently shows its end first; a member sees no sessions of others' agents", async () => {
-    const { p, chris, maya, claude } = await setup();
-    const computer = p.computers.byName("macbook")!;
+    const { p, chris, maya, claude, computer, shared } = await setup();
+    // In a workspace Maya is in, so Maya sees the agent: its sessions stay its manager's to read.
+    p.workspaces.addAgent(chris.id, shared.id, claude.id);
     const long = p.agents.registerSession(computer, { key: "key-long-0001", repo: "portico", folderId: claude.folderId! });
     for (let i = 0; i < 3; i++) {
       p.clock.advance(HOUR);
@@ -341,9 +345,8 @@ describe("the control plane's person API", () => {
   });
 
   test("activity: sessions start and end beside the record; the agent page counts tasks and partners", async () => {
-    const { p, chris, grok, claude } = await setup();
+    const { p, chris, grok, claude, computer } = await setup();
     const owner = signIn(p, chris);
-    const computer = p.computers.byName("macbook")!;
     const run = p.agents.registerSession(computer, { key: "key-again-01", repo: "portico", folderId: claude.folderId! });
     p.clock.advance(5 * MINUTE);
     p.agents.seen(claude.id, run.runId);

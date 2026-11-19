@@ -133,9 +133,6 @@ export interface StatusReport {
   branch: string | null;
 }
 
-/** A desktop pop-up's answer to a held message. */
-export type Decision = "allow_once" | "always_allow" | "deny";
-
 /** A failed call to Portico. `status` 0 means Portico couldn't be reached. */
 export class ApiError extends Error {
   constructor(
@@ -248,17 +245,12 @@ export class PorticoClient {
     return this.call("POST", "/api/agent/status", report);
   }
 
-  /** A pop-up's answer to a held message, with the nonce the request came with. */
-  answerApproval(messageId: string, body: { nonce: string; decision: Decision }): Promise<{ message: MessageView }> {
-    return this.call("POST", `/api/agent/approvals/${encodeURIComponent(messageId)}`, body);
-  }
-
   /**
    * Opens `GET /api/agent/stream`, registering the session with the registration, and declaring that this session can
-   * show pop-ups when `popup` is set, and start a turn when a message arrives when `wake` is set. Doesn't throw for
-   * HTTP errors: the caller checks `status`, reads the body, and aborts with `signal`.
+   * start a turn when a message arrives when `wake` is set. Doesn't throw for HTTP errors: the caller checks `status`,
+   * reads the body, and aborts with `signal`.
    */
-  openStream(signal: AbortSignal, registration?: StreamRegistration, opts: { popup?: boolean; wake?: boolean } = {}): Promise<Response> {
+  openStream(signal: AbortSignal, registration?: StreamRegistration, opts: { wake?: boolean } = {}): Promise<Response> {
     const headers = this.headers("text/event-stream");
     let path = "/api/agent/stream";
     if (registration) {
@@ -266,7 +258,6 @@ export class PorticoClient {
       headers["x-portico-folder"] = registration.folderId;
       if (registration.client) headers["x-portico-client"] = registration.client;
     }
-    if (opts.popup) headers["x-portico-popup"] = "1";
     if (opts.wake) headers["x-portico-wake"] = "1";
     return this.doFetch(`${this.opts.url}${path}`, { headers, signal });
   }

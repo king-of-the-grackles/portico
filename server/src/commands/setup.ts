@@ -35,10 +35,14 @@ export async function setupCommand(args: string[], io: CliIo): Promise<number> {
     io.err(err.message);
     return 1;
   }
-  // A missing database means a different folder or PORTICO_DB_PATH than serve's: a link made here wouldn't work there.
+  if (config.descopeProjectId) {
+    io.err("This Portico server signs people in with Descope (PORTICO_DESCOPE_PROJECT_ID): signing in creates each account, so there is no setup link.");
+    return 1;
+  }
+  // A missing database means a different folder or PORTICO_DATA_DIR than serve's: a link made here wouldn't work there.
   if (!existsSync(resolve(io.cwd, config.dbPath))) {
     io.err(
-      `No Portico database at ${config.dbPath}. Start Portico with portico serve first, or set PORTICO_DB_PATH to the database Portico uses.`,
+      `No Portico database at ${config.dbPath}. Start Portico with portico serve first, or set PORTICO_DATA_DIR to the data folder Portico uses.`,
     );
     return 1;
   }

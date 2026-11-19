@@ -25,7 +25,7 @@ function jsonResponse(description: string, schema: unknown) {
 
 /**
  * The agent API for apps that connect through an OpenAPI description (Muse's custom connectors, for one). Sessions'
- * plugin routes (deliveries, status, pop-up answers, the stream) stay out of it.
+ * plugin routes (deliveries, status, the stream) stay out of it.
  */
 export function openApiDocument(publicUrl: string): OpenApiDocument {
   return {

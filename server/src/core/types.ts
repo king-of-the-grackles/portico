@@ -122,7 +122,7 @@ export interface Thread {
   startedBy: string;
   createdAt: string;
   lastMessageAt: string;
-  /** The workspace the two agents share that the thread runs through, set by Portico. Null where there are none. */
+  /** The workspace the two agents share that the thread runs through, set by Portico. Null once they share none. */
   workspaceId: string | null;
 }
 
@@ -159,7 +159,7 @@ export interface Message {
   senderNotifiedAt: string | null;
 }
 
-/** Things the outside world acts on: stream nudges, pop-ups and person updates. portico.ts routes them. */
+/** Things the outside world acts on: stream nudges, wake URLs and person updates. portico.ts routes them. */
 export type Notice =
   | { kind: "message_sent"; message: Message }
   | { kind: "message_decided"; message: Message }
@@ -183,22 +183,6 @@ export interface BucketConfig {
   secretAccessKey: string;
 }
 
-/**
- * Hosted Portico's sign-in on the base domain, as one workspace sees it. People sign in once on the base domain, which
- * hands the browser to a workspace with a pass: good once, for a minute, for that workspace and the browser that asked.
- * With this set, the workspace takes no passwords or passkeys of its own.
- */
-export interface CentralSignIn {
-  /** The base domain's own address, where the account's workspaces are listed. */
-  homeUrl: string;
-  /** Where the browser goes to sign in and come back with a pass. `state` ties the pass to the browser that asked. */
-  startUrl(state: string, next: string): string;
-  /** The account a pass names. Null for a pass that is unknown, used, expired, or asked for with another state. */
-  take(pass: string, state: string): string | null;
-  /** The account now has a place in this workspace: the base domain lists the workspace for the account. */
-  joined(accountId: string): void;
-}
-
 /** An account with the outside sign-in service, as a checked sign-in token names it. */
 export interface Account {
   id: string;
@@ -208,27 +192,22 @@ export interface Account {
 }
 
 /**
- * Hosted Portico with one database: people sign in with the outside service at Portico's own address, and the first
- * sign-in makes the person. No passwords, passkeys, setup link or invites.
+ * Signing in with an outside account (Descope, on hosted Portico): the first sign-in makes the person, and the welcome
+ * page asks for a name and handle. No passwords, passkeys, setup link or invites. Where Core has none, people sign in
+ * with this server's own passwords and passkeys. After sign-in nothing differs between the two.
  */
 export interface AccountSignIn {
   /** The sign-in service's project, shown on the sign-in page. */
   projectId: string;
   /** The account a sign-in token belongs to, or `unauthorized`. */
   account(token: unknown): Promise<Account>;
-  /** The one address people sign in at. */
-  homeUrl: string;
-  /** Every address this Portico answers at, the home address included. */
-  addresses(): string[];
-  /** The domain the sign-in cookie is set for, so every address shares one sign-in. Null: this host only. */
-  cookieDomain: string | null;
 }
 
 export interface PorticoConfig {
   port: number;
-  /** ":memory:" in tests. */
+  /** `<dataDir>/portico.db`. ":memory:" in tests. */
   dbPath: string;
-  /** The database's folder: the signing key lives here. */
+  /** PORTICO_DATA_DIR, the data folder: the database, the signing key and files live here. */
   dataDir: string;
   /** PORTICO_PLUGIN_SOURCE: the marketplace source /join tells computers to install from. */
   pluginSource: string | null;
@@ -241,14 +220,13 @@ export interface PorticoConfig {
    * development only; otherwise Portico posts only to public https:// addresses.
    */
   webhooksAllowPrivate: boolean;
-  /**
-   * Workspaces on: agents reach each other only through a workspace both are in, other people's agents are addressed
-   * as `<handle>/<agent>`, and a person reads only conversations of the person's own agents. Off (self-hosted Portico):
-   * one open network, where every agent reaches every other.
-   */
-  workspaces: boolean;
   /** Where files live: a bucket when one is configured, otherwise `files` in the data folder. */
   files: BucketConfig | null;
   /** Emails share links when set. Null: Share gives the link only. */
   mail: MailConfig | null;
+  /**
+   * PORTICO_DESCOPE_PROJECT_ID: people sign in with Descope, and signing in creates the account (hosted Portico). Null:
+   * passwords and passkeys, with a setup link for the first account and invites for the rest (a self-hosted server).
+   */
+  descopeProjectId: string | null;
 }

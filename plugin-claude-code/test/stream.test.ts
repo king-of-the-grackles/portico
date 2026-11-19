@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { PorticoClient } from "../src/portico-client";
 import { StreamClient, type StreamClientOptions, type StreamStop } from "../src/stream";
-import { appAgent, captureLog, connected, joinTestComputer, startPortico, type TestPortico, waitFor } from "./helpers";
+import { appAgent, captureLog, connected, joinTestComputer, startPortico, type TestPortico, waitFor, computerNamed } from "./helpers";
 
 const running: StreamClient[] = [];
 afterEach(async () => {
@@ -54,7 +54,7 @@ describe("StreamClient against Portico", () => {
     p.messages.send(agent, { to: "api-claude", subject: "Hello", text: "hello" });
     await waitFor(() => watched.events.length > 1);
     expect(watched.events).toEqual([
-      { event: "hello", data: { address: "api-claude@macbook", name: "api-claude", computer: "macbook" } },
+      { event: "hello", data: { address: "api-claude@macbook", name: "api-claude", computer: "macbook", workspaces: true } },
       { event: "nudge", data: {} },
     ]);
   });
@@ -66,7 +66,7 @@ describe("StreamClient against Portico", () => {
     await waitFor(() => watched.events.length > 1);
     expect(watched.events[1]).toEqual({
       event: "renamed",
-      data: { address: "billing-claude@macbook", name: "billing-claude", computer: "macbook" },
+      data: { address: "billing-claude@macbook", name: "billing-claude", computer: "macbook", workspaces: true },
     });
   });
 
@@ -92,7 +92,7 @@ describe("StreamClient against Portico", () => {
   });
 
   test("a folder that is off stops the stream for good with folder_off, logged once as info", async () => {
-    p.computers.setFolder(p.computers.byName("macbook")!.id, "f".repeat(64), "api", false);
+    p.computers.setFolder(computerNamed(p, "macbook")!.id, "f".repeat(64), "api", false);
     const watched = watch(openAs("key-stream-001", "f".repeat(64)));
     await waitFor(() => watched.stops.length === 1);
     expect(watched.stops[0]).toMatchObject({ reason: "rejected", status: 403, code: "folder_off" });
@@ -149,22 +149,6 @@ describe("StreamClient against Portico", () => {
     const quiet = watch(openAs(), { silenceMs: 300 });
     await Bun.sleep(800);
     expect(quiet.opens()).toBe(1);
-  });
-
-  test("reports each dropped connection through onDisconnect, but not a refused open", async () => {
-    let drops = 0;
-    const watched = watch(openAs(), { onDisconnect: () => drops++ });
-    const hellos = () => watched.events.filter((item) => item.event === "hello").length;
-    await waitFor(() => hellos() === 1);
-    watched.client.reconnect();
-    await waitFor(() => drops === 1);
-    await waitFor(() => hellos() === 2); // the second connection reached Portico before the stop
-    await watched.client.stop();
-    expect(drops).toBe(2);
-    let refused = 0;
-    const wrong = watch(openAs("key-stream-002", FOLDER, () => "pc_wrong-token-0123456789abcdef"), { onDisconnect: () => refused++ });
-    await waitFor(() => wrong.stops.length === 1);
-    expect(refused).toBe(0);
   });
 
   test("starts the backoff over after a healthy connection", async () => {

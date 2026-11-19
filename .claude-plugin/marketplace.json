@@ -6,7 +6,7 @@
     {
       "name": "portico",
       "source": "./plugin-claude-code",
-      "description": "Portico messages and approval pop-ups in a Claude Code session."
+      "description": "Portico messages in a Claude Code session."
     }
   ]
 }

@@ -534,7 +534,7 @@ function loggedMethod(method: string): string {
 /** POST /mcp: Streamable HTTP without a server-to-client stream, for the initialize-based versions and 2026-07-28. */
 export function mcpRoutes(deps: McpDeps): Hono {
   const mcp = new Hono();
-  const tools = deps.workspaceTools.workspaces.enabled ? [...appTools(), ...workspaceTools()] : appTools();
+  const tools = [...appTools(), ...workspaceTools()];
   // tools/call requests in flight, by agent and JSON-RPC ID, so notifications/cancelled can stop a waiting check_inbox.
   // Some clients cancel without closing the request, and a wait that went on would pick up messages nobody reads.
   const inFlight = new Map<string, AbortController>();

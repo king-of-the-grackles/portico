@@ -91,8 +91,6 @@ export interface FilesDeps {
   /** A message by ID. Passed as a function because messages are wired after files. */
   message: (id: string) => Message | null;
   publicUrl: () => string;
-  /** Whether the person reads everything on Portico: see Workspaces.seesEverything. By default, the owner. */
-  seesEverything?: (person: Person) => boolean;
   signingKey: string;
   now?: () => Date;
   newId?: () => string;
@@ -109,7 +107,6 @@ export class Files {
   private readonly store: FileStore;
   private readonly agents: Agents;
   private readonly message: (id: string) => Message | null;
-  private readonly seesEverything: (person: Person) => boolean;
   private readonly publicUrl: () => string;
   private readonly signingKey: string;
   private readonly now: () => Date;
@@ -122,7 +119,6 @@ export class Files {
     this.db = deps.db;
     this.store = deps.store;
     this.agents = deps.agents;
-    this.seesEverything = deps.seesEverything ?? ((person) => person.role === "owner");
     this.message = deps.message;
     this.publicUrl = deps.publicUrl;
     this.signingKey = deps.signingKey;
@@ -301,9 +297,8 @@ export class Files {
     return this.carriers(file.id).some((m) => m.fromId === agent.id || (m.toId === agent.id && letThrough(m)));
   }
 
-  /** With workspaces, a person sees files to and from the person's own agents. Without: the owner sees every file, as every task. A member sees files to and from the member's own agents, held ones too. */
+  /** A person sees files to and from the person's own agents, held ones too. */
   personMayDownload(person: Person, file: StoredFile): boolean {
-    if (this.seesEverything(person)) return true;
     const mine = new Set(this.agents.ownedBy(person.id).map((a) => a.id));
     if (file.uploaderId !== null && mine.has(file.uploaderId)) return true;
     return this.carriers(file.id).some((m) => mine.has(m.fromId) || mine.has(m.toId));

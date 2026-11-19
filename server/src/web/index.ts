@@ -3,7 +3,6 @@ import { type PersonEnv, loadPerson } from "../api/context";
 import type { Core } from "../core/core";
 import { accountPages } from "./account";
 import { assetRoutes } from "./assets";
-import { centralPages } from "./central";
 import { codexBridgeRoutes } from "./codex-bridge";
 import { homePage } from "./home";
 import { invitePage } from "./invite";
@@ -31,14 +30,13 @@ export function webRoutes(core: Core): Hono<PersonEnv> {
     await next();
   });
   web.use("*", loadPerson(core));
-  // A hosted workspace signs people in on the base domain: no setup link and no password page.
+  // Two sign-ins. An outside account: signing in makes the person, so no setup link, password page or invites.
   if (core.accountSignIn) web.route("/", accountPages(core, core.accountSignIn));
-  else if (core.central) web.route("/", centralPages(core, core.central));
   else {
     web.route("/", setupPage(core));
     web.route("/", signInPage(core));
+    web.route("/", invitePage(core));
   }
-  if (!core.workspaces.enabled) web.route("/", invitePage(core));
   web.route("/", joinPage(core));
   web.route("/", sharePages(core));
   web.route("/", mailPages(core));

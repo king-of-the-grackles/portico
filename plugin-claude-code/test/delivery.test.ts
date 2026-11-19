@@ -4,7 +4,7 @@ import { deliveryItems, InboxDelivery, stopNotice } from "../src/delivery";
 import { INSTRUCTIONS } from "../src/instructions";
 import { ApiError, type DeliveryAck, type Inbox, type MessageDelivery, PorticoClient, type UpdateDelivery } from "../src/portico-client";
 import { InboxSocket, SocketError } from "../src/socket";
-import { appAgent, connected, joinTestComputer, startPortico, startSession, type TestPortico, waitFor } from "./helpers";
+import { appAgent, connected, joinTestComputer, startPortico, startSession, type TestPortico, waitFor, computerNamed } from "./helpers";
 
 let p: TestPortico;
 let token: string;
@@ -77,7 +77,7 @@ describe("inbox socket delivery", () => {
 
   test("delivers messages that arrived while disconnected", async () => {
     // The session registered earlier and is offline now, as after a dropped connection.
-    p.agents.registerSession(p.computers.byName("macbook")!, { key: KEY, repo: "api", folderId: "a".repeat(64), client: "claude-code" });
+    p.agents.registerSession(computerNamed(p, "macbook")!, { key: KEY, repo: "api", folderId: "a".repeat(64), client: "claude-code" });
     const message = sender()("Waiting", "Waiting already");
     expect(status(message.id)).toBe("pending");
     const { sock } = await connect();
@@ -217,7 +217,7 @@ describe("inbox socket delivery", () => {
     sock.mode = "accept";
     const peeks = client.peeks;
     // The computer is removed: the stream closes, the reconnect gets 401, and the stream stops for good.
-    p.agents.forget(p.computers.remove(p.computers.byName("macbook")!.id));
+    p.agents.forget(p.computers.remove(computerNamed(p, "macbook")!.id));
     await waitFor(() => sock.posts.length === 1);
     expect(sock.posts[0]!.content).toContain("no longer accepts this computer's token");
     await Bun.sleep(400);

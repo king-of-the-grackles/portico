@@ -68,7 +68,7 @@ function renderInviteForm(s: SettingsState): string {
   </form>`;
 }
 
-/** With workspaces: the people who share one with the signed-in person. Coming and going happens on each workspace's page. */
+/** The people who share a workspace with the signed-in person. Coming and going happens on each workspace's page. */
 function renderSharedPeople(s: SettingsState): string {
   const people = s.people ?? [];
   const row = (p: PersonRow) =>
@@ -81,7 +81,8 @@ function renderSharedPeople(s: SettingsState): string {
 }
 
 export function renderPeople(s: SettingsState): string {
-  if (s.workspaces) return renderSharedPeople(s);
+  // A server with its own sign-in has invites, which its owner manages with claims and removing a person.
+  if (!s.canInvite) return renderSharedPeople(s);
   const owner = s.me.role === "owner";
   const people = s.people ?? [];
   const sorted = [...people.filter((p) => p.role === "owner"), ...people.filter((p) => p.role !== "owner")];
@@ -152,9 +153,7 @@ export function renderAccount(s: SettingsState): string {
         <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="name-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "name", " disabled")}>Save</button></span>
       </form></li>`
     : `<li class="srow" data-key="acct-name"><span class="row-text"><strong>Name</strong><span class="row-help">${esc(s.me.name)}</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="name-open">Change name</button></span></li>`;
-  const handleRow = !s.workspaces
-    ? ""
-    : s.handleForm
+  const handleRow = s.handleForm
       ? `<li class="srow srow-stack" data-key="acct-handle"><form class="sform-inline" data-form="handle-save" novalidate>
         <label for="acct-handle" class="lbl">Handle</label>
         <input id="acct-handle" class="field field-narrow${when(s.handleForm.error, " is-invalid")}" value="${esc(s.handleForm.handle)}" data-input="handle-field" aria-describedby="acct-handle-help" aria-invalid="${Boolean(s.handleForm.error)}" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="20" data-autofocus>
@@ -162,7 +161,7 @@ export function renderAccount(s: SettingsState): string {
         ${when(s.handleForm.error, `<span role="alert" class="field-error">${esc(s.handleForm.error)}</span>`)}
         <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="handle-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "handle", " disabled")}>Save handle</button></span>
       </form></li>`
-      : `<li class="srow" data-key="acct-handle"><span class="row-text"><strong>Handle</strong><span class="row-help"><code>${esc(s.me.handle ?? "")}</code> Goes in front of an agent's name for other people's agents, as in <code>${esc(s.me.handle ?? "")}/muse</code>.</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="handle-open">Change handle</button></span></li>`;
+    : `<li class="srow" data-key="acct-handle"><span class="row-text"><strong>Handle</strong><span class="row-help"><code>${esc(s.me.handle ?? "")}</code> Goes in front of an agent's name for other people's agents, as in <code>${esc(s.me.handle ?? "")}/muse</code>.</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="handle-open">Change handle</button></span></li>`;
   const emailRow = s.me.email ? `<li class="srow" data-key="acct-email"><span class="row-text"><strong>Email</strong><span class="row-help">${esc(s.me.email)}. The address signed in with. A share link sent by email works only for this address.</span></span></li>` : "";
   const pw = s.passwordForm;
   const passwordRow = pw
@@ -251,7 +250,7 @@ export function settingsState(data: {
   computers: ComputerView[] | null;
   passkeys: PasskeyView[] | null;
   passwords?: boolean;
-  workspaces?: boolean;
+  canInvite?: boolean;
   now: number;
 }): SettingsState {
   return {
@@ -265,7 +264,7 @@ export function settingsState(data: {
     computers: data.computers,
     passkeys: data.passkeys,
     passwords: data.passwords ?? true,
-    workspaces: data.workspaces ?? false,
+    canInvite: data.canInvite ?? false,
     handleForm: null,
     acctOpen: false,
     add: null,

@@ -1,10 +1,8 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, type CallToolResult, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { ApprovalPanels } from "./approvals";
 import { frameNotice, InboxDelivery, stopNotice } from "./delivery";
 import { INSTRUCTIONS } from "./instructions";
 import { errorName, type Logger } from "./log";
-import type { DialogRunner } from "./popup";
 import type { Inbox, PorticoClient, StatusReport, StreamRegistration } from "./portico-client";
 import { type InboxSocket, SocketError } from "./socket";
 import type { SessionWatcher } from "./status";
@@ -140,8 +138,6 @@ export interface PorticoPluginDeps {
   registration?: () => Promise<StreamRegistration>;
   /** Reports the session's status. Started by the first hello, told to resend on each later one, stopped with the plugin. */
   watcher?: Pick<SessionWatcher, "start" | "stop" | "resend"> | null;
-  /** Shows approval pop-ups. Null or absent, the session never declares pop-ups. */
-  popup?: DialogRunner | null;
   /** The folder's switch. Absent, the folder counts as on. */
   folder?: FolderSwitch;
   /**
@@ -153,8 +149,6 @@ export interface PorticoPluginDeps {
   joining?: boolean;
   /** Codex only: makes the link to the conversation, given the plugin's hooks. Absent, Portico can't start turns. */
   conversation?: (hooks: ConversationHooks) => ConversationLink;
-  /** Test override for the pauses before retrying a pop-up's answer. */
-  answerRetryMs?: number[];
   /** Test override for the pauses before retrying a post the socket didn't take. */
   deliveryRetryMs?: number[];
   /** Test overrides for the live stream. */
@@ -316,12 +310,14 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
   const onHello = (data: unknown) => {
     const { address, name, workspaces } = (data ?? {}) as { address?: unknown; name?: unknown; workspaces?: unknown };
     if (typeof address === "string") log("info", "session_registered", { address });
-    if ((workspaces === true) !== workspacesOn) {
-      workspacesOn = workspaces === true;
-      server.sendToolListChanged().catch((err) => log("warn", "tool_list_notice_failed", { error: errorName(err) }));
-    }
+    const workspacesChanged = (workspaces === true) !== workspacesOn;
+    workspacesOn = workspaces === true;
     // Portico registered the session, so the folder is on there, whatever the local copy said.
     if (quiet === host.folderOffNote) deps.folder?.record(false);
+    // One notice per hello: lifting the quiet already tells Claude Code that the list changed.
+    if (workspacesChanged && quiet === null) {
+      server.sendToolListChanged().catch((err) => log("warn", "tool_list_notice_failed", { error: errorName(err) }));
+    }
     setQuiet(null);
     if (deps.joining && !announced && typeof name === "string" && SAFE_NAME.test(name)) {
       announced = true;
@@ -344,23 +340,14 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     void post(`This session is now \`${name}\` on Portico (address \`${address}\`). Other agents send messages to that name.`);
   };
 
-  const panels = new ApprovalPanels({
-    client,
-    runner: deps.popup ?? null,
-    log,
-    retryMs: deps.answerRetryMs,
-    // A panel failed to show: reconnect without declaring pop-ups, so Portico hands the request to another session.
-    onUnavailable: () => stream.reconnect(),
-  });
-
   const stream: StreamClient = new StreamClient({
-    // Pop-ups and waking are declared on each open, so a session whose panel failed stops declaring pop-ups on its next
-    // connection, and one whose Codex conversation turned up declares waking.
+    // Waking is declared on each open, so a session whose Codex conversation turned up declares waking on its next
+    // connection.
     open: async (signal) => {
       await link?.settled(CONVERSATION_WAIT_MS);
       const registration = deps.registration ? await deps.registration() : undefined;
       declaredWake = link?.canWake ?? false;
-      return client.openStream(signal, registration, { popup: panels.available, wake: declaredWake });
+      return client.openStream(signal, registration, { wake: declaredWake });
     },
     onEvent: (event, data) => {
       if (event === "hello") onHello(data);
@@ -369,11 +356,7 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
         void delivery?.run();
         link?.nudge();
       }
-      else if (event === "approval_request") panels.request(data);
-      else if (event === "approval_closed") panels.closed(data);
     },
-    // Portico sends open requests again on reconnect, to whichever session it then elects on the computer.
-    onDisconnect: () => panels.closeAll(),
     onStop: (stop) => {
       // Delivery is over for good too: a retry armed by an earlier socket failure must not peek, post or ack now.
       delivery?.stop();
@@ -406,7 +389,6 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
       delivery?.stop();
       link?.stop();
       clearTimeout(codexIdleTimer);
-      panels.closeAll();
       await stream.stop();
     },
     notice: (text) => void post(text),

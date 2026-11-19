@@ -1,7 +1,4 @@
-import type { HostedConfig } from "./config";
 import type { PorticoConfig } from "./core/types";
-import { MainHosted, readMain } from "./hosted/main";
-import { Hosted } from "./hosted/router";
 import { LIMITS, MAX_BODY_BYTES } from "./core/limits";
 import { openDb } from "./db";
 import { log } from "./log";
@@ -16,6 +13,7 @@ export interface RunningServer {
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
+/** The one way Portico runs: one database in the data folder, one address. */
 export function startServer(config: PorticoConfig, opts: { port?: number } = {}): RunningServer {
   const db = openDb(config.dbPath, (msg, fields) => log("info", msg, fields));
   const portico = createPortico(config, { db });
@@ -54,69 +52,4 @@ export function startServer(config: PorticoConfig, opts: { port?: number } = {})
       db.close();
     },
   };
-}
-
-export interface RunningHosted {
-  port: number;
-  hosted: Hosted | MainHosted;
-  stop(): void;
-}
-
-/** How often closed workspaces are opened for their expiries. */
-const CLOSED_SWEEP_MS = 15 * MINUTE_MS;
-
-/** Hosted Portico: one server routing each request to its workspace by host. */
-export function startHosted(config: HostedConfig, opts: { port?: number } = {}): RunningHosted {
-  // One database once the data folder has one; until then, a database per workspace.
-  const hosted = readMain(config) ? new MainHosted(config) : new Hosted(config);
-  let server: ReturnType<typeof Bun.serve>;
-  try {
-    server = Bun.serve({
-      port: opts.port ?? config.port,
-      fetch: hosted.fetch,
-      maxRequestBodySize: hosted.takesUploads ? LIMITS.maxFileMb * 1024 * 1024 + MAX_BODY_BYTES : MAX_BODY_BYTES * 2,
-      idleTimeout: 60,
-    });
-  } catch (err) {
-    hosted.stop();
-    throw err;
-  }
-  void hosted.sweepAll(true);
-  const minuteTimer = setInterval(() => hosted.sweepMinute(), MINUTE_MS);
-  const closedTimer = setInterval(() => void hosted.sweepAll(), CLOSED_SWEEP_MS);
-  const dailyTimer = setInterval(() => void hosted.sweepAll(true), DAY_MS);
-  const port = server.port as number;
-  if (hosted instanceof MainHosted) log("info", "portico_hosted_started", { port, domain: config.domain, one_database: true });
-  else log("info", "portico_hosted_started", { port, domain: config.domain, workspaces: hosted.control.all().length });
-  return {
-    port,
-    hosted,
-    stop() {
-      clearInterval(minuteTimer);
-      clearInterval(closedTimer);
-      clearInterval(dailyTimer);
-      server.stop(true);
-      hosted.stop();
-    },
-  };
-}
-
-/**
- * Holds the address without opening any database: the health check answers, and everything else is told to come back
- * shortly. For work on the data folder that nothing may write during, such as moving to one database: agents and
- * browsers retry, and what the folder holds stays exactly as the release before left it.
- */
-export function startHold(port: number): { port: number; stop(): void } {
-  const server = Bun.serve({
-    port,
-    fetch: (request) => {
-      if (new URL(request.url).pathname === "/healthz") return Response.json({ ok: true });
-      return Response.json(
-        { error: "unavailable", message: "Portico is being moved and is back in a few minutes." },
-        { status: 503, headers: { "Retry-After": "30", "Cache-Control": "no-store" } },
-      );
-    },
-  });
-  log("info", "portico_holding", { port: server.port });
-  return { port: server.port as number, stop: () => server.stop(true) };
 }

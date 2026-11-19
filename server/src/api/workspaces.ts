@@ -132,9 +132,8 @@ export function workspaceViews(core: Core, me: Person) {
   return {
     workspace,
     share,
-    /** The person's workspaces: Personal first, then shared ones by name. Empty where Portico has no workspaces. */
+    /** The person's workspaces: Personal first, then shared ones by name. */
     list: (): WorkspaceView[] => {
-      if (!workspaces.enabled) return [];
       workspaces.personal(me.id);
       const needs = needing();
       return workspaces.forPerson(me.id).map((w) => workspace(w, needs));
@@ -146,7 +145,6 @@ export function workspaceViews(core: Core, me: Person) {
 
 /** What waits for the person about workspaces: agents asking to come in, and what agents asked to be confirmed. */
 export function workspaceApprovals(core: Core, me: Person): { joins: JoinView[]; asks: AskView[] } {
-  if (!core.workspaces.enabled) return { joins: [], asks: [] };
   const views = workspaceViews(core, me);
   return { joins: views.joins(), asks: views.asks() };
 }
@@ -183,7 +181,6 @@ export function workspacePageData(core: Core, me: Person, id: string): Workspace
 export function workspaceRoutes(core: Core): Hono<PersonEnv> {
   const { workspaces, shares } = core;
   const route = new Hono<PersonEnv>();
-  if (!workspaces.enabled) return route;
   const views = (c: Context<PersonEnv>) => workspaceViews(core, currentPerson(c));
 
   route.get("/workspaces", (c) => c.json({ workspaces: views(c).list() }));

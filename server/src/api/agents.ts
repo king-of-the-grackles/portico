@@ -33,7 +33,7 @@ export function agentPageData(core: Core, me: Person, id: string): AgentPageData
   const { agents, approvals } = core;
   const agent = agents.require(id);
   // An agent in no workspace of the person's answers the same as one that doesn't exist.
-  if (core.workspaces.visibleAgents(me.id)?.has(agent.id) === false) throw new PorticoError("not_found", "No such agent.");
+  if (!core.workspaces.visibleAgents(me.id).has(agent.id)) throw new PorticoError("not_found", "No such agent.");
   const views = personViews(core, me);
   const mine = agent.ownerId === me.id;
   const allowList = mine ? approvals.allowListFor(me.id, agent.id).map(views.allowEntry) : null;
@@ -58,8 +58,8 @@ export function agentPageData(core: Core, me: Person, id: string): AgentPageData
     taskCounts: counts,
     worksWith,
     // Sessions, like tasks and activity, only for the person's own agents (everyone's for the owner).
-    runs: visible === null || visible.includes(agent.id) ? agents.runs(agent.id, 10).map(views.run) : [],
-    runCount: visible === null || visible.includes(agent.id) ? agents.runCount(agent.id) : 0,
+    runs: visible.includes(agent.id) ? agents.runs(agent.id, 10).map(views.run) : [],
+    runCount: visible.includes(agent.id) ? agents.runCount(agent.id) : 0,
     woken: [wake, events].some((v) => v !== null && (v.lastStatus === null || v.lastStatus === "ok")),
     wake: mine ? wake : null,
     events: mine ? events : null,
@@ -75,9 +75,8 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
   const unseen: MiddlewareHandler<PersonEnv> = async (c, next) => {
     const me = c.get("person");
-    const visible = me ? core.workspaces.visibleAgents(me.id) : null;
     const id = c.req.param("id");
-    if (me && visible && id && !visible.has(id)) return c.json({ error: "not_found", message: "No such agent." }, 404);
+    if (me && id && !core.workspaces.visibleAgents(me.id).has(id)) return c.json({ error: "not_found", message: "No such agent." }, 404);
     await next();
   };
 
@@ -87,7 +86,7 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
     return c.json({ agents: agentsInOrder(agents, me).map(views.agent) });
   });
 
-  // With workspaces, an agent in none of the person's workspaces answers like one that isn't there, on every route.
+  // An agent in none of the person's workspaces answers like one that isn't there, on every route.
   route.use("/:id/*", unseen);
   route.use("/:id", unseen);
 

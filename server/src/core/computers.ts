@@ -6,7 +6,6 @@ import { checkAgentName } from "./agents";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
-import { releasedByOther, releaseNames } from "./released-names";
 import { hashSecret, LINK_SECRET, newLinkSecret, newToken, sameSecret } from "./tokens";
 import { AGENT_KINDS } from "./types";
 import type { Agent, AgentKind, Computer } from "./types";
@@ -159,8 +158,6 @@ export interface ComputersDeps {
   db: Database;
   changes: Changes;
   activity?: Activity;
-  /** With workspaces, a computer's name is unique among its owner's computers, not across everyone. */
-  namesPerOwner?: boolean;
   now?: () => Date;
   newId?: () => string;
   log?: (msg: string, fields: Record<string, unknown>) => void;
@@ -174,7 +171,6 @@ export class Computers {
   private readonly db: Database;
   private readonly changes: Changes;
   private readonly activity: Activity | undefined;
-  private readonly namesPerOwner: boolean;
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
@@ -184,7 +180,6 @@ export class Computers {
     this.db = deps.db;
     this.changes = deps.changes;
     this.activity = deps.activity;
-    this.namesPerOwner = deps.namesPerOwner ?? false;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.log = deps.log ?? (() => {});
@@ -239,11 +234,6 @@ export class Computers {
     return row ? toComputer(row) : null;
   }
 
-  byName(name: string): Computer | null {
-    const row = this.db.query("SELECT * FROM computers WHERE name = $name").get({ name }) as ComputerRow | null;
-    return row ? toComputer(row) : null;
-  }
-
   /** By name. With an owner, only that person's computers. */
   list(ownerId?: string): Computer[] {
     const rows = ownerId
@@ -253,21 +243,12 @@ export class Computers {
   }
 
   /**
-   * Deletes the computer and, by cascade, its sessions and folders, so its token fails at once. The computer's name and
-   * its sessions' names are released. Returns the IDs of the sessions it had, so their streams can be closed.
+   * Deletes the computer and, by cascade, its sessions and folders, so its token fails at once. Returns the IDs of the
+   * sessions it had, so their streams can be closed.
    */
   remove(id: string): string[] {
     return this.db.transaction(() => {
       const sessions = this.db.query("SELECT id, name FROM agents WHERE computer_id = $id").all({ id }) as { id: string; name: string }[];
-      const computer = this.get(id);
-      if (computer) {
-        releaseNames(
-          this.db,
-          computer.ownerId,
-          [{ scope: "computer", name: computer.name }, ...sessions.map((session) => ({ scope: "agent" as const, name: session.name }))],
-          this.now(),
-        );
-      }
       const removed = this.db.query("DELETE FROM computers WHERE id = $id").run({ id }).changes;
       if (removed > 0) {
         this.log("computer_removed", { computer_id: id, sessions: sessions.length });
@@ -648,15 +629,10 @@ export class Computers {
     return new Date(this.now().getTime() + offsetMs).toISOString();
   }
 
-  /**
-   * The base name, or the first free `<base>-2` … `<base>-99`. A name another person's computer had within the history
-   * window isn't free, so addresses on that computer can't start reaching this one.
-   */
+  /** The base name, or the first free `<base>-2` … `<base>-99`. A name is unique among its owner's computers. */
   private freeName(base: string, ownerId: string): string {
     const taken = (name: string) =>
-      this.namesPerOwner
-        ? this.db.query("SELECT 1 FROM computers WHERE owner_id = $ownerId AND name = $name").get({ ownerId, name }) !== null
-        : this.byName(name) !== null || releasedByOther(this.db, "computer", name, ownerId, this.now());
+      this.db.query("SELECT 1 FROM computers WHERE owner_id = $ownerId AND name = $name").get({ ownerId, name }) !== null;
     let name = base;
     for (let n = 2; taken(name); n++) {
       if (n > MAX_DEDUPE) throw new PorticoError("rate_limited", `Too many computers named ${base}. Remove some first.`);

@@ -9,19 +9,11 @@ import { safeNext } from "../web/layout";
 import { type PersonEnv, currentPerson } from "./context";
 import { jsonObject, startBrowserSession } from "./session";
 
-/**
- * Where a browser goes after signing in. `at` is the address the sign-in started from, when that is another of this
- * Portico's own addresses: the sign-in cookie reaches every one of them, so the browser goes back there.
- */
-export function afterAccountSignIn(signIn: AccountSignIn, person: Person, next: unknown, at: unknown): string {
+/** Where a browser goes after signing in: the page asked for, or first the welcome page for a person with no handle yet. */
+export function afterAccountSignIn(person: Person, next: unknown): string {
   const path = safeNext(next);
-  const origin = typeof at === "string" && at !== signIn.homeUrl && signIn.addresses().includes(at) ? at : "";
-  if (person.handle !== null) return `${origin}${path}`;
-  const query = new URLSearchParams();
-  if (path !== "/") query.set("next", path);
-  if (origin) query.set("at", origin);
-  const tail = query.toString();
-  return `${signIn.homeUrl}/welcome${tail ? `?${tail}` : ""}`;
+  if (person.handle !== null) return path;
+  return path === "/" ? "/welcome" : `/welcome?next=${encodeURIComponent(path)}`;
 }
 
 /** A name for a person just made from an account: the account's own, else the email's first part, else a plain one. */
@@ -38,12 +30,12 @@ function firstName(account: Account): string {
 }
 
 /**
- * Signing in with an outside account at Portico's own address. The first sign-in makes the person; the handle page
- * then asks for the name and handle before anything else opens.
+ * Signing in with an outside account (Descope). The first sign-in makes the person; the welcome page then asks for the
+ * name and handle before anything else opens.
  *
- *   POST /api/session `{ token, next?, at? }` → `{ next }`
+ *   POST /api/session `{ token, next? }` → `{ next }`
  *   GET  /api/handles/check?handle=… → `{ handle, free, message }`
- *   POST /api/welcome `{ name, handle, next?, at? }` → `{ next }`
+ *   POST /api/welcome `{ name, handle, next? }` → `{ next }`
  */
 export function accountSignInRoutes(core: Core, signIn: AccountSignIn): Hono<PersonEnv> {
   const { people, workspaces } = core;
@@ -69,7 +61,7 @@ export function accountSignInRoutes(core: Core, signIn: AccountSignIn): Hono<Per
     }
     startBrowserSession(c, core, person.id);
     log("info", "account_sign_in", { person_id: person.id });
-    return c.json({ next: afterAccountSignIn(signIn, person, body.next, body.at) });
+    return c.json({ next: afterAccountSignIn(person, body.next) });
   });
 
   /** Whether the signed-in person could take the handle, and why not. Never says whose a taken handle is. */
@@ -98,7 +90,7 @@ export function accountSignInRoutes(core: Core, signIn: AccountSignIn): Hono<Per
       return named;
     })();
     log("info", "handle_set", { person_id: person.id });
-    return c.json({ next: afterAccountSignIn(signIn, person, body.next, body.at) });
+    return c.json({ next: afterAccountSignIn(person, body.next) });
   });
 
   return route;

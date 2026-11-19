@@ -80,7 +80,7 @@ export function requireAgent(resolver: Resolver): MiddlewareHandler<AgentEnv> {
   };
 }
 
-/** Sessions only: deliveries, status reports and pop-up answers. */
+/** Sessions only: deliveries and status reports. */
 export function requireSession(agent: Agent, what: string): void {
   if (agent.type !== "session") throw new PorticoError("not_allowed", `Only sessions on a computer ${what}.`);
 }

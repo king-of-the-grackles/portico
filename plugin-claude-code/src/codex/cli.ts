@@ -141,10 +141,8 @@ async function join(args: string[], io: CodexCliIo, deps: CodexCliDeps): Promise
   const bridge = bridgeFile(deps);
   // The settings the join ran with that the bridge reads, since Codex passes the bridge only a few variables.
   const env: Record<string, string> = {};
-  for (const key of ["PORTICO_COMPUTER_CONFIG", "PORTICO_POPUP"]) {
-    const value = io.env[key]?.trim();
-    if (value) env[key] = key === "PORTICO_COMPUTER_CONFIG" ? resolve(io.cwd, value) : value;
-  }
+  const configured = io.env.PORTICO_COMPUTER_CONFIG?.trim();
+  if (configured) env.PORTICO_COMPUTER_CONFIG = resolve(io.cwd, configured);
   const bun = (deps.findBun ?? (() => findOnPath("bun", io.env.PATH) ?? process.execPath))();
   const server = outcomeLine(
     setServer(home, bridge, { allow, bun, env }),

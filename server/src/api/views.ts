@@ -25,7 +25,7 @@ import type {
 export interface PersonRef {
   id: string;
   name: string;
-  /** With workspaces: what goes in front of the person's agents' names for everyone else. */
+  /** What goes in front of the person's agents' names for everyone else. */
   handle?: string | null;
 }
 
@@ -442,20 +442,16 @@ export function personViews(deps: ViewDeps, me: Person) {
 
 export type PersonViews = ReturnType<typeof personViews>;
 
-/**
- * The owner sees every thread. A member sees only threads with at least one of the member's own agents. With workspaces,
- * that holds for everyone: a person reads a thread only when one of the person's own agents is in it.
- */
-export function canSeeThread(core: Pick<Core, "agents" | "workspaces">, me: Person, thread: Thread): boolean {
+/** A person reads a thread only when one of the person's own agents is in it. That holds for everyone, a server's owner too. */
+export function canSeeThread(core: Pick<Core, "agents">, me: Person, thread: Thread): boolean {
   const { agents } = core;
-  if (core.workspaces.seesEverything(me)) return true;
   const mine = new Set(agents.ownedBy(me.id).map((a) => a.id));
   return mine.has(thread.aId) || mine.has(thread.bId);
 }
 
 /**
- * Every agent the person sees, the signed-in person's first, then by owner, then as the agent list orders them. With
- * workspaces, only agents in a workspace the person is in.
+ * Every agent the person sees, the signed-in person's first, then by owner, then as the agent list orders them. Only
+ * the person's own agents and those in a workspace the person is in.
  */
 export function agentsInOrder(agents: Agents, me: Person): Agent[] {
   const entries = agents.entriesForPerson(me.id);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentPageData } from "../src/api/agents";
+import type { WorkspaceView } from "../src/api/workspaces";
 import type { TaskListData, TodayData } from "../src/api/tasks";
 import type { ActivityView, AgentView, HeldCard, MessageView, PersonView, SignInView, TaskView } from "../src/api/views";
 import { agentState, clock, dayHeading, duration, esc, expiresIn, longDate, renderAddSheet } from "../src/web/client/render/common";
@@ -16,6 +17,7 @@ import {
   copyProblems,
   makePortico,
   signIn,
+  together,
   visibleCopy,
 } from "./helpers";
 
@@ -203,13 +205,25 @@ const TASKS: TaskListData = {
   projects: ["portico"],
 };
 
+/** Chris's own workspace, holding every agent of Chris's. */
+const PERSONAL: WorkspaceView = {
+  id: "w-personal",
+  name: "Personal",
+  kind: "personal",
+  owner: CHRIS,
+  isOwner: true,
+  people: [CHRIS],
+  agentIds: AGENTS.filter((a) => a.mine).map((a) => a.id),
+  needs: false,
+};
+
 function state(o: Partial<HomeState> = {}): HomeState {
   const base = homeState({
     me: ME,
     publicUrl: "https://portico.example.com",
     agents: AGENTS,
     approvals: { held: [HELD], signIns: [SIGN_IN], joins: [], asks: [] },
-    workspaces: null,
+    workspaces: [PERSONAL],
     workspacePage: null,
     route: { page: "today" },
     today: TODAY,
@@ -470,24 +484,16 @@ describe("an agent's page", () => {
 });
 
 describe("the navigation", () => {
-  test("Today with its count, Activity, the agents in plain words, quiet ones folded, others' agents by person", () => {
-    const html = render(state());
+  test("Home with its count, Activity, the workspaces with who else is there, Agents and Settings", () => {
+    const launch: WorkspaceView = { id: "w-launch", name: "Launch", kind: "shared", owner: CHRIS, isOwner: true, people: [CHRIS, MAYA], agentIds: [], needs: true };
+    const html = render(state({ workspaces: [PERSONAL, launch] }));
     const t = text(html);
-    expect(t).toContain("Today 3 waiting for a decision");
-    inOrder(
-      t,
-      "Claude Code (portico) Working",
-      "Codex (portico) Has a question",
-      "Grok Bot Available",
-      "Codex Available",
-      "Muse (muse-work) Waiting to join",
-      "Not running (1)",
-      "Add agent",
-      "Maya Okafor",
-      "Dots",
-    );
+    inOrder(t, "Home 3 waiting for a decision", "Activity", "Workspaces", "Personal", "Launch", "Something here needs a decision", "New workspace", "Agents", "Settings");
+    expect(html).toContain('aria-label="With Maya Okafor"');
+    expect(html).toMatch(/href="\/w\/w-launch" data-action="go"/);
+    // No list of every agent on the server, and no shortcut to invites: people come in by sharing a workspace.
     expect(html).not.toContain('data-key="n-a-gone"');
-    expect(render(state({ quietOpen: true }))).toContain('data-key="n-a-gone"');
+    expect(html).not.toContain("Invite a person");
     expect(render(state({ route: { page: "activity" }, tasks: TASKS }))).toMatch(
       /href="\/activity" data-action="go" data-href="\/activity" aria-current="page"/,
     );
@@ -577,7 +583,9 @@ async function setup() {
   const dialogSession = addSession(p, computer, { repo: "dialog" }).agent;
   const held = p.messages.send(grokAgent, { to: "muse", subject: "Flights to Denver", text: "Found three flights under $400." }).message;
   const chrisOnly = p.messages.send(dialogSession, { to: "grok", subject: "Webhook retries", text: "Three tries with backoff." }).message;
-  const shared = p.messages.send(dotAgent, { to: "grok", subject: "Weekly status", text: "The status page is current." }).message;
+  // grok and maya-dot share a workspace; Chris's other agents stay in Chris's own.
+  together(p, grokAgent, dotAgent);
+  const shared = p.messages.send(dotAgent, { to: "chris/grok", subject: "Weekly status", text: "The status page is current." }).message;
   return { p, chris, maya, owner: signIn(p, chris), member: signIn(p, maya), grokAgent, museAgent, dotAgent, held, chrisOnly, shared };
 }
 
@@ -648,11 +656,11 @@ describe("the pages", () => {
     expect(old.headers.get("location")).toBe("/activity");
   });
 
-  test("a member sees every agent, only tasks with the member's agents, and no invite link", async () => {
+  test("a member sees the agents sharing a workspace, only tasks with the member's agents, and no invite link", async () => {
     const { p, member, shared } = await setup();
     const html = await (await p.app.request("/activity", { headers: { cookie: member } })).text();
     const data = firstData(html);
-    expect(data.agents.map((a: { name: string }) => a.name).sort()).toEqual(["dialog-claude", "grok", "maya-dot", "muse"].sort());
+    expect(data.agents.map((a: { name: string }) => a.name).sort()).toEqual(["grok", "maya-dot"]);
     expect(data.tasks.tasks.map((t: { id: string }) => t.id)).toEqual([shared.id]);
     expect(data.approvals.held).toEqual([]);
     expect(html).not.toContain("Invite a person");

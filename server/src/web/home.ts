@@ -38,14 +38,13 @@ export function homeData(core: Core, me: Person, route: Route): HomeData {
       resolved = { page: "today" };
     }
   }
-  if (route.page === "agents" && !core.workspaces.enabled) resolved = { page: "today" };
   return {
     page: "home",
     me: views.person(me),
     publicUrl: core.settings.publicUrl(),
     agents: agentsInOrder(core.agents, me).map(views.agent),
     approvals: { held: core.approvals.heldFor(me.id).map(views.held), signIns: pendingSignIns(core, me), ...workspaceApprovals(core, me) },
-    workspaces: core.workspaces.enabled ? workspaceViews(core, me).list() : null,
+    workspaces: workspaceViews(core, me).list(),
     workspacePage,
     route: resolved,
     today: resolved.page === "today" ? todayData(core, me, serverMidnight(core.now())) : null,

@@ -8,7 +8,6 @@ import { defang } from "./framing";
 import { isBroadcast } from "./guards";
 import { DAY_MS, HOUR_MS, LIMITS, NAME } from "./limits";
 import type { Presence } from "./presence";
-import { releasedByOther, releaseNames } from "./released-names";
 import { hashSecret, newToken } from "./tokens";
 import { AGENT_KINDS } from "./types";
 import type { Agent, AgentKind, AgentType, Computer, DeliveryTier, DirectoryEntry, LiveStatus } from "./types";
@@ -225,7 +224,7 @@ export interface AgentsDeps {
   computers: Computers;
   presence: Presence;
   changes: Changes;
-  /** Who reaches whom. With workspaces on, names are unique per owner and other people's agents carry a handle. */
+  /** Who reaches whom. Names are unique per owner, and other people's agents carry a handle. */
   workspaces: Workspaces;
   activity?: Activity;
   /** Whether the agent has an open stream. A connected session stays listed however long ago its row was written. */
@@ -296,14 +295,9 @@ export class Agents {
     return agent;
   }
 
-  /** Whether the two agents reach each other now: always, where Portico has no workspaces. */
+  /** Whether the two agents reach each other now: both are in one workspace. */
   reaches(agentId: string, otherId: string): boolean {
     return this.workspaces.reach(agentId, otherId);
-  }
-
-  /** Whether this Portico has workspaces, so reach follows them. */
-  get hasWorkspaces(): boolean {
-    return this.workspaces.enabled;
   }
 
   /** The agent at exactly this address, including a session however long ago it was seen. */
@@ -341,24 +335,17 @@ export class Agents {
   }
 
   /**
-   * A session's short name when it alone resolves to the session, otherwise the full address. With workspaces, the name
-   * the agent's own owner knows it by: short when no other agent of that owner has the name.
+   * The name the agent's own owner knows it by: a session's short name when no other agent of that owner has the name,
+   * otherwise the full address.
    */
   display(agent: Agent): string {
     if (agent.type !== "session") return agent.name;
-    if (this.workspaces.enabled) return this.ownedNamed(agent.ownerId, agent.name).length === 1 ? agent.name : addressOf(agent);
-    if (this.byAddress(agent.name)) return addressOf(agent);
-    const n = (
-      this.db.query("SELECT COUNT(*) AS n FROM agents WHERE computer_id IS NOT NULL AND name = $name").get({
-        name: agent.name,
-      }) as { n: number }
-    ).n;
-    return n === 1 && !this.releasedByOther(agent.name, agent.ownerId) ? agent.name : addressOf(agent);
+    return this.ownedNamed(agent.ownerId, agent.name).length === 1 ? agent.name : addressOf(agent);
   }
 
   /**
    * The name to address the agent by, for a viewer owned by `viewerOwnerId`: the plain name for that person's own
-   * agents, and `<handle>/<name>` for anyone else's. Without workspaces, the same name for everyone.
+   * agents, and `<handle>/<name>` for anyone else's.
    */
   nameFor(agent: Agent, viewerOwnerId: string): string {
     return this.prefixFor(agent, viewerOwnerId) + this.display(agent);
@@ -370,7 +357,7 @@ export class Agents {
   }
 
   private prefixFor(agent: Agent, viewerOwnerId: string): string {
-    if (!this.workspaces.enabled || agent.ownerId === viewerOwnerId) return "";
+    if (agent.ownerId === viewerOwnerId) return "";
     const handle = this.workspaces.handleOf(agent.ownerId);
     // Everyone in a shared workspace has a handle. Without one the plain name stays, which only the owner's own agents
     // resolve, so nothing can be misrouted.
@@ -389,9 +376,9 @@ export class Agents {
       const twins = this.db
         .query(
           `SELECT SUM(computer_id IS $computerId) AS here, SUM(computer_id IS NOT $computerId) AS elsewhere FROM agents
-           WHERE type = 'session' AND kind = $kind AND folder = $folder AND id != $id AND ($ownerId IS NULL OR owner_id = $ownerId)`,
+           WHERE type = 'session' AND kind = $kind AND folder = $folder AND id != $id AND owner_id = $ownerId`,
         )
-        .get({ kind: agent.kind, folder, computerId: agent.computerId, id: agent.id, ownerId: this.scopeOwner(agent) }) as { here: number | null; elsewhere: number | null };
+        .get({ kind: agent.kind, folder, computerId: agent.computerId, id: agent.id, ownerId: agent.ownerId }) as { here: number | null; elsewhere: number | null };
       // Another folder with the same name on this computer: the agent's own name tells them apart.
       if ((twins.here ?? 0) > 0) return `${client} (${agent.name})`;
       return (twins.elsewhere ?? 0) > 0 && agent.computer ? `${client} (${folder} on ${agent.computer})` : `${client} (${folder})`;
@@ -401,32 +388,19 @@ export class Agents {
     const twins = (
       this.db
         .query(
-          "SELECT COUNT(*) AS n FROM agents WHERE type != 'session' AND kind = $kind AND id != $id AND ($ownerId IS NULL OR owner_id = $ownerId)",
+          "SELECT COUNT(*) AS n FROM agents WHERE type != 'session' AND kind = $kind AND id != $id AND owner_id = $ownerId",
         )
-        .get({ kind: agent.kind, id: agent.id, ownerId: this.scopeOwner(agent) }) as { n: number }
+        .get({ kind: agent.kind, id: agent.id, ownerId: agent.ownerId }) as { n: number }
     ).n;
     return twins > 0 ? `${kind} (${agent.name})` : kind;
   }
 
   /**
-   * Each listed agent but `exceptId` as the agent list shows it: connected sessions by status (busy, waiting, idle),
-   * then apps and connectors, then offline sessions, alphabetical within each.
-   */
-  entries(exceptId?: string): DirectoryEntry[] {
-    return this.sorted(
-      this.listed()
-        .filter((agent) => agent.id !== exceptId)
-        .map((agent) => this.entry(agent)),
-    );
-  }
-
-  /**
-   * What list_agents shows the agent: every listed agent it reaches, named as it addresses them. Without workspaces,
-   * every listed agent but itself.
+   * What list_agents shows the agent: every listed agent it reaches, named as it addresses them. Connected sessions
+   * come first by status (busy, waiting, idle), then apps and connectors, then offline sessions, alphabetical within each.
    */
   entriesFor(viewer: Agent): DirectoryEntry[] {
     const reachable = this.workspaces.reachable(viewer.id);
-    if (reachable === null) return this.entries(viewer.id);
     return this.sorted(
       this.listed()
         .filter((agent) => reachable.has(agent.id))
@@ -434,10 +408,9 @@ export class Agents {
     );
   }
 
-  /** The agents a person sees, named as that person's agents address them: with workspaces, only those in a workspace the person is in. */
+  /** The agents a person sees, named as that person's agents address them: the person's own, and those in a workspace the person is in. */
   entriesForPerson(personId: string): DirectoryEntry[] {
     const visible = this.workspaces.visibleAgents(personId);
-    if (visible === null) return this.entries();
     return this.sorted(
       this.listed()
         .filter((agent) => visible.has(agent.id))
@@ -487,44 +460,16 @@ export class Agents {
   }
 
   /**
-   * The agent a sender means by `to`: an exact address, or a session's short name when only one session has it and no
-   * other person let the name go within the history window. Patterns are refused, since a message goes to one agent.
-   *
-   * With workspaces, a plain name always means one of the caller's owner's own agents, and `<handle>/<name>` one of that
-   * person's. Only an agent the caller reaches is found: any other answers exactly as a name nobody has.
+   * The agent a sender means by `to`. A plain name always means one of the caller's owner's own agents, and
+   * `<handle>/<name>` one of that person's. Only an agent the caller reaches is found: any other answers exactly as a
+   * name nobody has. Patterns are refused, since a message goes to one agent.
    */
   resolve(to: unknown, callerId: string): Agent {
     if (typeof to !== "string" || to.trim() === "") throw new PorticoError("bad_request", "to must be an agent name.");
     if (isBroadcast(to)) {
       throw new PorticoError("bad_request", `"${to}" is a pattern. Name one agent from list_agents.`);
     }
-    if (this.workspaces.enabled) return this.resolveReached(to.trim(), this.require(callerId));
-    const exact = this.byAddress(to);
-    if (exact) return exact;
-    if (!to.includes("@")) {
-      const named = (
-        this.db.query(`${SELECT} WHERE a.computer_id IS NOT NULL AND a.name = $name ORDER BY c.name`).all({
-          name: to,
-        }) as AgentRow[]
-      ).map(toAgent);
-      if (named.length === 1) {
-        const only = named[0]!;
-        if (!this.releasedByOther(to, only.ownerId)) return only;
-        throw new PorticoError(
-          "unknown_agent",
-          `The name "${to}" moved to a different person's agent recently. Use the full address to send there: ${addressOf(only)}.`,
-        );
-      }
-      if (named.length > 1) {
-        const addresses = named.map(addressOf).join(", ");
-        throw new PorticoError("unknown_agent", `"${to}" is on ${named.length} computers. Use one of: ${addresses}.`);
-      }
-    }
-    const valid = this.listed()
-      .filter((agent) => agent.id !== callerId)
-      .map((agent) => this.display(agent))
-      .join(", ");
-    throw new PorticoError("unknown_agent", `No agent named "${to}". Valid agents: ${valid || "none yet"}.`);
+    return this.resolveReached(to.trim(), this.require(callerId));
   }
 
   private resolveReached(to: string, caller: Agent): Agent {
@@ -537,6 +482,9 @@ export class Agents {
     const named = ownerId === null ? [] : this.ownedNamed(ownerId, to.slice(slash + 1));
     const reached = named.filter((agent) => this.workspaces.reach(caller.id, agent.id));
     if (reached.length === 1) return reached[0]!;
+    // A plain name is an app's or connector's whole address, so the app has it even when a session shares the name.
+    const app = reached.filter((agent) => agent.computerId === null);
+    if (app.length === 1) return app[0]!;
     if (reached.length > 1) {
       const addresses = reached.map((agent) => this.addressFor(agent, caller.ownerId)).join(", ");
       throw new PorticoError("unknown_agent", `"${to}" is on ${reached.length} computers. Use one of: ${addresses}.`);
@@ -560,11 +508,6 @@ export class Agents {
             .query(`${SELECT} WHERE a.owner_id = $ownerId AND a.name = $name AND c.name = $computer`)
             .all({ ownerId, name: address.slice(0, at), computer: address.slice(at + 1) });
     return (rows as AgentRow[]).map(toAgent);
-  }
-
-  /** With workspaces, names and labels are told apart among one owner's agents; without, among everyone's. */
-  private scopeOwner(agent: Pick<Agent, "ownerId">): string | null {
-    return this.workspaces.enabled ? agent.ownerId : null;
   }
 
   /** Claude Code sessions are pushed to; Codex sessions, apps and connectors check their inbox. */
@@ -730,8 +673,7 @@ export class Agents {
   // ---- apps and connectors ----
 
   /**
-   * An app or connector agent. Throws `conflict` when another agent has the name, or another person let the name go
-   * within the history window.
+   * An app or connector agent. Throws `conflict` when another agent of the owner has the name.
    */
   create(input: { ownerId: string; name: unknown; kind: unknown; type: "app" | "connector"; description?: unknown }): Agent {
     const name = checkAgentName(input.name);
@@ -739,7 +681,6 @@ export class Agents {
       throw new PorticoError("bad_request", `kind must be one of: ${AGENT_KINDS.join(", ")}.`);
     }
     if (this.nameTaken(name, input.ownerId)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
-    this.refuseReleased(name, input.ownerId);
     const id = this.newId();
     this.insert({
       id,
@@ -762,7 +703,7 @@ export class Agents {
 
   /** Whether create would give the person's new app or connector this name. */
   nameFree(name: string, ownerId: string): boolean {
-    return !this.nameTaken(name, ownerId) && !this.releasedByOther(name, ownerId);
+    return !this.nameTaken(name, ownerId);
   }
 
   /** Mints a token for the agent, returned only here and stored only as a hash. */
@@ -820,8 +761,8 @@ export class Agents {
 
   /**
    * Name and description edits go live at once. A name already in use answers `conflict`: for a session, a name on its
-   * computer or one another person's agent goes by; for an app or connector, any agent's name. So does a name another
-   * person let go within the history window. A rename releases the old name.
+   * computer, or the name of the owner's own app or connector; for an app or connector, the name of any agent of the
+   * owner.
    */
   update(personId: string, agentId: string, changes: AgentChanges): Agent {
     const agent = this.requireManaged(personId, agentId);
@@ -835,10 +776,9 @@ export class Agents {
         const taken = agent.computerId
           ? this.db
               .query("SELECT 1 FROM agents WHERE computer_id = $computerId AND name = $name")
-              .get({ computerId: agent.computerId, name }) !== null || this.usedByOther(name, agent.ownerId)
+              .get({ computerId: agent.computerId, name }) !== null || this.ownAppNamed(name, agent.ownerId)
           : this.nameTaken(name, agent.ownerId, agent.id);
         if (taken) throw new PorticoError("conflict", `The name ${name} is already in use.`);
-        this.refuseReleased(name, agent.ownerId);
         sets.push("name = $name");
         bindings.name = name;
         renamed = true;
@@ -867,7 +807,6 @@ export class Agents {
       this.computers.setFolder(agent.computerId, agent.folderId, agent.folder ?? "session", changes.joinFromFolder);
     }
     if (sets.length > 0) this.db.query(`UPDATE agents SET ${sets.join(", ")} WHERE id = $id`).run(bindings);
-    if (renamed) releaseNames(this.db, agent.ownerId, [{ scope: "agent", name: agent.name }], this.now());
     const updated = this.require(agent.id);
     const record = (
       kind: "renamed" | "description_changed" | "approval_switched" | "folder_switched",
@@ -932,13 +871,10 @@ export class Agents {
     return this.computers.folderJoins(agent.computerId, agent.folderId) !== false;
   }
 
-  /** Removes the agent, its credentials and its threads, and signs it out. The name is released. */
+  /** Removes the agent, its credentials and its threads, and signs it out. */
   remove(personId: string, agentId: string): Agent {
     const agent = this.requireManaged(personId, agentId);
-    this.db.transaction(() => {
-      releaseNames(this.db, agent.ownerId, [{ scope: "agent", name: agent.name }], this.now());
-      this.db.query("DELETE FROM agents WHERE id = $id").run({ id: agent.id });
-    })();
+    this.db.query("DELETE FROM agents WHERE id = $id").run({ id: agent.id });
     this.activity?.record("agent_removed", { personId, detail: { name: addressOf(agent), kind: agent.kind } });
     this.forget([agent.id]);
     this.log("agent_removed", { agent_id: agent.id });
@@ -972,43 +908,19 @@ export class Agents {
 
   /**
    * Whether an app or connector can't take the name: another app or connector has it, or a session does. A session's
-   * short name is how agents address it, so an app taking it would receive that session's messages. With workspaces,
-   * only the owner's own agents count: another person's agents carry that person's handle.
+   * short name is how agents address it, so an app taking it would receive that session's messages. Only the owner's
+   * own agents count: another person's agents carry that person's handle.
    */
   private nameTaken(name: string, ownerId: string, exceptId?: string): boolean {
     const row = this.db
-      .query("SELECT id FROM agents WHERE name = $name AND id != $exceptId AND ($ownerId IS NULL OR owner_id = $ownerId) LIMIT 1")
-      .get({ name, exceptId: exceptId ?? "", ownerId: this.scopeOwner({ ownerId }) });
+      .query("SELECT id FROM agents WHERE name = $name AND id != $exceptId AND owner_id = $ownerId LIMIT 1")
+      .get({ name, exceptId: exceptId ?? "", ownerId });
     return row !== null;
   }
 
-  /**
-   * Whether another person's agent goes by the name. A session taking it would be one rename or removal away from
-   * receiving that agent's messages.
-   */
-  private usedByOther(name: string, ownerId: string): boolean {
-    // With workspaces: whether the owner's own app or connector goes by the name, which a plain name would then mean.
-    if (this.workspaces.enabled) {
-      return this.db.query("SELECT 1 FROM agents WHERE name = $name AND owner_id = $ownerId AND computer_id IS NULL LIMIT 1").get({ name, ownerId }) !== null;
-    }
-    return this.db.query("SELECT 1 FROM agents WHERE name = $name AND owner_id != $ownerId LIMIT 1").get({ name, ownerId }) !== null;
-  }
-
-  /** Whether another person let the name go within the history window, so the name still stays with them. */
-  private releasedByOther(name: string, ownerId: string): boolean {
-    // With workspaces a name never moves between people: each person's names sit behind that person's handle.
-    if (this.workspaces.enabled) return false;
-    return releasedByOther(this.db, "agent", name, ownerId, this.now());
-  }
-
-  /** Throws `conflict` when another person let the name go within the history window. */
-  private refuseReleased(name: string, ownerId: string): void {
-    if (this.releasedByOther(name, ownerId)) {
-      throw new PorticoError(
-        "conflict",
-        `The name ${name} was in use until recently. A released name stays reserved for ${LIMITS.historyDays} days.`,
-      );
-    }
+  /** Whether the owner's own app or connector goes by the name, which a plain name would then mean. */
+  private ownAppNamed(name: string, ownerId: string): boolean {
+    return this.db.query("SELECT 1 FROM agents WHERE name = $name AND owner_id = $ownerId AND computer_id IS NULL LIMIT 1").get({ name, ownerId }) !== null;
   }
 
   private sessionsOn(computerId: string): Agent[] {

@@ -14,7 +14,7 @@ test("the plugin's tools match Portico's /mcp tools exactly", () => {
 
 test("the plugin's workspace tools match Portico's exactly, and Portico runs them", async () => {
   expect(WORKSPACE_TOOLS).toEqual(workspaceTools() as unknown as typeof WORKSPACE_TOOLS);
-  const p = makePortico({ config: { workspaces: true } });
+  const p = makePortico();
   const owner = p.people.setHandle((await addOwner(p)).id, "chris");
   const { computer, token } = addComputer(p, owner);
   const { key } = addSession(p, computer);
