@@ -244,6 +244,12 @@ export class People {
   }
 
   /** The person signed in through an outside account, in hosted Portico. */
+  /** The person's account at the sign-in service, for a person who signs in with one. */
+  externalIdOf(personId: string): string | null {
+    const row = this.db.query("SELECT external_id FROM people WHERE id = $personId").get({ personId }) as { external_id: string | null } | null;
+    return row?.external_id ?? null;
+  }
+
   byExternalId(externalId: string): Person | null {
     const row = this.db.query("SELECT * FROM people WHERE external_id = $externalId").get({ externalId }) as PersonRow | null;
     return row ? toPerson(row) : null;

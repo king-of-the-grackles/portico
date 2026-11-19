@@ -4,7 +4,7 @@ import { NO_PASSWORD } from "../core/accounts";
 import { PorticoError } from "../core/errors";
 import { checkHandle, cleanPersonName } from "../core/people";
 import type { Account, AccountSignIn, Person } from "../core/types";
-import { log } from "../log";
+import { errorName, log } from "../log";
 import { safeNext } from "../web/layout";
 import { type PersonEnv, currentPerson } from "./context";
 import { jsonObject, startBrowserSession } from "./session";
@@ -20,6 +20,22 @@ export function afterAccountSignIn(person: Person, next: unknown): string {
   const path = safeNext(next);
   if (person.handle !== null || ASKS_FOR_HANDLE.test(path)) return path;
   return path === "/" ? "/welcome" : `/welcome?next=${encodeURIComponent(path)}`;
+}
+
+/**
+ * Writes the person's name to their account at the sign-in service, where Portico was given the means, so the service
+ * holds the name the person gave here. A failure is logged and changes nothing in Portico: the name is saved either way.
+ */
+export async function tellAccountName(core: Core, person: Person): Promise<void> {
+  const rename = core.accountSignIn?.rename;
+  const accountId = rename ? core.people.externalIdOf(person.id) : null;
+  if (!rename || accountId === null) return;
+  try {
+    await rename(accountId, person.name);
+    log("info", "account_name_written", { person_id: person.id });
+  } catch (err) {
+    log("error", "account_name_write_failed", { person_id: person.id, error: errorName(err) });
+  }
 }
 
 /** A name for a person just made from an account: the account's own, else the email's first part, else a plain one. */
@@ -96,6 +112,7 @@ export function accountSignInRoutes(core: Core, signIn: AccountSignIn): Hono<Per
       return named;
     })();
     log("info", "handle_set", { person_id: person.id });
+    await tellAccountName(core, person);
     return c.json({ next: afterAccountSignIn(person, body.next) });
   });
 

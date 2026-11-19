@@ -7,6 +7,11 @@ export interface AccountCheck {
   accountFor(token: unknown): Promise<string>;
   /** The account with what else the token says about it. Optional: a check without it names the account only. */
   account?(token: unknown): Promise<Account>;
+  /**
+   * Writes a person's name to the account, so the sign-in service holds the name the person gave Portico. Optional:
+   * present only where Portico was given the means (PORTICO_DESCOPE_MANAGEMENT_KEY).
+   */
+  rename?(accountId: string, name: string): Promise<void>;
 }
 
 /** The whole account from any check: one that names only the ID has no email or name to give. */
@@ -18,6 +23,10 @@ export interface DescopeOptions {
   now?: () => Date;
   /** The project's public keys; by default fetched from Descope. */
   fetchKeys?: () => Promise<JsonWebKey[]>;
+  /** PORTICO_DESCOPE_MANAGEMENT_KEY: lets Portico write a person's name to the Descope user. Without it, nothing is written. */
+  managementKey?: string | null;
+  /** How the name is posted; tests pass their own. */
+  post?: typeof fetch;
 }
 
 type Jwk = JsonWebKey & { kid?: string };
@@ -44,7 +53,7 @@ function decodePart(part: string): Record<string, unknown> | null {
 /**
  * Checks a Descope session token: signed by the project's own key (RS256), issued by the project, not expired, and a
  * session token, not a refresh token. Portico checks the token once, when the browser signs in,
- * and uses its own cookie from then on. Only the account's ID is read, so Portico holds no Descope secret.
+ * and uses its own cookie from then on. Checking needs no Descope secret; writing a name back needs the management key.
  */
 export class Descope implements AccountCheck {
   private readonly now: () => Date;
@@ -54,12 +63,16 @@ export class Descope implements AccountCheck {
   private fetchedAt = 0;
   private askedAt = 0;
   private fetching: Promise<void> | null = null;
+  /** Present only with a management key. */
+  rename?: (accountId: string, name: string) => Promise<void>;
 
   constructor(
     private readonly projectId: string,
     opts: DescopeOptions = {},
   ) {
     this.now = opts.now ?? (() => new Date());
+    const key = opts.managementKey ?? null;
+    if (key) this.rename = (accountId, name) => this.writeName(key, opts.post ?? fetch, accountId, name);
     this.fetchKeys =
       opts.fetchKeys ??
       (async () => {
@@ -70,6 +83,19 @@ export class Descope implements AccountCheck {
         const body = (await res.json()) as { keys?: JsonWebKey[] } | JsonWebKey[];
         return Array.isArray(body) ? body : (body.keys ?? []);
       });
+  }
+
+  /** Writes the name to the Descope user. The key goes only to Descope, and never into a log or an error. */
+  private async writeName(key: string, post: typeof fetch, accountId: string, name: string): Promise<void> {
+    const res = await post("https://api.descope.com/v1/mgmt/user/update/name", {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.projectId}:${key}`, "content-type": "application/json" },
+      // Descope takes a user ID where a login ID goes, and finds the user either way.
+      body: JSON.stringify({ loginId: accountId, name }),
+      redirect: "error",
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) throw new Error(`Descope answered ${res.status} to the name`);
   }
 
   async accountFor(token: unknown): Promise<string> {

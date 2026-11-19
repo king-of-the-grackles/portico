@@ -128,3 +128,54 @@ describe("signing in with an account", () => {
     expect((await page("/api/me", cookie)).status).toBe(401);
   });
 });
+
+describe("the name a person gives Portico goes back to the sign-in service", () => {
+  test("the welcome page and a later rename each write the name to the account; a failed write changes nothing here", async () => {
+    const written: { accountId: string; name: string }[] = [];
+    let fail = false;
+    const p = makePortico({
+      accountCheck: {
+        ...fakeAccounts,
+        rename: async (accountId, name) => {
+          if (fail) throw new Error("down");
+          written.push({ accountId, name });
+        },
+      },
+    });
+    const res = await p.app.request("/api/session", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: PUBLIC_URL },
+      body: JSON.stringify({ token: "account:acct-maya:maya@example.com:" }),
+    });
+    const cookie = (res.headers.get("set-cookie") ?? "").split(";")[0]!;
+    // No name came from the sign-in: nothing is written until the person gives one.
+    expect(written).toEqual([]);
+    expect((await callPerson(p, cookie, "POST", "/api/welcome", { name: "Maya Lin", handle: "maya" })).status).toBe(200);
+    expect(written).toEqual([{ accountId: "acct-maya", name: "Maya Lin" }]);
+    // A change of handle alone writes nothing; a change of name does.
+    await callPerson(p, cookie, "PATCH", "/api/me", { handle: "maya-l" });
+    expect(written.length).toBe(1);
+    await callPerson(p, cookie, "PATCH", "/api/me", { name: "Maya L" });
+    expect(written.at(-1)).toEqual({ accountId: "acct-maya", name: "Maya L" });
+    fail = true;
+    expect((await callPerson(p, cookie, "PATCH", "/api/me", { name: "Maya" })).status).toBe(200);
+    const me = (await (await callPerson(p, cookie, "GET", "/api/me")).json()) as { person: { name: string } };
+    expect(me.person.name).toBe("Maya");
+  });
+
+  test("with a management key the name is posted to Descope for that user, and without one nothing is", async () => {
+    const { Descope } = await import("../src/core/descope");
+    const posts: { url: string; auth: string | null; body: unknown }[] = [];
+    const post = (async (url: string | URL | Request, init?: RequestInit) => {
+      posts.push({ url: String(url), auth: new Headers(init?.headers).get("authorization"), body: JSON.parse(String(init?.body)) });
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    const keyed = new Descope("P123456789", { managementKey: "K-test", post });
+    await keyed.rename!("U1", "Maya Lin");
+    expect(posts).toEqual([{ url: "https://api.descope.com/v1/mgmt/user/update/name", auth: "Bearer P123456789:K-test", body: { loginId: "U1", name: "Maya Lin" } }]);
+    expect(new Descope("P123456789", { post }).rename).toBeUndefined();
+    const refusing = new Descope("P123456789", { managementKey: "K-test", post: (async () => new Response("no", { status: 403 })) as unknown as typeof fetch });
+    const err = await refusing.rename!("U1", "x").catch((e: Error) => e);
+    expect(String(err)).not.toContain("K-test");
+  });
+});
