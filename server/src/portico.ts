@@ -9,6 +9,7 @@ import { Agents } from "./core/agents";
 import { AllowList, Approvals } from "./core/approvals";
 import { Changes } from "./core/changes";
 import { Computers } from "./core/computers";
+import { Content } from "./core/content";
 import { type AccountCheck, accountFrom, Descope } from "./core/descope";
 import { EventSubscriptions } from "./core/events";
 import { type FileStore, fileStoreFor } from "./core/file-store";
@@ -29,7 +30,10 @@ import { safePost, type WebhookPost } from "./core/webhooks";
 import { errorName, log } from "./log";
 
 export interface PorticoOptions {
+  /** The directory database, open. Each workspace's content database is opened from the data folder as it is needed. */
   db: Database;
+  /** How long a workspace's content database stays open with nothing using it. */
+  contentIdleMs?: number;
   now?: () => Date;
   newId?: () => string;
   /** Both streams' heartbeat, for tests. */
@@ -61,6 +65,13 @@ export interface Portico extends Core {
   sweepDaily(): void;
   /** Deletes files no message carries. Part of the minute sweep; tests await it. */
   sweepFiles(): Promise<number>;
+  /**
+   * Removes deleted workspaces whose history has emptied: the directory row, then the content database, the files and
+   * the folder. Also folders a crash left with no workspace. Part of the daily sweep; tests await it.
+   */
+  sweepArchived(): Promise<number>;
+  /** Closes every workspace's content database: the server is stopping. The directory is the caller's to close. */
+  close(): void;
 }
 
 const logInfo = (msg: string, fields: Record<string, unknown>) => log("info", msg, fields);
@@ -71,6 +82,16 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const now = opts.now ?? (() => new Date());
   const newId = opts.newId ?? (() => crypto.randomUUID());
   const changes = new Changes();
+  // Message content never lives in the directory: each workspace has a database of its own, in memory when the
+  // directory is (tests).
+  const content = new Content({
+    directory: db,
+    dataDir: config.dataDir,
+    memory: config.dbPath === ":memory:",
+    idleMs: opts.contentIdleMs,
+    now,
+    log: logInfo,
+  });
   const settings = new Settings(db, config);
   const presence = new Presence();
   const agentStreams = new AgentStreams();
@@ -84,16 +105,17 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
 
   // Its own IDs: activity rows never shift the IDs tests expect for everything else.
   const activity = new Activity({ db, changes, now });
-  const people = new People({ db, changes, signingKey: config.signingKey, signInByName: check === null, now, newId });
+  const people = new People({ db, changes, content, signingKey: config.signingKey, signInByName: check === null, now, newId });
   const accounts = new Accounts({ db, people, now, newId });
   const workspaces = new Workspaces({ db, changes, now, newId, log: logInfo });
-  const computers = new Computers({ db, changes, activity, now, newId, log: logInfo });
+  const computers = new Computers({ db, changes, activity, content, now, newId, log: logInfo });
   const agents: Agents = new Agents({
     db,
     computers,
     presence,
     changes,
     workspaces,
+    content,
     activity,
     now,
     newId,
@@ -156,7 +178,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       }
       case "message_decided":
         if (m.status === "declined") {
-          files.release(m.id).catch((err) => log("error", "file_release_failed", { message_id: m.id, error: errorName(err) }));
+          files.release(m).catch((err) => log("error", "file_release_failed", { message_id: m.id, error: errorName(err) }));
         }
         if (m.status === "pending") {
           wake(m.toId);
@@ -177,9 +199,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const allowList = new AllowList(db);
   const files: Files = new Files({
     db,
+    content,
     store: opts.fileStore ?? fileStoreFor(config),
     agents,
-    message: (id) => messages.get(id),
     publicUrl: () => settings.publicUrl(),
     signingKey: config.signingKey,
     now,
@@ -187,7 +209,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     log: logInfo,
   });
   const messages: Messages = new Messages({
-    db,
+    content,
     agents,
     workspaces,
     alwaysAllows: (agentId, senderId) => allowList.has(agentId, senderId),
@@ -199,7 +221,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     notify,
     log: logInfo,
   });
-  const tasks = new Tasks({ db, now });
+  const tasks = new Tasks({ content, now });
   const mail = new ShareMail({
     db,
     config: config.mail,
@@ -212,7 +234,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   });
   // What an agent asks about a workspace is answered only in a signed-in browser.
   const shares = new Shares({ db, workspaces, agents, people, changes, signingKey: config.signingKey, now, newId, log: logInfo });
-  const approvals = new Approvals({ db, agents, messages, people, allowList, changes, activity, now, notify, log: logInfo });
+  const approvals = new Approvals({ agents, workspaces, messages, people, allowList, changes, activity, now, notify, log: logInfo });
 
   const accountSignIn: AccountSignIn | null = check
     ? { projectId: config.descopeProjectId ?? "", account: (token) => accountFrom(check, token) }
@@ -223,6 +245,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const core: Core = {
     config,
     db,
+    content,
     settings,
     changes,
     people,
@@ -271,12 +294,37 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     }
   };
 
+  const sweepArchived = async () => {
+    let removed = 0;
+    try {
+      for (const id of workspaces.archived()) {
+        if (!content.isEmpty(id)) continue;
+        // The directory row goes first, then the content: a stop in between leaves a folder the next sweep finds.
+        if (!workspaces.purge(id)) continue;
+        await files.dropWorkspace(id);
+        removed++;
+      }
+      for (const id of content.orphans()) {
+        await files.dropWorkspace(id);
+        log("info", "content_orphan_removed", { workspace_id: id });
+        removed++;
+      }
+    } catch (err) {
+      log("error", "archived_sweep_failed", { error: errorName(err) });
+    }
+    return removed;
+  };
+
   return {
     ...core,
     app,
     inboxWaits,
     sweepFiles,
+    sweepArchived,
+    close: () => content.close(),
     sweepMinute() {
+      // First: the sweeps below open the databases again only for as long as each needs one.
+      sweep("content_idle", () => content.sweepIdle());
       void sweepFiles();
       sweep("messages_expired", () => messages.expireDue().length);
       sweep("event_subscriptions", () => events.sweep());
@@ -287,6 +335,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     },
     sweepDaily() {
       sweep("history", () => messages.prune());
+      void sweepArchived();
       sweep("runs", () => agents.pruneRuns());
       sweep("activity", () => activity.prune());
       sweep("web_sessions", () => accounts.sweep());

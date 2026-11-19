@@ -4,16 +4,20 @@ import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startupProblem } from "../src/commands/serve";
-import { BASE_VERSION, openDb, prepare, SCHEMA_VERSION, SchemaMismatchError } from "../src/db";
-import { MIGRATIONS, type Migration } from "../src/migrations";
+import { CONTENT, CONTENT_VERSION, DIRECTORY, FRESH_FOLDER, openContentDb, openDb, prepare, SCHEMA_VERSION, SchemaMismatchError } from "../src/db";
+import { CONTENT_MIGRATIONS, DIRECTORY_MIGRATIONS, type Migration } from "../src/migrations";
 
+const BASE_VERSION = DIRECTORY.baseVersion;
 const versionOf = (db: Database) => (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+const kindOf = (db: Database) => (db.query("PRAGMA application_id").get() as { application_id: number }).application_id;
+const tablesOf = (db: Database) =>
+  (db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[]).map((row) => row.name);
 
 function tempPath(name: string): string {
   return join(mkdtempSync(join(tmpdir(), "portico-db-")), name);
 }
 
-/** A database file at the first schema (version 100), with a person in it. */
+/** A directory file at the baseline, with a person in it. */
 function baseFile(): string {
   const path = tempPath("portico.db");
   const db = new Database(path, { create: true, strict: true });
@@ -26,21 +30,145 @@ function baseFile(): string {
   return path;
 }
 
+/** What an earlier Portico left: tables, a schema version, and no application ID. */
+function oldFile(version: number): string {
+  const path = tempPath("portico.db");
+  const old = new Database(path);
+  old.run("CREATE TABLE people (id TEXT PRIMARY KEY, name TEXT)");
+  old.run("CREATE TABLE messages (id TEXT PRIMARY KEY, subject TEXT, text TEXT)");
+  old.run("INSERT INTO messages (id, subject, text) VALUES ('m1', 'Hello', 'An old message')");
+  old.run(`PRAGMA user_version = ${version}`);
+  old.close();
+  return path;
+}
+
 const addNotes: Migration = (db) => db.run("CREATE TABLE notes (id TEXT PRIMARY KEY, text TEXT NOT NULL)");
 const addColour: Migration = (db) => db.run("ALTER TABLE people ADD COLUMN colour TEXT");
 
-describe("database", () => {
-  test("a new database gets the whole schema at the current version", () => {
+describe("the two kinds of database", () => {
+  test("a new directory holds who is on Portico, at the current version, and no table for message content", () => {
     const db = openDb(":memory:");
-    const tables = (db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[]).map(
-      (row) => row.name,
-    );
-    expect(tables).toContain("messages");
-    expect(tables).toContain("always_allow");
+    const tables = tablesOf(db);
+    for (const table of ["people", "agents", "workspaces", "workspace_agents", "always_allow", "activity", "uploads", "join_lines"]) {
+      expect(tables).toContain(table);
+    }
+    for (const table of ["threads", "messages", "message_files", "files", "released_names"]) expect(tables).not.toContain(table);
     expect(versionOf(db)).toBe(SCHEMA_VERSION);
+    expect(kindOf(db)).toBe(DIRECTORY.applicationId);
+    // The baseline is the whole schema: nothing is migrated yet.
+    expect(DIRECTORY_MIGRATIONS).toEqual([]);
+    expect(SCHEMA_VERSION).toBe(200);
   });
 
-  test("a new database runs every migration after the first schema", () => {
+  test("a new content database holds threads, messages and files, at its own version, and nothing of the directory", () => {
+    const db = openContentDb(":memory:");
+    expect(tablesOf(db)).toEqual(["files", "message_files", "messages", "threads"]);
+    expect(versionOf(db)).toBe(CONTENT_VERSION);
+    expect(kindOf(db)).toBe(CONTENT.applicationId);
+    expect(CONTENT_MIGRATIONS).toEqual([]);
+    // No foreign key leaves the database: agent IDs are plain text.
+    const foreign = tablesOf(db).flatMap((table) => db.query(`PRAGMA foreign_key_list(${table})`).all() as { table: string }[]);
+    expect([...new Set(foreign.map((key) => key.table))].sort()).toEqual(["files", "messages", "threads"]);
+  });
+
+  test("a workspace and its membership carry where the content is, when it was deleted, and who left", () => {
+    const db = openDb(":memory:");
+    db.run("INSERT INTO people (id, name, role, status, password_hash, created_at) VALUES ('p1', 'Maya', 'member', 'active', 'h', 't')");
+    db.run("INSERT INTO agents (id, owner_id, name, kind, type, description, created_at) VALUES ('a1', 'p1', 'x', 'muse', 'app', '', 't')");
+    db.run("INSERT INTO workspaces (id, name, kind, owner_id, created_at) VALUES ('w1', 'Launch', 'shared', 'p1', 't')");
+    db.run("INSERT INTO workspace_agents (workspace_id, agent_id, added_at) VALUES ('w1', 'a1', 't')");
+    expect(db.query("SELECT location, archived_at FROM workspaces").get()).toEqual({ location: "local", archived_at: null });
+    expect(db.query("SELECT left_at FROM workspace_agents").get()).toEqual({ left_at: null });
+  });
+
+  test("one kind is never opened as the other", () => {
+    const directory = tempPath("portico.db");
+    openDb(directory).close();
+    const content = tempPath("content.db");
+    openContentDb(content).close();
+    for (const open of [() => openContentDb(directory), () => openDb(content)]) {
+      let error: unknown;
+      try {
+        open();
+      } catch (err) {
+        error = err;
+      }
+      expect(error).toBeInstanceOf(SchemaMismatchError);
+      expect((error as SchemaMismatchError).reason).toBe("wrong_kind");
+    }
+    expect(startupProblem(new SchemaMismatchError(1, "wrong_kind"), { port: 3000, dbPath: content })).toContain("another kind");
+    // Neither file was changed by the refusal.
+    const again = new Database(content);
+    expect([versionOf(again), kindOf(again)]).toEqual([CONTENT_VERSION, CONTENT.applicationId]);
+    again.close();
+  });
+});
+
+describe("a database from an earlier Portico", () => {
+  test("every old version is refused with the fresh-folder message, and the file is left as it was", () => {
+    // 2: before the open network. 100 to 110: the one database that held everything. 150: a version nothing ever made.
+    for (const version of [1, 2, 100, 105, 110, 150]) {
+      const path = oldFile(version);
+      let error: unknown;
+      try {
+        openDb(path);
+      } catch (err) {
+        error = err;
+      }
+      expect(error).toBeInstanceOf(SchemaMismatchError);
+      expect((error as SchemaMismatchError).reason).toBe("older");
+      expect((error as Error).message).toBe(FRESH_FOLDER);
+      const problem = startupProblem(error, { port: 3000, dbPath: path })!;
+      expect(problem).toContain("made by an earlier Portico that this version can't open");
+      expect(problem).toContain("Start with a fresh data folder");
+      expect(problem).toContain("PORTICO_DATA_DIR");
+      expect(problem).toContain(path);
+      const again = new Database(path);
+      expect(versionOf(again)).toBe(version);
+      expect(tablesOf(again)).toEqual(["messages", "people"]);
+      expect(again.query("SELECT text FROM messages").get()).toEqual({ text: "An old message" });
+      again.close();
+      expect(readdirSync(join(path, "..")).filter((file) => file.endsWith(".bak"))).toEqual([]);
+    }
+  });
+
+  test("a file with tables and no version at all is refused too", () => {
+    const path = tempPath("portico.db");
+    const other = new Database(path);
+    other.run("CREATE TABLE tasks (id TEXT)");
+    other.close();
+    expect(() => openDb(path)).toThrow(FRESH_FOLDER);
+  });
+
+  test("an old database carrying the current version number is still refused: it has no application ID", () => {
+    const path = oldFile(SCHEMA_VERSION);
+    expect(() => openDb(path)).toThrow(FRESH_FOLDER);
+  });
+
+  test("a database from a newer Portico is refused, not changed, with its own explanation", () => {
+    const path = baseFile();
+    const newer = new Database(path);
+    newer.run(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+    newer.close();
+    let error: unknown;
+    try {
+      openDb(path);
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeInstanceOf(SchemaMismatchError);
+    expect(startupProblem(error, { port: 3000, dbPath: path })).toContain("newer Portico version");
+    // Restoring the copy brings back removed access, so the message says to remove it again.
+    expect(startupProblem(error, { port: 3000, dbPath: path })).toContain("brings back everything removed since the upgrade");
+    const again = new Database(path);
+    expect(versionOf(again)).toBe(SCHEMA_VERSION + 1);
+    again.close();
+    expect(readdirSync(join(path, "..")).filter((file) => file.endsWith(".bak"))).toEqual([]);
+  });
+});
+
+describe("migrations, for both kinds", () => {
+  test("a new database runs every migration after the baseline", () => {
     const db = new Database(":memory:", { strict: true });
     prepare(db, { migrations: [addNotes, addColour] });
     expect(versionOf(db)).toBe(BASE_VERSION + 2);
@@ -67,11 +195,27 @@ describe("database", () => {
     expect(logged).toEqual(["db_backed_up", "db_migrated", "db_migrated"]);
 
     const backups = readdirSync(join(path, "..")).filter((file) => file.endsWith(".bak"));
-    expect(backups).toEqual(["portico.db.v100-2026-10-28T12-00-00-000Z.bak"]);
+    expect(backups).toEqual([`portico.db.v${BASE_VERSION}-2026-10-28T12-00-00-000Z.bak`]);
     const backup = new Database(join(path, "..", backups[0]!), { readonly: true });
     expect(versionOf(backup)).toBe(BASE_VERSION);
     expect((backup.query("SELECT COUNT(*) AS n FROM people").get() as { n: number }).n).toBe(1);
     backup.close();
+  });
+
+  test("a content database has its own list: a feature in a workspace arrives as one migration, per database", () => {
+    const path = tempPath("content.db");
+    const first = openContentDb(path);
+    first.run("INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at) VALUES ('t1', 'a', 'b', 'a', 't', 't')");
+    first.close();
+    const addBoard: Migration = (db) => db.run("CREATE TABLE board_posts (id TEXT PRIMARY KEY, text TEXT NOT NULL)");
+    const db = new Database(path, { strict: true });
+    prepare(db, { kind: CONTENT, path, migrations: [addBoard] });
+    expect(versionOf(db)).toBe(CONTENT.baseVersion + 1);
+    expect(tablesOf(db)).toContain("board_posts");
+    expect(db.query("SELECT id FROM threads").get()).toEqual({ id: "t1" });
+    db.close();
+    // The copy made before the upgrade sits beside the content database, in the workspace's own folder.
+    expect(readdirSync(join(path, "..")).filter((file) => file.endsWith(".bak"))).toHaveLength(1);
   });
 
   test("a failed migration rolls back and leaves the last version that worked", () => {
@@ -83,11 +227,8 @@ describe("database", () => {
     const db = new Database(path, { strict: true });
     expect(() => prepare(db, { path, migrations: [addNotes, failing] })).toThrow("boom");
     expect(versionOf(db)).toBe(BASE_VERSION + 1);
-    const tables = (db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map(
-      (row) => row.name,
-    );
-    expect(tables).toContain("notes");
-    expect(tables).not.toContain("half_done");
+    expect(tablesOf(db)).toContain("notes");
+    expect(tablesOf(db)).not.toContain("half_done");
     db.close();
   });
 
@@ -117,214 +258,9 @@ describe("database", () => {
     prepare(db, { migrations: [addNotes] });
     expect(versionOf(db)).toBe(BASE_VERSION + 1);
   });
+});
 
-  test("a database from a Portico before the open network is refused, not changed", () => {
-    const path = tempPath("old.db");
-    const old = new Database(path);
-    old.run("CREATE TABLE tasks (id TEXT)");
-    old.run("PRAGMA user_version = 2");
-    old.close();
-    expect(() => openDb(path)).toThrow(SchemaMismatchError);
-    const again = new Database(path);
-    expect(versionOf(again)).toBe(2);
-    again.close();
-  });
-
-  test("a database from a newer Portico is refused, not changed, with its own explanation", () => {
-    const path = baseFile();
-    const newer = new Database(path);
-    newer.run(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
-    newer.close();
-    let error: unknown;
-    try {
-      openDb(path);
-    } catch (err) {
-      error = err;
-    }
-    expect(error).toBeInstanceOf(SchemaMismatchError);
-    expect(startupProblem(error, { port: 3000, dbPath: path })).toContain("newer Portico version");
-    // Restoring the copy brings back removed access, so the message says to remove it again.
-    expect(startupProblem(error, { port: 3000, dbPath: path })).toContain("brings back everything removed since the upgrade");
-    const again = new Database(path);
-    expect(versionOf(again)).toBe(SCHEMA_VERSION + 1);
-    again.close();
-    expect(readdirSync(join(path, "..")).filter((file) => file.endsWith(".bak"))).toEqual([]);
-  });
-
-  test("101: sessions that split one folder merge into one agent, keeping their messages, threads and allow entries", () => {
-    const path = tempPath("portico.db");
-    const old = new Database(path, { create: true, strict: true });
-    old.run("PRAGMA foreign_keys = ON");
-    prepare(old, { migrations: [] });
-    const F = "f".repeat(64);
-    const t = (minute: number) => `2026-10-20T10:${String(minute).padStart(2, "0")}:00.000Z`;
-    old.run(
-      `INSERT INTO people (id, name, role, status, password_hash, created_at) VALUES ('p1', 'Chris', 'owner', 'active', 'h', 't')`,
-    );
-    old.run("INSERT INTO computers (id, owner_id, name, token_hash, created_at) VALUES ('c1', 'p1', 'macbook', 'th', 't')");
-    const agent = old.query(
-      `INSERT INTO agents (id, owner_id, name, kind, type, description, computer_id, session_key, folder, folder_id, created_at, last_seen_at)
-       VALUES ($id, 'p1', $name, $kind, $type, '', $computer, $key, $folder, $folderId, $at, $at)`,
-    );
-    agent.run({ id: "a-grok", name: "grok", kind: "grok-bot", type: "app", computer: null, key: null, folder: null, folderId: null, at: t(0) });
-    agent.run({ id: "m-muse", name: "muse", kind: "muse", type: "app", computer: null, key: null, folder: null, folderId: null, at: t(0) });
-    agent.run({ id: "s1", name: "api-claude", kind: "claude-code", type: "session", computer: "c1", key: "k1", folder: "api", folderId: F, at: t(1) });
-    agent.run({ id: "s2", name: "api-claude-2", kind: "claude-code", type: "session", computer: "c1", key: "k2", folder: "api", folderId: F, at: t(5) });
-    old.run("UPDATE agents SET approval_required = 1 WHERE id = 's2'");
-    agent.run({ id: "s3", name: "api-claude-3", kind: "claude-code", type: "session", computer: "c1", key: "k3", folder: "api", folderId: F, at: t(6) });
-    agent.run({ id: "s4", name: "api-codex", kind: "codex", type: "session", computer: "c1", key: "k4", folder: "api", folderId: F, at: t(7) });
-    const thread = old.query(
-      "INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at) VALUES ($id, $a, $b, $by, $created, $last)",
-    );
-    thread.run({ id: "t1", a: "a-grok", b: "s1", by: "a-grok", created: t(2), last: t(2) });
-    thread.run({ id: "t2", a: "a-grok", b: "s2", by: "s2", created: t(1), last: t(8) });
-    thread.run({ id: "t3", a: "m-muse", b: "s2", by: "s2", created: t(3), last: t(3) });
-    thread.run({ id: "t4", a: "s1", b: "s3", by: "s1", created: t(4), last: t(4) });
-    const message = old.query(
-      `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, status, created_at, expires_at)
-       VALUES ($id, $thread, $from, $to, 's', 't', 'delivered', $at, $at)`,
-    );
-    message.run({ id: "m1", thread: "t1", from: "a-grok", to: "s1", at: t(2) });
-    message.run({ id: "m2", thread: "t2", from: "s2", to: "a-grok", at: t(8) });
-    message.run({ id: "m3", thread: "t3", from: "s2", to: "m-muse", at: t(3) });
-    message.run({ id: "m4", thread: "t4", from: "s1", to: "s3", at: t(4) });
-    const allow = old.query("INSERT INTO always_allow (agent_id, sender_id, added_by, created_at) VALUES ($agent, $sender, 'p1', 't')");
-    allow.run({ agent: "s1", sender: "a-grok" });
-    allow.run({ agent: "s2", sender: "a-grok" });
-    allow.run({ agent: "m-muse", sender: "s2" });
-    old.close();
-
-    const db = openDb(path);
-    expect(versionOf(db)).toBe(SCHEMA_VERSION);
-    const rows = <T>(sql: string) => db.query(sql).all() as T[];
-    expect(rows<{ id: string; folder_id: string | null }>("SELECT id, folder_id FROM agents WHERE type = 'session' ORDER BY id")).toEqual([
-      { id: "s1", folder_id: F },
-      // s3 talked with s1, so it keeps its history but leaves the folder.
-      { id: "s3", folder_id: null },
-      { id: "s4", folder_id: F },
-    ]);
-    expect(rows<{ agent_id: string; session_key: string }>("SELECT agent_id, session_key FROM agent_runs ORDER BY session_key")).toEqual([
-      { agent_id: "s1", session_key: "k1" },
-      { agent_id: "s1", session_key: "k2" },
-      { agent_id: "s3", session_key: "k3" },
-      { agent_id: "s4", session_key: "k4" },
-    ]);
-    expect(rows("SELECT id, a_id, b_id, started_by, created_at, last_message_at FROM threads ORDER BY id")).toEqual([
-      { id: "t1", a_id: "a-grok", b_id: "s1", started_by: "s1", created_at: t(1), last_message_at: t(8) },
-      { id: "t3", a_id: "m-muse", b_id: "s1", started_by: "s1", created_at: t(3), last_message_at: t(3) },
-      { id: "t4", a_id: "s1", b_id: "s3", started_by: "s1", created_at: t(4), last_message_at: t(4) },
-    ]);
-    expect(rows("SELECT id, thread_id, from_id, to_id FROM messages ORDER BY id")).toEqual([
-      { id: "m1", thread_id: "t1", from_id: "a-grok", to_id: "s1" },
-      { id: "m2", thread_id: "t1", from_id: "s1", to_id: "a-grok" },
-      { id: "m3", thread_id: "t3", from_id: "s1", to_id: "m-muse" },
-      { id: "m4", thread_id: "t4", from_id: "s1", to_id: "s3" },
-    ]);
-    expect(rows("SELECT agent_id, sender_id FROM always_allow ORDER BY agent_id")).toEqual([
-      { agent_id: "m-muse", sender_id: "s1" },
-      { agent_id: "s1", sender_id: "a-grok" },
-    ]);
-    expect(rows("SELECT COUNT(*) AS n FROM agents WHERE session_key IS NOT NULL")).toEqual([{ n: 0 }]);
-    // s2 required approval, so the merged agent does too.
-    expect(rows("SELECT approval_required FROM agents WHERE id = 's1'")).toEqual([{ approval_required: 1 }]);
-    // One agent per folder and coding agent from now on.
-    expect(() =>
-      db.run(
-        `INSERT INTO agents (id, owner_id, name, kind, type, description, computer_id, folder, folder_id, created_at)
-         VALUES ('s5', 'p1', 'api-claude-5', 'claude-code', 'session', '', 'c1', 'api', '${F}', 't')`,
-      ),
-    ).toThrow();
-    db.close();
-  });
-
-  test("102: each message gets its conversation's first message as its task, and a reply whose original is gone starts one", () => {
-    const path = tempPath("portico.db");
-    const old = new Database(path, { create: true, strict: true });
-    prepare(old, { migrations: MIGRATIONS.slice(0, 1) });
-    old.run(`INSERT INTO people (id, name, role, status, password_hash, created_at) VALUES ('p1', 'Chris', 'owner', 'active', 'h', 't')`);
-    for (const [id, name] of [["a1", "grok"], ["a2", "muse"]]) {
-      old.run(
-        `INSERT INTO agents (id, owner_id, name, kind, type, description, created_at) VALUES ('${id}', 'p1', '${name}', 'muse', 'app', '', 't')`,
-      );
-    }
-    old.run("INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at) VALUES ('t1', 'a1', 'a2', 'a1', 't', 't')");
-    const message = old.query(
-      `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, reply_to, status, created_at, expires_at)
-       VALUES ($id, 't1', $from, $to, 's', 't', $replyTo, 'delivered', $at, $at)`,
-    );
-    message.run({ id: "m1", from: "a1", to: "a2", replyTo: null, at: "2026-10-20T10:00:00.000Z" });
-    message.run({ id: "m2", from: "a2", to: "a1", replyTo: "m1", at: "2026-10-20T10:01:00.000Z" });
-    message.run({ id: "m3", from: "a1", to: "a2", replyTo: "m2", at: "2026-10-20T10:02:00.000Z" });
-    message.run({ id: "m4", from: "a2", to: "a1", replyTo: "pruned", at: "2026-10-20T10:03:00.000Z" });
-    message.run({ id: "m5", from: "a1", to: "a2", replyTo: "m4", at: "2026-10-20T10:04:00.000Z" });
-    old.close();
-    const db = openDb(path);
-    expect(db.query("SELECT id, root_id, summary FROM messages ORDER BY id").all()).toEqual([
-      { id: "m1", root_id: "m1", summary: null },
-      { id: "m2", root_id: "m1", summary: null },
-      { id: "m3", root_id: "m1", summary: null },
-      { id: "m4", root_id: "m4", summary: null },
-      { id: "m5", root_id: "m4", summary: null },
-    ]);
-    expect((db.query("SELECT COUNT(*) AS n FROM activity").get() as { n: number }).n).toBe(0);
-    db.close();
-  });
-
-  test("103: old messages are final, unread ones that already expired aren't reported again, and keys are unique per sender", () => {
-    const path = tempPath("portico.db");
-    const old = new Database(path, { create: true, strict: true });
-    prepare(old, { migrations: MIGRATIONS.slice(0, 2) });
-    old.run(`INSERT INTO people (id, name, role, status, password_hash, created_at) VALUES ('p1', 'Chris', 'owner', 'active', 'h', 't')`);
-    for (const [id, name] of [["a1", "grok"], ["a2", "muse"]]) {
-      old.run(
-        `INSERT INTO agents (id, owner_id, name, kind, type, description, created_at) VALUES ('${id}', 'p1', '${name}', 'muse', 'app', '', 't')`,
-      );
-    }
-    old.run("INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at) VALUES ('t1', 'a1', 'a2', 'a1', 't', 't')");
-    const message = old.query(
-      `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, root_id, status, held_at, created_at, expires_at)
-       VALUES ($id, 't1', 'a1', 'a2', 's', 't', $id, $status, $heldAt, 't', 'x')`,
-    );
-    message.run({ id: "m1", status: "delivered", heldAt: null });
-    message.run({ id: "m2", status: "expired", heldAt: null });
-    message.run({ id: "m3", status: "expired", heldAt: "t" });
-    old.close();
-    const db = openDb(path);
-    expect(db.query("SELECT id, final, send_key, sender_notified_at FROM messages ORDER BY id").all()).toEqual([
-      { id: "m1", final: 1, send_key: null, sender_notified_at: null },
-      { id: "m2", final: 1, send_key: null, sender_notified_at: "x" },
-      // A held message's outcome was already reported the old way, when the sender checked.
-      { id: "m3", final: 1, send_key: null, sender_notified_at: null },
-    ]);
-    expect(db.query("SELECT doing, doing_at FROM agents WHERE id = 'a1'").get()).toEqual({ doing: null, doing_at: null });
-    db.run("UPDATE messages SET send_key = 'k' WHERE id = 'm1'");
-    expect(() => db.run("UPDATE messages SET send_key = 'k' WHERE id = 'm2'")).toThrow();
-    db.close();
-  });
-
-  test("105: a new database and an upgraded one both keep released names, one row per person and name", () => {
-    const columns = (db: Database) =>
-      (db.query("SELECT name FROM pragma_table_info('released_names') ORDER BY cid").all() as { name: string }[]).map((row) => row.name);
-    const fresh = openDb(":memory:");
-    expect(columns(fresh)).toEqual(["scope", "name", "owner_id", "released_at"]);
-
-    const path = tempPath("portico.db");
-    const old = new Database(path, { create: true, strict: true });
-    prepare(old, { migrations: MIGRATIONS.slice(0, 4) });
-    expect(columns(old)).toEqual([]);
-    old.close();
-    const db = openDb(path);
-    expect(versionOf(db)).toBe(SCHEMA_VERSION);
-    expect(columns(db)).toEqual(["scope", "name", "owner_id", "released_at"]);
-    const release = db.query("INSERT INTO released_names (scope, name, owner_id, released_at) VALUES ($scope, 'reports', $owner, 't')");
-    release.run({ scope: "agent", owner: "p1" });
-    release.run({ scope: "agent", owner: "p2" });
-    release.run({ scope: "computer", owner: "p1" });
-    expect(() => release.run({ scope: "agent", owner: "p1" })).toThrow();
-    expect(() => release.run({ scope: "folder", owner: "p3" })).toThrow();
-    db.close();
-  });
-
+describe("what the directory removes by itself", () => {
   test("removing a person removes what depends on them", () => {
     const db = openDb(":memory:");
     db.run(

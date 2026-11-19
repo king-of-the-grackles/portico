@@ -180,7 +180,8 @@ describe("removing a member", () => {
     expect(p.agents.get(dot.id)).toBeNull();
     expect(p.computers.get(computer.id)).toBeNull();
     expect(p.accounts.personForSession(token)).toBeNull();
-    expect(p.messages.threads({})).toEqual([]);
+    expect(p.messages.threads({ person: chris.id })).toEqual([]);
+    expect(p.content.for(p.workspaces.forPerson(chris.id).at(-1)!.id).db.query("SELECT COUNT(*) AS n FROM messages").get()).toEqual({ n: 0 });
     expect(p.agents.get(grok.id)).not.toBeNull();
   });
 });

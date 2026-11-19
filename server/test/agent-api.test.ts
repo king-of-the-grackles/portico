@@ -312,7 +312,7 @@ describe("tasks and profiles for agents", () => {
       done: false,
     });
     expect(update.status).toBe(201);
-    expect(p.tasks.get(first.message.id)!.task.outcome).toBe("in_progress");
+    expect(p.tasks.get({ agent: session.agent.id }, first.message.id)!.task.outcome).toBe("in_progress");
   });
 });
 

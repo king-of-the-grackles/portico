@@ -120,7 +120,8 @@ describe("approvals", () => {
     expect(list.held[0]).toMatchObject({ subject: "Add the doc link", from: { display: "grok" }, facts: { managedBy: { name: "Chris" } } });
     expect(list.signIns).toEqual([]);
     expect(await json(callPerson(p, member, "GET", "/api/approvals"))).toMatchObject({ held: [] });
-    expect((await callPerson(p, member, "POST", `/api/approvals/held/${held.id}`, { decision: "allow_once" })).status).toBe(403);
+    // None of the member's agents is in the conversation, so the message answers the same as one that doesn't exist.
+    expect((await callPerson(p, member, "POST", `/api/approvals/held/${held.id}`, { decision: "allow_once" })).status).toBe(404);
     const decided = await callPerson(p, owner, "POST", `/api/approvals/held/${held.id}`, { decision: "allow_once" });
     expect(await decided.json()).toMatchObject({ message: { status: "pending", decision: "allow_once", decidedBy: { name: "Chris" } } });
   });

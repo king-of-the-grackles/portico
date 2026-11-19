@@ -5,6 +5,7 @@ import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
 import type { Messages } from "./messages";
 import type { People } from "./people";
+import type { Workspaces } from "./workspaces";
 import { DECISIONS } from "./types";
 import type { Decision, Message, Notice, Person } from "./types";
 
@@ -55,8 +56,9 @@ export interface HeldFacts {
 }
 
 export interface ApprovalsDeps {
-  db: Database;
   agents: Agents;
+  /** Whether a message's workspace still joins its two agents. */
+  workspaces: Workspaces;
   messages: Messages;
   people: People;
   allowList: AllowList;
@@ -69,8 +71,8 @@ export interface ApprovalsDeps {
 
 /** Decisions on held messages. Only a person decides, and only for agents that person manages. */
 export class Approvals {
-  private readonly db: Database;
   private readonly agents: Agents;
+  private readonly workspaces: Workspaces;
   private readonly messages: Messages;
   private readonly people: People;
   private readonly allowList: AllowList;
@@ -81,8 +83,8 @@ export class Approvals {
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
 
   constructor(deps: ApprovalsDeps) {
-    this.db = deps.db;
     this.agents = deps.agents;
+    this.workspaces = deps.workspaces;
     this.messages = deps.messages;
     this.people = deps.people;
     this.allowList = deps.allowList;
@@ -101,30 +103,37 @@ export class Approvals {
   /**
    * Allow once delivers this message. Always allow delivers it, and every other message held from the same sender to the
    * same recipient, and adds the sender to the recipient's Always allow list. Deny declines it.
+   *
+   * The message is looked for only in the workspaces of the person's own agents. Always allow writes the list in the
+   * directory first, then decides the held messages workspace by workspace: there is no transaction across databases,
+   * and a stop in between leaves the sender allowed and some messages still held, which the person can decide again.
    */
   decide(personId: string, messageId: string, decision: unknown): Message {
     if (!DECISIONS.some((known) => known === decision)) {
       throw new PorticoError("bad_request", "decision must be allow_once, always_allow or deny.");
     }
     const choice = decision as Decision;
-    const held = this.messages.require(messageId);
+    const held = this.messages.require({ person: personId }, messageId);
     const receiver = this.agents.require(held.toId);
     if (receiver.ownerId !== personId) {
       throw new PorticoError("not_allowed", "Only the person who manages the recipient can decide this message.");
     }
     if (held.status !== "held") throw new PorticoError("wrong_status", `The message is already ${held.status}.`);
-    // The two agents stopped sharing a workspace while the message waited: the message can be turned down, not let through.
-    if (choice !== "deny" && !this.agents.reaches(held.fromId, held.toId)) {
-      throw new PorticoError("wrong_status", "The sender no longer shares a workspace with this agent, so the message can only be turned down.");
+    // The message's workspace stopped joining the two agents while the message waited: the conversation there is
+    // read-only, so the message can be turned down, not let through.
+    if (choice !== "deny" && !this.workspaces.joins(held.workspaceId, held.fromId, held.toId)) {
+      throw new PorticoError("wrong_status", "The workspace this message came through no longer joins the sender and this agent, so the message can only be turned down.");
     }
     const at = this.now().toISOString();
-    const decided = this.db.transaction(() => {
-      const ids =
-        choice === "always_allow" ? this.messages.heldBetween(held.fromId, held.toId).map((m) => m.id) : [held.id];
-      if (!ids.includes(held.id)) ids.unshift(held.id);
-      if (choice === "always_allow") this.allowList.add(held.toId, held.fromId, personId, at);
-      return ids.map((id) => this.messages.decideHeld(id, choice, personId, at)).filter((m): m is Message => m !== null);
-    })();
+    // With Always allow, every other message held from the sender, in a workspace that still joins the two.
+    const others =
+      choice === "always_allow"
+        ? this.messages
+            .heldBetween(held.fromId, held.toId)
+            .filter((m) => m.id !== held.id && this.workspaces.joins(m.workspaceId, m.fromId, m.toId))
+        : [];
+    if (choice === "always_allow") this.allowList.add(held.toId, held.fromId, personId, at);
+    const decided = this.messages.decideHeld([held, ...others], choice, personId, at);
     const message = decided.find((m) => m.id === held.id);
     if (!message) throw new PorticoError("wrong_status", "The message was decided a moment ago.");
     for (const m of decided) {

@@ -122,12 +122,18 @@ export interface Thread {
   startedBy: string;
   createdAt: string;
   lastMessageAt: string;
-  /** The workspace the two agents share that the thread runs through, set by Portico. Null once they share none. */
-  workspaceId: string | null;
+  /**
+   * The workspace the thread lives in: the one whose content database holds it. A thread never moves. Once the
+   * workspace stops joining the two agents, the thread is read-only, and the pair's next conversation starts a thread
+   * in another workspace the two share.
+   */
+  workspaceId: string;
 }
 
 export interface Message {
   id: string;
+  /** The workspace the message went through: the one whose content database holds the message. */
+  workspaceId: string;
   threadId: string;
   fromId: string;
   toId: string;
@@ -205,9 +211,9 @@ export interface AccountSignIn {
 
 export interface PorticoConfig {
   port: number;
-  /** `<dataDir>/portico.db`. ":memory:" in tests. */
+  /** The directory database, `<dataDir>/portico.db`. ":memory:" in tests, where every workspace's content is in memory too. */
   dbPath: string;
-  /** PORTICO_DATA_DIR, the data folder: the database, the signing key and files live here. */
+  /** PORTICO_DATA_DIR, the data folder: the directory, each workspace's content under `porticos`, the signing key and files live here. */
   dataDir: string;
   /** PORTICO_PLUGIN_SOURCE: the marketplace source /join tells computers to install from. */
   pluginSource: string | null;
@@ -220,7 +226,7 @@ export interface PorticoConfig {
    * development only; otherwise Portico posts only to public https:// addresses.
    */
   webhooksAllowPrivate: boolean;
-  /** Where files live: a bucket when one is configured, otherwise `files` in the data folder. */
+  /** Where files' bytes live: a bucket when one is configured, otherwise the data folder. */
   files: BucketConfig | null;
   /** Emails share links when set. Null: Share gives the link only. */
   mail: MailConfig | null;

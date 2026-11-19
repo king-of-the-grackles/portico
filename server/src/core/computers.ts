@@ -4,6 +4,7 @@ import type { Activity } from "./activity";
 import type { Agents } from "./agents";
 import { checkAgentName } from "./agents";
 import type { Changes } from "./changes";
+import type { Content } from "./content";
 import { PorticoError } from "./errors";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
 import { hashSecret, LINK_SECRET, newLinkSecret, newToken, sameSecret } from "./tokens";
@@ -158,6 +159,8 @@ export interface ComputersDeps {
   db: Database;
   changes: Changes;
   activity?: Activity;
+  /** Each workspace's own database: the threads of a removed computer's sessions are deleted there. */
+  content: Content;
   now?: () => Date;
   newId?: () => string;
   log?: (msg: string, fields: Record<string, unknown>) => void;
@@ -171,6 +174,7 @@ export class Computers {
   private readonly db: Database;
   private readonly changes: Changes;
   private readonly activity: Activity | undefined;
+  private readonly content: Content;
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
@@ -180,6 +184,7 @@ export class Computers {
     this.db = deps.db;
     this.changes = deps.changes;
     this.activity = deps.activity;
+    this.content = deps.content;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.log = deps.log ?? (() => {});
@@ -243,19 +248,19 @@ export class Computers {
   }
 
   /**
-   * Deletes the computer and, by cascade, its sessions and folders, so its token fails at once. Returns the IDs of the
-   * sessions it had, so their streams can be closed.
+   * Deletes the computer and, by cascade, its sessions and folders, so its token fails at once. Once the directory
+   * rows are gone, the sessions' threads and messages are deleted in each workspace the sessions were in. Returns the
+   * IDs of the sessions it had, so their streams can be closed.
    */
   remove(id: string): string[] {
-    return this.db.transaction(() => {
-      const sessions = this.db.query("SELECT id, name FROM agents WHERE computer_id = $id").all({ id }) as { id: string; name: string }[];
-      const removed = this.db.query("DELETE FROM computers WHERE id = $id").run({ id }).changes;
-      if (removed > 0) {
-        this.log("computer_removed", { computer_id: id, sessions: sessions.length });
-        this.changes.emit("computers", "agents", "threads", "approvals");
-      }
-      return sessions.map((session) => session.id);
-    })();
+    const sessions = (this.db.query("SELECT id FROM agents WHERE computer_id = $id").all({ id }) as { id: string }[]).map((row) => row.id);
+    const clearContent = this.content.gather(sessions);
+    const removed = this.db.query("DELETE FROM computers WHERE id = $id").run({ id }).changes;
+    if (removed === 0) return sessions;
+    clearContent();
+    this.log("computer_removed", { computer_id: id, sessions: sessions.length });
+    this.changes.emit("computers", "agents", "threads", "approvals");
+    return sessions;
   }
 
   /** The folder's switch: true on, false off, null when never set (on). */

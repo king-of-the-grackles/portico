@@ -239,9 +239,9 @@ describe("workspaces", () => {
     expect(p.workspaces.reach(muse.id, scout.id)).toBe(false);
     expect(p.workspaces.reachable(muse.id)).toEqual(new Set());
     expect(errorCode(() => say(p, muse, "maya/scout"))).toBe("unknown_agent");
-    together(p, muse, scout);
-    expect(say(p, muse, "maya/scout").toId).toBe(scout.id);
-    expect(p.messages.threadBetween(muse.id, scout.id)?.workspaceId).not.toBeNull();
+    const shared = together(p, muse, scout);
+    expect(say(p, muse, "maya/scout")).toMatchObject({ toId: scout.id, workspaceId: shared.id });
+    expect(p.messages.threadsBetween(muse.id, scout.id).map((t) => t.workspaceId)).toEqual([shared.id]);
   });
 });
 
@@ -308,9 +308,9 @@ describe("the reach rule", () => {
   test("a message goes only to an agent the sender reaches, and its thread records the workspace", async () => {
     const { p, chris, muse, grok, rmuse, launch } = await world();
     expect(say(p, muse.agent, "robert/muse").toId).toBe(rmuse.agent.id);
-    expect(p.messages.threadBetween(muse.agent.id, rmuse.agent.id)?.workspaceId).toBe(launch.id);
+    expect(p.messages.threadsBetween(muse.agent.id, rmuse.agent.id).map((t) => t.workspaceId)).toEqual([launch.id]);
     expect(say(p, muse.agent, "grok-bot").toId).toBe(grok.agent.id);
-    expect(p.messages.threadBetween(muse.agent.id, grok.agent.id)?.workspaceId).toBe(p.workspaces.personal(chris.id).id);
+    expect(p.messages.threadsBetween(muse.agent.id, grok.agent.id).map((t) => t.workspaceId)).toEqual([p.workspaces.personal(chris.id).id]);
     expect(errorCode(() => say(p, grok.agent, "robert/muse"))).toBe("unknown_agent");
     expect(errorCode(() => say(p, muse.agent, "robert/dots"))).toBe("unknown_agent");
     expect(errorCode(() => say(p, muse.agent, "maya/scout"))).toBe("unknown_agent");
@@ -331,29 +331,42 @@ describe("the reach rule", () => {
 
     // What was sent before still arrives and can be read, by the agents and over the API.
     expect(p.messages.inbox(muse.agent).messages.map((m) => m.id)).toEqual([answer.id]);
-    const thread = p.messages.threadBetween(muse.agent.id, rmuse.agent.id)!;
-    expect(p.messages.inThread(thread.id).messages).toHaveLength(2);
+    const [thread] = p.messages.threadsBetween(muse.agent.id, rmuse.agent.id);
+    expect(p.messages.inThread(thread!).messages).toHaveLength(2);
+    // Robert's agent left the workspace, and still reads what it said there.
+    expect(p.messages.threadsBetween(rmuse.agent.id, muse.agent.id).map((t) => t.id)).toEqual([thread!.id]);
     const task = (await (await callAs(p, muse, "GET", `/api/agent/tasks/${ask.id}`)).json()) as { task: { with: string } };
     expect(task.task.with).toBe("robert/muse");
 
     // Back in a workspace together, the same thread carries on.
     p.workspaces.addAgent(robert.id, launch.id, rmuse.agent.id);
-    expect(p.messages.send(muse.agent, { replyTo: answer.id, subject: "More", text: "x" }).message.threadId).toBe(thread.id);
+    expect(p.messages.send(muse.agent, { replyTo: answer.id, subject: "More", text: "x" }).message.threadId).toBe(thread!.id);
   });
 
-  test("a thread moves to another workspace the two share when its own goes", async () => {
+  test("a thread never moves: when its workspace goes, the thread is read-only and the two start a new one in another they share", async () => {
     const { p, chris, robert, muse, rmuse, launch } = await world();
-    say(p, muse.agent, "robert/muse");
+    const first = say(p, muse.agent, "robert/muse");
     const second = p.workspaces.create(robert.id, "Second");
     p.workspaces.admit(second.id, chris.id);
     p.workspaces.addAgent(chris.id, second.id, muse.agent.id);
     p.workspaces.addAgent(robert.id, second.id, rmuse.agent.id);
-    say(p, muse.agent, "robert/muse");
-    expect(p.messages.threadBetween(muse.agent.id, rmuse.agent.id)?.workspaceId).toBe(launch.id);
+    // A reply stays in the workspace of the message it answers.
+    const reply = p.messages.send(rmuse.agent, { replyTo: first.id, subject: "Re", text: "x" });
+    expect(reply.message).toMatchObject({ workspaceId: launch.id, threadId: first.threadId, rootId: first.id });
+    expect(reply.note).toBeNull();
     p.workspaces.remove(chris.id, launch.id);
-    expect(p.messages.threadBetween(muse.agent.id, rmuse.agent.id)?.workspaceId).toBeNull();
-    say(p, rmuse.agent, "chris/muse");
-    expect(p.messages.threadBetween(muse.agent.id, rmuse.agent.id)?.workspaceId).toBe(second.id);
+    const [old] = p.messages.threadsBetween(muse.agent.id, rmuse.agent.id);
+    expect(old).toMatchObject({ id: first.threadId, workspaceId: launch.id });
+    // The reply can't go where the conversation was, so the message starts a new conversation and says so.
+    p.clock.advance(60_000);
+    const next = p.messages.send(muse.agent, { replyTo: reply.message.id, subject: "More", text: "x" });
+    expect(next.message).toMatchObject({ workspaceId: second.id, replyTo: null, rootId: next.message.id });
+    expect(next.message.threadId).not.toBe(first.threadId);
+    expect(next.note).toContain("read-only");
+    expect(next.note).toContain("the Second workspace");
+    expect(p.messages.threadsBetween(muse.agent.id, rmuse.agent.id).map((t) => t.workspaceId)).toEqual([second.id, launch.id]);
+    // The old thread is still read, with nothing new in it.
+    expect(p.messages.inThread(old!).messages.map((m) => m.id)).toEqual([first.id, reply.message.id]);
   });
 
   test("messages name the other agent as the reader addresses that agent", async () => {
@@ -493,9 +506,12 @@ describe("what a person reads with workspaces", () => {
     const { p, chris, robert, maya, rmuse } = await world();
     const { file } = await p.files.createUpload(rmuse.agent, { name: "notes.txt", text: "hello" });
     p.messages.send(rmuse.agent, { to: "dots", subject: "Notes", text: "x", attachments: [file.id] });
-    const stored = p.files.get(file.id)!;
+    const stored = p.files.forPerson(robert, file.id)!;
+    expect(stored.workspaceId).toBe(p.workspaces.personal(robert.id).id);
     expect(p.files.personMayDownload(robert, stored)).toBe(true);
     expect(p.files.personMayDownload(chris, stored)).toBe(false);
     expect(p.files.personMayDownload(maya, stored)).toBe(false);
+    expect(p.files.forPerson(chris, file.id)).toBeNull();
+    expect(p.files.forPerson(maya, file.id)).toBeNull();
   });
 });

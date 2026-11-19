@@ -83,6 +83,11 @@ export function fakeBucket() {
       const bytes = objects.get(key);
       return bytes ? { size: bytes.length, etag: etags.get(key)! } : null;
     },
+    copy: async (fromKey, toKey) => {
+      const bytes = objects.get(fromKey);
+      if (!bytes) throw new Error(`nothing stored at ${fromKey}`);
+      put(toKey, bytes);
+    },
     remove: async (key) => {
       objects.delete(key);
     },
@@ -100,7 +105,9 @@ export interface TestPortico extends Portico {
 }
 
 /**
- * Portico over an in-memory database, with a fake clock and counting IDs. With `setup` (the default), setup is marked
+ * Portico over an in-memory directory, with each workspace's content database in memory too, a fake clock and counting
+ * IDs. With `dataDir`, everything is on disk in that folder instead, as a real server keeps it: `portico.db`, and
+ * `porticos/<workspace ID>/` with `content.db` and the workspace's files. With `setup` (the default), setup is marked
  * done, so Portico is open; the owner still has to be added with addOwner.
  */
 export function makePortico(
@@ -113,19 +120,23 @@ export function makePortico(
     mailPost?: FakeWebhooks["post"];
     /** Sign-in with an outside account, as Descope does it: who a sign-in token belongs to. */
     accountCheck?: AccountCheck;
+    /** A real data folder: the directory, every content database and the files are written there. */
+    dataDir?: string;
   } = {},
 ): TestPortico {
   const clock = testClock();
   const notices: Notice[] = [];
   let counter = 0;
-  const portico = createPortico(testConfig(opts.config), {
-    db: openDb(":memory:"),
+  const onDisk = opts.dataDir ? { dataDir: opts.dataDir, dbPath: join(opts.dataDir, "portico.db") } : {};
+  const config = testConfig({ ...onDisk, ...opts.config });
+  const portico = createPortico(config, {
+    db: openDb(config.dbPath),
     now: clock.now,
     newId: () => `id-${String(++counter).padStart(4, "0")}`,
     heartbeatMs: 50,
     onNotice: (notice) => notices.push(notice),
-    // A folder of its own per Portico, made only when a test writes a file.
-    fileStore: opts.fileStore ?? new FolderStore(join(tmpdir(), `portico-test-files-${process.pid}-${++stores}`)),
+    // A folder of its own per Portico, made only when a test writes a file; the data folder itself when there is one.
+    fileStore: opts.fileStore ?? new FolderStore(opts.dataDir ?? join(tmpdir(), `portico-test-files-${process.pid}-${++stores}`)),
     webhookPost: opts.webhooks?.post,
     // Never the network: a test without a fake gets an email that didn't go out.
     mailPost: opts.mailPost ?? (async () => ({ status: null, error: "no_mail_in_tests" })),

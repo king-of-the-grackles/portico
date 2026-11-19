@@ -13,7 +13,7 @@ export interface RunningServer {
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
-/** The one way Portico runs: one database in the data folder, one address. */
+/** The one way Portico runs: the directory database and each workspace's content in the data folder, one address. */
 export function startServer(config: PorticoConfig, opts: { port?: number } = {}): RunningServer {
   const db = openDb(config.dbPath, (msg, fields) => log("info", msg, fields));
   const portico = createPortico(config, { db });
@@ -29,7 +29,8 @@ export function startServer(config: PorticoConfig, opts: { port?: number } = {})
       idleTimeout: 60,
     });
   } catch (err) {
-    // E.g. the port is in use: release the database before the error reaches the CLI.
+    // E.g. the port is in use: release the databases before the error reaches the CLI.
+    portico.close();
     db.close();
     throw err;
   }
@@ -49,6 +50,7 @@ export function startServer(config: PorticoConfig, opts: { port?: number } = {})
       clearInterval(minuteTimer);
       clearInterval(dailyTimer);
       server.stop(true);
+      portico.close();
       db.close();
     },
   };

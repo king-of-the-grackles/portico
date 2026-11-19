@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Content, ContentDb, Scope } from "./content";
 import { HOUR_MS, LIMITS } from "./limits";
 import type { Decision, Message, MessageStatus } from "./types";
 
@@ -30,6 +30,8 @@ export interface TaskStep {
 export interface Task {
   /** The first message's ID. */
   id: string;
+  /** The workspace the conversation runs through: every message of a task is in that one workspace. */
+  workspaceId: string;
   subject: string;
   /** Who asked, and who was asked. Every message in a task is between these two. */
   fromId: string;
@@ -125,6 +127,7 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
 
   return {
     id: rootId,
+    workspaceId: root.workspaceId,
     subject: root.subject,
     fromId: root.fromId,
     toId: root.toId,
@@ -157,7 +160,7 @@ interface TaskRow {
   to_id: string;
   subject: string;
   reply_to: string | null;
-  root_id: string | null;
+  root_id: string;
   summary: string | null;
   final: number;
   status: string;
@@ -174,15 +177,16 @@ interface TaskRow {
 const COLUMNS = `id, thread_id, from_id, to_id, subject, reply_to, root_id, summary, final, status, held_at, decision,
   decided_by, decided_at, created_at, expires_at, delivered_at, sender_notified_at`;
 
-function toTaskMessage(row: TaskRow): TaskMessage {
+function toTaskMessage(row: TaskRow, workspaceId: string): TaskMessage {
   return {
     id: row.id,
+    workspaceId,
     threadId: row.thread_id,
     fromId: row.from_id,
     toId: row.to_id,
     subject: row.subject,
     replyTo: row.reply_to,
-    rootId: row.root_id ?? row.id,
+    rootId: row.root_id,
     summary: row.summary,
     final: row.final !== 0,
     status: row.status as MessageStatus,
@@ -216,17 +220,23 @@ export interface TaskFilter {
 }
 
 export interface TasksDeps {
-  db: Database;
+  content: Content;
   now?: () => Date;
 }
 
-/** Tasks, worked out from the stored messages, which are kept for 30 days. */
+type BuildFilter = Omit<TaskFilter, "outcome" | "before" | "since" | "limit">;
+
+/**
+ * Tasks, worked out from the stored messages, which are kept for 30 days. Every read names whose content to look in:
+ * an agent's, or a person's. A task's messages are all in one workspace, so tasks from several workspaces merge into
+ * one list without splitting any.
+ */
 export class Tasks {
-  private readonly db: Database;
+  private readonly content: Content;
   private readonly now: () => Date;
 
   constructor(deps: TasksDeps) {
-    this.db = deps.db;
+    this.content = deps.content;
     this.now = deps.now ?? (() => new Date());
   }
 
@@ -234,8 +244,8 @@ export class Tasks {
    * Matching tasks, newest started first, a page at a time; the counts cover every outcome before the outcome filter,
    * for the status chips.
    */
-  list(filter: TaskFilter): { tasks: Task[]; counts: Record<TaskOutcome, number>; more: boolean } {
-    const all = this.build(filter);
+  list(scope: Scope, filter: TaskFilter): { tasks: Task[]; counts: Record<TaskOutcome, number>; more: boolean } {
+    const all = this.build(scope, filter);
     const counts: Record<TaskOutcome, number> = { needs_approval: 0, in_progress: 0, done: 0, failed: 0 };
     for (const task of all) counts[task.outcome]++;
     const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
@@ -250,30 +260,31 @@ export class Tasks {
   }
 
   /** Every matching task, newest started first. */
-  all(filter: Omit<TaskFilter, "outcome" | "before" | "since" | "limit">): Task[] {
-    return this.build(filter);
+  all(scope: Scope, filter: BuildFilter): Task[] {
+    return this.build(scope, filter);
   }
 
-  /** One task and its messages, oldest first. Null when none of its messages are left. */
-  get(rootId: string): { task: Task; messageIds: string[] } | null {
-    const chain = (
-      this.db
-        .query(`SELECT ${COLUMNS} FROM messages WHERE root_id = $rootId ORDER BY created_at, rowid`)
-        .all({ rootId }) as TaskRow[]
-    ).map(toTaskMessage);
-    if (chain.length === 0) return null;
-    return { task: taskOf(rootId, chain, this.now()), messageIds: chain.map((m) => m.id) };
+  /** One task and its messages, oldest first. Null when none of its messages are left, or none are in the scope. */
+  get(scope: Scope, rootId: string): { task: Task; messageIds: string[] } | null {
+    for (const { db, workspaceId } of this.content.of(scope)) {
+      const chain = (db.query(`SELECT ${COLUMNS} FROM messages WHERE root_id = $rootId ORDER BY created_at, rowid`).all({ rootId }) as TaskRow[]).map(
+        (row) => toTaskMessage(row, workspaceId),
+      );
+      if (chain.length > 0) return { task: taskOf(rootId, chain, this.now()), messageIds: chain.map((m) => m.id) };
+    }
+    return null;
   }
 
-  /** The task a message belongs to. */
-  rootOf(messageId: string): string | null {
-    const row = this.db.query("SELECT COALESCE(root_id, id) AS root FROM messages WHERE id = $id").get({ id: messageId }) as {
-      root: string;
-    } | null;
-    return row?.root ?? null;
+  /** The task a message belongs to, looked for only in the scope's workspaces. */
+  rootOf(scope: Scope, messageId: string): string | null {
+    for (const { db } of this.content.of(scope)) {
+      const row = db.query("SELECT root_id AS root FROM messages WHERE id = $id").get({ id: messageId }) as { root: string } | null;
+      if (row) return row.root;
+    }
+    return null;
   }
 
-  private build(filter: Omit<TaskFilter, "outcome" | "before" | "since" | "limit">): Task[] {
+  private build(scope: Scope, filter: BuildFilter): Task[] {
     const clauses: string[] = [];
     const bindings: Record<string, string> = {};
     const among = (ids: string[], prefix: string) => {
@@ -290,23 +301,25 @@ export class Tasks {
       clauses.push("(from_id = $agentId OR to_id = $agentId)");
       bindings.agentId = filter.agentId;
     }
-    if (filter.workspaceId) {
-      clauses.push("thread_id IN (SELECT id FROM threads WHERE workspace_id = $workspaceId)");
-      bindings.workspaceId = filter.workspaceId;
-    }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    // Only the one workspace, when the filter names one, and only when the scope covers that workspace.
+    const within: Scope = filter.workspaceId === undefined ? scope : { ...scope, workspace: filter.workspaceId };
+    const now = this.now();
+    const tasks: Task[] = [];
+    for (const content of this.content.of(within)) tasks.push(...this.tasksIn(content, where, bindings, now));
+    return tasks.sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id));
+  }
+
+  private tasksIn(content: ContentDb, where: string, bindings: Record<string, string>, now: Date): Task[] {
     // Every message of a conversation is between the same two agents, so filtering messages keeps whole tasks.
-    const rows = this.db.query(`SELECT ${COLUMNS} FROM messages ${where} ORDER BY created_at, rowid`).all(bindings) as TaskRow[];
+    const rows = content.db.query(`SELECT ${COLUMNS} FROM messages ${where} ORDER BY created_at, rowid`).all(bindings) as TaskRow[];
     const chains = new Map<string, TaskMessage[]>();
     for (const row of rows) {
-      const m = toTaskMessage(row);
+      const m = toTaskMessage(row, content.workspaceId);
       const chain = chains.get(m.rootId) ?? [];
       chain.push(m);
       chains.set(m.rootId, chain);
     }
-    const now = this.now();
-    return [...chains]
-      .map(([rootId, chain]) => taskOf(rootId, chain, now))
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id));
+    return [...chains].map(([rootId, chain]) => taskOf(rootId, chain, now));
   }
 }

@@ -40,7 +40,7 @@ export function agentPageData(core: Core, me: Person, id: string): AgentPageData
   const wake = core.wakeUrls.view(agent.id);
   const events = core.events.view(agent.id);
   const visible = visibleAgents(core, me);
-  const tasks = core.tasks.all({ visible, agentId: agent.id });
+  const tasks = core.tasks.all({ person: me.id }, { visible, agentId: agent.id });
   const counts: Record<TaskOutcome, number> = { needs_approval: 0, in_progress: 0, done: 0, failed: 0 };
   const partners = new Map<string, { tasks: number; lastAt: string }>();
   for (const task of tasks) {

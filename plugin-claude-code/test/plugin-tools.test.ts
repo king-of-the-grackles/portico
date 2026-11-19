@@ -128,7 +128,7 @@ describe("the plugin's MCP server", () => {
     const { message, delivery } = JSON.parse(text(sent)) as { message: { id: string; to: string; subject: string }; delivery: string };
     expect(message).toMatchObject({ to: "grok", subject: "Release date" });
     expect(delivery).toBe("queued");
-    expect(p.messages.get(message.id)?.text).toBe("Ready when you are");
+    expect(p.messages.get({ person: p.owner.id }, message.id)?.text).toBe("Ready when you are");
 
     // A reply needs only reply_to, a subject and the text.
     const question = p.messages.send(grok.agent, { to: "api-claude", subject: "Which branch?", text: "Which branch?" });
@@ -140,7 +140,7 @@ describe("the plugin's MCP server", () => {
 
     // The question went to this plugin's own live session: let that delivery finish before teardown.
     await waitFor(() => sock.posts.length === 1);
-    await waitFor(() => p.messages.get(question.message.id)?.status === "delivered");
+    await waitFor(() => p.messages.get({ person: p.owner.id }, question.message.id)?.status === "delivered");
   });
 
   test("a message to an agent that requires approval comes back held, with the note as a second line", async () => {
@@ -187,7 +187,7 @@ describe("the plugin's MCP server", () => {
     const grok = appAgent(p, "grok", { kind: "grok-bot" });
     const { host, sock } = await registered();
     const ask = p.messages.send(grok.agent, { to: "api-claude", subject: "Fix the export", text: "Please fix." }).message;
-    await waitFor(() => p.messages.get(ask.id)?.status === "delivered");
+    await waitFor(() => p.messages.get({ person: p.owner.id }, ask.id)?.status === "delivered");
     const update = await host.callTool({
       name: "send_message",
       arguments: { reply_to: ask.id, subject: "On it", text: "Looking", done: false, key: "fix-export-1" },

@@ -33,7 +33,7 @@ function sender(name = "grok") {
   return (subject: string, text: string) => p.messages.send(agent, { to: "api-claude", subject, text }).message;
 }
 
-const status = (id: string) => p.messages.get(id)?.status;
+const status = (id: string) => p.messages.get({ person: p.owner.id }, id)?.status;
 
 describe("inbox socket delivery", () => {
   test("gives Claude standing instructions, without pronouns", async () => {
@@ -97,7 +97,7 @@ describe("inbox socket delivery", () => {
     await waitFor(() => sock.posts.length === 1);
     expect(sock.posts[0]!.content).toStartWith(`<portico-update message_id="${message.id}" to="muse" status="declined">`);
     expect(sock.posts[0]!.content).toContain("declined");
-    await waitFor(() => p.messages.get(message.id)?.senderNotifiedAt != null);
+    await waitFor(() => p.messages.get({ person: p.owner.id }, message.id)?.senderNotifiedAt != null);
   });
 
   test("delivers each message once when nudges overlap", async () => {
@@ -224,7 +224,7 @@ describe("inbox socket delivery", () => {
     expect(client.peeks).toBe(peeks);
     expect(client.acks).toBe(0);
     expect(sock.posts).toHaveLength(1);
-    expect(p.messages.get(message.id)).toBeNull();
+    expect(p.messages.get({ person: p.owner.id }, message.id)).toBeNull();
   });
 
   test("stop() clears a pending retry", async () => {

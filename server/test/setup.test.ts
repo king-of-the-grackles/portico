@@ -257,7 +257,7 @@ describe("owner recovery", () => {
     const woken = await Promise.race([waiting, Bun.sleep(1000).then(() => null)]);
     expect(woken?.status).toBe(401);
     expect((await callAs(p, { token: pc, key: "attacker-run-0001" }, "GET", "/api/agent/inbox")).status).toBe(401);
-    expect(p.messages.get(sent.message.id)?.status).toBe("held");
+    expect(p.messages.get({ person: chris.id }, sent.message.id)?.status).toBe("held");
     expect(p.approvals.allowListFor(chris.id, notes.agent.id)).toEqual([]);
     const reopened = await p.app.request("/api/agent/stream?repo=api", {
       headers: {

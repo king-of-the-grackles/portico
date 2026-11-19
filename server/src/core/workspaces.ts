@@ -63,14 +63,14 @@ export class Workspaces {
 
   // ---- the reach rule ----
 
-  /** Whether the two agents can see and message each other: both are in at least one workspace. */
+  /** Whether the two agents can see and message each other: both are in at least one workspace now. */
   reach(agentId: string, otherId: string): boolean {
     if (agentId === otherId) return true;
     return (
       this.db
         .query(
           `SELECT 1 FROM workspace_agents x JOIN workspace_agents y ON y.workspace_id = x.workspace_id
-           WHERE x.agent_id = $agentId AND y.agent_id = $otherId LIMIT 1`,
+           WHERE x.agent_id = $agentId AND y.agent_id = $otherId AND x.left_at IS NULL AND y.left_at IS NULL LIMIT 1`,
         )
         .get({ agentId, otherId }) !== null
     );
@@ -81,31 +81,51 @@ export class Workspaces {
     const rows = this.db
       .query(
         `SELECT DISTINCT y.agent_id AS id FROM workspace_agents x JOIN workspace_agents y ON y.workspace_id = x.workspace_id
-         WHERE x.agent_id = $agentId AND y.agent_id != $agentId`,
+         WHERE x.agent_id = $agentId AND y.agent_id != $agentId AND x.left_at IS NULL AND y.left_at IS NULL`,
       )
       .all({ agentId }) as { id: string }[];
     return new Set(rows.map((row) => row.id));
   }
 
-  /** The workspaces both agents are in, personal first, then the oldest. */
+  /** The workspaces both agents are in now, personal first, then the oldest. */
   shared(agentId: string, otherId: string): Workspace[] {
     const rows = this.db
       .query(
         `SELECT w.* FROM workspaces w
-         JOIN workspace_agents x ON x.workspace_id = w.id AND x.agent_id = $agentId
-         JOIN workspace_agents y ON y.workspace_id = w.id AND y.agent_id = $otherId ${ORDER}`,
+         JOIN workspace_agents x ON x.workspace_id = w.id AND x.agent_id = $agentId AND x.left_at IS NULL
+         JOIN workspace_agents y ON y.workspace_id = w.id AND y.agent_id = $otherId AND y.left_at IS NULL
+         WHERE w.archived_at IS NULL ${ORDER}`,
       )
       .all({ agentId, otherId }) as WorkspaceRow[];
     return rows.map(toWorkspace);
   }
 
+  /** Whether the workspace joins the two agents now: both are in the workspace, and the workspace isn't deleted. */
+  joins(workspaceId: string, agentId: string, otherId: string): boolean {
+    return this.shared(agentId, otherId).some((w) => w.id === workspaceId);
+  }
+
   /**
-   * The workspace a thread between the two runs through: the one it already has while both are still in it, otherwise
-   * the first they share. Null when they share none.
+   * The workspace a new conversation between the two goes in: the most private one both are in now. First the personal
+   * workspace of the person who manages both; then a shared one whose people are exactly the two agents' owners; then
+   * the oldest shared one. Null when the two share none. A reply doesn't ask this: a conversation stays in the
+   * workspace where the conversation started (core/messages.ts).
    */
-  stamp(agentId: string, otherId: string, current: string | null = null): string | null {
+  route(agentId: string, otherId: string): Workspace | null {
     const shared = this.shared(agentId, otherId);
-    return shared.find((w) => w.id === current)?.id ?? shared[0]?.id ?? null;
+    if (shared.length <= 1) return shared[0] ?? null;
+    const personal = shared.find((w) => w.kind === "personal");
+    if (personal) return personal;
+    const owners = new Set(
+      (this.db.query("SELECT owner_id FROM agents WHERE id IN ($agentId, $otherId)").all({ agentId, otherId }) as { owner_id: string }[]).map(
+        (row) => row.owner_id,
+      ),
+    );
+    const onlyThem = shared.find((w) => {
+      const people = this.peopleIn(w.id);
+      return people.length === owners.size && people.every((id) => owners.has(id));
+    });
+    return onlyThem ?? shared[0]!;
   }
 
   /** The agents a person sees: the person's own, and every agent in a workspace the person is in. */
@@ -113,7 +133,7 @@ export class Workspaces {
     const rows = this.db
       .query(
         `SELECT DISTINCT a.agent_id AS id FROM workspace_people p JOIN workspace_agents a ON a.workspace_id = p.workspace_id
-         WHERE p.person_id = $personId
+         WHERE p.person_id = $personId AND a.left_at IS NULL
          UNION SELECT id FROM agents WHERE owner_id = $personId`,
       )
       .all({ personId }) as { id: string }[];
@@ -133,8 +153,9 @@ export class Workspaces {
 
   // ---- reads ----
 
+  /** The workspace, unless deleted: a deleted workspace answers the same as one that never existed. */
   get(id: string): Workspace | null {
-    const row = this.db.query("SELECT * FROM workspaces WHERE id = $id").get({ id }) as WorkspaceRow | null;
+    const row = this.db.query("SELECT * FROM workspaces WHERE id = $id AND archived_at IS NULL").get({ id }) as WorkspaceRow | null;
     return row ? toWorkspace(row) : null;
   }
 
@@ -148,15 +169,18 @@ export class Workspaces {
   /** The workspaces the person is in, personal first. */
   forPerson(personId: string): Workspace[] {
     const rows = this.db
-      .query(`SELECT w.* FROM workspaces w JOIN workspace_people p ON p.workspace_id = w.id WHERE p.person_id = $personId ${ORDER}`)
+      .query(`SELECT w.* FROM workspaces w JOIN workspace_people p ON p.workspace_id = w.id WHERE p.person_id = $personId AND w.archived_at IS NULL ${ORDER}`)
       .all({ personId }) as WorkspaceRow[];
     return rows.map(toWorkspace);
   }
 
-  /** The workspaces the agent is in, personal first. */
+  /** The workspaces the agent is in now, personal first. */
   ofAgent(agentId: string): Workspace[] {
     const rows = this.db
-      .query(`SELECT w.* FROM workspaces w JOIN workspace_agents a ON a.workspace_id = w.id WHERE a.agent_id = $agentId ${ORDER}`)
+      .query(
+        `SELECT w.* FROM workspaces w JOIN workspace_agents a ON a.workspace_id = w.id
+         WHERE a.agent_id = $agentId AND a.left_at IS NULL AND w.archived_at IS NULL ${ORDER}`,
+      )
       .all({ agentId }) as WorkspaceRow[];
     return rows.map(toWorkspace);
   }
@@ -172,10 +196,10 @@ export class Workspaces {
     return rows.map((row) => row.id);
   }
 
-  /** The IDs of the agents in the workspace, as they came in. */
+  /** The IDs of the agents in the workspace now, as they came in. */
   agentsIn(workspaceId: string): string[] {
     const rows = this.db
-      .query("SELECT agent_id AS id FROM workspace_agents WHERE workspace_id = $workspaceId ORDER BY added_at, agent_id")
+      .query("SELECT agent_id AS id FROM workspace_agents WHERE workspace_id = $workspaceId AND left_at IS NULL ORDER BY added_at, agent_id")
       .all({ workspaceId }) as { id: string }[];
     return rows.map((row) => row.id);
   }
@@ -191,7 +215,7 @@ export class Workspaces {
   hasAgent(workspaceId: string, agentId: string): boolean {
     return (
       this.db
-        .query("SELECT 1 FROM workspace_agents WHERE workspace_id = $workspaceId AND agent_id = $agentId")
+        .query("SELECT 1 FROM workspace_agents WHERE workspace_id = $workspaceId AND agent_id = $agentId AND left_at IS NULL")
         .get({ workspaceId, agentId }) !== null
     );
   }
@@ -209,7 +233,7 @@ export class Workspaces {
    * agents and never takes anyone else.
    */
   personal(personId: string): Workspace {
-    const row = this.db.query("SELECT * FROM workspaces WHERE owner_id = $personId AND kind = 'personal'").get({ personId }) as
+    const row = this.db.query("SELECT * FROM workspaces WHERE owner_id = $personId AND kind = 'personal' AND archived_at IS NULL").get({ personId }) as
       | WorkspaceRow
       | null;
     if (row) return toWorkspace(row);
@@ -260,12 +284,13 @@ export class Workspaces {
   }
 
   /**
-   * Deletes a shared workspace. Only its owner can. The agents that reached each other only through it stop reaching
-   * each other; their conversations stay readable.
+   * Deletes a shared workspace. Only its owner can. The workspace is archived: nobody is in it or reaches through it
+   * any more, and its share links end. The conversations that ran through it stay readable, and take nothing new, until
+   * the history window has emptied them; then the workspace's content and its row go (`archived`, `purge`).
    */
   remove(byId: string, workspaceId: string): Workspace {
     const workspace = this.requireOwned(byId, workspaceId);
-    this.db.query("DELETE FROM workspaces WHERE id = $id").run({ id: workspace.id });
+    this.db.transaction(() => archiveWorkspaces(this.db, "id = $id", { id: workspace.id }, this.iso()))();
     this.log("workspace_removed", { workspace_id: workspace.id });
     this.changes.emit("workspaces", "agents", "threads");
     return workspace;
@@ -301,13 +326,14 @@ export class Workspaces {
     if (personId === workspace.ownerId) {
       throw new PorticoError("not_allowed", "The owner of a workspace can't leave. Delete the workspace instead.");
     }
+    // The agents' rows stay, marked as left, so the conversations each had here stay readable to its owner.
     this.db.transaction(() => {
       this.db
         .query(
-          `DELETE FROM workspace_agents WHERE workspace_id = $workspaceId
+          `UPDATE workspace_agents SET left_at = $at WHERE workspace_id = $workspaceId AND left_at IS NULL
            AND agent_id IN (SELECT id FROM agents WHERE owner_id = $personId)`,
         )
-        .run({ workspaceId: workspace.id, personId });
+        .run({ workspaceId: workspace.id, personId, at: this.iso() });
       this.db
         .query("DELETE FROM workspace_people WHERE workspace_id = $workspaceId AND person_id = $personId")
         .run({ workspaceId: workspace.id, personId });
@@ -326,8 +352,12 @@ export class Workspaces {
     if (!this.owns(byId, agentId)) {
       throw new PorticoError("not_allowed", "Only the person who manages an agent can add the agent to a workspace.");
     }
+    // An agent that was here before comes back on the same row.
     this.db
-      .query("INSERT OR IGNORE INTO workspace_agents (workspace_id, agent_id, added_at) VALUES ($workspaceId, $agentId, $at)")
+      .query(
+        `INSERT INTO workspace_agents (workspace_id, agent_id, added_at) VALUES ($workspaceId, $agentId, $at)
+         ON CONFLICT (workspace_id, agent_id) DO UPDATE SET added_at = excluded.added_at, left_at = NULL WHERE left_at IS NOT NULL`,
+      )
       .run({ workspaceId: workspace.id, agentId, at: this.iso() });
     this.log("workspace_agent_added", { workspace_id: workspace.id, agent_id: agentId });
     this.changes.emit("workspaces", "agents");
@@ -335,7 +365,8 @@ export class Workspaces {
 
   /**
    * Takes an agent out of a shared workspace: the person who manages the agent can, and so can the workspace's owner.
-   * Every agent stays in its owner's personal workspace.
+   * Every agent stays in its owner's personal workspace. The row stays, marked as left: the agent reaches nobody through
+   * the workspace, and the conversations the agent had there stay readable.
    */
   removeAgent(byId: string, workspaceId: string, agentId: string): void {
     // Whether the person is in the workspace comes first, so a stranger learns nothing about what kind it is.
@@ -346,10 +377,25 @@ export class Workspaces {
       throw new PorticoError("not_allowed", "Only the person who manages the agent, or the owner of the workspace, can remove the agent.");
     }
     this.db
-      .query("DELETE FROM workspace_agents WHERE workspace_id = $workspaceId AND agent_id = $agentId")
-      .run({ workspaceId: workspace.id, agentId });
+      .query("UPDATE workspace_agents SET left_at = $at WHERE workspace_id = $workspaceId AND agent_id = $agentId AND left_at IS NULL")
+      .run({ workspaceId: workspace.id, agentId, at: this.iso() });
     this.log("workspace_agent_removed", { workspace_id: workspace.id, agent_id: agentId });
     this.changes.emit("workspaces", "agents", "threads");
+  }
+
+  // ---- deleted workspaces ----
+
+  /** The IDs of the deleted workspaces still kept for their content, the oldest deletion first. */
+  archived(): string[] {
+    const rows = this.db.query("SELECT id FROM workspaces WHERE archived_at IS NOT NULL ORDER BY archived_at, id").all() as { id: string }[];
+    return rows.map((row) => row.id);
+  }
+
+  /** Drops a deleted workspace's row, and with the row the record of who was in it. The caller removes the content next. */
+  purge(workspaceId: string): boolean {
+    const gone = this.db.query("DELETE FROM workspaces WHERE id = $id AND archived_at IS NOT NULL").run({ id: workspaceId }).changes === 1;
+    if (gone) this.log("workspace_purged", { workspace_id: workspaceId });
+    return gone;
   }
 
   // ---- helpers ----
@@ -396,4 +442,19 @@ export class Workspaces {
   private iso(): string {
     return this.now().toISOString();
   }
+}
+
+/**
+ * Archives the workspaces a condition picks: nobody is in one or reaches through one any more, and the share links and
+ * requests about one end. Each agent's row stays, marked as left, so the conversations stay readable to the agents'
+ * owners until the history window empties the workspace. Run inside the caller's transaction. Removing a person
+ * archives the workspaces that person owns (core/people.ts).
+ */
+export function archiveWorkspaces(db: Database, where: string, bindings: Record<string, string>, at: string): void {
+  const ids = `SELECT id FROM workspaces WHERE ${where}`;
+  db.query(`UPDATE workspace_agents SET left_at = $at WHERE left_at IS NULL AND workspace_id IN (${ids})`).run({ ...bindings, at });
+  db.query(`DELETE FROM workspace_people WHERE workspace_id IN (${ids})`).run(bindings);
+  db.query(`DELETE FROM shares WHERE workspace_id IN (${ids})`).run(bindings);
+  db.query(`DELETE FROM workspace_asks WHERE workspace_id IN (${ids})`).run(bindings);
+  db.query(`UPDATE workspaces SET archived_at = $at WHERE archived_at IS NULL AND ${where}`).run({ ...bindings, at });
 }

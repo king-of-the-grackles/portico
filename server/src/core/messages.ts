@@ -1,13 +1,14 @@
 import type { Database } from "bun:sqlite";
 import type { Agents } from "./agents";
 import type { Changes } from "./changes";
+import { type Content, type ContentDb, merged, type Scope } from "./content";
 import { PorticoError } from "./errors";
 import { LOOP_LIMIT, LOOP_WINDOW_MS, loopGuardRetryAt } from "./guards";
 import type { InboxWaits } from "./inbox-waits";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
 import { letThrough } from "./tasks";
 import type { Workspaces } from "./workspaces";
-import type { Agent, Decision, DeliveryTier, Message, MessageStatus, Notice, Thread } from "./types";
+import type { Agent, Decision, DeliveryTier, Message, MessageStatus, Notice, Thread, Workspace } from "./types";
 
 interface MessageRow {
   id: string;
@@ -17,7 +18,7 @@ interface MessageRow {
   subject: string;
   text: string;
   reply_to: string | null;
-  root_id: string | null;
+  root_id: string;
   summary: string | null;
   final: number;
   send_key: string | null;
@@ -39,19 +40,20 @@ interface ThreadRow {
   started_by: string;
   created_at: string;
   last_message_at: string;
-  workspace_id: string | null;
 }
 
-function toMessage(row: MessageRow): Message {
+/** A row as a message of the workspace whose content database the row came from. */
+function toMessage(row: MessageRow, workspaceId: string): Message {
   return {
     id: row.id,
+    workspaceId,
     threadId: row.thread_id,
     fromId: row.from_id,
     toId: row.to_id,
     subject: row.subject,
     text: row.text,
     replyTo: row.reply_to,
-    rootId: row.root_id ?? row.id,
+    rootId: row.root_id,
     summary: row.summary,
     final: row.final !== 0,
     sendKey: row.send_key,
@@ -67,7 +69,7 @@ function toMessage(row: MessageRow): Message {
   };
 }
 
-function toThread(row: ThreadRow): Thread {
+function toThread(row: ThreadRow, workspaceId: string): Thread {
   return {
     id: row.id,
     aId: row.a_id,
@@ -75,8 +77,18 @@ function toThread(row: ThreadRow): Thread {
     startedBy: row.started_by,
     createdAt: row.created_at,
     lastMessageAt: row.last_message_at,
-    workspaceId: row.workspace_id,
+    workspaceId,
   };
+}
+
+/** `$p0, $p1, …` for a list of values, added to the bindings. */
+function among(values: string[], prefix: string, bindings: Record<string, string | number>): string {
+  return values
+    .map((value, i) => {
+      bindings[`${prefix}${i}`] = value;
+      return `$${prefix}${i}`;
+    })
+    .join(", ");
 }
 
 /** The most of each kind one deliveries list holds, and one ack may name, so a single ack always covers a list. */
@@ -145,15 +157,20 @@ function checkText(value: unknown): string {
 export interface MessageFiles {
   /** The IDs as given, cleaned, with no check of who may attach them. */
   ids(attachments: unknown): string[];
-  attachable(caller: Agent, attachments: unknown): string[];
-  attach(messageId: string, ids: string[]): void;
-  of(messageId: string): { id: string }[];
+  /** The files a send may carry, checked, each with where its bytes are now. */
+  attachable(caller: Agent, attachments: unknown): { id: string }[];
+  /** Puts the files `attachable` gave on a message, inside the send's transaction in the message's own content database. */
+  attach(content: ContentDb, messageId: string, files: { id: string }[]): void;
+  /** After the send's transaction: the files' bytes are copied into the message's workspace. */
+  attached(message: Message, files: { id: string }[]): void;
+  of(message: Pick<Message, "id" | "workspaceId">): { id: string }[];
 }
 
 export interface MessagesDeps {
-  db: Database;
+  /** Each workspace's own database: every thread and message lives in one. */
+  content: Content;
   agents: Agents;
-  /** The reach rule: a message goes only between two agents in one workspace. */
+  /** The reach rule, and which workspace a conversation goes in. */
   workspaces: Workspaces;
   /** Whether the receiver always allows messages from the sender. */
   alwaysAllows: (agentId: string, senderId: string) => boolean;
@@ -168,9 +185,14 @@ export interface MessagesDeps {
   log?: (msg: string, fields: Record<string, unknown>) => void;
 }
 
-/** Messages between agents, the threads they form, holds for approval, and what each agent picks up. */
+/**
+ * Messages between agents, the threads they form, holds for approval, and what each agent picks up. Every thread and
+ * message lives in one workspace's content database. A read names whose content to look in (a scope), or starts from
+ * a thread or message already found, which says which workspace it is in. Nothing here searches every workspace for a
+ * caller; only the sweeps (`expireDue`, `prune`) walk them all.
+ */
 export class Messages {
-  private readonly db: Database;
+  private readonly content: Content;
   private readonly agents: Agents;
   private readonly workspaces: Workspaces;
   private readonly alwaysAllows: (agentId: string, senderId: string) => boolean;
@@ -185,7 +207,7 @@ export class Messages {
   private readonly waitingSlots = new Map<string, number>();
 
   constructor(deps: MessagesDeps) {
-    this.db = deps.db;
+    this.content = deps.content;
     this.agents = deps.agents;
     this.workspaces = deps.workspaces;
     this.alwaysAllows = deps.alwaysAllows;
@@ -205,9 +227,11 @@ export class Messages {
    * sender used before isn't sent again: the first one comes back. Attachments are file IDs: finished uploads of the
    * sender's own, or files the sender received.
    *
-   * The two agents must be in one workspace now. A name (`to`) finds only agents the sender reaches;
-   * a reply (`reply_to`) to an agent the sender no longer reaches is refused, so a conversation between two agents that
-   * stopped sharing a workspace stays readable and takes nothing new. The thread records the workspace it runs through.
+   * The two agents must be in one workspace now. A name (`to`) finds only agents the sender reaches. A new conversation
+   * goes in the most private workspace the two share (`Workspaces.route`). A reply (`reply_to`) stays in the workspace
+   * of the message it answers while that workspace still joins the two. When it no longer does and another workspace
+   * joins them, the old conversation is read-only: the message starts a new conversation in the routed workspace, with
+   * no reply_to, and the result's note says so. When the two share no workspace, the send is refused.
    */
   send(
     caller: Agent,
@@ -239,16 +263,20 @@ export class Messages {
         const to = typeof input.to === "string" && input.to.trim() !== "" ? this.agents.resolve(input.to, caller.id).id : first.toId;
         // Compared as named, before any check of the files: a retry stays safe after the first message's files went
         // (a declined message drops them), and then there is nothing left to compare.
-        const named = this.files?.ids(input.attachments) ?? [];
-        const firstFiles = (this.files?.of(first.id) ?? []).map((file) => file.id);
+        const namedFiles = this.files?.ids(input.attachments) ?? [];
+        const firstFiles = (this.files?.of(first) ?? []).map((file) => file.id);
         const sameFiles =
           (first.status === "declined" && firstFiles.length === 0) ||
-          (firstFiles.length === named.length && firstFiles.every((id, i) => id === named[i]));
+          (firstFiles.length === namedFiles.length && firstFiles.every((id, i) => id === namedFiles[i]));
+        // A reply that started a new conversation, because its workspace stopped joining the two, was stored with no
+        // reply_to: the message the retry names is then in another workspace than the first message.
+        const named = (id: string) => this.get({ agent: caller.id }, id);
+        const sameReply = first.replyTo === replyTo || (first.replyTo === null && replyTo !== null && (named(replyTo)?.workspaceId ?? first.workspaceId) !== first.workspaceId);
         if (
           first.subject !== subject ||
           first.text !== text ||
           first.final !== final ||
-          first.replyTo !== replyTo ||
+          !sameReply ||
           first.toId !== to ||
           !sameFiles
         ) {
@@ -266,13 +294,13 @@ export class Messages {
         };
       }
     }
-    const fileIds = this.attachmentIds(caller, input.attachments);
+    const attachments = this.attachable(caller, input.attachments);
     let receiver: Agent | null =
       typeof input.to === "string" && input.to.trim() !== "" ? this.agents.resolve(input.to, caller.id) : null;
-    let replyTo: string | null = null;
-    let rootId: string | null = null;
+    let original: Message | null = null;
     if (input.replyTo !== undefined && input.replyTo !== null && input.replyTo !== "") {
-      const original = typeof input.replyTo === "string" ? this.get(input.replyTo) : null;
+      // Only among the caller's own workspaces: a message anywhere else answers the same as one that doesn't exist.
+      original = typeof input.replyTo === "string" ? this.get({ agent: caller.id }, input.replyTo) : null;
       if (!original || (original.toId !== caller.id && original.fromId !== caller.id)) {
         throw new PorticoError("bad_request", "reply_to must be the ID of a message sent to or by this agent.");
       }
@@ -285,35 +313,41 @@ export class Messages {
         throw new PorticoError("bad_request", "reply_to names a message from a different thread. Leave out to, or fix reply_to.");
       }
       receiver ??= this.agents.require(other);
-      replyTo = original.id;
-      rootId = original.rootId;
     }
     if (!receiver) throw new PorticoError("bad_request", "to is required unless reply_to is given.");
-    if (!final && replyTo === null) {
+    if (!final && original === null) {
       throw new PorticoError("bad_request", "done: false marks a reply as an update with more to come, so reply_to is required.");
     }
     if (receiver.id === caller.id) throw new PorticoError("bad_request", "An agent can't send a message to itself.");
-    if (!this.workspaces.reach(caller.id, receiver.id)) {
+    const shared = this.workspaces.shared(caller.id, receiver.id);
+    if (shared.length === 0) {
       throw new PorticoError(
         "not_allowed",
         `${this.agents.nameFor(receiver, caller.ownerId)} no longer shares a workspace with this agent, so the ` +
           "conversation is read-only. list_agents shows who can be reached now.",
       );
     }
-    this.requireBudget(caller, receiver);
+    // A reply stays where the conversation is while that workspace still joins the two. Otherwise the conversation is
+    // read-only, and the message starts a new one where a new conversation between the two goes.
+    const stays = original !== null && shared.some((w) => w.id === original.workspaceId);
+    const workspace: Workspace = stays ? shared.find((w) => w.id === original!.workspaceId)! : this.workspaces.route(caller.id, receiver.id)!;
+    const moved = original !== null && !stays;
+    const replyTo = stays ? original!.id : null;
+    const rootId = stays ? original!.rootId : null;
+    this.requireBudget(caller, receiver, shared);
 
     const at = this.iso();
-    const message = this.db.transaction(() => {
-      const before = this.threadBetween(caller.id, receiver.id);
-      const workspaceId = this.workspaces.stamp(caller.id, receiver.id, before?.workspaceId ?? null);
-      const thread = before ?? this.startThread(caller.id, receiver.id, at, workspaceId);
+    const content = this.content.for(workspace.id);
+    const message = content.db.transaction(() => {
+      const thread = this.threadIn(content, caller.id, receiver.id) ?? this.startThread(content, caller.id, receiver.id, at);
       const held =
         receiver.approvalRequired &&
         !this.alwaysAllows(receiver.id, caller.id) &&
-        !(replyTo !== null && this.receiverInConversation(replyTo, receiver.id));
+        !(replyTo !== null && this.receiverInConversation(content.db, replyTo, receiver.id));
       const id = this.newId();
       const m: Message = {
         id,
+        workspaceId: workspace.id,
         threadId: thread.id,
         fromId: caller.id,
         toId: receiver.id,
@@ -334,44 +368,56 @@ export class Messages {
         deliveredAt: null,
         senderNotifiedAt: null,
       };
-      this.insert(m);
-      if (fileIds.length > 0) this.files!.attach(id, fileIds);
-      this.db
-        .query("UPDATE threads SET last_message_at = $at, workspace_id = $workspaceId WHERE id = $id")
-        .run({ id: thread.id, at, workspaceId });
+      this.insert(content.db, m);
+      if (attachments.length > 0) this.files!.attach(content, id, attachments);
+      content.db.query("UPDATE threads SET last_message_at = $at WHERE id = $id").run({ id: thread.id, at });
       return m;
     })();
+    if (attachments.length > 0) this.files!.attached(message, attachments);
 
     const delivery: DeliveryTier = message.status === "held" ? "held" : this.agents.tier(receiver);
-    this.log("message_sent", { message_id: message.id, from: caller.id, to: receiver.id, delivery });
+    this.log("message_sent", { message_id: message.id, workspace_id: workspace.id, from: caller.id, to: receiver.id, delivery, moved });
     this.notify({ kind: "message_sent", message });
     this.changes.emit(...(message.status === "held" ? (["threads", "approvals"] as const) : (["threads"] as const)));
-    const note =
-      delivery === "held"
-        ? `Held: ${this.agents.nameFor(receiver, caller.ownerId)} requires approval for new conversations. Replies (reply_to) in a ` +
-          `conversation ${this.agents.nameFor(receiver, caller.ownerId)} wrote in during the last ${LIMITS.replyWindowHours} hours aren't ` +
+    const name = this.agents.nameFor(receiver, caller.ownerId);
+    const notes: string[] = [];
+    if (moved) {
+      notes.push(
+        `The message reply_to names is in a conversation whose workspace no longer joins this agent and ${name}, so ` +
+          `that conversation is read-only. This message started a new conversation in the ${workspace.name} workspace, ` +
+          "with no reply_to.",
+      );
+    }
+    if (delivery === "held") {
+      notes.push(
+        `Held: ${name} requires approval for new conversations. Replies (reply_to) in a ` +
+          `conversation ${name} wrote in during the last ${LIMITS.replyWindowHours} hours aren't ` +
           `held. A person decides within ${LIMITS.messageExpiryHours / 24} days; check_inbox reports whether the message ` +
-          "was delivered, declined or expired."
-        : null;
-    return { message, delivery, note };
+          "was delivered, declined or expired.",
+      );
+    }
+    return { message, delivery, note: notes.length > 0 ? notes.join(" ") : null };
   }
 
   /**
    * Picks up the caller's pending messages (they become delivered) and the outcomes of its held messages (marked
-   * reported). Marks the caller checked in.
+   * reported), from every workspace the caller is or was in, oldest first. Marks the caller checked in.
    */
   inbox(caller: Agent): { messages: Message[]; updates: Message[] } {
     const at = this.iso();
-    const outcome = this.db.transaction(() => {
-      const messages = this.pendingFor(caller.id, at, -1);
-      const updates = this.updatesFor(caller.id, -1);
-      this.markDelivered(caller.id, messages.map((m) => m.id), at);
-      this.markNotified(caller.id, updates.map((m) => m.id), at);
-      return {
-        messages: messages.map((m) => ({ ...m, status: "delivered" as const, deliveredAt: at })),
-        updates: updates.map((m) => ({ ...m, senderNotifiedAt: at })),
-      };
-    })();
+    const messages: Message[][] = [];
+    const updates: Message[][] = [];
+    for (const content of this.content.of({ agent: caller.id })) {
+      content.db.transaction(() => {
+        const pending = this.pendingFor(content, caller.id, at, -1);
+        const outcomes = this.updatesFor(content, caller.id, -1);
+        this.markDelivered(content.db, caller.id, pending.map((m) => m.id), at);
+        this.markNotified(content.db, caller.id, outcomes.map((m) => m.id), at);
+        messages.push(pending.map((m) => ({ ...m, status: "delivered" as const, deliveredAt: at })));
+        updates.push(outcomes.map((m) => ({ ...m, senderNotifiedAt: at })));
+      })();
+    }
+    const outcome = { messages: merged(messages, sentAt), updates: merged(updates, endedAt) };
     this.agents.checkedIn(caller);
     this.afterDelivery(outcome.messages);
     return outcome;
@@ -379,9 +425,11 @@ export class Messages {
 
   /** What a session's plugin has to deliver, oldest first, at most DELIVERY_BATCH_MAX of each. Changes nothing. */
   pending(caller: Agent): { messages: Message[]; updates: Message[] } {
+    const at = this.iso();
+    const contents = this.content.of({ agent: caller.id });
     const pending = {
-      messages: this.pendingFor(caller.id, this.iso(), DELIVERY_BATCH_MAX),
-      updates: this.updatesFor(caller.id, DELIVERY_BATCH_MAX),
+      messages: merged(contents.map((c) => this.pendingFor(c, caller.id, at, DELIVERY_BATCH_MAX)), sentAt).slice(0, DELIVERY_BATCH_MAX),
+      updates: merged(contents.map((c) => this.updatesFor(c, caller.id, DELIVERY_BATCH_MAX)), endedAt).slice(0, DELIVERY_BATCH_MAX),
     };
     this.agents.checkedIn(caller);
     return pending;
@@ -390,16 +438,21 @@ export class Messages {
   /** Marks delivered messages delivered and reported updates reported: only the caller's own, only those still waiting. */
   ack(caller: Agent, ack: { messages: string[]; updates: string[] }): { messages: number; updates: number } {
     const at = this.iso();
-    const { delivered, notified } = this.db.transaction(() => {
-      const ids = [...new Set(ack.messages)];
-      // Marked first, then read back: only the ones this ack delivered carry this delivered_at.
-      this.markDelivered(caller.id, ids, at);
-      const delivered = ids
-        .map((id) => this.get(id))
-        .filter((m): m is Message => m !== null && m.toId === caller.id && m.deliveredAt === at);
-      const notified = this.markNotified(caller.id, [...new Set(ack.updates)], at);
-      return { delivered, notified };
-    })();
+    const ids = [...new Set(ack.messages)];
+    const updateIds = [...new Set(ack.updates)];
+    const delivered: Message[] = [];
+    let notified = 0;
+    for (const content of this.content.of({ agent: caller.id })) {
+      content.db.transaction(() => {
+        // Marked first, then read back: only the ones this ack delivered carry this delivered_at.
+        this.markDelivered(content.db, caller.id, ids, at);
+        for (const id of ids) {
+          const m = this.getIn(content, id);
+          if (m && m.toId === caller.id && m.deliveredAt === at) delivered.push(m);
+        }
+        notified += this.markNotified(content.db, caller.id, updateIds, at);
+      })();
+    }
     this.afterDelivery(delivered);
     return { messages: delivered.length, updates: notified };
   }
@@ -407,13 +460,18 @@ export class Messages {
   /** Pending messages and unreported outcomes: what the caller's next check_inbox would pick up. */
   unreadCount(agentId: string): number {
     const now = this.iso();
-    const row = this.db
-      .query(
-        `SELECT (SELECT COUNT(*) FROM messages WHERE ${PENDING})
-              + (SELECT COUNT(*) FROM messages WHERE ${UPDATE}) AS n`,
-      )
-      .get({ agent: agentId, now }) as { n: number };
-    return row.n;
+    let count = 0;
+    for (const { db } of this.content.of({ agent: agentId })) {
+      count += (
+        db
+          .query(
+            `SELECT (SELECT COUNT(*) FROM messages WHERE ${PENDING})
+                  + (SELECT COUNT(*) FROM messages WHERE ${UPDATE}) AS n`,
+          )
+          .get({ agent: agentId, now }) as { n: number }
+      ).n;
+    }
+    return count;
   }
 
   hasWaiting(agentId: string): boolean {
@@ -460,101 +518,134 @@ export class Messages {
     }
   }
 
-  get(id: string): Message | null {
-    const row = this.db.query("SELECT * FROM messages WHERE id = $id").get({ id }) as MessageRow | null;
-    return row ? toMessage(row) : null;
+  /** The message with the ID, looked for only in the scope's workspaces. */
+  get(scope: Scope, id: string): Message | null {
+    for (const content of this.content.of(scope)) {
+      const message = this.getIn(content, id);
+      if (message) return message;
+    }
+    return null;
   }
 
-  require(id: string): Message {
-    const message = this.get(id);
+  require(scope: Scope, id: string): Message {
+    const message = this.get(scope, id);
     if (!message) throw new PorticoError("not_found", "No such message.");
     return message;
   }
 
-  // ---- threads ----
-
-  thread(id: string): Thread | null {
-    const row = this.db.query("SELECT * FROM threads WHERE id = $id").get({ id }) as ThreadRow | null;
-    return row ? toThread(row) : null;
+  /** The message this one answers: it is in the same workspace, or gone with the history. */
+  original(message: Pick<Message, "workspaceId" | "replyTo">): Message | null {
+    return message.replyTo ? this.get({ workspace: message.workspaceId }, message.replyTo) : null;
   }
 
-  threadBetween(x: string, y: string): Thread | null {
-    const [a, b] = x < y ? [x, y] : [y, x];
-    const row = this.db.query("SELECT * FROM threads WHERE a_id = $a AND b_id = $b").get({ a, b }) as ThreadRow | null;
-    return row ? toThread(row) : null;
+  // ---- threads ----
+
+  /** The thread with the ID, looked for only in the scope's workspaces. */
+  thread(scope: Scope, id: string): Thread | null {
+    for (const { db, workspaceId } of this.content.of(scope)) {
+      const row = db.query("SELECT * FROM threads WHERE id = $id").get({ id }) as ThreadRow | null;
+      if (row) return toThread(row, workspaceId);
+    }
+    return null;
   }
 
   /**
-   * Threads, most recent first. With `involving`, only threads with at least one of those agents; with `agentId`, only
-   * that agent's threads.
+   * The threads between the two agents, the latest message first: one in each workspace the pair has talked through.
+   * Looked for in the workspaces the first agent is or was in.
    */
-  threads(filter: { involving?: string[]; agentId?: string; limit?: number } = {}): Thread[] {
+  threadsBetween(x: string, y: string): Thread[] {
+    const threads = this.content.of({ agent: x }).flatMap((content) => {
+      const thread = this.threadIn(content, x, y);
+      return thread ? [thread] : [];
+    });
+    return threads.sort((s, t) => (s.lastMessageAt < t.lastMessageAt ? 1 : s.lastMessageAt > t.lastMessageAt ? -1 : 0));
+  }
+
+  /**
+   * The scope's threads, most recent first. With `involving`, only threads with at least one of those agents; with
+   * `agentId`, only that agent's threads. A person's request always names `involving`: the person's own agents.
+   */
+  threads(scope: Scope, filter: { involving?: string[]; agentId?: string; limit?: number } = {}): Thread[] {
     // Filtered before the limit, so a member's or an agent's threads never fall behind everyone else's.
+    const limit = filter.limit ?? 500;
     const clauses: string[] = [];
-    const bindings: Record<string, string | number> = { limit: filter.limit ?? 500 };
+    const bindings: Record<string, string | number> = { limit };
     if (filter.involving) {
       if (filter.involving.length === 0) return [];
-      const names = filter.involving.map((id, i) => {
-        bindings[`i${i}`] = id;
-        return `$i${i}`;
-      });
-      clauses.push(`(a_id IN (${names.join(", ")}) OR b_id IN (${names.join(", ")}))`);
+      const names = among(filter.involving, "i", bindings);
+      clauses.push(`(a_id IN (${names}) OR b_id IN (${names}))`);
     }
     if (filter.agentId) {
       clauses.push("(a_id = $agentId OR b_id = $agentId)");
       bindings.agentId = filter.agentId;
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = this.db
-      .query(`SELECT * FROM threads ${where} ORDER BY last_message_at DESC, id LIMIT $limit`)
-      .all(bindings) as ThreadRow[];
-    return rows.map(toThread);
+    const lists = this.content.of(scope).map(({ db, workspaceId }) =>
+      (db.query(`SELECT * FROM threads ${where} ORDER BY last_message_at DESC, id LIMIT $limit`).all(bindings) as ThreadRow[]).map((row) =>
+        toThread(row, workspaceId),
+      ),
+    );
+    return merged(lists, (thread) => thread.lastMessageAt, true).slice(0, limit);
   }
 
   /**
    * A page of the thread, oldest first: the newest `limit` messages, or with `before`, the newest `limit` sent before
    * that message. `more` says whether older messages remain.
    */
-  inThread(threadId: string, page: { before?: string; limit?: number } = {}): { messages: Message[]; more: boolean } {
+  inThread(thread: Pick<Thread, "id" | "workspaceId">, page: { before?: string; limit?: number } = {}): { messages: Message[]; more: boolean } {
+    const content = this.content.find(thread.workspaceId);
+    if (!content) return { messages: [], more: false };
+    const threadId = thread.id;
     const limit = Math.min(Math.max(1, Math.floor(page.limit ?? THREAD_PAGE)), THREAD_PAGE_MAX);
     const cursor = page.before
-      ? (this.db
+      ? (content.db
           .query("SELECT created_at AS at, rowid AS n FROM messages WHERE id = $id AND thread_id = $threadId")
           .get({ id: page.before, threadId }) as { at: string; n: number } | null)
       : null;
     // Pruning deletes the oldest messages first, so when the cursor is gone, so is everything older.
     if (page.before && !cursor) return { messages: [], more: false };
-    const rows = this.db
+    const rows = content.db
       .query(
         `SELECT * FROM messages WHERE thread_id = $threadId
            ${cursor ? "AND (created_at < $at OR (created_at = $at AND rowid < $n))" : ""}
          ORDER BY created_at DESC, rowid DESC LIMIT $limit`,
       )
       .all({ threadId, limit: limit + 1, ...(cursor ? { at: cursor.at, n: cursor.n } : {}) }) as MessageRow[];
-    return { messages: rows.slice(0, limit).reverse().map(toMessage), more: rows.length > limit };
+    return {
+      messages: rows
+        .slice(0, limit)
+        .reverse()
+        .map((row) => toMessage(row, content.workspaceId)),
+      more: rows.length > limit,
+    };
   }
 
   /** The thread's newest message, its count, and how many are held. */
-  threadSummary(threadId: string): { last: Message | null; count: number; held: number } {
-    const last = this.db
+  threadSummary(thread: Pick<Thread, "id" | "workspaceId">): { last: Message | null; count: number; held: number } {
+    const content = this.content.find(thread.workspaceId);
+    if (!content) return { last: null, count: 0, held: 0 };
+    const threadId = thread.id;
+    const last = content.db
       .query("SELECT * FROM messages WHERE thread_id = $threadId ORDER BY created_at DESC, rowid DESC LIMIT 1")
       .get({ threadId }) as MessageRow | null;
-    const counts = this.db
+    const counts = content.db
       .query("SELECT COUNT(*) AS n, SUM(status = 'held') AS held FROM messages WHERE thread_id = $threadId")
       .get({ threadId }) as { n: number; held: number | null };
-    return { last: last ? toMessage(last) : null, count: counts.n, held: counts.held ?? 0 };
+    return { last: last ? toMessage(last, content.workspaceId) : null, count: counts.n, held: counts.held ?? 0 };
   }
 
   /** The message sent just before this one in its thread. */
   previous(message: Message): Message | null {
-    const row = this.db
+    const content = this.content.find(message.workspaceId);
+    if (!content) return null;
+    const row = content.db
       .query(
         `SELECT * FROM messages WHERE thread_id = $threadId
            AND (created_at < $at OR (created_at = $at AND rowid < (SELECT rowid FROM messages WHERE id = $id)))
          ORDER BY created_at DESC, rowid DESC LIMIT 1`,
       )
       .get({ threadId: message.threadId, at: message.createdAt, id: message.id }) as MessageRow | null;
-    return row ? toMessage(row) : null;
+    return row ? toMessage(row, content.workspaceId) : null;
   }
 
   // ---- holds ----
@@ -564,8 +655,8 @@ export class Messages {
    * hours. Only the receiver's own messages count: a sender chooses reply_to, so its own earlier messages can't open the
    * way. Answers to the protected agent, and the back-and-forth once it has replied, are never held.
    */
-  private receiverInConversation(messageId: string, receiverId: string): boolean {
-    const row = this.db
+  private receiverInConversation(db: Database, messageId: string, receiverId: string): boolean {
+    const row = db
       .query(
         `WITH RECURSIVE chain(id, reply_to, from_id, created_at) AS (
            SELECT id, reply_to, from_id, created_at FROM messages WHERE id = $id
@@ -578,70 +669,99 @@ export class Messages {
     return row !== null;
   }
 
-  /** The message the sender already sent with this key, if any. */
+  /** The message the sender already sent with this key, if any, in any workspace the sender is or was in. */
   private sentWithKey(fromId: string, sendKey: string): Message | null {
-    const row = this.db
-      .query("SELECT * FROM messages WHERE from_id = $fromId AND send_key = $sendKey")
-      .get({ fromId, sendKey }) as MessageRow | null;
-    return row ? toMessage(row) : null;
+    for (const { db, workspaceId } of this.content.of({ agent: fromId })) {
+      const row = db.query("SELECT * FROM messages WHERE from_id = $fromId AND send_key = $sendKey").get({ fromId, sendKey }) as MessageRow | null;
+      if (row) return toMessage(row, workspaceId);
+    }
+    return null;
   }
 
-  /** Held messages to agents the person manages, oldest first. */
+  /**
+   * Held messages to agents the person manages, oldest first. Two steps: the directory says which agents are the
+   * person's, and each of the person's workspaces is asked for held messages to those agents.
+   */
   heldFor(personId: string): Message[] {
-    const rows = this.db
-      .query(
-        `SELECT m.* FROM messages m JOIN agents a ON a.id = m.to_id
-         WHERE m.status = 'held' AND a.owner_id = $personId ORDER BY m.created_at, m.rowid`,
-      )
-      .all({ personId }) as MessageRow[];
-    return rows.map(toMessage);
+    const mine = this.agents.ownedBy(personId).map((agent) => agent.id);
+    if (mine.length === 0) return [];
+    const bindings: Record<string, string | number> = {};
+    const names = among(mine, "m", bindings);
+    const lists = this.content.of({ person: personId }).map(({ db, workspaceId }) =>
+      (
+        db.query(`SELECT * FROM messages WHERE status = 'held' AND to_id IN (${names}) ORDER BY created_at, rowid`).all(bindings) as MessageRow[]
+      ).map((row) => toMessage(row, workspaceId)),
+    );
+    return merged(lists, sentAt);
   }
 
-  /** Held messages from the sender to the receiver, oldest first. */
+  /** Held messages from the sender to the receiver, oldest first, in every workspace the receiver is or was in. */
   heldBetween(fromId: string, toId: string): Message[] {
-    const rows = this.db
-      .query("SELECT * FROM messages WHERE from_id = $fromId AND to_id = $toId AND status = 'held' ORDER BY created_at, rowid")
-      .all({ fromId, toId }) as MessageRow[];
-    return rows.map(toMessage);
+    const lists = this.content.of({ agent: toId }).map(({ db, workspaceId }) =>
+      (
+        db
+          .query("SELECT * FROM messages WHERE from_id = $fromId AND to_id = $toId AND status = 'held' ORDER BY created_at, rowid")
+          .all({ fromId, toId }) as MessageRow[]
+      ).map((row) => toMessage(row, workspaceId)),
+    );
+    return merged(lists, sentAt);
   }
 
   /** Earlier decisions on messages from the sender to the receiver, newest first. */
   decisionsBetween(fromId: string, toId: string, exceptId: string, limit = 3): { decision: Decision; at: string }[] {
-    const rows = this.db
-      .query(
-        `SELECT decision, decided_at FROM messages
-         WHERE from_id = $fromId AND to_id = $toId AND decision IS NOT NULL AND id != $exceptId
-         ORDER BY decided_at DESC LIMIT $limit`,
-      )
-      .all({ fromId, toId, exceptId, limit }) as { decision: Decision; decided_at: string }[];
-    return rows.map((row) => ({ decision: row.decision, at: row.decided_at }));
+    const lists = this.content.of({ agent: toId }).map(({ db }) =>
+      (
+        db
+          .query(
+            `SELECT decision, decided_at FROM messages
+             WHERE from_id = $fromId AND to_id = $toId AND decision IS NOT NULL AND id != $exceptId
+             ORDER BY decided_at DESC LIMIT $limit`,
+          )
+          .all({ fromId, toId, exceptId, limit }) as { decision: Decision; decided_at: string }[]
+      ).map((row) => ({ decision: row.decision, at: row.decided_at })),
+    );
+    return merged(lists, (row) => row.at, true).slice(0, limit);
   }
 
   /**
-   * Records a person's decision on a held message: Allow once and Always allow make it pending, Deny declines it.
-   * Returns null when the message isn't held any more. Run inside the caller's transaction.
+   * Records a person's decision on held messages: Allow once and Always allow make each pending, Deny declines it.
+   * Returns the ones decided now: a message that isn't held any more is left out. One transaction per workspace.
    */
-  decideHeld(messageId: string, decision: Decision, personId: string, at: string): Message | null {
+  decideHeld(held: Pick<Message, "id" | "workspaceId">[], decision: Decision, personId: string, at: string): Message[] {
     const status: MessageStatus = decision === "deny" ? "declined" : "pending";
-    const changed = this.db
-      .query(
-        `UPDATE messages SET status = $status, decision = $decision, decided_by = $personId, decided_at = $at
-         WHERE id = $id AND status = 'held'`,
-      )
-      .run({ id: messageId, status, decision, personId, at }).changes;
-    return changed === 1 ? this.get(messageId) : null;
+    const decided: Message[] = [];
+    for (const workspaceId of new Set(held.map((m) => m.workspaceId))) {
+      const content = this.content.find(workspaceId);
+      if (!content) continue;
+      content.db.transaction(() => {
+        const mark = content.db.query(
+          `UPDATE messages SET status = $status, decision = $decision, decided_by = $personId, decided_at = $at
+           WHERE id = $id AND status = 'held'`,
+        );
+        for (const m of held) {
+          if (m.workspaceId !== workspaceId || mark.run({ id: m.id, status, decision, personId, at }).changes !== 1) continue;
+          const now = this.getIn(content, m.id);
+          if (now) decided.push(now);
+        }
+      })();
+    }
+    return decided;
   }
 
-  /** Expires held and pending messages past their time. */
+  /** Expires held and pending messages past their time, in every workspace. */
   expireDue(): Message[] {
     const at = this.iso();
-    const expired = this.db.transaction(() => {
-      const rows = this.db
-        .query("SELECT * FROM messages WHERE status IN ('held', 'pending') AND expires_at <= $at ORDER BY expires_at, rowid")
-        .all({ at }) as MessageRow[];
-      this.db.query("UPDATE messages SET status = 'expired' WHERE status IN ('held', 'pending') AND expires_at <= $at").run({ at });
-      return rows.map((row) => ({ ...toMessage(row), status: "expired" as const }));
-    })();
+    const expired: Message[] = [];
+    this.content.each(({ db, workspaceId }) => {
+      db.transaction(() => {
+        const rows = db
+          .query("SELECT * FROM messages WHERE status IN ('held', 'pending') AND expires_at <= $at ORDER BY expires_at, rowid")
+          .all({ at }) as MessageRow[];
+        if (rows.length === 0) return;
+        db.query("UPDATE messages SET status = 'expired' WHERE status IN ('held', 'pending') AND expires_at <= $at").run({ at });
+        expired.push(...rows.map((row) => ({ ...toMessage(row, workspaceId), status: "expired" as const })));
+      })();
+    });
     for (const message of expired) {
       this.log("message_expired", { message_id: message.id, held: message.heldAt !== null });
       this.notify({ kind: "message_expired", message });
@@ -651,55 +771,76 @@ export class Messages {
   }
 
   /**
-   * Deletes whole tasks (a conversation's messages, by root_id) whose newest message is older than the history limit
-   * and that wait on nothing, then threads left empty. A task never loses its first message while its replies stay.
+   * In every workspace: deletes whole tasks (a conversation's messages, by root_id) whose newest message is older than
+   * the history limit and that wait on nothing, then threads left empty. A task never loses its first message while
+   * its replies stay. Then clears threads of agents the directory no longer has, which a crash during a removal leaves.
    */
   prune(): { messages: number; threads: number } {
     const cutoff = this.iso(-LIMITS.historyDays * DAY_MS);
-    return this.db.transaction(() => {
-      const messages = this.db
-        .query(
-          `DELETE FROM messages WHERE COALESCE(root_id, id) IN (
-             SELECT COALESCE(root_id, id) FROM messages GROUP BY COALESCE(root_id, id)
-             HAVING MAX(created_at) < $cutoff AND SUM(status IN ('held', 'pending')) = 0)`,
-        )
-        .run({ cutoff }).changes;
-      const threads = this.db
-        .query("DELETE FROM threads WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = threads.id)")
-        .run().changes;
-      return { messages, threads };
-    })();
+    const removed = { messages: 0, threads: 0 };
+    this.content.each(({ db }) => {
+      db.transaction(() => {
+        removed.messages += db
+          .query(
+            `DELETE FROM messages WHERE root_id IN (
+               SELECT root_id FROM messages GROUP BY root_id
+               HAVING MAX(created_at) < $cutoff AND SUM(status IN ('held', 'pending')) = 0)`,
+          )
+          .run({ cutoff }).changes;
+        removed.threads += db.query("DELETE FROM threads WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = threads.id)").run().changes;
+      })();
+    });
+    removed.threads += this.content.sweepLeftovers();
+    return removed;
   }
 
   // ---- helpers ----
 
-  private attachmentIds(caller: Agent, attachments: unknown): string[] {
+  private getIn(content: ContentDb, id: string): Message | null {
+    const row = content.db.query("SELECT * FROM messages WHERE id = $id").get({ id }) as MessageRow | null;
+    return row ? toMessage(row, content.workspaceId) : null;
+  }
+
+  private threadIn(content: ContentDb, x: string, y: string): Thread | null {
+    const [a, b] = x < y ? [x, y] : [y, x];
+    const row = content.db.query("SELECT * FROM threads WHERE a_id = $a AND b_id = $b").get({ a, b }) as ThreadRow | null;
+    return row ? toThread(row, content.workspaceId) : null;
+  }
+
+  private attachable(caller: Agent, attachments: unknown): { id: string }[] {
     if (attachments === undefined || attachments === null) return [];
     if (!this.files) throw new PorticoError("bad_request", "This Portico doesn't take attachments.");
     return this.files.attachable(caller, attachments);
   }
 
-  private requireBudget(caller: Agent, receiver: Agent): void {
+  /**
+   * The hourly limit counts the sender's messages in every workspace the sender is or was in. The loop guard counts the
+   * messages between the two in the workspaces the two share now.
+   */
+  private requireBudget(caller: Agent, receiver: Agent, shared: Workspace[]): void {
     const since = this.iso(-HOUR_MS);
-    const sent = (
-      this.db.query("SELECT COUNT(*) AS n FROM messages WHERE from_id = $id AND created_at >= $since").get({
-        id: caller.id,
-        since,
-      }) as { n: number }
-    ).n;
+    let sent = 0;
+    for (const { db } of this.content.of({ agent: caller.id })) {
+      sent += (db.query("SELECT COUNT(*) AS n FROM messages WHERE from_id = $id AND created_at >= $since").get({ id: caller.id, since }) as { n: number }).n;
+    }
     if (sent >= LIMITS.messagesPerHour) {
       throw new PorticoError("rate_limited", `The limit is ${LIMITS.messagesPerHour} messages an hour per sender.`);
     }
-    const times = (
-      this.db
+    const loopSince = this.iso(-LOOP_WINDOW_MS);
+    const times: string[] = [];
+    for (const workspace of shared) {
+      const content = this.content.find(workspace.id);
+      if (!content) continue;
+      const rows = content.db
         .query(
           `SELECT created_at FROM messages
            WHERE ((from_id = $a AND to_id = $b) OR (from_id = $b AND to_id = $a)) AND created_at > $since
            ORDER BY created_at, rowid`,
         )
-        .all({ a: caller.id, b: receiver.id, since: this.iso(-LOOP_WINDOW_MS) }) as { created_at: string }[]
-    ).map((row) => row.created_at);
-    const retryAt = loopGuardRetryAt(times);
+        .all({ a: caller.id, b: receiver.id, since: loopSince }) as { created_at: string }[];
+      times.push(...rows.map((row) => row.created_at));
+    }
+    const retryAt = loopGuardRetryAt(shared.length > 1 ? times.sort() : times);
     if (retryAt) {
       // Rounded up to the minute, so a retry at the time named is never refused again.
       const retryMinute = new Date(Math.ceil(Date.parse(retryAt) / MINUTE_MS) * MINUTE_MS).toISOString();
@@ -711,45 +852,44 @@ export class Messages {
     }
   }
 
-  private startThread(x: string, y: string, at: string, workspaceId: string | null): Thread {
+  private startThread(content: ContentDb, x: string, y: string, at: string): Thread {
     const [a, b] = x < y ? [x, y] : [y, x];
-    const thread: Thread = { id: this.newId(), aId: a, bId: b, startedBy: x, createdAt: at, lastMessageAt: at, workspaceId };
-    this.db
+    const thread: Thread = { id: this.newId(), aId: a, bId: b, startedBy: x, createdAt: at, lastMessageAt: at, workspaceId: content.workspaceId };
+    content.db
       .query(
-        `INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at, workspace_id)
-         VALUES ($id, $aId, $bId, $startedBy, $createdAt, $lastMessageAt, $workspaceId)`,
+        `INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at)
+         VALUES ($id, $aId, $bId, $startedBy, $createdAt, $lastMessageAt)`,
       )
-      .run({ ...thread });
+      .run({ id: thread.id, aId: a, bId: b, startedBy: x, createdAt: at, lastMessageAt: at });
     return thread;
   }
 
-  private insert(m: Message): void {
-    this.db
-      .query(
-        `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, reply_to, root_id, summary, final, send_key,
-           status, held_at, decision, decided_by, decided_at, created_at, expires_at, delivered_at, sender_notified_at)
-         VALUES ($id, $threadId, $fromId, $toId, $subject, $text, $replyTo, $rootId, $summary, $final, $sendKey,
-           $status, $heldAt, $decision, $decidedBy, $decidedAt, $createdAt, $expiresAt, $deliveredAt, $senderNotifiedAt)`,
-      )
-      .run({ ...m, final: m.final ? 1 : 0 });
+  private insert(db: Database, m: Message): void {
+    const { workspaceId: _workspace, ...row } = m;
+    db.query(
+      `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, reply_to, root_id, summary, final, send_key,
+         status, held_at, decision, decided_by, decided_at, created_at, expires_at, delivered_at, sender_notified_at)
+       VALUES ($id, $threadId, $fromId, $toId, $subject, $text, $replyTo, $rootId, $summary, $final, $sendKey,
+         $status, $heldAt, $decision, $decidedBy, $decidedAt, $createdAt, $expiresAt, $deliveredAt, $senderNotifiedAt)`,
+    ).run({ ...row, final: m.final ? 1 : 0 });
   }
 
-  private pendingFor(agentId: string, now: string, limit: number): Message[] {
-    const rows = this.db
+  private pendingFor(content: ContentDb, agentId: string, now: string, limit: number): Message[] {
+    const rows = content.db
       .query(`SELECT * FROM messages WHERE ${PENDING} ORDER BY created_at, rowid LIMIT $limit`)
       .all({ agent: agentId, now, limit }) as MessageRow[];
-    return rows.map(toMessage);
+    return rows.map((row) => toMessage(row, content.workspaceId));
   }
 
-  private updatesFor(agentId: string, limit: number): Message[] {
-    const rows = this.db
+  private updatesFor(content: ContentDb, agentId: string, limit: number): Message[] {
+    const rows = content.db
       .query(`SELECT * FROM messages WHERE ${UPDATE} ORDER BY COALESCE(decided_at, created_at), rowid LIMIT $limit`)
       .all({ agent: agentId, limit }) as MessageRow[];
-    return rows.map(toMessage);
+    return rows.map((row) => toMessage(row, content.workspaceId));
   }
 
-  private markDelivered(agentId: string, ids: string[], at: string): number {
-    const mark = this.db.query(
+  private markDelivered(db: Database, agentId: string, ids: string[], at: string): number {
+    const mark = db.query(
       `UPDATE messages SET status = 'delivered', delivered_at = $at
        WHERE id = $id AND to_id = $agent AND status = 'pending' AND expires_at > $at`,
     );
@@ -758,8 +898,8 @@ export class Messages {
     return marked;
   }
 
-  private markNotified(agentId: string, ids: string[], at: string): number {
-    const mark = this.db.query(`UPDATE messages SET sender_notified_at = $at WHERE id = $id AND ${UPDATE}`);
+  private markNotified(db: Database, agentId: string, ids: string[], at: string): number {
+    const mark = db.query(`UPDATE messages SET sender_notified_at = $at WHERE id = $id AND ${UPDATE}`);
     let marked = 0;
     for (const id of ids) marked += mark.run({ id, agent: agentId, at }).changes;
     return marked;
@@ -775,3 +915,8 @@ export class Messages {
     return new Date(this.now().getTime() + offsetMs).toISOString();
   }
 }
+
+/** When a message was sent: what an inbox is ordered by. */
+const sentAt = (m: Message) => m.createdAt;
+/** When a sent message's outcome was reached: what updates are ordered by. */
+const endedAt = (m: Message) => m.decidedAt ?? m.createdAt;

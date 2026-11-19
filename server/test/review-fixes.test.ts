@@ -31,9 +31,9 @@ describe("fixes from the code review", () => {
       p.clock.advance(60_000);
       p.messages.send(grok, { to: other.name, subject: "Newer", text: "t" });
     }
-    expect(p.messages.threads({ involving: [mayaDot.id], limit: 3 })).toHaveLength(1);
-    expect(p.messages.threads({ agentId: mayaDot.id, limit: 3 })).toHaveLength(1);
-    expect(p.messages.threads({ involving: [], limit: 3 })).toEqual([]);
+    expect(p.messages.threads({ person: maya.id }, { involving: [mayaDot.id], limit: 3 })).toHaveLength(1);
+    expect(p.messages.threads({ person: maya.id }, { agentId: mayaDot.id, limit: 3 })).toHaveLength(1);
+    expect(p.messages.threads({ person: maya.id }, { involving: [], limit: 3 })).toEqual([]);
   });
 
   test("the 401's pointer to the OAuth metadata uses the public URL, not the request's own address", async () => {

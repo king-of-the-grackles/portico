@@ -132,8 +132,8 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
   // A file's own address: checks the caller may have the file, then sends the caller on to a short-lived download.
   api.get("/files/:id", async (c) => {
     const agent = c.get("agent");
-    const file = deps.files.get(c.req.param("id"));
-    if (!file || !deps.files.agentMayDownload(agent, file)) throw new PorticoError("not_found", "No such file among this agent's files.");
+    const file = deps.files.forAgent(agent, c.req.param("id"));
+    if (!file) throw new PorticoError("not_found", "No such file among this agent's files.");
     const link = await deps.files.link(file);
     return c.redirect(link.url, 302);
   });

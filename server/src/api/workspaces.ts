@@ -78,14 +78,8 @@ export function workspaceViews(core: Core, me: Person) {
       const share = shares.get(request.shareId);
       if (share) found.add(share.workspaceId);
     }
-    const held = core.approvals.heldFor(me.id);
-    if (held.length > 0) {
-      const stamp = core.db.query("SELECT t.workspace_id AS id FROM messages m JOIN threads t ON t.id = m.thread_id WHERE m.id = $id");
-      for (const message of held) {
-        const row = stamp.get({ id: message.id }) as { id: string | null } | null;
-        if (row?.id) found.add(row.id);
-      }
-    }
+    // Each held message says which workspace it is in: the one whose content database holds the message.
+    for (const message of core.approvals.heldFor(me.id)) found.add(message.workspaceId);
     return found;
   };
   const workspace = (w: Workspace, needs: Set<string> = needing()): WorkspaceView => ({

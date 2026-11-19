@@ -16,6 +16,7 @@ import {
   MINUTE,
   signIn,
   together,
+  type TestPortico,
 } from "./helpers";
 
 async function setup() {
@@ -34,13 +35,16 @@ async function setup() {
 
 const json = async <T>(res: Response | Promise<Response>) => (await (await res).json()) as T;
 
+/** Chris's content: every workspace an agent of Chris's is or was in. Each task here has one of Chris's agents in it. */
+const mine = (p: TestPortico) => ({ person: p.people.owner()!.id });
+
 describe("a task's outcome", () => {
   test("a new question is in progress while queued and once picked up", async () => {
     const { p, grok, claude } = await setup();
     const { message } = p.messages.send(grok, { to: claude.name, subject: "Review the export", text: "Please review." });
-    expect(p.tasks.get(message.id)!.task).toMatchObject({ outcome: "in_progress", pickedUpAt: null, subject: "Review the export" });
+    expect(p.tasks.get(mine(p), message.id)!.task).toMatchObject({ outcome: "in_progress", pickedUpAt: null, subject: "Review the export" });
     p.messages.inbox(claude);
-    const { task } = p.tasks.get(message.id)!;
+    const { task } = p.tasks.get(mine(p), message.id)!;
     expect(task).toMatchObject({ outcome: "in_progress", reason: null, endedAt: null, pickedUpAt: task.startedAt });
     expect(task.steps.map((s) => s.kind)).toEqual(["asked", "picked_up"]);
   });
@@ -58,7 +62,7 @@ describe("a task's outcome", () => {
     }).message;
     expect(reply.rootId).toBe(ask.id);
     p.messages.inbox(grok);
-    const { task, messageIds } = p.tasks.get(ask.id)!;
+    const { task, messageIds } = p.tasks.get(mine(p), ask.id)!;
     expect(task).toMatchObject({
       outcome: "done",
       endedAt: reply.createdAt,
@@ -70,7 +74,7 @@ describe("a task's outcome", () => {
     // A reply to the reply stays in the same task.
     const thanks = p.messages.send(grok, { replyTo: reply.id, subject: "Thanks", text: "!" }).message;
     expect(thanks.rootId).toBe(ask.id);
-    expect(p.tasks.get(ask.id)!.task.messageCount).toBe(3);
+    expect(p.tasks.get(mine(p), ask.id)!.task.messageCount).toBe(3);
   });
 
   test("an update with done: false keeps the task in progress until a final answer", async () => {
@@ -78,22 +82,22 @@ describe("a task's outcome", () => {
     const ask = p.messages.send(grok, { to: claude.name, subject: "Fix the export", text: "Please fix." }).message;
     p.messages.inbox(claude);
     const update = p.messages.send(claude, { replyTo: ask.id, subject: "On it", text: "Looking.", done: false }).message;
-    expect(p.tasks.get(ask.id)!.task).toMatchObject({
+    expect(p.tasks.get(mine(p), ask.id)!.task).toMatchObject({
       outcome: "in_progress",
       endedAt: null,
       answer: { id: update.id, subject: "On it", final: false },
     });
-    expect(p.tasks.get(ask.id)!.task.steps.map((s) => s.kind)).toEqual(["asked", "picked_up"]);
+    expect(p.tasks.get(mine(p), ask.id)!.task.steps.map((s) => s.kind)).toEqual(["asked", "picked_up"]);
     p.clock.advance(HOUR);
     const final = p.messages.send(claude, { replyTo: ask.id, subject: "Fixed", text: "PR 15", summary: "Fixed in PR 15" }).message;
-    expect(p.tasks.get(ask.id)!.task).toMatchObject({ outcome: "done", endedAt: final.createdAt, answer: { summary: "Fixed in PR 15" } });
+    expect(p.tasks.get(mine(p), ask.id)!.task).toMatchObject({ outcome: "done", endedAt: final.createdAt, answer: { summary: "Fixed in PR 15" } });
     // Another update after the final answer opens the task again, and the next final answer ends it then.
     p.clock.advance(HOUR);
     p.messages.send(claude, { replyTo: ask.id, subject: "One more thing", text: "Also the CSV", done: false });
-    expect(p.tasks.get(ask.id)!.task.outcome).toBe("in_progress");
+    expect(p.tasks.get(mine(p), ask.id)!.task.outcome).toBe("in_progress");
     p.clock.advance(HOUR);
     const last = p.messages.send(claude, { replyTo: ask.id, subject: "CSV fixed", text: "PR 16" }).message;
-    expect(p.tasks.get(ask.id)!.task).toMatchObject({ outcome: "done", endedAt: last.createdAt });
+    expect(p.tasks.get(mine(p), ask.id)!.task).toMatchObject({ outcome: "done", endedAt: last.createdAt });
   });
 
   test("a final answer a person didn't allow, or one that expired unread, doesn't make the task done", async () => {
@@ -106,26 +110,26 @@ describe("a task's outcome", () => {
     p.clock.advance(30 * HOUR);
     const final = p.messages.send(claude, { replyTo: ask.id, subject: "Draft ready", text: "Here", summary: "Draft ready" });
     expect(final.delivery).toBe("held");
-    expect(p.tasks.get(ask.id)!.task).toMatchObject({ outcome: "needs_approval" });
+    expect(p.tasks.get(mine(p), ask.id)!.task).toMatchObject({ outcome: "needs_approval" });
     p.approvals.decide(chris.id, final.message.id, "deny");
-    expect(p.tasks.get(ask.id)!.task).toMatchObject({ outcome: "in_progress", answer: { subject: "Drafting", final: false } });
+    expect(p.tasks.get(mine(p), ask.id)!.task).toMatchObject({ outcome: "in_progress", answer: { subject: "Drafting", final: false } });
     // A final answer that expires before the asker picks it up doesn't count either.
     const second = p.messages.send(claude, { replyTo: ask.id, subject: "Draft, again", text: "Here" }).message;
     p.approvals.decide(chris.id, second.id, "allow_once");
     p.clock.advance(3 * DAY + MINUTE);
     p.messages.expireDue();
-    expect(p.tasks.get(ask.id)!.task.outcome).not.toBe("done");
+    expect(p.tasks.get(mine(p), ask.id)!.task.outcome).not.toBe("done");
   });
 
   test("a held message needs a decision; Don't allow makes it not go through; Allow once moves it on", async () => {
     const { p, chris, grok, muse } = await setup();
     const denied = p.messages.send(grok, { to: "muse", subject: "Post this", text: "Now" }).message;
-    expect(p.tasks.get(denied.id)!.task).toMatchObject({ outcome: "needs_approval", heldMessageId: denied.id, heldAt: denied.createdAt });
+    expect(p.tasks.get(mine(p), denied.id)!.task).toMatchObject({ outcome: "needs_approval", heldMessageId: denied.id, heldAt: denied.createdAt });
     p.approvals.decide(chris.id, denied.id, "deny");
-    expect(p.tasks.get(denied.id)!.task).toMatchObject({ outcome: "failed", reason: "not_allowed", heldMessageId: null });
+    expect(p.tasks.get(mine(p), denied.id)!.task).toMatchObject({ outcome: "failed", reason: "not_allowed", heldMessageId: null });
     const allowed = p.messages.send(grok, { to: "muse", subject: "Find a time", text: "With Sam" }).message;
     p.approvals.decide(chris.id, allowed.id, "allow_once");
-    const { task } = p.tasks.get(allowed.id)!;
+    const { task } = p.tasks.get(mine(p), allowed.id)!;
     expect(task).toMatchObject({ outcome: "in_progress", pickedUpAt: null });
     expect(task.steps.find((s) => s.kind === "allowed")).toMatchObject({ personId: chris.id, decision: "allow_once" });
     expect(muse.id).toBeDefined();
@@ -141,12 +145,12 @@ describe("a task's outcome", () => {
     p.messages.send(claude, { replyTo: updated.id, subject: "Halfway", text: "…", done: false });
     p.clock.advance(DAY + MINUTE);
     p.messages.expireDue();
-    expect(p.tasks.get(unanswered.id)!.task).toMatchObject({ outcome: "failed", reason: "no_answer" });
+    expect(p.tasks.get(mine(p), unanswered.id)!.task).toMatchObject({ outcome: "failed", reason: "no_answer" });
     // The update started the clock again.
-    expect(p.tasks.get(updated.id)!.task).toMatchObject({ outcome: "in_progress" });
-    expect(p.tasks.get(unread.id)!.task).toMatchObject({ outcome: "failed", reason: "expired", endedAt: unread.expiresAt });
+    expect(p.tasks.get(mine(p), updated.id)!.task).toMatchObject({ outcome: "in_progress" });
+    expect(p.tasks.get(mine(p), unread.id)!.task).toMatchObject({ outcome: "failed", reason: "expired", endedAt: unread.expiresAt });
     p.clock.advance(2 * DAY);
-    expect(p.tasks.get(updated.id)!.task).toMatchObject({ outcome: "failed", reason: "no_answer" });
+    expect(p.tasks.get(mine(p), updated.id)!.task).toMatchObject({ outcome: "failed", reason: "no_answer" });
     expect(dot.id).toBeDefined();
   });
 
@@ -159,20 +163,20 @@ describe("a task's outcome", () => {
     }
     p.messages.send(dot, { to: "chris/grok", subject: "Other", text: "t" });
     p.messages.send(grok, { to: "muse", subject: "Held", text: "t" });
-    const all = p.tasks.list({ visible: null });
+    const all = p.tasks.list(mine(p), { visible: null });
     expect(all.tasks.map((t) => t.subject)).toEqual(["Held", "Other", "Three", "Two", "One"]);
     expect(all.counts).toEqual({ needs_approval: 1, in_progress: 4, done: 0, failed: 0 });
-    expect(p.tasks.list({ visible: null, outcome: "needs_approval" }).tasks.map((t) => t.subject)).toEqual(["Held"]);
-    expect(p.tasks.list({ visible: null, outcome: ["needs_approval", "done"] }).tasks.map((t) => t.subject)).toEqual(["Held"]);
-    expect(p.tasks.list({ visible: null, since: all.tasks[0]!.updatedAt }).tasks.map((t) => t.subject)).toEqual(["Held", "Other"]);
-    expect(p.tasks.list({ visible: null, agentId: claude.id }).tasks).toHaveLength(3);
-    expect(p.tasks.list({ visible: null, anyOf: [claude.id] }).tasks).toHaveLength(3);
-    const first = p.tasks.list({ visible: null, agentId: claude.id, limit: 2 });
+    expect(p.tasks.list(mine(p), { visible: null, outcome: "needs_approval" }).tasks.map((t) => t.subject)).toEqual(["Held"]);
+    expect(p.tasks.list(mine(p), { visible: null, outcome: ["needs_approval", "done"] }).tasks.map((t) => t.subject)).toEqual(["Held"]);
+    expect(p.tasks.list(mine(p), { visible: null, since: all.tasks[0]!.updatedAt }).tasks.map((t) => t.subject)).toEqual(["Held", "Other"]);
+    expect(p.tasks.list(mine(p), { visible: null, agentId: claude.id }).tasks).toHaveLength(3);
+    expect(p.tasks.list(mine(p), { visible: null, anyOf: [claude.id] }).tasks).toHaveLength(3);
+    const first = p.tasks.list(mine(p), { visible: null, agentId: claude.id, limit: 2 });
     expect(first).toMatchObject({ more: true });
-    const next = p.tasks.list({ visible: null, agentId: claude.id, limit: 2, before: first.tasks.at(-1)!.startedAt });
+    const next = p.tasks.list(mine(p), { visible: null, agentId: claude.id, limit: 2, before: first.tasks.at(-1)!.startedAt });
     expect(next.tasks.map((t) => t.subject)).toEqual(["One"]);
     // A member sees only tasks with one of their own agents.
-    expect(p.tasks.list({ visible: [dot.id] }).tasks.map((t) => t.subject)).toEqual(["Other"]);
+    expect(p.tasks.list(mine(p), { visible: [dot.id] }).tasks.map((t) => t.subject)).toEqual(["Other"]);
     expect(chris.id).toBeDefined();
   });
 
@@ -185,23 +189,21 @@ describe("a task's outcome", () => {
     p.messages.expireDue();
     // 31 days after the question, 29 after the answer: the task stays, question included.
     expect(p.messages.prune().messages).toBe(0);
-    expect(p.tasks.get(ask.id)!.messageIds).toHaveLength(2);
+    expect(p.tasks.get(mine(p), ask.id)!.messageIds).toHaveLength(2);
     p.clock.advance(2 * DAY);
     p.messages.expireDue();
     expect(p.messages.prune().messages).toBe(2);
-    expect(p.tasks.get(ask.id)).toBeNull();
+    expect(p.tasks.get(mine(p), ask.id)).toBeNull();
   });
 
   test("a task whose first message an earlier Portico pruned still opens under the first message's ID", async () => {
     const { p, grok, claude } = await setup();
     const ask = p.messages.send(grok, { to: claude.name, subject: "Ask", text: "?" }).message;
     const reply = p.messages.send(claude, { replyTo: ask.id, subject: "Answer", text: "!" }).message;
-    p.db.run("PRAGMA foreign_keys = OFF");
-    p.db.query("DELETE FROM messages WHERE id = $id").run({ id: ask.id });
-    p.db.run("PRAGMA foreign_keys = ON");
-    const listed = p.tasks.list({ visible: null }).tasks;
+    p.content.for(ask.workspaceId).db.query("DELETE FROM messages WHERE id = $id").run({ id: ask.id });
+    const listed = p.tasks.list(mine(p), { visible: null }).tasks;
     expect(listed.map((t) => t.id)).toEqual([ask.id]);
-    expect(p.tasks.get(ask.id)!.messageIds).toEqual([reply.id]);
+    expect(p.tasks.get(mine(p), ask.id)!.messageIds).toEqual([reply.id]);
   });
 
   test("a summary is optional, one line, at most 120 characters", () => {
@@ -224,7 +226,7 @@ describe("a task's outcome", () => {
       summary: "Nothing broken",
     });
     expect(res.status).toBe(201);
-    expect(p.tasks.get(ask.id)!.task.answer?.summary).toBe("Nothing broken");
+    expect(p.tasks.get(mine(p), ask.id)!.task.answer?.summary).toBe("Nothing broken");
   });
 });
 

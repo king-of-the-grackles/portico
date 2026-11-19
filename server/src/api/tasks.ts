@@ -63,7 +63,7 @@ export function serverMidnight(now: Date): string {
 /** Today: what needs the person's decision, what's in progress, and what ended since `since`. */
 export function todayData(core: Core, me: Person, since: string): TodayData {
   const views = personViews(core, me);
-  const tasks = core.tasks.all({ visible: visibleAgents(core, me) });
+  const tasks = core.tasks.all({ person: me.id }, { visible: visibleAgents(core, me) });
   const held = core.approvals.heldFor(me.id).map(views.held);
   const signIns = pendingSignIns(core, me);
   const waiting = agentsInOrder(core.agents, me)
@@ -114,7 +114,7 @@ export function taskListData(core: Core, me: Person, query: TaskQuery): TaskList
         .filter((a) => a.type === "session" && a.folder === query.project)
         .map((a) => a.id)
     : undefined;
-  const page = core.tasks.list({
+  const page = core.tasks.list({ person: me.id }, {
     visible,
     agentId: query.agent || undefined,
     anyOf,
@@ -158,17 +158,18 @@ export function taskRoutes(core: Core): Hono<PersonEnv> {
   route.get("/tasks/:id", (c) => {
     const me = currentPerson(c);
     const views = personViews(core, me);
-    const found = core.tasks.get(c.req.param("id"));
+    const found = core.tasks.get({ person: me.id }, c.req.param("id"));
     if (!found || !sees(visibleAgents(core, me), found.task)) throw new PorticoError("not_found", "No such task.");
-    const messages = found.messageIds.map((id) => core.messages.get(id)).filter((m) => m !== null);
+    const within = { person: me.id, workspace: found.task.workspaceId };
+    const messages = found.messageIds.map((id) => core.messages.get(within, id)).filter((m) => m !== null);
     return c.json({ task: views.task(found.task), messages: messages.map(views.message) });
   });
 
   // A file on a message the person can see: sends the browser on to a short-lived download.
   route.get("/files/:id", async (c) => {
     const me = currentPerson(c);
-    const file = core.files.get(c.req.param("id"));
-    if (!file || !core.files.personMayDownload(me, file)) throw new PorticoError("not_found", "No such file.");
+    const file = core.files.forPerson(me, c.req.param("id"));
+    if (!file) throw new PorticoError("not_found", "No such file.");
     const link = await core.files.link(file);
     return c.redirect(link.url, 302);
   });

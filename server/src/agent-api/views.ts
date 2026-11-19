@@ -114,7 +114,7 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
     status: m.status,
     created_at: m.createdAt,
     expires_at: m.expiresAt,
-    attachments: files.of(m.id).map(file),
+    attachments: files.of(m).map(file),
   });
 
   const delivery = (m: Message, viewer: Agent): MessageOutView & { framed_message: string } => {

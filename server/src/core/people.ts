@@ -1,9 +1,11 @@
 import type { Database } from "bun:sqlite";
 import type { Changes } from "./changes";
+import type { Content } from "./content";
 import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS } from "./limits";
 import { hashSecret, LINK_SECRET, newLinkSecret, seal, unseal } from "./tokens";
 import type { Person, PersonStatus, Role } from "./types";
+import { archiveWorkspaces } from "./workspaces";
 import { slugify } from "./words";
 
 export type InviteStatus = "open" | "claimed" | "revoked" | "expired";
@@ -132,6 +134,11 @@ export function cleanPersonName(value: unknown): string {
 export interface PeopleDeps {
   db: Database;
   changes: Changes;
+  /**
+   * Each workspace's own database: a removed person's agents' threads are deleted there. Left out only where nobody is
+   * removed (the setup command).
+   */
+  content?: Content;
   /** Seals open invites' secrets, so their links can be copied again. */
   signingKey: string;
   /**
@@ -153,6 +160,7 @@ const INVITE_SEAL = "invite";
 export class People {
   private readonly db: Database;
   private readonly changes: Changes;
+  private readonly content: Content | null;
   private readonly now: () => Date;
   private readonly newId: () => string;
 
@@ -162,6 +170,7 @@ export class People {
   constructor(deps: PeopleDeps) {
     this.db = deps.db;
     this.changes = deps.changes;
+    this.content = deps.content ?? null;
     this.signingKey = deps.signingKey;
     this.signInByName = deps.signInByName ?? true;
     this.now = deps.now ?? (() => new Date());
@@ -355,9 +364,20 @@ export class People {
     return this.require(id);
   }
 
-  /** Deletes the person and, by cascade, their sign-ins, computers and agents. */
+  /**
+   * Deletes the person and, by cascade, their sign-ins, computers and agents. The workspaces the person owns are
+   * archived, as when a workspace is deleted: nobody reaches through one any more, and what other people's agents said
+   * there stays readable until the history window empties it. Once the directory rows are gone, the threads and
+   * messages of the person's agents are deleted in each workspace those agents were in.
+   */
   remove(id: string): void {
-    this.db.query("DELETE FROM people WHERE id = $id").run({ id });
+    const agentIds = (this.db.query("SELECT id FROM agents WHERE owner_id = $id").all({ id }) as { id: string }[]).map((row) => row.id);
+    const clearContent = this.content?.gather(agentIds);
+    this.db.transaction(() => {
+      archiveWorkspaces(this.db, "owner_id = $id", { id }, this.iso());
+      this.db.query("DELETE FROM people WHERE id = $id").run({ id });
+    })();
+    clearContent?.();
     this.changes.emit("people", "agents", "threads", "approvals", "computers");
   }
 

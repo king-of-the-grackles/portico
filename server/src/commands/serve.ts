@@ -2,7 +2,7 @@ import { ConfigError, loadConfig, platformUrl } from "../config";
 import type { Core } from "../core/core";
 import { isLocalUrl } from "../core/settings";
 import type { PorticoConfig } from "../core/types";
-import { SchemaMismatchError } from "../db";
+import { FRESH_FOLDER, SchemaMismatchError } from "../db";
 import { startServer } from "../server";
 import type { CliIo } from "./io";
 
@@ -31,7 +31,10 @@ export function startupProblem(err: unknown, config: Pick<PorticoConfig, "port" 
         `those again, and rerun portico setup --reset if the owner password was reset.`
       );
     }
-    return `The database at ${config.dbPath} was written by a different Portico version. Move it aside to start fresh, or run that version.`;
+    if (err.reason === "wrong_kind") {
+      return `The file at ${config.dbPath} is a Portico database of another kind, not the directory. Set PORTICO_DATA_DIR to the data folder itself.`;
+    }
+    return `${FRESH_FOLDER} The database found is ${config.dbPath}.`;
   }
   const code = (err as { code?: unknown } | null)?.code;
   if (code === "EADDRINUSE") return `Port ${config.port} is already in use. Stop the other process, or set PORT to a free port.`;

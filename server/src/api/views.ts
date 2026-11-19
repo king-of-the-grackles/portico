@@ -286,7 +286,7 @@ export function personViews(deps: ViewDeps, me: Person) {
   };
 
   const message = (m: Message): MessageView => {
-    const original = m.replyTo ? messages.get(m.replyTo) : null;
+    const original = messages.original(m);
     return {
       id: m.id,
       threadId: m.threadId,
@@ -310,7 +310,7 @@ export function personViews(deps: ViewDeps, me: Person) {
       decision: m.decision,
       decidedAt: m.decidedAt,
       decidedBy: m.decidedBy ? personRef(m.decidedBy) : null,
-      files: files.of(m.id).map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.size })),
+      files: files.of(m).map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.size })),
     };
   };
 
@@ -342,7 +342,7 @@ export function personViews(deps: ViewDeps, me: Person) {
   };
 
   const thread = (t: Thread): ThreadView => {
-    const summary = messages.threadSummary(t.id);
+    const summary = messages.threadSummary(t);
     return {
       id: t.id,
       a: threadAgent(t.aId),
@@ -384,7 +384,7 @@ export function personViews(deps: ViewDeps, me: Person) {
     t: Thread,
     range: { before?: string; limit?: number } = {},
   ): { thread: ThreadView; messages: MessageView[]; more: boolean } => {
-    const page = messages.inThread(t.id, range);
+    const page = messages.inThread(t, range);
     return { thread: thread(t), messages: page.messages.map(message), more: page.more };
   };
 

@@ -3,6 +3,7 @@ import type { Bindings } from "../db";
 import type { Activity } from "./activity";
 import type { Changes } from "./changes";
 import type { Computers } from "./computers";
+import type { Content } from "./content";
 import { PorticoError } from "./errors";
 import { defang } from "./framing";
 import { isBroadcast } from "./guards";
@@ -226,6 +227,8 @@ export interface AgentsDeps {
   changes: Changes;
   /** Who reaches whom. Names are unique per owner, and other people's agents carry a handle. */
   workspaces: Workspaces;
+  /** Each workspace's own database: a removed agent's threads are deleted there. */
+  content: Content;
   activity?: Activity;
   /** Whether the agent has an open stream. A connected session stays listed however long ago its row was written. */
   isConnected?: (agentId: string) => boolean;
@@ -253,6 +256,7 @@ export class Agents {
   private readonly presence: Presence;
   private readonly changes: Changes;
   private readonly workspaces: Workspaces;
+  private readonly content: Content;
   private readonly activity: Activity | undefined;
   private readonly isConnected: (agentId: string) => boolean;
   readonly liveRuns: (agentId: string) => number;
@@ -270,6 +274,7 @@ export class Agents {
     this.presence = deps.presence;
     this.changes = deps.changes;
     this.workspaces = deps.workspaces;
+    this.content = deps.content;
     this.activity = deps.activity;
     this.isConnected = deps.isConnected ?? (() => false);
     this.liveRuns = deps.liveRuns ?? ((id) => (this.isConnected(id) ? 1 : 0));
@@ -293,11 +298,6 @@ export class Agents {
     const agent = this.get(id);
     if (!agent) throw new PorticoError("not_found", "No such agent.");
     return agent;
-  }
-
-  /** Whether the two agents reach each other now: both are in one workspace. */
-  reaches(agentId: string, otherId: string): boolean {
-    return this.workspaces.reach(agentId, otherId);
   }
 
   /** The agent at exactly this address, including a session however long ago it was seen. */
@@ -871,10 +871,15 @@ export class Agents {
     return this.computers.folderJoins(agent.computerId, agent.folderId) !== false;
   }
 
-  /** Removes the agent, its credentials and its threads, and signs it out. */
+  /**
+   * Removes the agent, its credentials and its threads, and signs it out. The directory row goes first; then the
+   * agent's threads and messages are deleted in each workspace the agent was in.
+   */
   remove(personId: string, agentId: string): Agent {
     const agent = this.requireManaged(personId, agentId);
+    const clearContent = this.content.gather([agent.id]);
     this.db.query("DELETE FROM agents WHERE id = $id").run({ id: agent.id });
+    clearContent();
     this.activity?.record("agent_removed", { personId, detail: { name: addressOf(agent), kind: agent.kind } });
     this.forget([agent.id]);
     this.log("agent_removed", { agent_id: agent.id });

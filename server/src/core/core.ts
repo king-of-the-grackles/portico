@@ -7,6 +7,7 @@ import type { Agents } from "./agents";
 import type { AllowList, Approvals } from "./approvals";
 import type { Changes } from "./changes";
 import type { Computers } from "./computers";
+import type { Content } from "./content";
 import type { EventSubscriptions } from "./events";
 import type { Files } from "./files";
 import type { Messages } from "./messages";
@@ -26,7 +27,10 @@ import type { Workspaces } from "./workspaces";
  */
 export interface Core {
   config: PorticoConfig;
+  /** The directory: people, agents, workspaces and who is in each. No route reads message content from here. */
   db: Database;
+  /** Each workspace's own content database, by the caller's scope. Routes reach content through the core modules. */
+  content: Content;
   settings: Settings;
   changes: Changes;
   people: People;
