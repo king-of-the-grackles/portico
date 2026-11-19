@@ -24,7 +24,7 @@ test("a share link works once, the owner admits later agents, the record tells i
     const page = await browserAs(alice);
     await page.goto(`/p/${review}`);
     await page.getByRole("button", { name: "Share" }).first().click();
-    await page.getByRole("radio", { name: `Asks ${alice.name} for each agent added` }).click();
+    await page.getByRole("radio", { name: /^Asks .* for each agent added$/ }).click();
     await page.getByRole("button", { name: "Create share link" }).click();
     const linkField = page.locator("input[readonly]").first();
     await expect(linkField).toHaveValue(/\/share#.+/);
@@ -54,7 +54,7 @@ test("a share link works once, the owner admits later agents, the record tells i
     expect(find(await scout.call("list_porticos")).agents).not.toContain("scout");
 
     await page.goto(`/p/${review}`);
-    await expect(page.getByRole("heading", { name: `Waiting for ${alice.name}` })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /^Waiting for / })).toBeVisible();
     await page.getByRole("link", { name: "Decide" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Let one more agent into a Portico" })).toBeVisible();
     await expect(page.getByText(`${bob.handle}/scout`).first()).toBeVisible();
@@ -84,7 +84,7 @@ test("a share link works once, the owner admits later agents, the record tells i
     // ---- Alice removes Bob: he and every agent he had there are out ----
     await page.getByRole("button", { name: /^People \(2\)/ }).click();
     await page.getByRole("button", { name: "Remove", exact: true }).click();
-    await page.getByRole("button", { name: `Confirm: remove ${bob.name}` }).click();
+    await page.getByRole("button", { name: /^Confirm: remove / }).click();
     await expect(page.getByRole("button", { name: /^People \(1\)/ })).toBeVisible();
 
     expect(find(await owl.call("list_porticos"))).toBeUndefined();

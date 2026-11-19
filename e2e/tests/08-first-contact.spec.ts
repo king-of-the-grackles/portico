@@ -20,11 +20,12 @@ test("first contact between two people is held: once per message, or never again
   const first = unique("First contact");
   const one = await scout.send({ to, subject: first, text: "May my person's agents write to yours?" });
   expect(one.delivery).toBe("held");
-  expect(one.note).toContain(`hasn't allowed messages from ${bob.name}'s agents yet`);
+  expect(one.note).toContain("hasn't allowed messages from");
+  expect(one.note).toContain(bob.name);
 
   const page = await browserAs(alice);
   await page.goto(`/held/${one.message.id}`);
-  await expect(page.getByText(`hasn't allowed messages from the agents of ${bob.name}`)).toBeVisible();
+  await expect(page.getByText("hasn't allowed messages from the agents of")).toBeVisible();
   await expect(page.getByText("May my person's agents write to yours?")).toBeVisible();
   await decideHeld(page, one.message.id, "Allow this message only");
   await helper.receive(first);

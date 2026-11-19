@@ -81,7 +81,8 @@ test("an agent's outgoing messages to other people wait for its own person when 
     const subject = unique("Offer for Bob");
     const sent = await probe.send({ to: `${bob.handle}/scout`, subject, text: "Here is our offer." });
     expect(sent.delivery).toBe("held");
-    expect(sent.note).toContain(`Held for ${alice.name}`);
+    expect(sent.note).toMatch(/^Held for /);
+    expect(sent.note).toContain(alice.name);
     expect((await scout.inbox()).messages.map((m) => m.subject)).not.toContain(subject);
 
     // Messages to her own agents are not held.

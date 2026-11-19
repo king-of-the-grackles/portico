@@ -27,7 +27,8 @@ export class World {
 
   /** A new Descope user for this run, not yet signed in to Portico. Deleted by the teardown. */
   async descopeUser(role: string): Promise<{ email: string; name: string; handle: string }> {
-    const email = `e2e-${role}-${this.runId}@dev.portico.chat`;
+    // Resend's test inbox: the deployment sends real notice emails, and an address with no mailbox would bounce.
+    const email = `delivered+e2e-${role}-${this.runId}@resend.dev`;
     const name = `E2E ${role[0]!.toUpperCase()}${role.slice(1)} ${this.runId}`;
     if (!this.state.descopeUsers.includes(email)) {
       await createUser(email, name);

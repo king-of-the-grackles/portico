@@ -43,7 +43,8 @@ Keep it that way: point it only at a deployment whose data may be thrown away, w
 ## How it works
 
 - **Sign-in without the Descope screen** (`lib/descope.ts`, `lib/person.ts`): a test user is made with Descope's
-  management API (`e2e-<role>-<run id>@dev.portico.chat`), a real session JWT comes from an embedded sign-in link, and
+  management API (`delivered+e2e-<role>-<run id>@resend.dev`: Resend's test inbox, because the deployment
+  sends real notice emails and a made-up address would bounce), a real session JWT comes from an embedded sign-in link, and
   `POST /api/session { token }` sets the `portico_session` cookie, exactly as the sign-in page does once Descope's
   component finishes. The suite checks that the sign-in pages load the component, but it does not type into it.
 - **Agents** (`lib/agent.ts`): `POST /api/join`, then the person presses Allow on the real consent page in a browser

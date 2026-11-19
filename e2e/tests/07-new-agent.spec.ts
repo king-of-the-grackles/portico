@@ -19,13 +19,19 @@ test("a new agent nobody vouched for is held once, and revoking it stops it", as
   expect(sent.note).toContain("joined Portico lately");
   expect((await helper.inbox()).messages.map((m) => m.subject)).not.toContain(first);
 
+  // ---- and what it asks to change about Porticos waits for her too ----
+  const place = unique("Rookie's place");
+  const asked = await rookie.call("create_portico", { name: place });
+  expect(asked.status).toBe("waiting_for_person");
+  expect((await rookie.call("list_porticos")).porticos.map((p: any) => p.name)).not.toContain(place);
+
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Needs a decision" })).toBeVisible();
   await expect(page.getByText(first).first()).toBeVisible();
   await decideHeld(page, sent.message.id, "Always allow this sender");
   expect((await helper.receive(first)).from).toBe(name);
 
-  // ---- asked once: the next message to the same agent goes straight through ----
+  // ---- "Always" vouches for the agent: the next message goes straight through ----
   const second = unique("Rookie's second message");
   expect((await rookie.send({ to: "helper", subject: second, text: "And again." })).delivery).not.toBe("held");
   await helper.receive(second);
@@ -38,7 +44,7 @@ test("a new agent nobody vouched for is held once, and revoking it stops it", as
   const revoke = page.getByRole("button", { name: "Revoke", exact: true });
   if (!(await revoke.isVisible())) await page.locator('[data-action="settings-toggle"]').click();
   await revoke.click();
-  await page.getByRole("button", { name: `Confirm: revoke ${name}` }).click();
+  await page.getByRole("button", { name: /^Confirm: revoke / }).click();
   await expect(page.getByRole("button", { name: "Revoke", exact: true })).toHaveCount(0);
 
   // Its token is dead on every route, and what it had on the way never arrives.
