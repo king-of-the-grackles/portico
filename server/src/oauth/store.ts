@@ -162,19 +162,24 @@ export class OAuthStore {
     return row.n;
   }
 
-  /** Keeps at most `keep` unused clients, the newest: the oldest beyond that are deleted. Returns how many went. */
-  evictUnused(keep: number): number {
+  /**
+   * Keeps at most `keep` unused clients, the newest: the oldest beyond that are deleted, but never one made in the last
+   * `spareMs`, which a person may be about to allow. Returns how many went.
+   */
+  evictUnused(keep: number, spareMs: number): number {
     const over = this.unusedClients() - keep;
     if (over <= 0) return 0;
+    const before = new Date(this.deps.now().getTime() - spareMs).toISOString();
     return this.deps.db
       .query(
         `DELETE FROM oauth_clients WHERE id IN (
            SELECT id FROM oauth_clients
            WHERE client_id NOT IN (SELECT client_id FROM agent_tokens WHERE client_id IS NOT NULL)
              AND client_id NOT IN (SELECT client_id FROM oauth_codes)
+             AND created_at < $before
            ORDER BY created_at, rowid LIMIT $over)`,
       )
-      .run({ over }).changes;
+      .run({ over, before }).changes;
   }
 
   client(clientId: unknown): OAuthClient | null {

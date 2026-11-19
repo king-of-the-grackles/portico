@@ -25,6 +25,8 @@ import { OAuthProblem, type OAuthClient, OAuthStore, validChallenge } from "./st
  */
 const REGISTRATIONS_PER_HOUR = 20;
 const MAX_UNUSED_CLIENTS = 1000;
+/** How long a new, unused client is safe from making room for others: time for its person to reach Allow. */
+const SPARE_NEW_CLIENT_MS = 10 * 60_000;
 const MAX_STATE = 1000;
 
 type Fields = Record<string, unknown>;
@@ -131,9 +133,14 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     if (counted && registrations.blocked(address)) {
       throw new OAuthProblem("temporarily_unavailable", "Too many client registrations. Try again later.", 429);
     }
+    // Room is made from the oldest unused clients, never from one made in the last few minutes: its person may be on
+    // the consent page. With no room left even so, registration waits.
+    store.evictUnused(MAX_UNUSED_CLIENTS - 1, SPARE_NEW_CLIENT_MS);
+    if (store.unusedClients() >= MAX_UNUSED_CLIENTS) {
+      throw new OAuthProblem("temporarily_unavailable", "Too many client registrations. Try again in a few minutes.", 429);
+    }
     const client = store.register(body as Fields);
     if (counted) registrations.record(address);
-    store.evictUnused(MAX_UNUSED_CLIENTS);
     return c.json(
       {
         client_id: client.clientId,

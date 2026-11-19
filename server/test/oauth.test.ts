@@ -245,6 +245,10 @@ describe("registration", () => {
       insert.run({ id: `flood-${i}`, at: p.now().toISOString() });
       p.clock.advance(1);
     }
+    // Clients made in the last minutes are never pushed out: with no older one to take, registration waits.
+    expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.1")).status).toBe(429);
+    expect(clientCount(p)).toBe(1001);
+    p.clock.advance(11 * MINUTE);
     const res = await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.1");
     expect(res.status).toBe(201);
     const fresh = (await json<{ client_id: string }>(res)).client_id;

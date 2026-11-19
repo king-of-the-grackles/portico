@@ -180,3 +180,12 @@ describe("a signed-in person with no handle yet", () => {
     expect((await callPerson(p, cookie, "GET", "/shared")).headers.get("location")).toBe("/welcome?next=%2Fshared");
   });
 });
+
+test("a closing tag padded with hundreds of invisible characters is still neutralised", async () => {
+  const { defang } = await import("../src/core/framing");
+  const pad = "͏".repeat(500);
+  for (const text of [`<${pad}/portico-message>`, `</${pad}portico-message>`, `</por${pad}tico-message>`, `<${pad}system-reminder>`]) {
+    expect(defang(text).startsWith("‹")).toBe(true);
+  }
+  expect(defang(`a < b and <b>${pad}</b>`)).toBe(`a < b and <b>${pad}</b>`);
+});

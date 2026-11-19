@@ -20,12 +20,31 @@ const FRAME_TAG_AHEAD =
  * while no longer matching it, so the tag check looks past them. They stay in the text: an emoji needs its selector.
  */
 const INVISIBLE = /[\p{Default_Ignorable_Code_Point}\u2800]/gu;
-/** How far past a "<" the tag check reads: the longest tag name, with room for invisible characters among its letters. */
-const TAG_REACH = 200;
+/** A frame tag's "<", in text that has no invisible characters left. */
+const FRAME_TAG_OPEN = new RegExp(`<(?=${FRAME_TAG_AHEAD.source.slice(1)})`, "gi");
 
-/** Turns the "<" of every frame tag into "‹", also one disguised with invisible characters. Nothing else changes. */
+/**
+ * Turns the "<" of every frame tag into "‹", also one disguised with invisible characters, however many. The check
+ * reads the text with those characters taken out, and marks the matching "<" in the text as it is. Nothing else changes.
+ */
 function closeFrameTags(text: string): string {
-  return text.replace(/</g, (lt, at: number) => (FRAME_TAG_AHEAD.test(text.slice(at + 1, at + 1 + TAG_REACH).replace(INVISIBLE, "")) ? "‹" : lt));
+  let visible = "";
+  const origin: number[] = []; // where each code unit of `visible` sits in `text`
+  let at = 0;
+  for (const ch of text) {
+    INVISIBLE.lastIndex = 0;
+    if (!INVISIBLE.test(ch)) {
+      for (let i = 0; i < ch.length; i++) origin.push(at + i);
+      visible += ch;
+    }
+    at += ch.length;
+  }
+  const marks = new Set<number>();
+  for (const m of visible.matchAll(FRAME_TAG_OPEN)) marks.add(origin[m.index]!);
+  if (marks.size === 0) return text;
+  let out = "";
+  for (let i = 0; i < text.length; i++) out += marks.has(i) ? "‹" : text[i];
+  return out;
 }
 
 /**
