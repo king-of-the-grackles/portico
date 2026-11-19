@@ -94,9 +94,14 @@ export function safeNext(value: unknown): string {
   return unsafe ? "/" : value;
 }
 
-/** "5:09 PM UTC": a time the server shows before the browser puts it in the reader's own time zone. */
-export function utcClock(at: Date | string): string {
+/**
+ * "5:09 PM UTC", or "Nov 22, 5:09 PM UTC" when the time isn't today: a time the server shows before the browser puts
+ * it in the reader's own time zone.
+ */
+export function utcClock(at: Date | string, now: Date = new Date()): string {
   const d = typeof at === "string" ? new Date(at) : at;
   const h = d.getUTCHours();
-  return `${h % 12 || 12}:${String(d.getUTCMinutes()).padStart(2, "0")} ${h < 12 ? "AM" : "PM"} UTC`;
+  const time = `${h % 12 || 12}:${String(d.getUTCMinutes()).padStart(2, "0")} ${h < 12 ? "AM" : "PM"} UTC`;
+  if (d.toISOString().slice(0, 10) === now.toISOString().slice(0, 10)) return time;
+  return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}, ${time}`;
 }
