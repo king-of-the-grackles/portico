@@ -1,5 +1,5 @@
 // Settings: People, Computers and Account. Pure: state in, HTML out.
-import { ago, clock, date, dayLabel, esc, ICON, monogram, personColor, plural, renderAddSheet, renderHeader, when } from "./common.js";
+import { ago, clock, date, dayLabel, esc, ICON, kindInfo, logo, monogram, personColor, plural, renderAddSheet, renderHeader, when } from "./common.js";
 import type { AgentView, ClaimView, ComputerView, InviteView, PasskeyView, PersonRow, SettingsState } from "./types.js";
 
 function notice(text: string, key: string): string {
@@ -112,32 +112,60 @@ function computerSub(c: ComputerView, now: number): string {
   return `${sessions}.${when2}`;
 }
 
+/** One of the person's agents in Settings: its page, where it runs, and Remove with its confirmation. */
+function agentLine(s: SettingsState, a: AgentView): string {
+  const href = `/a/${encodeURIComponent(a.id)}`;
+  const where = a.type === "session" ? `Folder ${a.repo ?? a.folder ?? "unknown"}. ` : "";
+  const seen = a.status && a.status !== "offline" ? "Online." : a.lastSeen ? `Last seen ${ago(a.lastSeen, s.now)}.` : "Not seen yet.";
+  return `<li class="sagent" data-key="sa-${esc(a.id)}">${logo(a.kind, "logo-sm", kindInfo(a.kind).label)}<span class="row-text"><a class="row-link" href="${href}"><strong>${esc(a.label)}</strong></a><span class="row-help tnum">${esc(where)}${esc(seen)}</span></span>${confirmPair(
+    s.confirmAgent === a.id,
+    a.label,
+    "sagent-remove",
+    "sagent-cancel",
+    "sagent-confirm",
+    a.id,
+    s.busy === `sagent:${a.id}`,
+  )}</li>`;
+}
+
 function computerRow(s: SettingsState, c: ComputerView): string {
   const owner = c.sessions[0] && !c.sessions[0].mine ? c.sessions[0].owner.name : null;
-  return `<li class="srow" data-key="m-${esc(c.id)}"><span class="av av-device">${ICON.laptop()}</span><span class="row-text"><span class="comp-name"><strong>${esc(c.name)}</strong>${when(owner, `<span class="owner-chip">${esc(owner)}</span>`)}</span><span class="row-help tnum">${computerSub(c, s.now)}</span>${when(
-    c.alwaysAllowed,
-    `<span class="row-help">Always allowed. <button type="button" class="btn btn-link" data-action="computer-unallow" data-id="${esc(c.id)}"${s.busy === `unallow:${c.id}` ? " disabled" : ""}>Stop</button></span>`,
-  )}</span>${confirmPair(
-    s.confirmComputer === c.id,
-    c.name,
-    "computer-remove",
-    "computer-cancel",
-    "computer-confirm",
-    c.id,
-    s.busy === `computer:${c.id}`,
-  )}</li>`;
+  const busy = s.busy === `unallow:${c.id}`;
+  const remove = s.confirmComputer === c.id
+    ? `<span class="actions"><button type="button" class="btn btn-link" data-action="computer-cancel">Cancel</button><button type="button" class="btn btn-danger" data-action="computer-confirm" data-id="${esc(c.id)}" data-autofocus${when(s.busy === `computer:${c.id}`, " disabled")}>Confirm: remove <span class="btn-name">${esc(c.name)}</span></button></span>`
+    : `<span class="actions"><button type="button" class="btn btn-text" data-action="computer-remove" data-id="${esc(c.id)}">Remove computer</button></span>`;
+  return `<li class="srow srow-stack" data-key="m-${esc(c.id)}">
+    <div class="srow-line"><span class="av av-device">${ICON.laptop()}</span><span class="row-text"><span class="comp-name"><strong>${esc(c.name)}</strong>${when(owner, `<span class="owner-chip">${esc(owner)}</span>`)}</span><span class="row-help tnum">${computerSub(c, s.now)}</span></span>${remove}</div>
+    <div class="srow-line comp-allow"><span class="row-text"><span class="row-title">Always allow</span><span class="row-help">${
+      c.alwaysAllowed ? "On. Messages from new sessions here go through without asking." : "Off. The first message from each new session here waits for a decision."
+    }</span></span><span class="actions">${
+      c.alwaysAllowed
+        ? `<button type="button" class="btn btn-secondary" data-action="computer-unallow" data-id="${esc(c.id)}"${when(busy, " disabled")}>Stop</button>`
+        : `<button type="button" class="btn btn-primary" data-action="computer-allow" data-id="${esc(c.id)}"${when(busy, " disabled")}>Always allow</button>`
+    }</span></div>
+    ${when(c.sessions.length > 0, `<ul class="sagents" aria-label="Agents on ${esc(c.name)}">${c.sessions.map((a) => agentLine(s, a)).join("")}</ul>`)}
+  </li>`;
 }
 
 export function renderComputers(s: SettingsState): string {
   const list = s.computers ?? [];
+  // Agents on no computer: apps and connectors such as Muse, ChatGPT or Grok Bot.
+  const onComputers = new Set(list.flatMap((c) => c.sessions.map((a) => a.id)));
+  const others = s.agents.filter((a) => a.mine && !onComputers.has(a.id) && a.computer === null);
   return `<section id="computers" aria-labelledby="computers-h" class="ssection">
     <h2 id="computers-h" class="h-settings">Computers</h2>
-    <p class="sec-help">Removing a computer signs out every session on it.</p>
+    <p class="sec-help">Each computer, the agents on it, and what the computer is allowed. Removing a computer signs out every session on it.</p>
     ${notice(s.compNotice, "comp-notice")}
     <ul class="rows card-list">${list.map((c) => computerRow(s, c)).join("")}${when(
       s.computers !== null && list.length === 0,
       `<li class="srow"><span class="row-help">No computers yet.</span></li>`,
     )}</ul>
+    ${when(
+      others.length > 0,
+      `<h3 id="other-agents-h" class="h-sub other-agents-h">Other agents</h3>
+    <p class="sec-help">Apps and connectors, which run on no computer.</p>
+    <ul class="rows card-list"><li class="srow srow-stack"><ul class="sagents" aria-labelledby="other-agents-h">${others.map((a) => agentLine(s, a)).join("")}</ul></li></ul>`,
+    )}
   </section>`;
 }
 
@@ -280,6 +308,7 @@ export function settingsState(data: {
     compNotice: "",
     confirmMember: null,
     confirmComputer: null,
+    confirmAgent: null,
     nameForm: null,
     passwordForm: null,
     passwordChanged: false,

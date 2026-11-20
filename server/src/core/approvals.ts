@@ -171,6 +171,26 @@ export class Approvals {
   }
 
   /**
+   * Always allow for a whole computer, chosen in Settings and not on a held message: every session there, now and
+   * later, is taken as the person's own. What waits only because a session there is new is decided as Always allow on
+   * that message would, so the same messages go through and the same people are told.
+   */
+  alwaysAllowComputer(personId: string, computerId: string): void {
+    for (let i = 0; i < 100; i++) {
+      const waiting = this.messages.heldFor(personId).find((m) => {
+        const from = this.agents.get(m.fromId);
+        if (!from || from.computerId !== computerId || !from.unproven) return false;
+        if (!this.workspaces.joins(m.workspaceId, m.fromId, m.toId)) return false;
+        return m.heldFor === "new_agent" || (m.heldFor === "outbound" && !from.outboundHold);
+      });
+      if (!waiting) break;
+      this.decide(personId, waiting.id, "always_allow");
+    }
+    this.agents.computerProven(computerId, true);
+    this.changes.about({ people: [personId] }, "computers", "agents", "approvals");
+  }
+
+  /**
    * Allow once delivers this message. Always allow delivers it and stops asking: for first contact, about every agent
    * of the sender's person writing to this person's agents; for an agent with its own approval switch, about this
    * sender writing to that agent. Deny declines it. An outbound hold takes Allow once or Deny, and an allowed message

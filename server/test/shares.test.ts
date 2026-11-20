@@ -632,7 +632,7 @@ describe("workspaces for a signed-in person", () => {
     p.consents.ask(muse.agent, "share", launch.id, { email: "robert@example.com" });
     p.shares.create(chris.id, launch.id);
     const personal = p.workspaces.personal(chris.id);
-    for (const path of ["/", `/p/${launch.id}`, `/p/${personal.id}`, "/agents", "/share", "/settings"]) {
+    for (const path of ["/", `/p/${launch.id}`, `/p/${personal.id}`, "/share", "/settings"]) {
       const res = await p.app.request(path, { headers: { cookie: cookies.chris } });
       expect(`${path}: ${res.status}`).toBe(`${path}: 200`);
       expect(`${path}: ${copyProblems(visibleCopy(await res.text())).join("; ")}`).toBe(`${path}: `);

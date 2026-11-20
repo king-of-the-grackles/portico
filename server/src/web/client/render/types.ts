@@ -53,9 +53,8 @@ export type Route =
   | { page: "today" }
   | { page: "activity" }
   | { page: "agent"; id: string }
-  /** One Portico's page (/p/:id), and every agent with its Porticos (/agents). */
-  | { page: "workspace"; id: string }
-  | { page: "agents" };
+  /** One Portico's page (/p/:id). */
+  | { page: "workspace"; id: string };
 
 /** What GET /api/tasks/:id answers: one task's steps and every message in it, oldest first. */
 export interface TaskDetail {
@@ -135,7 +134,7 @@ export interface WakeEditState {
   error: string;
 }
 
-/** The form open on a Portico's page or the Agents page. */
+/** The form open on a Portico's page. */
 export type WorkspaceForm =
   /** A new Portico. `thenShare` opens Share on it afterwards: sharing from the person's own Portico starts here. */
   | { kind: "new"; name: string; agentIds: string[]; thenShare: boolean; error: string }
@@ -148,6 +147,10 @@ export type WorkspaceForm =
 export interface HomeState {
   now: number;
   me: PersonView;
+  /** The Porticos opened or closed by hand in the navigation, by ID. One not listed is open while it is being looked at. */
+  navFold: Record<string, boolean>;
+  /** The Porticos whose whole list of agents shows in the navigation, past the first few. */
+  navAll: Record<string, boolean>;
   publicUrl: string;
   agents: AgentView[];
   held: HeldCard[];
@@ -224,6 +227,8 @@ export interface SettingsState {
   compNotice: string;
   confirmMember: string | null;
   confirmComputer: string | null;
+  /** The agent whose Remove waits for its confirmation. */
+  confirmAgent: string | null;
   nameForm: { name: string; error: string } | null;
   passwordForm: { current: string; next: string; error: string } | null;
   passwordChanged: boolean;

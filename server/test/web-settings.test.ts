@@ -166,10 +166,38 @@ describe("Settings renders every board state", () => {
     inOrder(html, "Maya Okafor", ">Cancel<", "Confirm: remove Maya Okafor");
   });
 
+  test("each computer has Remove computer, its Always allow line with Stop or Always allow, and its agents with Remove", () => {
+    const on = { ...COMPUTERS[1]!, alwaysAllowed: true };
+    const html = render(settings({ computers: [COMPUTERS[0]!, on] }));
+    const mac = html.slice(html.indexOf('data-key="m-c-macbook"'), html.indexOf('data-key="m-c-studio"'));
+    const studio = html.slice(html.indexOf('data-key="m-c-studio"'));
+    inOrder(text(mac), "macbook", "Remove computer", "Always allow", "Off. The first message from each new session here waits for a decision.", "Always allow", "Claude Code (dialog)", "Folder dialog.", "Remove");
+    expect(mac).toContain('data-action="computer-allow" data-id="c-macbook"');
+    expect(mac).not.toContain('data-action="computer-unallow"');
+    expect((mac.match(/data-action="sagent-remove"/g) ?? []).length).toBe(3);
+    expect(text(studio)).toContain("On. Messages from new sessions here go through without asking.");
+    expect(studio).toContain('data-action="computer-unallow" data-id="c-studio"');
+    // Removing an agent asks first.
+    const asked = render(settings({ confirmAgent: "s4" }));
+    inOrder(asked.slice(asked.indexOf('data-key="sa-s4"')), ">Cancel<", "Confirm: remove Claude Code (dialog)");
+  });
+
+  test("agents on no computer, apps and connectors, are listed under Other agents", () => {
+    const app: AgentView = { ...sessionOn("a-muse", MACBOOK, null), name: "muse", label: "Muse", kind: "muse", type: "app", computer: null, folder: null, repo: null };
+    const theirs: AgentView = { ...app, id: "a-theirs", label: "Dots", mine: false, owner: { id: "p-maya", name: "Maya Okafor" } };
+    const html = render(settings({ agents: [app, theirs, COMPUTERS[0]!.sessions[0]!] }));
+    const part = html.slice(html.indexOf("Other agents"));
+    inOrder(text(part), "Other agents", "Apps and connectors", "Muse", "Remove");
+    expect(part).toContain('data-key="sa-a-muse"');
+    expect(part).not.toContain('data-key="sa-a-theirs"');
+    expect(part).not.toContain('data-key="sa-s1"');
+    expect(render(settings())).not.toContain("Other agents");
+  });
+
   test("J3: removing a computer asks to confirm", () => {
     const html = render(settings({ confirmComputer: "c-studio" }));
     const row = html.slice(html.indexOf('data-key="m-c-studio"'));
-    inOrder(row, "studio", ">Cancel<", "Confirm: remove studio");
+    inOrder(row, "studio", ">Cancel<", "Confirm: remove", "studio</span>");
     expect(row).toContain('class="btn btn-danger"');
   });
 

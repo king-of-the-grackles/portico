@@ -78,9 +78,7 @@ export function homePage(core: Core): Hono<PersonEnv> {
           ? (data.agentPage?.agent.label ?? "Agent")
           : data.route.page === "workspace"
             ? (data.workspacePage?.workspace.name ?? "A Portico")
-            : data.route.page === "agents"
-              ? "Agents"
-              : "Today";
+            : "Today";
     return sendPage(c, {
       // "Launch on Portico", but "Personal Portico" as it is.
       title: /\bPortico$/.test(title) ? title : `${title} on Portico`,
@@ -94,6 +92,7 @@ export function homePage(core: Core): Hono<PersonEnv> {
   route.get("/activity", (c) => page(c, { page: "activity" }));
   route.get("/a/:agentId", (c) => page(c, { page: "agent", id: c.req.param("agentId") }));
   route.get("/p/:workspaceId", (c) => page(c, { page: "workspace", id: c.req.param("workspaceId") }));
-  route.get("/agents", (c) => page(c, { page: "agents" }));
+  // The Agents page is gone: each Portico lists its agents, and Settings has every computer's. Old links go home.
+  route.get("/agents", (c) => (c.get("person") ? c.redirect("/", 303) : page(c, { page: "today" })));
   return route;
 }

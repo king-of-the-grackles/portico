@@ -4,6 +4,7 @@
 import { api, ApiError, firstData } from "./api.js";
 import { clock, kindInfo, midnight, plural } from "./render/common.js";
 import { homeState, renderHome } from "./render/home.js";
+import { porticoOpen } from "./render/nav.js";
 import { renderSettings, settingsState } from "./render/settings.js";
 import type {
   ActivityView,
@@ -370,7 +371,6 @@ const ROUTES: [RegExp, (m: RegExpExecArray) => Route][] = [
   [/^\/activity\/?$/, () => ({ page: "activity" })],
   [/^\/a\/([^/]+)\/?$/, (m) => ({ page: "agent", id: decodeURIComponent(m[1]!) })],
   [/^\/p\/([^/]+)\/?$/, (m) => ({ page: "workspace", id: decodeURIComponent(m[1]!) })],
-  [/^\/agents\/?$/, () => ({ page: "agents" })],
 ];
 
 function routeOf(path: string): Route {
@@ -387,8 +387,6 @@ function pathOf(route: Route): string {
       return "/";
     case "activity":
       return "/activity";
-    case "agents":
-      return "/agents";
     case "workspace":
       return `/p/${encodeURIComponent(route.id)}`;
     case "agent":
@@ -403,8 +401,27 @@ function query(params: Record<string, string | null | undefined>): string {
   return text ? `?${text}` : "";
 }
 
+/** What the person opened or closed in the navigation, kept in this browser. Missing or unreadable: nothing chosen. */
+const NAV_FOLD_KEY = "portico.nav";
+function loadNavFold(): Record<string, boolean> {
+  try {
+    const value = JSON.parse(localStorage.getItem(NAV_FOLD_KEY) ?? "{}") as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([, v]) => typeof v === "boolean")) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+function saveNavFold(fold: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(NAV_FOLD_KEY, JSON.stringify(fold));
+  } catch {
+    // Storage is off in this browser: the navigation still opens and closes for this visit.
+  }
+}
+
 function startHome(root: HTMLElement, data: HomeData): void {
-  const page = new Page<HomeState>(root, homeState({ ...data, now: Date.now() }), renderHome);
+  const page = new Page<HomeState>(root, { ...homeState({ ...data, now: Date.now() }), navFold: loadNavFold() }, renderHome);
   const s = () => page.state;
   const add = new AddFlow(page, (agent) => {
     if (!agent) return;
@@ -452,7 +469,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
   /** The tasks for the page: Activity's filters, or the agent's own tasks. `more` adds the next page. */
   const loadTasks = async (more = false) => {
     const route = s().route;
-    if (route.page === "today" || route.page === "agents") return;
+    if (route.page === "today") return;
     const f = s().filter;
     const shown = s().tasks;
     const before = more && shown?.tasks.length ? shown.tasks[shown.tasks.length - 1]!.startedAt : null;
@@ -522,7 +539,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     const route = s().route;
     const jobs: Promise<unknown>[] = [];
     if (route.page === "today") jobs.push(loadToday());
-    else if (route.page !== "agents") jobs.push(loadTasks());
+    else jobs.push(loadTasks());
     if (route.page === "activity") jobs.push(loadEvents());
     if (route.page === "agent") jobs.push(loadAgentPage());
     if (route.page === "workspace") jobs.push(loadWorkspacePage());
@@ -545,7 +562,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     if (route.page === "workspace" && (t.has("workspaces") || t.has("people"))) jobs.push(loadWorkspacePage());
     const tasksChanged = t.has("threads") || t.has("approvals");
     if (route.page === "today" && (tasksChanged || t.has("agents"))) jobs.push(loadToday());
-    if (route.page !== "today" && route.page !== "agents" && tasksChanged) jobs.push(loadTasks());
+    if (route.page !== "today" && tasksChanged) jobs.push(loadTasks());
     if (route.page === "activity" && (t.has("activity") || t.has("agents"))) jobs.push(loadEvents());
     if (route.page === "agent" && (tasksChanged || t.has("agents") || t.has("activity"))) jobs.push(loadAgentPage());
     if (tasksChanged) for (const id of Object.keys(s().openTasks)) jobs.push(loadTask(id));
@@ -668,8 +685,9 @@ function startHome(root: HTMLElement, data: HomeData): void {
 
   const openNewWorkspace = (thenShare: boolean) => {
     const route = s().route;
-    // The form shows on the Agents page and on a Portico's own page. The name is optional.
-    if (route.page !== "workspace" && route.page !== "agents") go("/agents");
+    // The form shows on a Portico's own page: from anywhere else, on the person's own. The name is optional.
+    const own = s().workspaces.find((w) => w.kind === "personal" && w.isOwner);
+    if (route.page !== "workspace" && own) go(`/p/${encodeURIComponent(own.id)}`);
     page.set({ wsForm: { kind: "new", name: "", agentIds: [], thenShare, error: "" }, navOpen: false });
   };
 
@@ -995,10 +1013,25 @@ function startHome(root: HTMLElement, data: HomeData): void {
           if (w) void setWorkspaceAgent(w.id, id, false, `ws-agent:${id}`);
           return;
         }
-        case "ws-toggle": {
-          const workspaceId = el.dataset.ws ?? "";
-          void setWorkspaceAgent(workspaceId, id, el.getAttribute("aria-checked") !== "true", `ws-tick:${workspaceId}:${id}`);
-          return;
+        case "nav-fold": {
+          const w = s().workspaces.find((x) => x.id === id);
+          if (!w) return;
+          const navFold = { ...s().navFold, [id]: !porticoOpen(s(), w) };
+          saveNavFold(navFold);
+          return page.set({ navFold });
+        }
+        case "nav-all":
+          return page.set({ navAll: { ...s().navAll, [id]: true } });
+        case "ws-add-agent": {
+          // The person's agents that aren't in the Portico yet come first; with none, a new agent joins.
+          const w = s().workspaces.find((x) => x.id === id);
+          if (!w) return;
+          const route = s().route;
+          if (route.page !== "workspace" || route.id !== id) go(`/p/${encodeURIComponent(id)}`);
+          const outside = s().agents.some((a) => a.mine && !w.agentIds.includes(a.id));
+          page.set({ navOpen: false });
+          if (outside) return page.set({ wsForm: { kind: "agents", agentIds: [], error: "" } });
+          return add.open();
         }
         case "ws-confirm":
           return page.set({ wsConfirm: id });
@@ -1448,6 +1481,35 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
                 confirmComputer: null,
                 compNotice: `${computer.name} removed. ${plural(computer.sessions.length, "session")} disconnected.`,
               });
+            },
+            (message) => page.set({ compNotice: message }),
+          );
+        }
+        case "computer-allow":
+          return void run(
+            `unallow:${id}`,
+            async () => {
+              const { computer } = await api<{ computer: ComputerView }>("PUT", `/api/computers/${encodeURIComponent(id)}/always-allow`);
+              page.set({
+                computers: (s().computers ?? []).map((c) => (c.id === id ? computer : c)),
+                compNotice: `Sessions on ${computer.name} are always allowed, now and later.`,
+              });
+            },
+            (message) => page.set({ compNotice: message }),
+          );
+        case "sagent-remove":
+          return page.set({ confirmAgent: id });
+        case "sagent-cancel":
+          return page.set({ confirmAgent: null });
+        case "sagent-confirm": {
+          const agent = s().agents.find((a) => a.id === id);
+          if (!agent) return;
+          return void run(
+            `sagent:${id}`,
+            async () => {
+              await api("DELETE", `/api/agents/${encodeURIComponent(id)}`);
+              page.set({ agents: s().agents.filter((a) => a.id !== id), confirmAgent: null, compNotice: `${agent.label} removed and signed out.` });
+              void loadComputers();
             },
             (message) => page.set({ compNotice: message }),
           );

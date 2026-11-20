@@ -44,7 +44,7 @@ describe("copy sweeps", () => {
     p.consents.ask(w.grok.agent, "delete", w.launch.id);
     p.consents.ask(w.grok.agent, "remove_person", w.launch.id, { person: "dana" });
     const cookie = signIn(p, w.chris);
-    for (const path of ["/", "/agents", `/p/${w.own.id}`, `/p/${w.pair.id}`, `/p/${w.launch.id}`, `/a/${w.grok.agent.id}`, "/activity"]) {
+    for (const path of ["/", `/p/${w.own.id}`, `/p/${w.pair.id}`, `/p/${w.launch.id}`, `/a/${w.grok.agent.id}`, "/activity"]) {
       const res = await p.app.request(path, { headers: { cookie } });
       expect(`${path}: ${res.status}`).toBe(`${path}: 200`);
       const html = await res.text();
@@ -184,7 +184,6 @@ describe("copy sweeps", () => {
     expect(wordProblems("Ask the person who runs this Portico server.")).toEqual([]);
     expect(wordProblems("Delete workspace")).toHaveLength(1);
     expect(wordProblems("Workspaces")).toHaveLength(1);
-    expect(wordProblems("Each agent is in Personal.")).toHaveLength(1);
     expect(wordProblems("Email isn't set up on this Portico.")).toHaveLength(1);
     expect(wordProblems("Each Portico instance keeps a data folder.")).toHaveLength(1);
     expect(copyProblems("No such workspace.")).toHaveLength(1);

@@ -30,6 +30,16 @@ export function computerRoutes(core: Core): Hono<PersonEnv> {
     return c.body(null, 204);
   });
 
+  // "Always allow" for a computer, from Settings: every session there, now and later, is taken as the person's own, and
+  // what waits only because a session there is new goes through.
+  route.put("/:id/always-allow", (c) => {
+    const me = currentPerson(c);
+    const computer = core.computers.get(c.req.param("id"));
+    if (!computer || computer.ownerId !== me.id) throw new PorticoError("not_found", "No such computer.");
+    core.approvals.alwaysAllowComputer(me.id, computer.id);
+    return c.json({ computer: computerView(core, me, core.computers.get(computer.id)!) });
+  });
+
   // Takes back "Always allow" for a computer: its sessions are asked about again, once for each agent they write to.
   route.delete("/:id/always-allow", (c) => {
     const me = currentPerson(c);

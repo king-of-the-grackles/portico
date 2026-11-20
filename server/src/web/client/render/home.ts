@@ -5,7 +5,7 @@ import { renderAddSheet, renderNotice, renderReconnecting, when } from "./common
 import { renderNav, renderPhoneBar } from "./nav.js";
 import { renderToday } from "./today.js";
 import type { HomeData, HomeState } from "./types.js";
-import { renderAgentsPage, renderWorkspace } from "./workspace.js";
+import { renderWorkspace } from "./workspace.js";
 
 function renderPage(s: HomeState): string {
   switch (s.route.page) {
@@ -17,8 +17,6 @@ function renderPage(s: HomeState): string {
       return renderAgent(s, s.route.id);
     case "workspace":
       return renderWorkspace(s, s.route.id);
-    case "agents":
-      return renderAgentsPage(s);
   }
 }
 
@@ -66,6 +64,8 @@ export function homeState(data: Omit<HomeData, "page"> & { now: number }): HomeS
     settingsOpen: false,
     acctOpen: false,
     navOpen: false,
+    navFold: {},
+    navAll: {},
     notice: null,
     reconnecting: false,
     add: null,

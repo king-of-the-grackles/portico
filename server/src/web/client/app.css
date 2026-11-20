@@ -418,3 +418,27 @@ button.trow-main:hover { background: #f5f7f3; }
 @media (max-width: 720px) {
   .ws-actions { margin-left: 0; width: 100%; justify-content: flex-start; }
 }
+
+/* The navigation: each Portico opens to show its agents. */
+.nfold { display: flex; align-items: center; gap: 2px; }
+.nfold .npage { flex: 1 1 auto; min-width: 0; padding-left: 6px; }
+.nfold-tog { flex: none; width: 28px; height: 44px; border: none; border-radius: 8px; background: transparent; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.nfold-tog:hover { background: #e9ede7; color: var(--ink); }
+.nfold-tog .caret.is-shut { transform: rotate(-90deg); }
+.nagents { list-style: none; margin: 0 0 6px 13px; padding: 0 0 0 10px; border-left: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 1px; }
+.nagent { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 4px 8px; border: none; border-radius: 8px; background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 20px; text-align: left; text-decoration: none; cursor: pointer; }
+.nagent:hover { background: #e9ede7; color: var(--ink); }
+.nagent[aria-current="page"] { background: var(--surface); box-shadow: 0 1px 3px rgba(16, 43, 37, 0.1); font-weight: 600; }
+.nagent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nagent-who { margin-left: auto; flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--muted); }
+.nagent-add, .nagent-more { color: var(--teal); font-weight: 600; }
+.nagent-add svg { color: var(--teal); width: 14px; height: 14px; }
+.nagent-none { padding: 6px 8px; font-size: 13px; line-height: 18px; color: var(--muted); }
+.logo-xs { width: 20px; height: 20px; border-radius: 5px; }
+/* Settings: a computer's Always allow line and the agents on it. */
+.comp-allow { padding-top: 12px; border-top: 1px solid var(--hairline); }
+.comp-allow .actions { margin-left: auto; }
+.sagents { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 6px; }
+.sagent { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-radius: 10px; background: #ffffff; }
+.sagent .actions { margin-left: auto; }
+.other-agents-h { margin-top: 24px; }

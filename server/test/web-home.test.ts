@@ -507,12 +507,66 @@ describe("an agent's page", () => {
   });
 });
 
+describe("the navigation: each Portico opens to show its agents", () => {
+  const starter: WorkspaceView = { ...PERSONAL, id: "w-shared", name: "Shared Portico", phrase: "your Shared Portico", starter: true, kind: "shared", agentIds: [] };
+  const launch: WorkspaceView = { ...PERSONAL, id: "w-launch", name: "Launch", phrase: "the Portico “Launch”", named: true, kind: "shared", people: [inPortico(CHRIS), inPortico(MAYA)], agentIds: [grok.id, mayaDot.id] };
+  const all = [PERSONAL, starter, launch];
+  const list = (html: string, id: string) => {
+    const from = html.indexOf(`data-key="nw-${id}"`);
+    const to = html.indexOf('data-key="nw-', from + 1);
+    return html.slice(from, to === -1 ? html.indexOf("New Portico", from) : to);
+  };
+
+  test("closed by default: only the Portico being looked at is open, and the short names show", () => {
+    const html = render(state({ workspaces: all }));
+    expect(html).not.toContain('class="nagents"');
+    inOrder(text(html), "Porticos", "Personal", "Shared", "Launch", "New Portico");
+    expect((html.match(/aria-expanded="false" aria-controls="nav-agents-/g) ?? []).length).toBe(3);
+    const open = render(state({ workspaces: all, route: { page: "workspace", id: "w-launch" }, tasks: TASKS }));
+    expect(list(open, "w-launch")).toContain('class="nagents"');
+    expect(list(open, PERSONAL.id)).not.toContain('class="nagents"');
+  });
+
+  test("an open Portico lists its agents, the person's own first, each opening the agent's page, then Add agent", () => {
+    const html = render(state({ workspaces: all, navFold: { "w-launch": true } }));
+    const part = list(html, "w-launch");
+    inOrder(text(part), "Launch", grok.label, mayaDot.label, "Maya Okafor", "Add agent");
+    expect(part).toContain(`href="/a/${grok.id}" data-action="go"`);
+    expect(part).toContain('data-action="ws-add-agent" data-id="w-launch"');
+    // What the person chose wins over what is being looked at.
+    const shut = render(state({ workspaces: all, navFold: { "w-launch": false }, route: { page: "workspace", id: "w-launch" }, tasks: TASKS }));
+    expect(list(shut, "w-launch")).not.toContain('class="nagents"');
+  });
+
+  test("an agent in two Porticos shows under both, and both open on the agent's page", () => {
+    const html = render(state({ workspaces: all, route: { page: "agent", id: grok.id }, tasks: TASKS }));
+    for (const id of [PERSONAL.id, "w-launch"]) expect(list(html, id)).toContain(`href="/a/${grok.id}" data-action="go" data-href="/a/${grok.id}" aria-current="page"`);
+    expect(list(html, "w-shared")).not.toContain('class="nagents"');
+  });
+
+  test("an empty Portico says so, and a long list stops at eight until Show all", () => {
+    const empty = list(render(state({ workspaces: all, navFold: { "w-shared": true } })), "w-shared");
+    inOrder(text(empty), "Shared", "No agents here yet", "Add agent");
+    const many = Array.from({ length: 11 }, (_, i) => agent({ id: `a-m${i}`, name: `m${i}`, label: `Helper ${i}` }));
+    const crowd: WorkspaceView = { ...launch, id: "w-crowd", name: "Crowd", agentIds: many.map((a) => a.id) };
+    const s = state({ agents: [...AGENTS, ...many], workspaces: [PERSONAL, crowd], navFold: { "w-crowd": true } });
+    const short = list(render(s), "w-crowd");
+    expect((short.match(/class="nagent"/g) ?? []).length).toBe(8);
+    expect(text(short)).toContain("Show all 11");
+    const whole = list(render({ ...s, navAll: { "w-crowd": true } }), "w-crowd");
+    expect((whole.match(/class="nagent"/g) ?? []).length).toBe(11);
+    expect(text(whole)).not.toContain("Show all");
+  });
+});
+
 describe("the navigation", () => {
-  test("Home with its count, Activity, the Porticos with who else is there, Agents and Settings", () => {
+  test("Home with its count, Activity, the Porticos with who else is there, and Settings: no Agents item", () => {
     const launch: WorkspaceView = { id: "w-launch", name: "Launch", phrase: "the Portico “Launch”", named: true, starter: false, kind: "shared", owner: CHRIS, isOwner: true, people: [inPortico(CHRIS), inPortico(MAYA)], pausedAt: null, agentIds: [], needs: true };
     const html = render(state({ workspaces: [PERSONAL, launch] }));
     const t = text(html);
-    inOrder(t, "Home 3 waiting for a decision", "Activity", "Porticos", "Personal Portico", "Launch", "Something here needs a decision", "New Portico", "Agents", "Settings");
+    inOrder(t, "Home 3 waiting for a decision", "Activity", "Porticos", "Personal", "Launch", "Something here needs a decision", "New Portico", "Settings");
+    expect(html).not.toContain('href="/agents"');
+    expect(t).not.toContain("Personal Portico");
     expect(html).toContain('aria-label="With Maya Okafor"');
     expect(html).toMatch(/href="\/p\/w-launch" data-action="go"/);
     // No list of every agent on the server, and no shortcut to invites: people come in by sharing a workspace.

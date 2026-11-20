@@ -89,7 +89,7 @@ function renderAgentsForm(s: HomeState, w: WorkspaceView, f: Extract<WorkspaceFo
     <span class="lbl" id="ws-add-lbl">Agents to put in ${esc(w.phrase)}</span>
     <div role="group" aria-labelledby="ws-add-lbl">${ticks(s, out, f.agentIds)}</div>
     ${when(f.error, `<span role="alert" class="field-error">${esc(f.error)}</span>`)}
-    <span class="actions"><button type="button" class="btn btn-link" data-action="ws-form-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "ws-form" || f.agentIds.length === 0, " disabled")}>Add ${plural(f.agentIds.length, "agent")}</button></span>
+    <span class="actions"><button type="button" class="btn btn-link start" data-action="add-open" aria-haspopup="dialog">${ICON.plus()}Join a new agent</button><button type="button" class="btn btn-link" data-action="ws-form-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "ws-form" || f.agentIds.length === 0, " disabled")}>Add ${plural(f.agentIds.length, "agent")}</button></span>
   </form>`;
 }
 
@@ -255,9 +255,7 @@ export function renderWorkspace(s: HomeState, id: string): string {
     )}
     <section aria-labelledby="h-ws-mine" class="block">
       <div class="block-head"><h2 id="h-ws-mine" class="h-section">${esc(s.me.name)}'s agents</h2>${
-        shared
-          ? when(outside.length > 0, `<button type="button" class="linkbtn" data-action="ws-agents-open">${ICON.plus()}Add agents</button>`)
-          : `<button type="button" class="linkbtn" data-action="add-open" aria-haspopup="dialog">${ICON.plus()}Add agent</button>`
+        `<button type="button" class="linkbtn" data-action="ws-add-agent" data-id="${esc(w.id)}" aria-haspopup="dialog">${ICON.plus()}Add agent</button>`
       }</div>
       ${when(f?.kind === "agents", () => renderAgentsForm(s, w, f as Extract<WorkspaceForm, { kind: "agents" }>))}
       ${mine.length === 0 ? `<p class="empty">${shared ? `None of ${esc(s.me.name)}'s agents are in ${esc(w.phrase)} yet.` : "No agents here yet."}</p>` : `<ul class="rows card-list">${mine.map((a) => agentRow(s, w, a)).join("")}</ul>`}
@@ -316,40 +314,5 @@ export function renderWorkspace(s: HomeState, id: string): string {
       </ul>
     </section>`,
     )}
-  </div>`;
-}
-
-// ---- the Agents page ----
-
-/** Every agent of the signed-in person once, with a tick for each Portico the agent is in, the person's own first. */
-export function renderAgentsPage(s: HomeState): string {
-  const mine = s.agents.filter((a) => a.mine);
-  const shared = s.workspaces;
-  const f = s.wsForm;
-  const row = (a: AgentView) => {
-    const st = agentState(a, s.now);
-    const href = `/a/${encodeURIComponent(a.id)}`;
-    const marks = shared
-      .map((w) => {
-        const on = w.agentIds.includes(a.id);
-        const busy = s.busy === `ws-tick:${w.id}:${a.id}`;
-        return `<button type="button" class="tick tick-chip${when(on, " is-on")}" role="checkbox" aria-checked="${on}" data-action="ws-toggle" data-ws="${esc(w.id)}" data-id="${esc(a.id)}"${when(busy, " disabled")}><span class="tick-box" aria-hidden="true">${when(on, ICON.check(14))}</span><span class="tick-name">${esc(w.name)}</span></button>`;
-      })
-      .join("");
-    return `<li class="srow srow-stack" data-key="ag-${esc(a.id)}">
-      <div class="srow-line">${logo(a.kind, "", kindInfo(a.kind).label)}<span class="row-text"><a class="row-link" href="${href}" data-action="go" data-href="${href}"><strong>${esc(a.label)}</strong></a><span class="row-help"><span class="dot ${st.dot}"></span> ${esc(st.label)}${when(s.me.handle, ` <code>${esc(`${s.me.handle}/${a.address}`)}</code>`)}</span></span></div>
-      <div class="tick-line" role="group" aria-label="Porticos for ${esc(a.label)}">${marks}</div>
-    </li>`;
-  };
-  return `<div class="page agents-page" data-key="page-agents">
-    <header class="page-head">
-      <div class="block-head ws-head">
-        <div class="page-title"><h1 class="h-page">Agents</h1></div>
-        <span class="actions ws-actions"><button type="button" class="btn btn-secondary" data-action="ws-new-open">New Portico</button><button type="button" class="btn btn-primary" data-action="add-open" aria-haspopup="dialog">${ICON.plus()}Add agent</button></span>
-      </div>
-      <p class="sec-help">Tick the Porticos each agent is in.${when(s.me.handle, ` Other people's agents write to these as <code>${esc(s.me.handle)}/name</code>.`)}</p>
-    </header>
-    ${when(f?.kind === "new", () => renderNewForm(s, f as Extract<WorkspaceForm, { kind: "new" }>))}
-    ${mine.length === 0 ? `<p class="empty">No agents yet.</p>` : `<ul class="rows card-list">${mine.map(row).join("")}</ul>`}
   </div>`;
 }

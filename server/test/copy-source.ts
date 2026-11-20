@@ -138,8 +138,6 @@ export function wordProblems(copy: string): string[] {
   const rules: [RegExp, string][] = [
     // The place is "a Portico": nothing visible calls it a workspace.
     [/\bworkspaces?\b/gi, "says workspace"],
-    // A person's own is "Personal Portico" or "Chris's Portico", never the stored name alone.
-    [/\bPersonal\b(?! (Portico|access|information|data))/g, "says Personal"],
     // "This Portico" would be the place being looked at, which is always named. An installation is a Portico server.
     [/\bthis Portico\b(?! server)/gi, "says this Portico: name the Portico, or say this Portico server"],
     [/\bPortico (instance|installation|deployment|host)s?\b/gi, "an installation is a Portico server"],

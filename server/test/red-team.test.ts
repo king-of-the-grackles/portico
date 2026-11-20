@@ -796,7 +796,7 @@ describe("Always allow covers the whole computer", () => {
     const listed = (await (await callPerson(p, cookies.chris, "GET", "/api/computers")).json()) as { computers: { id: string; alwaysAllowed: boolean }[] };
     expect(listed.computers.find((c) => c.id === studio.id)!.alwaysAllowed).toBe(true);
     const settings = (await page(p, "/settings", cookies.chris)).html;
-    expect(visibleCopy(settings)).toContain("Always allowed.");
+    expect(visibleCopy(settings)).toContain("On. Messages from new sessions here go through without asking.");
     expect(settings).toContain('data-action="computer-unallow"');
     // Someone else gets what an unknown computer gets, and nothing changes.
     expect((await callPerson(p, cookies.dana, "DELETE", `/api/computers/${studio.id}/always-allow`)).status).toBe(404);
@@ -807,7 +807,20 @@ describe("Always allow covers the whole computer", () => {
     // Sessions there, and ones started later, are asked about again: once for each agent not yet allowed.
     expect(say(api, "muse").status).toBe("pending");
     expect(say(api, "grok").heldFor).toBe("new_agent");
-    expect(say(session(studio, "web"), "muse").heldFor).toBe("new_agent");
+    const web = session(studio, "web");
+    const waiting = say(web, "muse");
+    expect(waiting.heldFor).toBe("new_agent");
+    // Settings turns it on again too: what waited for being new goes through, and later sessions aren't asked about.
+    expect((await callPerson(p, cookies.dana, "PUT", `/api/computers/${studio.id}/always-allow`)).status).toBe(404);
+    expect(p.computers.get(studio.id)!.unproven).toBe(true);
+    const on = await callPerson(p, cookies.chris, "PUT", `/api/computers/${studio.id}/always-allow`);
+    expect(((await on.json()) as { computer: { alwaysAllowed: boolean } }).computer.alwaysAllowed).toBe(true);
+    expect(p.messages.get({ agent: web.id }, waiting.id)!.status).not.toBe("held");
+    expect(say(session(studio, "docs"), "grok").status).toBe("pending");
+    expect((await page(p, "/settings", cookies.chris)).html).toContain('data-action="computer-unallow"');
+    // The old Agents page is gone: its address goes home.
+    const old = await p.app.request("/agents", { headers: { cookie: cookies.chris } });
+    expect([old.status, old.headers.get("location")]).toEqual([303, "/"]);
   });
 
   test("a join code that arrives as an agent's message is still only a message: handing it in needs the asker's own secret", async () => {
