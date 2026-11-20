@@ -323,6 +323,22 @@ describe("the code", () => {
     expect(await joinCodeOn(p, cookies.maya, asked.id)).toBe(code);
   });
 
+  test("the code page watches for the join: the status reads for the person who allowed and nobody else, never carries the code, and changes once the code is handed in", async () => {
+    const { p, cookies } = await world();
+    const asked = await askToJoin(p, { kind: "agent", name: "helper" });
+    expect((await answerConsent(p, cookies.maya, asked.id, { decision: "approve" })).status).toBe(200);
+    const code = p.consents.get(asked.id)!.code!;
+    expect((await page(p, `/c/${asked.id}`, cookies.maya)).html).toContain('<script type="module" src="/assets/code-wait.js');
+    const waiting = await callPerson(p, cookies.maya, "GET", `/api/consents/${asked.id}`);
+    expect(waiting.headers.get("cache-control")).toBe("no-store");
+    expect(await waiting.text()).toBe('{"status":"allowed"}');
+    expect((await callPerson(p, cookies.chris, "GET", `/api/consents/${asked.id}`)).status).toBe(404);
+    expect((await p.app.request(`/api/consents/${asked.id}`)).status).toBe(401);
+    expect((await submitJoinCode(p, asked, code)).status).toBe(200);
+    expect(await (await callPerson(p, cookies.maya, "GET", `/api/consents/${asked.id}`)).text()).toBe('{"status":"approved"}');
+    expect((await page(p, `/c/${asked.id}`, cookies.maya)).html).not.toContain("code-wait.js");
+  });
+
   test("a stranger who started the request but is never given the code gets no token, whatever the stranger tries", async () => {
     const { p, maya, cookies } = await world();
     // The stranger asks for an agent of the stranger's own, and sends Maya the link. Maya presses Allow.

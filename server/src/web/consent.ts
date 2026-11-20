@@ -185,7 +185,7 @@ ${more}
     return narrowPage(c, {
       title: "Give this code to the agent",
       referrer: "no-referrer",
-      scripts: ["forms.js", "local-time.js"],
+      scripts: ["forms.js", "local-time.js", "code-wait.js"],
       styles: ["onboarding.css"],
       main: html`<div><h1>Give this code to the agent</h1></div>
 <div class="ask">

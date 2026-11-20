@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { consentWords } from "../core/consent-words";
 import type { ConsentKind, ConsentRequest } from "../core/consents";
 import type { Core } from "../core/core";
+import { PorticoError } from "../core/errors";
 import type { Person } from "../core/types";
 import { log } from "../log";
 import { type PersonEnv, currentPerson } from "./context";
@@ -37,6 +38,9 @@ export function consentCards(core: Core, me: Person): ConsentCard[] {
  * no handle yet sends one along. Answers `{ status, next }`, where next is the same page, which then shows what
  * happened: for a join that was allowed (`status: "allowed"`), the code to give the computer or agent that asked. The
  * code itself is never in this answer, only on that page.
+ *
+ * GET /api/consents/:id → `{ status }`, for a person the page would show the request to: the code page asks, to show
+ * that the join finished. Anyone else gets 404.
  */
 export function consentRoutes(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
@@ -55,6 +59,13 @@ export function consentRoutes(core: Core): Hono<PersonEnv> {
       if (secret) await core.mail.send(share, `${core.settings.publicUrl()}/share#${secret}`, core.people.require(me.id));
     }
     return c.json({ status: request.status, next: `/c/${id}` });
+  });
+
+  route.get("/:id", (c) => {
+    const view = core.consents.describe(currentPerson(c), c.req.param("id"));
+    if (!view) throw new PorticoError("not_found", "No such request.");
+    c.header("Cache-Control", "no-store");
+    return c.json({ status: view.request.status });
   });
 
   return route;
