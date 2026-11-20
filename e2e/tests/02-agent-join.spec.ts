@@ -1,6 +1,6 @@
 // An agent asks to join. Its person opens the link, signs in on that page and presses Allow; the page then shows a
 // code, and only the agent that is handed the code joins.
-import { AgentClient, type Join, joinStatus, readJoinCode, startJoin, submitJoinCode } from "../lib/agent";
+import { AgentClient, type Join, joinStatus, readJoinCode, sayStartedThisJoin, startJoin, submitJoinCode } from "../lib/agent";
 import { nonce } from "../lib/env";
 import { expect, test } from "../lib/fixtures";
 import { signIn } from "../lib/person";
@@ -34,6 +34,8 @@ test("an agent joins through the consent page and lists its Portico", async ({ w
   await expect(page.locator('input[name="name"]')).toHaveValue(name);
   await expect(page.locator('input[name="mine"]')).toHaveCount(0);
 
+  // Later specs reuse this agent, so the join is marked as Alice's own (see sayStartedThisJoin).
+  await sayStartedThisJoin(page);
   // Alice started this join herself and presses Allow: the page shows the code, and nothing has joined yet.
   await page.getByRole("button", { name: "Allow", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Share this code with your agent" })).toBeVisible();

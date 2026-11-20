@@ -79,18 +79,24 @@ export async function allowOnConsentPage(page: Page, ask: { link: string }, opts
   await page.goto(ask.link);
   const handle = page.getByLabel("Handle");
   if (opts.handle && (await handle.count()) > 0) await handle.fill(opts.handle);
-  if (opts.mine !== false) {
-    await page.locator("form[data-api]").first().evaluate((form) => {
-      const tick = document.createElement("input");
-      Object.assign(tick, { type: "checkbox", name: "mine", checked: true, hidden: true });
-      form.append(tick);
-    });
-  }
+  if (opts.mine !== false) await sayStartedThisJoin(page);
   await page.locator('button[name="decision"][value="approve"]').click();
   const heading = page.getByRole("heading", { level: 1, name: /^(Allowed|Joined|Share this code with your agent)$/ });
   await expect(heading).toBeVisible();
   if ((await heading.innerText()).trim() !== "Share this code with your agent") return null;
   return readJoinCode(page);
+}
+
+/**
+ * Adds "started this join myself" to the consent page's form. The page no longer asks, and the person API still takes
+ * the field: with it the newcomer isn't held for being new, so a spec about something else isn't stopped by that.
+ */
+export async function sayStartedThisJoin(page: Page): Promise<void> {
+  await page.locator("form[data-api]").first().evaluate((form) => {
+    const tick = document.createElement("input");
+    Object.assign(tick, { type: "checkbox", name: "mine", checked: true, hidden: true });
+    form.append(tick);
+  });
 }
 
 /** The 4-digit code on the page a join shows after Allow. */
