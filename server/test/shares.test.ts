@@ -90,6 +90,52 @@ describe("share links", () => {
   });
 });
 
+describe("a person opens a share link in a browser", () => {
+  test("the page behind the link is for people first, and says who invites into which Portico", async () => {
+    const { p, chris, maya, launch, cookies } = await world();
+    const { secret } = p.shares.create(chris.id, launch.id);
+    const html = await (await p.app.request("/share")).text();
+    // One button for a person, and the steps for agents still on the page.
+    expect(html).toContain("data-invite-join");
+    expect(html).toContain("For AI agents: how to use a share link");
+    expect(html).toContain("join_portico");
+    const preview = async (cookie: string | null, with_: string) => {
+      const res = await callPerson(p, cookie, "POST", "/api/share-links/preview", { link: link(with_) });
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    };
+    // The link is the credential: no sign-in needed to read what it is for, and a wrong one tells nothing.
+    expect(await preview(null, secret)).toEqual({ status: 200, body: { portico: "Launch", by: "Chris", signedIn: false } });
+    expect((await preview(null, "B".repeat(22))).status).toBe(404);
+    const mine = await preview(cookies.maya, secret);
+    expect(mine.body).toMatchObject({ portico: "Launch", by: "Chris", signedIn: true, ready: true, forMe: true, already: false });
+    expect((mine.body.agents as { label: string }[]).map((a) => a.label)).toEqual(p.agents.ownedBy(maya.id).map((a) => a.name));
+    expect((await preview(cookies.chris, secret)).body).toMatchObject({ already: true, workspaceId: launch.id });
+  });
+
+  test("the person joins from that page with the agents ticked, or none, and the link is used up", async () => {
+    const { p, chris, robert, maya, launch, cookies } = await world();
+    const { secret } = p.shares.create(chris.id, launch.id);
+    const enter = (cookie: string | null, agents: unknown) => callPerson(p, cookie, "POST", "/api/share-links/enter", { link: link(secret), agents });
+    expect((await enter(null, [])).status).toBe(401);
+    const scout = p.agents.ownedBy(maya.id)[0]!;
+    const theirs = p.agents.ownedBy(robert.id)[0]!;
+    // Someone else's agent named on the way in is left out: only the person's own come along.
+    const res = await enter(cookies.maya, [scout.id, theirs.id, 7]);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { workspace: { id: string } }).workspace.id).toBe(launch.id);
+    expect(p.workspaces.hasPerson(launch.id, maya.id)).toBe(true);
+    expect(p.workspaces.hasAgent(launch.id, scout.id)).toBe(true);
+    expect(p.workspaces.hasAgent(launch.id, theirs.id)).toBe(false);
+    // Used up: nobody else comes in with it.
+    expect((await enter(cookies.robert, [])).status).toBe(404);
+    // With no agent at all, the person still joins: agents come later.
+    const again = p.shares.create(chris.id, launch.id).secret;
+    expect((await callPerson(p, cookies.robert, "POST", "/api/share-links/enter", { link: link(again) })).status).toBe(200);
+    expect(p.workspaces.hasPerson(launch.id, robert.id)).toBe(true);
+    expect(p.workspaces.agentsIn(launch.id).some((id) => p.agents.get(id)?.ownerId === robert.id)).toBe(false);
+  });
+});
+
 describe("an agent on Portico comes in with a link", () => {
   test("the link alone lets no agent in: nothing changes until the person who manages the agent confirms", async () => {
     const { p, chris, robert, muse, rmuse, launch } = await world();
@@ -509,7 +555,7 @@ describe("the Portico tools", () => {
     );
     expect((await tool(p, rmuse.token, "list_porticos")).body.waiting).toMatchObject([{ kind: "join", status: "pending", portico: { name: "Launch" }, link: `https://portico.example.com/c/${joining.body.request.id}` }]);
     const waiting = (await (await callPerson(p, cookies.robert, "GET", "/api/approvals")).json()) as { consents: { id: string }[] };
-    expect(waiting.consents).toMatchObject([{ id: joining.body.request.id, kind: "enter", title: "Come into a Portico" }]);
+    expect(waiting.consents).toMatchObject([{ id: joining.body.request.id, kind: "enter", title: "Join Launch" }]);
     expect((await answerConsent(p, cookies.chris, joining.body.request.id, { decision: "approve" })).status).toBe(404);
     expect((await answerConsent(p, cookies.robert, joining.body.request.id, { decision: "approve" })).status).toBe(200);
     expect(p.workspaces.hasPerson(launch.id, robert.id)).toBe(true);

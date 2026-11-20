@@ -22,9 +22,12 @@ export function afterAccountSignIn(person: Person, next: unknown): string {
   return path === "/" ? "/welcome" : `/welcome?next=${encodeURIComponent(path)}`;
 }
 
-/** A name for a person just made from an account: the account's own, else the email's first part, else a plain one. */
+/**
+ * A name for a person just made from an account: the account's own (Google's, say), else a plain one that stands until
+ * the person types theirs at sign-up. Never the first half of the address: that is no name to show other people.
+ */
 function firstName(account: Account): string {
-  for (const candidate of [account.name, account.email?.split("@")[0]]) {
+  for (const candidate of [account.name]) {
     if (!candidate) continue;
     try {
       return cleanPersonName(candidate);
@@ -84,6 +87,18 @@ export function accountSignInRoutes(core: Core, signIn: AccountSignIn): Hono<Per
   };
 
   route.get("/handles/check", (c) => c.json(check(c, c.req.query("handle"))));
+
+  // A free handle near the name the person is typing, for the handle field to offer. Empty when nothing usable was typed.
+  route.get("/handles/suggest", (c) => {
+    const me = currentPerson(c);
+    const name = (c.req.query("name") ?? "").trim().slice(0, 60);
+    if (!/[a-z0-9]/i.test(name)) return c.json({ handle: "" });
+    try {
+      return c.json({ handle: people.suggestHandle(name, me.id) });
+    } catch {
+      return c.json({ handle: "" });
+    }
+  });
 
   route.post("/welcome", async (c) => {
     const me = currentPerson(c);

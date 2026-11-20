@@ -174,7 +174,7 @@ describe("a signed-in person with no handle yet", () => {
       const page = await callPerson(p, cookie, "GET", path);
       expect([path, page.status, page.headers.get("location")]).toEqual([path, 200, null]);
     }
-    expect(await (await callPerson(p, cookie, "GET", "/share")).text()).toContain("Come into a Portico");
+    expect(await (await callPerson(p, cookie, "GET", "/share")).text()).toContain("Join a Portico");
     // Everything else still waits for the handle.
     expect((await callPerson(p, cookie, "GET", "/settings")).headers.get("location")).toBe("/welcome?next=%2Fsettings");
     expect((await callPerson(p, cookie, "GET", "/shared")).headers.get("location")).toBe("/welcome?next=%2Fshared");

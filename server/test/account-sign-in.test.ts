@@ -79,7 +79,7 @@ describe("signing in with an account", () => {
     const { cookie, next } = await signIn("account:acct-maya:maya@example.com:");
     expect(next).toBe("/welcome");
     const maya = p.people.byExternalId("acct-maya")!;
-    expect(maya).toMatchObject({ name: "maya", role: "member", status: "active", email: "maya@example.com", handle: null });
+    expect(maya).toMatchObject({ name: "New person", role: "member", status: "active", email: "maya@example.com", handle: null });
     // The handle tells apart two people with one name, and a taken handle is refused.
     expect((await callPerson(p, cookie, "POST", "/api/welcome", { name: "Chris", handle: "chris" })).status).toBe(409);
     await callPerson(p, cookie, "POST", "/api/welcome", { name: "Chris", handle: "maya" });
@@ -131,14 +131,20 @@ describe("signing in with an account", () => {
 
 describe("the name on the handle page", () => {
   test("the handle page starts the name with what the sign-in gave, and empty when the sign-in gave only an address", async () => {
-    const { signIn, page } = start();
+    const { p, signIn, page } = start();
     const field = async (cookie: string) => /id="wl-name"[^>]*value="([^"]*)"/.exec(await (await page("/welcome", cookie)).text())?.[1];
     // Google gives a name: the field starts with it.
     expect(await field((await signIn("account:acct-g:gia@example.com:Gia Rossi")).cookie)).toBe("Gia Rossi");
-    // An email sign-up gives none: the handle is suggested from the address, the name is left to the person.
+    // An email sign-up gives none: the name is left to the person, and nothing is taken from the address, not even a
+    // handle to offer. The handle is offered from the name as the person types it.
     const byEmail = await signIn("account:acct-e:emil.k@example.com:");
+    expect(p.people.byExternalId("acct-e")!.name).toBe("New person");
     expect(await field(byEmail.cookie)).toBe("");
-    expect(await (await page("/welcome", byEmail.cookie)).text()).toContain('value="emil-k"');
+    const welcome = await (await page("/welcome", byEmail.cookie)).text();
+    expect(/id="wl-handle"[^>]*value="([^"]*)"/.exec(welcome)?.[1]).toBe("");
+    const offer = async (name: string) => ((await (await callPerson(p, byEmail.cookie, "GET", `/api/handles/suggest?name=${encodeURIComponent(name)}`)).json()) as { handle: string }).handle;
+    expect(await offer("Emil Koch")).toBe("emil-koch");
+    expect(await offer("  ")).toBe("");
   });
 
   test("the name a person gives is kept in Portico only: no server source reads a management key or calls Descope's management API", async () => {

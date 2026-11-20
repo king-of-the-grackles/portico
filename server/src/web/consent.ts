@@ -9,7 +9,7 @@ import { defang, fileSize } from "../core/framing";
 import { LIMITS } from "../core/limits";
 import { HANDLE_MAX, HANDLE_MIN } from "../core/people";
 import type { Message, Person } from "../core/types";
-import { accountSignInCard, DESCOPE_SCRIPT, SIGN_IN_CSP } from "./account";
+import { accountSignInCard, DESCOPE_SCRIPT, hasOwnName, SIGN_IN_CSP } from "./account";
 import { type Html, narrowPage, utcClock } from "./layout";
 import { localSignInCard } from "./sign-in";
 
@@ -220,7 +220,9 @@ ${more}
     const words = consentWords(view, me.name, (agent) => core.agents.nameFor(agent, me.id));
     const joins = isJoin(request.kind);
     const needsHandle = me.handle === null;
-    const suggested = needsHandle ? core.people.suggestHandle(me.name === "New person" ? (me.email?.split("@")[0] ?? "") : me.name, me.id) : "";
+    // A sign-in by email gives no name: the field starts empty, and the handle is offered from the name as typed.
+    const nameShown = needsHandle && hasOwnName(me) ? me.name : "";
+    const suggested = needsHandle && nameShown ? core.people.suggestHandle(nameShown, me.id) : "";
     const started = html`<time datetime="${request.createdAt}" data-local-time>${utcClock(request.createdAt)}</time>`;
     return narrowPage(c, {
       title: words.title,
@@ -251,14 +253,17 @@ ${words.then.map((line) => html`<p>${line}</p>`)}`
 }
 ${
   needsHandle
-    ? html`<label for="cs-handle" class="lbl">Handle</label>
+    ? html`<label for="cs-person" class="lbl">Your name</label>
+<input id="cs-person" name="person" class="field" autocomplete="name" maxlength="60" required value="${nameShown}" aria-describedby="cs-person-help" data-person-name>
+<span id="cs-person-help" class="help">Shown to people you share a Portico with.</span>
+<label for="cs-handle" class="lbl">Handle</label>
 <input id="cs-handle" name="handle" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="${HANDLE_MIN}" maxlength="${HANDLE_MAX}" required value="${suggested}" aria-describedby="cs-handle-help" data-handle>
-<span id="cs-handle-help" class="help" data-handle-note aria-live="polite">Other people see your agents as ${suggested}/muse.</span>`
+<span id="cs-handle-help" class="help" data-handle-note aria-live="polite">Goes in front of your agents' names, like ada/muse. Lowercase letters, digits and hyphens.</span>`
     : ""
 }
 ${
   view.candidates.length > 0 && view.share
-    ? html`<fieldset class="ticks-field"><legend class="lbl">${me.name}'s agents to bring in</legend>
+    ? html`<fieldset class="ticks-field"><legend class="lbl">Your agents to bring in</legend>
 ${view.candidates.map(
   (agent) =>
     html`<label class="tick-line"><input type="checkbox" name="agents" data-list value="${agent.id}"${agent.id === view.agent?.id ? html` checked` : ""}> ${quote(core.agents.nameFor(agent, me.id))}${agent.id === view.agent?.id ? " (the agent that asked)" : ""}</label>`,

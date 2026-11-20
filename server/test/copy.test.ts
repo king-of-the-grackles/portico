@@ -142,9 +142,9 @@ describe("copy sweeps", () => {
   });
 
   test("the share email", () => {
-    const mail = shareEmail({ handle: "chris", senderEmail: "chris@example.com", to: "dana@example.com", link: `${PUBLIC_URL}/share#secret`, stopUrl: `${PUBLIC_URL}/mail/stop?t=x` });
+    const mail = shareEmail({ inviter: "Chris", senderEmail: "chris@example.com", portico: "Launch", to: "dana@example.com", link: `${PUBLIC_URL}/share#secret`, stopUrl: `${PUBLIC_URL}/mail/stop?t=x` });
     for (const part of [mail.subject, mail.text, visibleCopy(mail.html)]) expect(wordProblems(part)).toEqual([]);
-    expect(mail.subject).toBe("chris shared a Portico");
+    expect(mail.subject).toBe("Chris invited you to join Launch");
   });
 
   test("everything the server and the plugin can say: error messages, notes, pages and emails in the source", () => {

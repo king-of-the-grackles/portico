@@ -595,7 +595,7 @@ describe("what an agent asks its person, through the page", () => {
     const { secret } = p.shares.create(chris.id, launch.id);
     const entering = (await tool(p, scout.token, "join_portico", { link: `${PUBLIC_URL}/share#${secret}` })).request;
     const enterPage = await page(p, `/c/${entering.id}`, cookies.maya);
-    expect(visibleCopy(enterPage.html)).toContain("The agent “scout” asks to come into the Portico “Launch”, shared by Chris (chris).");
+    expect(visibleCopy(enterPage.html)).toContain("The agent “scout” asks to join the Portico “Launch”, shared by Chris (chris).");
     expect(copyProblems(visibleCopy(enterPage.html))).toEqual([]);
     expect((await page(p, `/c/${entering.id}`, cookies.chris)).status).toBe(404);
     expect(entering.code).toBeUndefined();
@@ -738,7 +738,7 @@ describe("consent email", () => {
     expect((await answerConsent(p, cookies.chris, request.id, { decision: "approve" })).status).toBe(200);
     const sent = bodies();
     expect(sent.map((mail) => mail.to[0])).toEqual(["chris@example.com", "dana@example.com"]);
-    expect(sent[1]!.subject).toBe("chris shared a Portico");
+    expect(sent[1]!.subject).toBe("Chris invited you to join Launch");
     expect(sent[1]!.text).toContain(`${PUBLIC_URL}/share#`);
     const done = await page(p, `/c/${request.id}`, cookies.chris);
     expect(visibleCopy(done.html)).toContain("Portico emailed the link to “dana@example.com”");

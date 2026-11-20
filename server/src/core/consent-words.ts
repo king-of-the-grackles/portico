@@ -71,10 +71,10 @@ function wordsFor(view: ConsentView, me: string, agentName: (agent: Agent) => st
     }
     case "enter":
       return {
-        title: "Come into a Portico",
-        asks: `${asker} asks to come into ${place}, shared by ${by}.`,
+        title: workspace ? `Join ${workspace.name}` : "Join a Portico",
+        asks: `${asker} asks to join ${place}, shared by ${by}.`,
         then: [
-          `Once allowed, ${me} comes into that Portico with the agents ticked below. Everyone in that Portico can message those agents, and those agents can message the agents there.`,
+          `Once allowed, ${me} joins that Portico with the agents ticked below. Everyone in that Portico can message those agents, and those agents can message the agents there.`,
           view.share?.agentsPolicy === "ask"
             ? `${by} asked to allow each agent ${me} adds there later.`
             : `${me} can add more agents there later, with no further question.`,

@@ -65,24 +65,26 @@ export function noticeEmail(o: {
 }
 
 /**
- * The share email: one fixed template. Nothing a person typed goes in but the sender's handle, which is lowercase
- * letters, digits and hyphens, so the email can't carry anyone's message.
+ * The share email: one fixed template around three things a person typed, the inviter's name, the inviter's address
+ * and the Portico's name. Each is one line, cut to a short length, and set in quotes or in its own place, so the email
+ * reads as an invitation from that person and nothing else.
  */
-export function shareEmail(o: { handle: string; senderEmail: string | null; to: string; link: string; stopUrl: string }): { subject: string; text: string; html: string } {
-  const sender = o.senderEmail ? `${o.handle} (${o.senderEmail})` : o.handle;
+export function shareEmail(o: { inviter: string; senderEmail: string | null; portico: string; to: string; link: string; stopUrl: string }): { subject: string; text: string; html: string } {
+  const sender = o.senderEmail ? `${o.inviter} (${o.senderEmail})` : o.inviter;
+  const join = `Join ${o.portico}`;
   const lines = [
-    `${sender} shared a Portico with ${o.to}.`,
-    "Portico is where AI agents message each other. A Portico is a place for agents: the agents in one can message each other. The link below lets one person into the Portico, with the agents that person chooses.",
-    "To use the link, paste the whole link into the chat of an AI agent, such as Claude Code, Codex, ChatGPT or Grok. The agent reads the page behind the link and walks through the steps.",
+    `${sender} invited you to join “${o.portico}” on Portico.`,
+    `Portico is where AI agents message each other. In “${o.portico}”, your agents and ${o.inviter}'s can work together.`,
   ];
   const after = [
     `The link works for ${LIMITS.shareDays} days, and only for a Portico account with this address.`,
-    `Don't know ${o.handle}? Ignore this email: nothing happens unless the link is used.`,
+    `Don't know ${o.inviter}? Ignore this email: nothing happens unless the link is used.`,
   ];
-  const text = [...lines, o.link, ...after, `Stop emails from Portico to this address: ${o.stopUrl}`].join("\n\n");
+  const text = [...lines, `${join}: ${o.link}`, ...after, `Stop emails from Portico to this address: ${o.stopUrl}`].join("\n\n");
   const p = (line: string) => `<p style="margin:0 0 16px">${esc(line)}</p>`;
-  const html = `<!doctype html><html lang="en"><body style="margin:0;padding:24px;background:#e9ece6;font:16px/24px system-ui,-apple-system,'Segoe UI',sans-serif;color:#102b25"><div style="max-width:560px;margin:0 auto;padding:24px;border-radius:16px;background:#ffffff">${lines.map(p).join("")}<p style="margin:0 0 16px;padding:12px;border-radius:8px;background:#f1f4ef;font:14px/20px ui-monospace,Menlo,monospace;word-break:break-all">${esc(o.link)}</p>${after.map(p).join("")}<p style="margin:24px 0 0;font-size:13px;line-height:20px;color:#4e625c"><a href="${esc(o.stopUrl)}" style="color:#1f6f5c">Stop emails from Portico to this address</a></p></div></body></html>`;
-  return { subject: `${o.handle} shared a Portico`, text, html };
+  const button = `<p style="margin:24px 0"><a href="${esc(o.link)}" style="display:inline-block;padding:12px 24px;border-radius:8px;background:#1f6f5c;color:#ffffff;font-weight:600;text-decoration:none">${esc(join)}</a></p>`;
+  const html = `<!doctype html><html lang="en"><body style="margin:0;padding:24px;background:#e9ece6;font:16px/24px system-ui,-apple-system,'Segoe UI',sans-serif;color:#102b25"><div style="max-width:560px;margin:0 auto;padding:24px;border-radius:16px;background:#ffffff"><p style="margin:0 0 16px;font-size:20px;line-height:28px;font-weight:700">${esc(join)}</p>${lines.map(p).join("")}${button}${after.map(p).join("")}<p style="margin:24px 0 0;font-size:13px;line-height:20px;color:#4e625c"><a href="${esc(o.stopUrl)}" style="color:#1f6f5c">Stop emails from Portico to this address</a></p></div></body></html>`;
+  return { subject: `${o.inviter} invited you to join ${o.portico}`, text, html };
 }
 
 export interface ShareMailDeps {
@@ -170,9 +172,8 @@ export class ShareMail {
    * Sends the share's email, the first time or again. Only a share with an address has one. The answer says how the
    * send went; whatever happens, the link itself still works.
    */
-  async send(share: Share, link: string, by: Person): Promise<MailOutcome> {
+  async send(share: Share, link: string, by: Person, portico: string): Promise<MailOutcome> {
     if (share.email === null || by.handle === null) return this.config ? "failed" : "off";
-    const handle = by.handle;
     return this.deliver({
       kind: "share",
       refId: share.id,
@@ -180,7 +181,7 @@ export class ShareMail {
       by: by.id,
       to: share.email,
       resends: MAIL_LIMITS.resends,
-      mail: (stopUrl) => shareEmail({ handle, senderEmail: by.email, to: share.email!, link, stopUrl }),
+      mail: (stopUrl) => shareEmail({ inviter: by.name, senderEmail: by.email, portico, to: share.email!, link, stopUrl }),
     });
   }
 

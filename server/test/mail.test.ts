@@ -30,15 +30,12 @@ describe("emailing a share link", () => {
     expect(sent.headers.authorization).toBe("Bearer re_test_key");
     expect(sent.headers["idempotency-key"]).toBe(`share-${made.id}-1`);
     const body = JSON.parse(sent.body) as { from: string; to: string[]; subject: string; text: string; html: string; headers: Record<string, string> };
-    expect(body).toMatchObject({ from: MAIL.from, to: ["robert@example.com"], subject: "chris shared a Portico" });
+    expect(body).toMatchObject({ from: MAIL.from, to: ["robert@example.com"], subject: "Chris invited you to join Launch <b>bold</b>" });
     expect(body.text).toContain(made.link);
-    expect(body.text).toContain("chris (chris@example.com) shared a Portico with robert@example.com.");
-    // Nothing a person typed rides along: not the workspace's name, not the person's name.
-    for (const part of [body.text, body.html, body.subject]) {
-      expect(part).not.toContain("Launch");
-      expect(part).not.toContain("bold");
-      expect(part).not.toContain("Chris");
-    }
+    expect(body.text).toContain("Chris (chris@example.com) invited you to join “Launch <b>bold</b>” on Portico.");
+    // The inviter's name and the Portico's name ride along, as plain text: what a person typed is never markup in the page.
+    expect(body.html).not.toContain("<b>");
+    expect(body.html).toContain('<a href="https://portico.example.com/share#');
     expect(body.headers["List-Unsubscribe"]).toMatch(/^<https:\/\/portico\.example\.com\/mail\/stop\?t=/);
     expect(body.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
     // The key never reaches the database or the page.
@@ -92,7 +89,7 @@ describe("emailing a share link", () => {
     const outcomes: string[] = [];
     for (let i = 0; i < MAIL_LIMITS.perPersonDaily + 1; i++) {
       const { share, secret } = p.shares.create(chris.id, launch.id, { email: `person${i}@example.com` });
-      outcomes.push(await p.mail.send(share, `https://portico.example.com/share#${secret}`, p.people.get(chris.id)!));
+      outcomes.push(await p.mail.send(share, `https://portico.example.com/share#${secret}`, p.people.get(chris.id)!, "Launch"));
     }
     expect(outcomes.filter((o) => o === "sent")).toHaveLength(MAIL_LIMITS.perPersonDaily);
     expect(outcomes.at(-1)).toBe("person_limit");
@@ -106,7 +103,7 @@ describe("emailing a share link", () => {
       for (let i = 0; i < MAIL_LIMITS.perPersonDaily && last !== "workspace_limit"; i++) {
         // Only the owner makes a link. The limit per Portico counts whoever each email is sent for.
         const { share, secret } = p.shares.create(p.workspaces.get(launch.id)!.ownerId, launch.id, { email: `m${m}-${i}@example.com` });
-        last = await p.mail.send(share, `https://portico.example.com/share#${secret}`, member);
+        last = await p.mail.send(share, `https://portico.example.com/share#${secret}`, member, "Launch");
         if (last === "sent") sent++;
       }
     }
@@ -115,7 +112,7 @@ describe("emailing a share link", () => {
     // A day later the count starts again.
     p.clock.advance(24 * HOUR + MINUTE);
     const { share, secret } = p.shares.create(chris.id, launch.id, { email: "later@example.com" });
-    expect(await p.mail.send(share, `https://portico.example.com/share#${secret}`, p.people.get(chris.id)!)).toBe("sent");
+    expect(await p.mail.send(share, `https://portico.example.com/share#${secret}`, p.people.get(chris.id)!, "Launch")).toBe("sent");
   });
 });
 
@@ -127,7 +124,7 @@ describe("limits that hold across accounts", () => {
       const sender = i === 0 ? p.people.get(chris.id)! : p.people.setHandle((await addMember(p, `Sender ${i}`)).id, `sender-${i}`);
       const workspace = i === 0 ? launch : p.workspaces.create(sender.id, `Space ${i}`);
       const { share, secret } = p.shares.create(sender.id, workspace.id, { email: "target@example.com" });
-      outcomes.push(await p.mail.send(share, `https://portico.example.com/share#${secret}`, sender));
+      outcomes.push(await p.mail.send(share, `https://portico.example.com/share#${secret}`, sender, "Launch"));
     }
     expect(outcomes).toEqual(["sent", "sent", "sent", "recipient_limit"]);
     expect(hooks.sent).toHaveLength(MAIL_LIMITS.perRecipientDaily);
@@ -183,10 +180,17 @@ describe("stopping email", () => {
 
 describe("the email and its settings", () => {
   test("the template follows the copy rules and escapes what goes into the page", () => {
-    const mail = shareEmail({ handle: "chris", senderEmail: "chris@example.com", to: "robert@example.com", link: "https://portico.example.com/share#abc", stopUrl: "https://portico.example.com/mail/stop?t=x&y=1" });
-    expect(copyProblems(visibleCopy(mail.html))).toEqual([]);
+    const plain = shareEmail({ inviter: "Chris Ivester", senderEmail: "chris@example.com", portico: "Launch plan", to: "robert@example.com", link: "https://portico.example.com/share#abc", stopUrl: "https://portico.example.com/mail/stop?t=x" });
+    expect(copyProblems(visibleCopy(plain.html))).toEqual([]);
+    const mail = shareEmail({ inviter: "Chris <b>Ivester</b>", senderEmail: "chris@example.com", portico: "Launch <i>plan</i>", to: "robert@example.com", link: "https://portico.example.com/share#abc", stopUrl: "https://portico.example.com/mail/stop?t=x&y=1" });
     expect(mail.html).toContain("t=x&#38;y=1");
-    expect(mail.text.split("\n\n")).toHaveLength(7);
+    expect(mail.text.split("\n\n")).toHaveLength(6);
+    // The inviter's name and the Portico's name are what a person typed: they show as text, and the button carries the link.
+    expect(mail.subject).toBe("Chris <b>Ivester</b> invited you to join Launch <i>plan</i>");
+    expect(mail.html).not.toContain("<b>");
+    expect(mail.html).not.toContain("<i>");
+    expect(mail.html).toContain('<a href="https://portico.example.com/share#abc"');
+    expect(visibleCopy(mail.html)).toContain("Join Launch");
   });
 
   test("mail is on only with a key, and the sender defaults to the public address", () => {

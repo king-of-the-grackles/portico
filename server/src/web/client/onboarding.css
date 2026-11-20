@@ -61,3 +61,12 @@
 .narrow .one-box h1 { margin: 0 0 4px; font-size: 28px; line-height: 36px; overflow-wrap: anywhere; }
 .one-box .lbl { margin-top: 8px; }
 .one-box .actions { margin-top: 12px; }
+
+/* /share: the short page for a person, with the steps for agents folded below. */
+.invite { margin-bottom: 8px; }
+.invite .actions { justify-content: flex-start; }
+.invite .actions .btn { min-width: 200px; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; display: block; }
+.agent-steps > summary { cursor: pointer; font-weight: 600; color: var(--teal); min-height: 32px; }
+.agent-steps[open] > summary { margin-bottom: 16px; }
+.agent-steps { display: flex; flex-direction: column; gap: 16px; }
+.agent-steps > * + * { margin-top: 16px; }

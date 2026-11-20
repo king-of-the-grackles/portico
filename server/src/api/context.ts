@@ -10,7 +10,7 @@ import type { Person } from "../core/types";
  * the consent pages, which ask for the handle themselves, and the two public pages of steps (/share, /join): a share
  * link's secret is in the fragment, which a redirect to /welcome would carry off and then lose.
  */
-const OPEN_WITHOUT_HANDLE = /^\/(welcome|sign-in|share|join|assets\/.*|c\/[^/]+|oauth\/authorize|api\/(session|welcome|handles\/check|me|consents\/[^/]+))\/?$/;
+const OPEN_WITHOUT_HANDLE = /^\/(welcome|sign-in|share|join|assets\/.*|c\/[^/]+|oauth\/authorize|api\/(session|welcome|handles\/check|handles\/suggest|me|consents\/[^/]+|share-links\/preview))\/?$/;
 
 /** Every person-API route sees who is signed in, or null. */
 export type PersonEnv = { Variables: { person: Person | null } };

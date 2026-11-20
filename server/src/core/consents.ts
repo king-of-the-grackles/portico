@@ -551,7 +551,7 @@ export class Consents {
    * new computer, starts unproven, and its first message to each other agent of the person waits for the person.
    * Don't allow also ends a join that was allowed and still waits for its code.
    */
-  decide(personId: string, id: string, input: { decision: unknown; name?: unknown; handle?: unknown; agents?: unknown; mine?: unknown }): Decided {
+  decide(personId: string, id: string, input: { decision: unknown; name?: unknown; handle?: unknown; person?: unknown; agents?: unknown; mine?: unknown }): Decided {
     const { decision } = input;
     if (decision !== "approve" && decision !== "deny") throw new PorticoError("bad_request", "decision must be approve or deny.");
     const person = this.people.require(personId);
@@ -577,6 +577,10 @@ export class Consents {
     if (person.status !== "active") throw new PorticoError("not_allowed", "Waiting for the owner to approve this account.");
     const wanted = typeof input.handle === "string" ? input.handle.trim().toLowerCase() : "";
     if (person.handle === null && wanted === "") throw new PorticoError("bad_request", "Pick a handle first.");
+    // A new person gives a name on the same page, once. An account that came with one (Google's, say) keeps it unless
+    // the person typed another.
+    const ownName = typeof input.person === "string" ? input.person.trim() : "";
+    if (person.handle === null && ownName === "" && person.name === "New person") throw new PorticoError("bad_request", "Type your name first.");
     // The person's own agents picked on the page to come in with a share link. Anything else named is ignored.
     const pickable = new Map(found.candidates.map((a) => [a.id, a]));
     const picked = Array.isArray(input.agents)
@@ -594,6 +598,7 @@ export class Consents {
       const code = signInCode();
       this.db.transaction(() => {
         if (person.handle === null) {
+          if (ownName !== "") this.people.rename(person.id, ownName);
           this.people.setHandle(person.id, wanted);
           this.workspaces.personal(person.id);
         }
@@ -612,6 +617,7 @@ export class Consents {
     }
     const done = this.db.transaction(() => {
       if (person.handle === null) {
+        if (ownName !== "") this.people.rename(person.id, ownName);
         this.people.setHandle(person.id, wanted);
         this.workspaces.personal(person.id);
       }

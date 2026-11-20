@@ -287,12 +287,52 @@ export function workspaceRoutes(core: Core): Hono<PersonEnv> {
     return c.body(null, 204);
   });
 
+  // What a share link is for, for whoever holds the link: the Portico's name and who invites. The link is the
+  // credential, so no sign-in is needed; a link that doesn't work answers the same 404 whatever the reason. A signed-in
+  // person also learns whether the link is for that account, and which of the person's agents could come along.
+  route.post("/share-links/preview", async (c) => {
+    const body = await jsonObject(c);
+    const share = shares.usable(body.link);
+    const workspace = workspaces.get(share.workspaceId)!;
+    const by = core.people.get(share.createdBy);
+    const me = c.get("person");
+    const mine = me && me.status === "active" ? core.agents.ownedBy(me.id).filter((a) => a.revokedAt === null) : [];
+    return c.json({
+      portico: workspace.name,
+      by: by?.name ?? "",
+      signedIn: me !== null,
+      ...(me
+        ? {
+            me: me.email ?? me.name,
+            ready: me.handle !== null && me.status === "active",
+            forMe: shares.mayClaim(share, me),
+            already: workspaces.hasPerson(workspace.id, me.id),
+            workspaceId: workspaces.hasPerson(workspace.id, me.id) ? workspace.id : null,
+            agents: mine.map((a) => ({ id: a.id, label: core.agents.nameFor(a, me.id) })),
+          }
+        : {}),
+    });
+  });
+
+  // The signed-in person comes into the link's Portico, from the page behind the link, with the agents ticked there
+  // (none is fine: agents can be added afterwards). The same step an agent asks for with join_portico, taken by the
+  // person in the person's own browser, so nothing more is asked.
+  route.post("/share-links/enter", async (c) => {
+    const me = currentPerson(c);
+    const body = await jsonObject(c);
+    const share = shares.usable(body.link);
+    const ids = Array.isArray(body.agents) ? body.agents.filter((id): id is string => typeof id === "string") : [];
+    const picked = core.agents.ownedBy(me.id).filter((a) => a.revokedAt === null && ids.includes(a.id));
+    const workspace = core.db.transaction(() => shares.enter(share, me, picked))();
+    return c.json({ workspace: { id: workspace.id, name: workspace.name } });
+  });
+
   route.post("/porticos/:id/shares", async (c) => {
     const me = currentPerson(c);
     const body = await jsonObject(c);
     const { share, secret } = shares.create(me.id, c.req.param("id"), { email: body.email, agents: body.agents });
     let mail: string | null = null;
-    if (share.email !== null) mail = await core.mail.send(share, `${core.settings.publicUrl()}/share#${secret}`, me);
+    if (share.email !== null) mail = await core.mail.send(share, `${core.settings.publicUrl()}/share#${secret}`, me, workspaces.get(share.workspaceId)?.name ?? "a Portico");
     return c.json({ share: workspaceViews(core, me).share(share, mail) }, 201);
   });
 
@@ -302,7 +342,7 @@ export function workspaceRoutes(core: Core): Hono<PersonEnv> {
     const share = shares.get(c.req.param("id"));
     const secret = share && share.createdBy === me.id ? shares.secretFor(me.id, share.id) : null;
     if (!share || !secret || share.email === null) throw new PorticoError("not_found", "No such share link.");
-    const mail = await core.mail.send(share, `${core.settings.publicUrl()}/share#${secret}`, me);
+    const mail = await core.mail.send(share, `${core.settings.publicUrl()}/share#${secret}`, me, workspaces.get(share.workspaceId)?.name ?? "a Portico");
     return c.json({ share: workspaceViews(core, me).share(share, mail) });
   });
 
