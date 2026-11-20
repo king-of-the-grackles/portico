@@ -377,7 +377,9 @@ describe("isolation sweep: tools", () => {
     expect(agents.agents.map((a) => a.name)).toEqual(["alice/beta-helper"]);
     const porticos = (await (await callAs(w.p, w.b1, "POST", "/api/agent/portico-tools/list_porticos", {})).json()) as { porticos: { name: string }[] };
     expect(porticos.porticos.map((x) => x.name)).toEqual(["Bob's Portico", "Bob's shared Portico", "Beta"]);
-    const people = (await (await callPerson(w.p, w.cookie, "GET", "/api/people")).json()) as { people: { name: string }[] };
+    const people = (await (await callPerson(w.p, w.cookie, "GET", "/api/people")).json()) as { people: { name: string; agentCount: number }[] };
     expect(people.people.map((x) => x.name).sort()).toEqual(["Alice", "Bob"]);
+    // Alice has two agents, and Bob reaches one: the count tells Bob nothing about the other.
+    expect(people.people.find((x) => x.name === "Alice")!.agentCount).toBe(1);
   });
 });

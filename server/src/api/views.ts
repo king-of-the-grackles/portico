@@ -405,13 +405,17 @@ export function personViews(deps: ViewDeps, me: Person) {
     };
   };
 
+  let seenAgents: Set<string> | null = null;
+  const seen = () => (seenAgents ??= workspaces.visibleAgents(me.id));
   const person = (p: Person): PersonView => ({
     id: p.id,
     name: p.name,
     role: p.role,
     status: p.status,
     isMe: p.id === me.id,
-    agentCount: agents.ownedBy(p.id).length,
+    // Someone else's agents count only as far as the signed-in person reaches them: an agent kept out of every shared
+    // Portico stays unknown, even as a number. A Portico server's owner, who removes people, sees the whole count.
+    agentCount: p.id === me.id || me.role === "owner" ? agents.ownedBy(p.id).length : agents.ownedBy(p.id).filter((a) => seen().has(a.id)).length,
     ...(p.handle ? { handle: p.handle } : {}),
     ...(p.id === me.id && p.email ? { email: p.email } : {}),
   });
