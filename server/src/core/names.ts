@@ -76,6 +76,8 @@ export function posesAsOwnPortico(name: string): boolean {
     key === titleKey("Portico") ||
     key === titleKey("My Portico") ||
     ends("'s Portico") ||
+    ends("'s shared Portico") ||
+    ends("s' shared Portico") ||
     ends("'s new Portico") ||
     ends("s' Portico")
   );

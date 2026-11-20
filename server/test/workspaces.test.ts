@@ -161,7 +161,7 @@ describe("workspaces", () => {
     p.workspaces.addAgent(chris.id, starter!.id, muse.agent.id);
     expect(p.workspaces.agentsIn(starter!.id)).toEqual([muse.agent.id]);
     // Nobody can give a Portico either name.
-    for (const name of ["Shared Portico", "shared", "Personal Portico", "Chris's shared Portico"]) expect(errorCode(() => p.workspaces.create(chris.id, name))).toBe("conflict");
+    for (const name of ["Shared Portico", "shared", "Personal Portico", "Chris's shared Portico", "Robert's shared Portico", "Robert\u2019s Shared Portico", "Dana's shared Portico", "Chris' shared Portico"]) expect(errorCode(() => p.workspaces.create(chris.id, name))).toBe("conflict");
     // Renamed, it is a Portico like any other. Deleted, it stays deleted.
     expect(p.workspaces.rename(chris.id, starter!.id, "Launch")).toMatchObject({ name: "Launch", named: true });
     p.workspaces.remove(chris.id, starter!.id);
