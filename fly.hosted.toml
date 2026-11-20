@@ -11,18 +11,19 @@
 # invites@mail.<address's host>.
 # The data folder holds portico.db (people, agents and Porticos), porticos/<id>/content.db (each Portico's messages)
 # and signing.key. A database made by an earlier Portico is refused: point PORTICO_DATA_DIR at a new folder.
-app = "portico-hosted"
+app = "portico-chat"
 primary_region = "iad"
 
 [build]
   dockerfile = "Dockerfile"
 
 [env]
-  PORTICO_PUBLIC_URL = "https://portico.chat"
+  PORTICO_PUBLIC_URL = "https://app.portico.chat"
   # A new folder beside what earlier versions kept under /data/hosted, which stays untouched.
-  PORTICO_DATA_DIR = "/data/portico"
+  PORTICO_DATA_DIR = "/data/portico-1"
   # People sign in with Descope. A project ID is public: the sign-in page shows the same value.
   PORTICO_DESCOPE_PROJECT_ID = "P3MD7hNBI7xhF3svzdJQHDkFRcYe"
+  PORTICO_MAIL_FROM = "Portico <no-reply@mail.portico.chat>"
   PORTICO_PLUGIN_SOURCE = "king-of-the-grackles/portico"
 
 # SQLite lives on one volume, so hosted Portico runs on one machine: deploy with --ha=false.
