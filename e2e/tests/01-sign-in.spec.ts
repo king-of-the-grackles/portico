@@ -30,7 +30,7 @@ test("a new person signs in, picks a handle and sees their Portico", async ({ wo
   // The dashboard, with the person's own Portico in the side list.
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { level: 1, name: "Today" })).toBeVisible();
-  await page.getByRole("link", { name: "Personal Portico" }).click();
+  await page.getByRole("link", { name: "Personal", exact: true }).click();
   await expect(page).toHaveURL(/\/p\/[0-9a-f-]+$/);
   await expect(page.getByRole("heading", { level: 1, name: "Personal Portico" })).toBeVisible();
 
