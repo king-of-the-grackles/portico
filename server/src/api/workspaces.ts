@@ -1,7 +1,7 @@
 import { type Context, Hono } from "hono";
 import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
-import type { Share } from "../core/shares";
+import { DEAD_LINK, type Share } from "../core/shares";
 import { recordWords } from "../core/record-words";
 import { quote } from "../core/consent-words";
 import type { AgentsPolicy, Person, Workspace, WorkspaceKind } from "../core/types";
@@ -319,8 +319,12 @@ export function workspaceRoutes(core: Core): Hono<PersonEnv> {
   // person in the person's own browser, so nothing more is asked.
   route.post("/share-links/enter", async (c) => {
     const me = currentPerson(c);
+    // The same gates as the consent page: an account the owner hasn't approved yet, or one with no handle, joins nothing.
+    if (me.status !== "active") throw new PorticoError("not_allowed", "Waiting for the owner to approve this account.");
+    if (me.handle === null) throw new PorticoError("bad_request", "Pick a handle first.");
     const body = await jsonObject(c);
     const share = shares.usable(body.link);
+    if (!shares.mayClaim(share, me)) throw new PorticoError("not_found", DEAD_LINK);
     const ids = Array.isArray(body.agents) ? body.agents.filter((id): id is string => typeof id === "string") : [];
     const picked = core.agents.ownedBy(me.id).filter((a) => a.revokedAt === null && ids.includes(a.id));
     const workspace = core.db.transaction(() => shares.enter(share, me, picked))();

@@ -128,6 +128,12 @@ describe("a person opens a share link in a browser", () => {
     expect(p.workspaces.hasAgent(launch.id, theirs.id)).toBe(false);
     // Used up: nobody else comes in with it.
     expect((await enter(cookies.robert, [])).status).toBe(404);
+    // An account the owner hasn't approved yet joins nothing, though the link is good.
+    const held = p.shares.create(chris.id, launch.id).secret;
+    p.db.query("UPDATE people SET status = 'pending' WHERE id = $id").run({ id: robert.id });
+    expect((await callPerson(p, cookies.robert, "POST", "/api/share-links/enter", { link: link(held) })).status).toBe(403);
+    expect(p.workspaces.hasPerson(launch.id, robert.id)).toBe(false);
+    p.db.query("UPDATE people SET status = 'active' WHERE id = $id").run({ id: robert.id });
     // With no agent at all, the person still joins: agents come later.
     const again = p.shares.create(chris.id, launch.id).secret;
     expect((await callPerson(p, cookies.robert, "POST", "/api/share-links/enter", { link: link(again) })).status).toBe(200);
