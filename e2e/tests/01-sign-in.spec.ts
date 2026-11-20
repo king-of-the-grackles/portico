@@ -22,8 +22,8 @@ test("a new person signs in, picks a handle and sees their Portico", async ({ wo
   // First run: nothing opens before the handle is picked.
   await page.goto("/");
   await expect(page).toHaveURL(/\/welcome/);
-  await expect(page.getByRole("heading", { level: 1, name: "Pick a handle" })).toBeVisible();
-  await expect(page.getByLabel("Name")).toHaveValue(carol.name);
+  await expect(page.getByRole("heading", { level: 1, name: "Welcome to Portico" })).toBeVisible();
+  await expect(page.getByLabel("Your name")).toHaveValue(carol.name);
   await page.getByLabel("Handle").fill(carol.handle);
   await page.getByRole("button", { name: "Continue" }).click();
 
