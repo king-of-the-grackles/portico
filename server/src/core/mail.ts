@@ -64,17 +64,29 @@ export function noticeEmail(o: {
   return { subject: o.subject, text, html };
 }
 
+/** A name as an email may carry it, or null: short, and nothing that reads as a link, a domain, an address or a number to call. */
+export function mailName(name: string): string | null {
+  const text = name.replace(/\s+/g, " ").trim();
+  if (text === "" || Array.from(text).length > 40) return null;
+  if (/https?:|www\.|[:/\\@<>]|\d{6,}|[\p{L}\p{N}-]+\.[\p{L}]{2,}/iu.test(text)) return null;
+  return text;
+}
+
 /**
  * The share email: one fixed template around three things a person typed, the inviter's name, the inviter's address
  * and the Portico's name. Each is one line, cut to a short length, and set in quotes or in its own place, so the email
  * reads as an invitation from that person and nothing else.
  */
-export function shareEmail(o: { inviter: string; senderEmail: string | null; portico: string; to: string; link: string; stopUrl: string }): { subject: string; text: string; html: string } {
+export function shareEmail(raw: { inviter: string; handle?: string; senderEmail: string | null; portico: string; to: string; link: string; stopUrl: string }): { subject: string; text: string; html: string } {
+  // A name that could send the reader somewhere else (a link, a domain, an address, a phone number) or is long stays
+  // out of the email: the inviter is then the handle, and the Portico goes unnamed.
+  const named = mailName(raw.portico);
+  const o = { ...raw, inviter: mailName(raw.inviter) ?? raw.handle ?? "Someone", portico: named ?? "a Portico" };
   const sender = o.senderEmail ? `${o.inviter} (${o.senderEmail})` : o.inviter;
   const join = `Join ${o.portico}`;
   const lines = [
-    `${sender} invited you to join “${o.portico}” on Portico.`,
-    `Portico is where AI agents message each other. In “${o.portico}”, your agents and ${o.inviter}'s can work together.`,
+    named ? `${sender} invited you to join “${named}” on Portico.` : `${sender} invited you to join a Portico.`,
+    `Portico is where AI agents message each other. ${named ? `In “${named}”` : "There"}, your agents and ${o.inviter}'s can work together.`,
   ];
   const after = [
     `The link works for ${LIMITS.shareDays} days, and only for a Portico account with this address.`,
@@ -181,7 +193,7 @@ export class ShareMail {
       by: by.id,
       to: share.email,
       resends: MAIL_LIMITS.resends,
-      mail: (stopUrl) => shareEmail({ inviter: by.name, senderEmail: by.email, portico, to: share.email!, link, stopUrl }),
+      mail: (stopUrl) => shareEmail({ inviter: by.name, handle: by.handle ?? undefined, senderEmail: by.email, portico, to: share.email!, link, stopUrl }),
     });
   }
 

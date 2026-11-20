@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import { parseEnv, ConfigError } from "../src/config";
-import { MAIL_LIMITS, shareEmail } from "../src/core/mail";
+import { MAIL_LIMITS, mailName, shareEmail } from "../src/core/mail";
 import { addAppAgent, addMember, addOwner, callPerson, copyProblems, fakeWebhooks, HOUR, makePortico, MINUTE, signIn, visibleCopy, fakeAccounts } from "./helpers";
 
 const MAIL = { apiKey: "re_test_key", from: "Portico <invites@mail.portico.example>", webhookSecret: `whsec_${Buffer.from("resend-webhook-secret").toString("base64")}` };
@@ -30,11 +30,12 @@ describe("emailing a share link", () => {
     expect(sent.headers.authorization).toBe("Bearer re_test_key");
     expect(sent.headers["idempotency-key"]).toBe(`share-${made.id}-1`);
     const body = JSON.parse(sent.body) as { from: string; to: string[]; subject: string; text: string; html: string; headers: Record<string, string> };
-    expect(body).toMatchObject({ from: MAIL.from, to: ["robert@example.com"], subject: "Chris invited you to join Launch <b>bold</b>" });
+    expect(body).toMatchObject({ from: MAIL.from, to: ["robert@example.com"], subject: "Chris invited you to join a Portico" });
     expect(body.text).toContain(made.link);
-    expect(body.text).toContain("Chris (chris@example.com) invited you to join “Launch <b>bold</b>” on Portico.");
+    expect(body.text).toContain("Chris (chris@example.com) invited you to join a Portico.");
     // The inviter's name and the Portico's name ride along, as plain text: what a person typed is never markup in the page.
-    expect(body.html).not.toContain("<b>");
+    // The Portico here is named with markup, so its name stays out of the email altogether.
+    expect(body.html).not.toContain("bold");
     expect(body.html).toContain('<a href="https://portico.example.com/share#');
     expect(body.headers["List-Unsubscribe"]).toMatch(/^<https:\/\/portico\.example\.com\/mail\/stop\?t=/);
     expect(body.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
@@ -182,15 +183,16 @@ describe("the email and its settings", () => {
   test("the template follows the copy rules and escapes what goes into the page", () => {
     const plain = shareEmail({ inviter: "Chris Ivester", senderEmail: "chris@example.com", portico: "Launch plan", to: "robert@example.com", link: "https://portico.example.com/share#abc", stopUrl: "https://portico.example.com/mail/stop?t=x" });
     expect(copyProblems(visibleCopy(plain.html))).toEqual([]);
-    const mail = shareEmail({ inviter: "Chris <b>Ivester</b>", senderEmail: "chris@example.com", portico: "Launch <i>plan</i>", to: "robert@example.com", link: "https://portico.example.com/share#abc", stopUrl: "https://portico.example.com/mail/stop?t=x&y=1" });
-    expect(mail.html).toContain("t=x&#38;y=1");
-    expect(mail.text.split("\n\n")).toHaveLength(6);
-    // The inviter's name and the Portico's name are what a person typed: they show as text, and the button carries the link.
-    expect(mail.subject).toBe("Chris <b>Ivester</b> invited you to join Launch <i>plan</i>");
-    expect(mail.html).not.toContain("<b>");
+    // A name that reads as a link, a domain, an address, markup or a number to call never rides in the email.
+    for (const bad of ["Visit evil.example now", "https://evil.test", "Call 5551234567", "pay@evil.test", "Chris <b>Ivester</b>", "x".repeat(41), "bank.com/login"]) expect(mailName(bad)).toBeNull();
+    for (const fine of ["Chris Ivester", "Launch plan", "Zoë & Co", "Q3 2026 plan"]) expect(mailName(fine)).toBe(fine);
+    const mail = shareEmail({ inviter: "Click evil.example", handle: "chris", senderEmail: "chris@example.com", portico: "Launch <i>plan</i>", to: "robert@example.com", link: "https://portico.example.com/share#abc", stopUrl: "https://portico.example.com/mail/stop?t=x&y=1" });
+    expect(mail.subject).toBe("chris invited you to join a Portico");
+    expect(mail.html).not.toContain("evil");
     expect(mail.html).not.toContain("<i>");
+    expect(mail.html).toContain("t=x&#38;y=1");
     expect(mail.html).toContain('<a href="https://portico.example.com/share#abc"');
-    expect(visibleCopy(mail.html)).toContain("Join Launch");
+    expect(mail.text.split("\n\n")).toHaveLength(6);
   });
 
   test("mail is on only with a key, and the sender defaults to the public address", () => {
