@@ -11,7 +11,6 @@
 # invites@mail.<address's host>.
 # The data folder holds portico.db (people, agents and Porticos), porticos/<id>/content.db (each Portico's messages)
 # and signing.key. A database made by an earlier Portico is refused: point PORTICO_DATA_DIR at a new folder.
-# Optional secret: PORTICO_DESCOPE_MANAGEMENT_KEY, so the name a person gives is written to their Descope user.
 app = "portico-hosted"
 primary_region = "iad"
 

@@ -53,10 +53,6 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
   if (descopeProjectId !== null && !/^[A-Za-z0-9]{8,64}$/.test(descopeProjectId)) {
     problems.push("PORTICO_DESCOPE_PROJECT_ID must be a Descope project ID: letters and digits only");
   }
-  const descopeManagementKey = env.PORTICO_DESCOPE_MANAGEMENT_KEY?.trim() || null;
-  if (descopeManagementKey !== null && descopeProjectId === null) {
-    problems.push("PORTICO_DESCOPE_MANAGEMENT_KEY needs PORTICO_DESCOPE_PROJECT_ID: the key belongs to a Descope project");
-  }
   const secretsKey = env.PORTICO_SECRETS_KEY?.trim() || null;
   const secretsKeyOld = env.PORTICO_SECRETS_KEY_OLD?.trim() || null;
   // Never the value itself in a message: a key that is nearly right is still most of a key.
@@ -83,7 +79,6 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     files,
     mail,
     descopeProjectId,
-    descopeManagementKey,
   };
 }
 

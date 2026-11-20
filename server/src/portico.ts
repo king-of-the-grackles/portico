@@ -145,7 +145,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
 
   // Two ways to sign in, one Portico after that: an outside account (Descope) where a project is configured, otherwise
   // this server's own passwords, passkeys, setup link and invites.
-  const check = opts.accountCheck ?? (config.descopeProjectId ? new Descope(config.descopeProjectId, { now, managementKey: config.descopeManagementKey }) : null);
+  const check = opts.accountCheck ?? (config.descopeProjectId ? new Descope(config.descopeProjectId, { now }) : null);
 
   // Its own IDs: activity rows never shift the IDs tests expect for everything else.
   const activity = new Activity({ db, changes, now });
@@ -690,11 +690,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   };
 
   const accountSignIn: AccountSignIn | null = check
-    ? {
-        projectId: config.descopeProjectId ?? "",
-        account: (token) => accountFrom(check, token),
-        rename: check.rename ? (accountId, name) => check.rename!(accountId, name) : null,
-      }
+    ? { projectId: config.descopeProjectId ?? "", account: (token) => accountFrom(check, token) }
     : null;
   // Signing in makes each account, so there is no setup link to open first.
   if (accountSignIn && !settings.setupDone()) settings.set("setup_done_at", now().toISOString());

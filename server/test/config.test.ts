@@ -19,7 +19,6 @@ describe("config", () => {
       files: null,
       mail: null,
       descopeProjectId: null,
-      descopeManagementKey: null,
     });
   });
 

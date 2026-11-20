@@ -50,7 +50,6 @@ export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfi
     mail: null,
     files: null,
     descopeProjectId: null,
-    descopeManagementKey: null,
     ...overrides,
   };
 }

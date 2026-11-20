@@ -243,8 +243,6 @@ export interface AccountSignIn {
   projectId: string;
   /** The account a sign-in token belongs to, or `unauthorized`. */
   account(token: unknown): Promise<Account>;
-  /** Writes the person's name to their account at the sign-in service. Null where Portico wasn't given the means. */
-  rename: ((accountId: string, name: string) => Promise<void>) | null;
 }
 
 export interface PorticoConfig {
@@ -281,9 +279,4 @@ export interface PorticoConfig {
    * passwords and passkeys, with a setup link for the first account and invites for the rest (a self-hosted server).
    */
   descopeProjectId: string | null;
-  /**
-   * PORTICO_DESCOPE_MANAGEMENT_KEY: with it, the name a person gives Portico is written to their Descope user. Null:
-   * Descope keeps whatever name the sign-in gave it.
-   */
-  descopeManagementKey: string | null;
 }

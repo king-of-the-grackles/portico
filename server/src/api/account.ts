@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { setCookie } from "hono/cookie";
 import { SESSION_COOKIE } from "../core/accounts";
 import type { Core } from "../core/core";
-import { tellAccountName } from "./account-sign-in";
 import { type PersonEnv, currentPerson, sessionCookie } from "./context";
 import { jsonObject } from "./session";
 import { personViews } from "./views";
@@ -26,7 +25,6 @@ export function accountRoutes(core: Core): Hono<PersonEnv> {
       }
       return changed;
     })();
-    if (person.name !== me.name) await tellAccountName(core, person);
     return c.json({ person: personViews(core, person).person(person) });
   });
 
