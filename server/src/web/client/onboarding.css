@@ -70,3 +70,4 @@
 .agent-steps[open] > summary { margin-bottom: 16px; }
 .agent-steps { display: flex; flex-direction: column; gap: 16px; }
 .agent-steps > * + * { margin-top: 16px; }
+.invite [hidden] { display: none; }
