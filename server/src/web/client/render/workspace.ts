@@ -1,7 +1,7 @@
 // A Portico's page (/p/:id; a workspace, in this code), the Agents page (/agents), and the cards for what an agent
 // asked about a Portico.
 // Pure: state in, HTML out.
-import { agentState, date, esc, expiresIn, ICON, kindInfo, logo, monogram, personColor, plural, when } from "./common.js";
+import { agentState, date, esc, expiresIn, ICON, kindInfo, logo, monogram, personColor, plural, porticoHeading, when } from "./common.js";
 import { renderTaskRow, taskHead } from "./tasks.js";
 import type { AgentView, HomeState, PersonRef, ShareView, WorkspaceForm, WorkspaceView } from "./types.js";
 
@@ -68,6 +68,8 @@ function renderShareForm(s: HomeState, w: WorkspaceView, f: Extract<WorkspaceFor
       <button type="button" class="tick${when(f.agents === "ask", " is-on")}" role="radio" aria-checked="${f.agents === "ask"}" data-action="ws-policy" data-id="ask"><span class="tick-box" aria-hidden="true">${when(f.agents === "ask", ICON.check(14))}</span><span class="tick-name">Asks ${esc(s.me.name)} for each agent added</span></button>
     </div>
     <span class="help">Applies to agents added later. Change it under People.</span>
+    <div class="ticks"><button type="button" class="tick${when(f.allow, " is-on")}" role="checkbox" aria-checked="${f.allow}" data-action="ws-share-allow"><span class="tick-box" aria-hidden="true">${when(f.allow, ICON.check(14))}</span><span class="tick-name">Allow messages from this person's agents</span></button></div>
+    <span class="help">No question the first time one of those agents writes to yours. Untick to be asked first.</span>
     ${when(f.error, `<span role="alert" class="field-error">${esc(f.error)}</span>`)}
     <span class="actions"><button type="button" class="btn btn-link" data-action="ws-form-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "ws-form", " disabled")}>Create share link</button></span>
   </form>`;
@@ -221,7 +223,7 @@ export function renderWorkspace(s: HomeState, id: string): string {
   return `<div class="page workspace" data-key="page-ws-${esc(id)}">
     <header class="page-head">
       <div class="block-head ws-head">
-        <div class="page-title"><h1 class="h-page">${esc(w.name)}</h1></div>
+        <div class="page-title"><h1 class="h-page">${esc(porticoHeading(w.name))}</h1></div>
         <span class="actions ws-actions">
           ${when(shared, `<button type="button" class="btn btn-secondary" data-action="ws-people-toggle" aria-expanded="${s.peopleOpen}">People (${w.people.length})</button>`)}
           ${when(!shared || w.isOwner, `<button type="button" class="btn btn-primary" data-action="ws-share-open">${ICON.userPlus()}Share</button>`)}

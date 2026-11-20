@@ -94,6 +94,12 @@ async function start(): Promise<void> {
     return;
   }
   note.textContent = `Signed in as ${preview.me ?? ""}.`;
+  // Joining can also be the answer to "may this person's agents write to mine": ticked, and the person's to untick.
+  const allow = part("allow");
+  if (allow && preview.by) {
+    part("allow-text")!.textContent = `Allow messages from ${preview.by}'s agents`;
+    allow.hidden = false;
+  }
   const agents = preview.agents ?? [];
   if (agents.length > 0) {
     const ticks = part("ticks")!;
@@ -113,7 +119,7 @@ async function start(): Promise<void> {
     join.disabled = true;
     try {
       const picked = [...box.querySelectorAll<HTMLInputElement>("[data-invite-ticks] input:checked")].map((input) => input.value);
-      const { workspace } = await api<{ workspace: { id: string } }>("POST", "/api/share-links/enter", { link, agents: picked });
+      const { workspace } = await api<{ workspace: { id: string } }>("POST", "/api/share-links/enter", { link, agents: picked, allow: allow !== null && !allow.hidden && allow.querySelector("input")!.checked });
       location.assign(`/p/${encodeURIComponent(workspace.id)}`);
     } catch (err) {
       join.disabled = false;

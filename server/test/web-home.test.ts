@@ -4,7 +4,7 @@ import type { WorkspaceView } from "../src/api/workspaces";
 import type { TaskListData, TodayData } from "../src/api/tasks";
 import type { ConsentCard } from "../src/api/consents";
 import type { ActivityView, AgentView, HeldCard, MessageView, PersonView, TaskView } from "../src/api/views";
-import { agentState, clock, dayHeading, duration, esc, expiresIn, longDate, renderAddSheet } from "../src/web/client/render/common";
+import { agentState, clock, dayHeading, duration, esc, expiresIn, longDate, porticoHeading, renderAddSheet } from "../src/web/client/render/common";
 import { homeState, renderHome } from "../src/web/client/render/home";
 import { eventText } from "../src/web/client/render/activity";
 import { taskLine } from "../src/web/client/render/tasks";
@@ -556,6 +556,25 @@ describe("the navigation: each Portico opens to show its agents", () => {
     const whole = list(render({ ...s, navAll: { "w-crowd": true } }), "w-crowd");
     expect((whole.match(/class="nagent"/g) ?? []).length).toBe(11);
     expect(text(whole)).not.toContain("Show all");
+  });
+});
+
+describe("a Portico's page heading", () => {
+  test("every Portico's page is headed <name> Portico, and a name that ends in Portico isn't doubled", () => {
+    expect(["Launch plan", "Personal Portico", "Shared Portico", "Chris's shared Portico", "Growth portico", "Portico Labs"].map(porticoHeading)).toEqual([
+      "Launch plan Portico",
+      "Personal Portico",
+      "Shared Portico",
+      "Chris's shared Portico",
+      "Growth portico",
+      "Portico Labs Portico",
+    ]);
+    const launch: WorkspaceView = { ...PERSONAL, id: "w-launch", name: "Launch plan", phrase: "the Portico “Launch plan”", named: true, kind: "shared" };
+    const html = render(state({ workspaces: [PERSONAL, launch], route: { page: "workspace", id: "w-launch" }, tasks: TASKS }));
+    expect(html).toContain('<h1 class="h-page">Launch plan Portico</h1>');
+    // The navigation keeps the short name.
+    expect(html).toMatch(/<span class="nrow-name">Launch plan<\/span>/);
+    expect(render(state({ route: { page: "workspace", id: PERSONAL.id }, tasks: TASKS }))).toContain('<h1 class="h-page">Personal Portico</h1>');
   });
 });
 

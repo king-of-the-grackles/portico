@@ -51,7 +51,7 @@ export function consentRoutes(core: Core): Hono<PersonEnv> {
     const id = c.req.param("id");
     // The page's ticks arrive as `agents`: one ID, or a list. Absent, the asking agent alone comes in.
     const agents = body.agents === undefined ? undefined : Array.isArray(body.agents) ? body.agents : [body.agents];
-    const { request, share } = core.consents.decide(me.id, id, { decision: body.decision, name: body.name, handle: body.handle, person: body.person, agents, mine: body.mine });
+    const { request, share } = core.consents.decide(me.id, id, { decision: body.decision, name: body.name, handle: body.handle, person: body.person, allow: body.allow, agents, mine: body.mine });
     log("info", "consent_answered", { request_id: request.id, kind: request.kind, status: request.status });
     // A share made for an address is emailed to that address now. Whatever happens to the email, the link works.
     if (share && share.email !== null) {

@@ -71,3 +71,12 @@
 .agent-steps { display: flex; flex-direction: column; gap: 16px; }
 .agent-steps > * + * { margin-top: 16px; }
 .invite [hidden] { display: none; }
+
+/* A ticked line that says what one press also allows, and the box that asks a person to vouch for what just joined. */
+.allow-line { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--teal); border-radius: 8px; background: var(--teal-wash); cursor: pointer; }
+.allow-line input { margin: 4px 0 0; width: 18px; height: 18px; flex: none; accent-color: var(--teal); }
+.allow-line strong { display: block; color: var(--ink); }
+.allow-line .help { display: block; }
+.vouch { margin: 0 0 12px; padding: 12px; border: 1px solid var(--teal); border-radius: 8px; background: var(--teal-wash); display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.vouch .row-text { flex: 1 1 200px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vouch .btn { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: block; }

@@ -80,6 +80,7 @@ export function sharePages(core: Core): Hono<PersonEnv> {
 <p class="asks" data-invite-by></p>
 <p data-invite-what>A Portico is a place where AI agents message each other and work together.</p>
 <fieldset class="ticks-field" data-invite-agents hidden><legend class="lbl">Your agents to bring in</legend><span data-invite-ticks></span><span class="help">Any number, or none: agents can be added later.</span></fieldset>
+<label class="tick-line allow-line" data-invite-allow hidden><input type="checkbox" checked><span><strong data-invite-allow-text>Allow messages from the agents of the person who invited you</strong><span class="help">No question the first time one of those agents writes to yours. Untick to be asked first.</span></span></label>
 <p class="notice notice-error" data-invite-error role="alert" hidden></p>
 <div class="actions"><button type="button" class="btn btn-primary" data-invite-join>Join</button></div>
 <p class="quiet" data-invite-note></p>

@@ -74,7 +74,7 @@ export interface ConsentRequest {
    * the person who asked (`personId`). `agent` with a share link, once allowed: the person's own agents ticked to
    * come in too (`bring`). A join, once allowed: whether the person ticked "started this join" (`mine`).
    */
-  detail: { email?: string | null; personId?: string; agents?: AgentsPolicy; agentId?: string; bring?: string[]; mine?: boolean; name?: string; agentIds?: string[] };
+  detail: { email?: string | null; personId?: string; agents?: AgentsPolicy; agentId?: string; bring?: string[]; mine?: boolean; allow?: boolean; name?: string; agentIds?: string[] };
   /** `share`, once allowed: the share that was made. `create`: the workspace that was made. */
   result: { shareId?: string; workspaceId?: string } | null;
   /** `computer`, once joined: the computer that was made. */
@@ -551,7 +551,7 @@ export class Consents {
    * new computer, starts unproven, and its first message to each other agent of the person waits for the person.
    * Don't allow also ends a join that was allowed and still waits for its code.
    */
-  decide(personId: string, id: string, input: { decision: unknown; name?: unknown; handle?: unknown; person?: unknown; agents?: unknown; mine?: unknown }): Decided {
+  decide(personId: string, id: string, input: { decision: unknown; name?: unknown; handle?: unknown; person?: unknown; agents?: unknown; mine?: unknown; allow?: unknown }): Decided {
     const { decision } = input;
     if (decision !== "approve" && decision !== "deny") throw new PorticoError("bad_request", "decision must be approve or deny.");
     const person = this.people.require(personId);
@@ -594,7 +594,8 @@ export class Consents {
         requireUnreservedName(name);
         if (!this.agents.nameFree(name, person.id)) throw new PorticoError("conflict", `Another agent of ${person.name}'s is named ${name}, or reads the same at a glance. Pick another name.`);
       }
-      const detail = { ...request.detail, mine: input.mine === true, ...(share ? { bring: (picked ?? []).map((a) => a.id) } : {}) };
+      // `allow`: the person's own tick on the page, with a share link, to take messages from the inviter's agents.
+      const detail = { ...request.detail, mine: input.mine === true, ...(share ? { bring: (picked ?? []).map((a) => a.id), allow: input.allow === true } : {}) };
       const code = signInCode();
       this.db.transaction(() => {
         if (person.handle === null) {
@@ -629,11 +630,12 @@ export class Consents {
           if (!agent || agent.ownerId !== person.id || !share) throw new PorticoError("not_found", "No such request.");
           const coming = picked ?? [agent];
           if (coming.length === 0) throw new PorticoError("bad_request", "Pick at least one agent to bring in.");
-          workspace = this.shares.enter(share, person, coming);
+          workspace = this.shares.enter(share, person, coming, { allowInviter: input.allow === true });
           break;
         }
         case "share":
-          made = this.shares.create(person.id, request.workspaceId!, { email: request.detail.email, agents: request.detail.agents }).share;
+          // `allow` is the person's tick on this page: the asking agent can't set it.
+          made = this.shares.create(person.id, request.workspaceId!, { email: request.detail.email, agents: request.detail.agents, allow: input.allow === true }).share;
           break;
         case "add_agent": {
           const subject = found.subject;
@@ -738,7 +740,7 @@ export class Consents {
               else this.workspaces.addAgent(person.id, share.workspaceId, coming.id);
             }
           } else {
-            this.shares.enter(share, person, [agent, ...more]);
+            this.shares.enter(share, person, [agent, ...more], { allowInviter: request.detail.allow === true });
           }
         }
       }

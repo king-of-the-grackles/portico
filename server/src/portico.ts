@@ -614,6 +614,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   };
   shares.onShared = (share, workspace) => activity.record("portico_shared", { personId: share.createdBy, workspaceId: workspace.id, detail: { policy: share.agentsPolicy } });
   shares.onEnded = (_share, workspace, byId) => activity.record("portico_share_ended", { personId: byId, workspaceId: workspace.id });
+  shares.allowPeople = (personId, senderPersonId) => contacts.add(personId, senderPersonId, now().toISOString());
   shares.onEntered = (share, workspace, person, entered) =>
     activity.record("portico_person_joined", { personId: person.id, subjectId: person.id, workspaceId: workspace.id, detail: { agents: String(entered.length), share: share.id } });
 

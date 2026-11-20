@@ -7,7 +7,7 @@ import type { Messages } from "./messages";
 import type { People } from "./people";
 import type { Workspaces } from "./workspaces";
 import { DECISIONS } from "./types";
-import type { Decision, HeldFor, Message, Notice, Person } from "./types";
+import type { Agent, Decision, HeldFor, Message, Notice, Person } from "./types";
 
 /**
  * First contact, per pair of people: whose agents get through to whose. A person's agents take messages from another
@@ -171,21 +171,43 @@ export class Approvals {
   }
 
   /**
+   * Lets through what waits for the person only because its sender, one of the agents `covers` picks, joined lately.
+   * The list is taken first: deciding the first as Always allow clears the sender, and the rest then go one at a time.
+   */
+  private releaseNew(personId: string, covers: (from: Agent) => boolean): void {
+    const waiting = this.messages.heldFor(personId).filter((m) => {
+      const from = this.agents.get(m.fromId);
+      if (!from || !from.unproven || !covers(from)) return false;
+      return m.heldFor === "new_agent" || (m.heldFor === "outbound" && !from.outboundHold);
+    });
+    for (const m of waiting) {
+      const now = this.messages.heldFor(personId).find((held) => held.id === m.id);
+      if (!now || !this.workspaces.joins(now.workspaceId, now.fromId, now.toId)) continue;
+      this.decide(personId, now.id, this.agents.get(now.fromId)?.unproven ? "always_allow" : "allow_once");
+    }
+  }
+
+  /**
+   * The person vouches for one of their own agents that joined lately, on the page that says the agent joined: the same
+   * as Always allow on one of its held messages, without a message having to wait first. Whatever of the agent's waits
+   * only for its being new goes through. An agent on a computer is vouched for with its computer (`agents.proven`).
+   * Only the agent's own person can, and only from the person's pages: no agent reaches this.
+   */
+  vouch(personId: string, agentId: string): void {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.ownerId !== personId) throw new PorticoError("not_found", "No such agent.");
+    this.releaseNew(personId, (from) => from.id === agent.id || (agent.computerId !== null && from.computerId === agent.computerId));
+    this.agents.proven(agent.id);
+    this.changes.about({ people: [personId], agents: [agent.id] }, "agents", "approvals", "computers");
+  }
+
+  /**
    * Always allow for a whole computer, chosen in Settings and not on a held message: every session there, now and
    * later, is taken as the person's own. What waits only because a session there is new is decided as Always allow on
    * that message would, so the same messages go through and the same people are told.
    */
   alwaysAllowComputer(personId: string, computerId: string): void {
-    for (let i = 0; i < 100; i++) {
-      const waiting = this.messages.heldFor(personId).find((m) => {
-        const from = this.agents.get(m.fromId);
-        if (!from || from.computerId !== computerId || !from.unproven) return false;
-        if (!this.workspaces.joins(m.workspaceId, m.fromId, m.toId)) return false;
-        return m.heldFor === "new_agent" || (m.heldFor === "outbound" && !from.outboundHold);
-      });
-      if (!waiting) break;
-      this.decide(personId, waiting.id, "always_allow");
-    }
+    this.releaseNew(personId, (from) => from.computerId === computerId);
     this.agents.computerProven(computerId, true);
     this.changes.about({ people: [personId] }, "computers", "agents", "approvals");
   }

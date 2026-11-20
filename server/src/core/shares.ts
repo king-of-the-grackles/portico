@@ -26,6 +26,11 @@ export interface Share {
   claimedBy: string | null;
   claimedAt: string | null;
   revokedAt: string | null;
+  /**
+   * The link's maker chose, when making it, to allow messages from the agents of the person the link lets in: no
+   * first-contact question for that one person. Only the maker's own choice on Portico's page sets this.
+   */
+  allowsBack: boolean;
 }
 
 interface ShareRow {
@@ -39,6 +44,7 @@ interface ShareRow {
   claimed_by: string | null;
   claimed_at: string | null;
   revoked_at: string | null;
+  allow_back: number;
 }
 
 const toShare = (row: ShareRow): Share => ({
@@ -52,6 +58,7 @@ const toShare = (row: ShareRow): Share => ({
   claimedBy: row.claimed_by,
   claimedAt: row.claimed_at,
   revokedAt: row.revoked_at,
+  allowsBack: row.allow_back === 1,
 });
 
 /** What links' secrets were sealed as, with the signing key, before the secrets key: read only by the start's pass over old rows. */
@@ -133,7 +140,7 @@ export class Shares {
    * secret is returned here and the owner can read it again. With an email address, only the person with that address
    * can claim the link. `agents` is the owner's choice for the person coming in: `self` (the default) or `ask`.
    */
-  create(byId: string, workspaceId: string, input: { email?: unknown; agents?: unknown } = {}): { share: Share; secret: string } {
+  create(byId: string, workspaceId: string, input: { email?: unknown; agents?: unknown; allow?: unknown } = {}): { share: Share; secret: string } {
     const workspace = this.sharedFor(byId, workspaceId);
     if (workspace.ownerId !== byId) {
       throw new PorticoError("not_allowed", `Only the owner of ${workspace.phrase} can share that Portico: the owner decides who comes in.`);
@@ -153,11 +160,12 @@ export class Shares {
       claimedBy: null,
       claimedAt: null,
       revokedAt: null,
+      allowsBack: input.allow === true,
     };
     this.db
       .query(
-        `INSERT INTO shares (id, workspace_id, created_by, secret_hash, secret_box, email, agents_policy, created_at, expires_at)
-         VALUES ($id, $workspaceId, $createdBy, $hash, $box, $email, $agentsPolicy, $createdAt, $expiresAt)`,
+        `INSERT INTO shares (id, workspace_id, created_by, secret_hash, secret_box, email, agents_policy, created_at, expires_at, allow_back)
+         VALUES ($id, $workspaceId, $createdBy, $hash, $box, $email, $agentsPolicy, $createdAt, $expiresAt, $allowBack)`,
       )
       .run({
         id: share.id,
@@ -169,6 +177,7 @@ export class Shares {
         agentsPolicy,
         createdAt: share.createdAt,
         expiresAt: share.expiresAt,
+        allowBack: share.allowsBack ? 1 : 0,
       });
     this.log("share_created", { share_id: share.id, workspace_id: workspace.id, emailed: email !== null });
     this.changes.about({ workspaces: [workspace.id] }, "workspaces");
@@ -189,6 +198,8 @@ export class Shares {
   /** Set by portico.ts: a link was made, or ended, for the workspace's record. */
   onShared: ((share: Share, workspace: Workspace) => void) | null = null;
   onEnded: ((share: Share, workspace: Workspace, byId: string) => void) | null = null;
+  /** Set by portico.ts: the first person takes messages from the second person's agents with no first-contact question. */
+  allowPeople?: (personId: string, senderPersonId: string) => void;
   /** Set by portico.ts: a person came in with a link, with these agents. The link's maker is told who. */
   onEntered: ((share: Share, workspace: Workspace, person: Person, agents: Agent[]) => void) | null = null;
 
@@ -309,7 +320,7 @@ export class Shares {
    * consent page. Uses the link up: it lets nobody in again. The owner's choice on the link becomes the person's in the
    * workspace. The one place a person comes into someone else's workspace; call inside a transaction.
    */
-  enter(share: Share, person: Person, agents: Agent[]): Workspace {
+  enter(share: Share, person: Person, agents: Agent[], opts: { allowInviter?: boolean } = {}): Workspace {
     const workspace = this.workspaces.get(share.workspaceId);
     if (!workspace || !this.worksFor(share, person)) throw new PorticoError("not_found", DEAD_LINK);
     // A link brings a person in. Someone already there adds agents the way the owner chose for that person, never by a link.
@@ -323,6 +334,11 @@ export class Shares {
     this.db.query("UPDATE consent_requests SET status = 'expired' WHERE share_id = $id AND status = 'pending'").run({ id: share.id });
     this.workspaces.admit(workspace.id, person.id, share.agentsPolicy);
     for (const agent of agents) this.workspaces.addAgent(person.id, workspace.id, agent.id, { allowed: true });
+    // An invitation taken up is the first-contact decision between these two people, each way only where that person
+    // chose so on Portico's own page: the one coming in here, the link's maker when making the link. Nobody else in the
+    // workspace is covered, and no agent's word counts.
+    if (opts.allowInviter === true) this.allowPeople?.(person.id, share.createdBy);
+    if (share.allowsBack) this.allowPeople?.(share.createdBy, person.id);
     this.log("share_entered", { share_id: share.id, workspace_id: workspace.id, agents: agents.length });
     this.onEntered?.({ ...share, claimedBy: person.id }, workspace, person, agents);
     return workspace;

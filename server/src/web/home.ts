@@ -9,6 +9,7 @@ import { workspacePageData, workspaceViews } from "../api/workspaces";
 import type { Core } from "../core/core";
 import type { Person } from "../core/types";
 import { homeState, renderHome } from "./client/render/home";
+import { porticoHeading } from "./client/render/common";
 import type { HomeData, Route } from "./client/render/types";
 import { sendPage, signInPath } from "./layout";
 
@@ -77,7 +78,7 @@ export function homePage(core: Core): Hono<PersonEnv> {
         : data.route.page === "agent"
           ? (data.agentPage?.agent.label ?? "Agent")
           : data.route.page === "workspace"
-            ? (data.workspacePage?.workspace.name ?? "A Portico")
+            ? porticoHeading(data.workspacePage?.workspace.name ?? "A Portico")
             : "Today";
     return sendPage(c, {
       // "Launch on Portico", but "Personal Portico" as it is.

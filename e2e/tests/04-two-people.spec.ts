@@ -19,7 +19,7 @@ test("a shared Portico joins two people's agents, and each person's own conversa
   await page.getByRole("checkbox", { name: "probe" }).click();
   await page.getByRole("checkbox", { name: "helper" }).click();
   await page.getByRole("button", { name: "Create Portico" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: porticoName })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: `${porticoName} Portico`, exact: true })).toBeVisible();
   await expect(page).toHaveURL(/\/p\/[0-9a-f-]+$/);
   const porticoId = page.url().split("/p/")[1]!;
 

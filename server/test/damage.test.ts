@@ -203,6 +203,121 @@ describe("first contact is asked first", () => {
   });
 });
 
+describe("an invitation taken up is the first-contact decision, between those two people only", () => {
+  const link = (secret: string) => `${PUBLIC_URL}/share#${secret}`;
+  /** Dana, who is in nothing of Chris's yet, with one agent. */
+  async function withDana() {
+    const w = await world();
+    const made = await addMember(w.p, "Dana");
+    w.p.people.setEmail(made.id, "dana@example.com");
+    const dana = w.p.people.setHandle(made.id, "dana");
+    const helper = addAppAgent(w.p, dana, "helper");
+    return { ...w, dana, helper, danaCookie: signIn(w.p, dana) };
+  }
+  const enter = (p: TestPortico, cookie: string, secret: string, body: Record<string, unknown>) => callPerson(p, cookie, "POST", "/api/share-links/enter", { link: link(secret), ...body });
+
+  test("both ticked: the inviter's agents and the invited person's agents write to each other with no hold, and a stranger is still held", async () => {
+    const { p, chris, dana, muse, pilot, helper, launch, cookies, danaCookie } = await withDana();
+    const made = await json(callPerson(p, cookies.chris, "POST", `/api/porticos/${launch.id}/shares`, { email: "dana@example.com", allow: true }));
+    const secret = p.shares.secretFor(chris.id, made.share.id)!;
+    expect((await enter(p, danaCookie, secret, { agents: [helper.agent.id], allow: true })).status).toBe(200);
+    // The first exchange, each way: nothing waits.
+    expect(send(p, muse.agent, "dana/helper", "Plan").message.status).toBe("pending");
+    expect(send(p, helper.agent, "chris/muse", "Reply").message.status).toBe("pending");
+    expect(p.approvals.heldFor(dana.id)).toHaveLength(0);
+    expect(p.approvals.heldFor(chris.id)).toHaveLength(0);
+    // Maya is in the same Portico, and nobody invited her to Dana or Dana to her: first contact is asked, each way.
+    expect(send(p, pilot.agent, "dana/helper", "Hi").message).toMatchObject({ status: "held", heldFor: "first_contact" });
+    expect(send(p, helper.agent, "maya/pilot", "Hi").message).toMatchObject({ status: "held", heldFor: "first_contact" });
+    // Either side takes it back like any other allowed person.
+    expect((await callPerson(p, danaCookie, "DELETE", `/api/contacts/${chris.id}`)).status).toBe(204);
+    expect(send(p, muse.agent, "dana/helper", "Again").message.status).toBe("held");
+  });
+
+  test("each side decides for itself: one tick allows one direction", async () => {
+    const { p, chris, muse, helper, launch, danaCookie } = await withDana();
+    // Chris left his line unticked; Dana ticked hers.
+    const { secret } = p.shares.create(chris.id, launch.id, { email: "dana@example.com" });
+    expect((await enter(p, danaCookie, secret, { agents: [helper.agent.id], allow: true })).status).toBe(200);
+    expect(send(p, muse.agent, "dana/helper", "Plan").message.status).toBe("pending");
+    expect(send(p, helper.agent, "chris/muse", "Reply").message).toMatchObject({ status: "held", heldFor: "first_contact" });
+    // And the other way round, with a second person.
+    const w2 = await withDana();
+    const two = w2.p.shares.create(w2.chris.id, w2.launch.id, { email: "dana@example.com", allow: true });
+    expect((await enter(w2.p, w2.danaCookie, two.secret, { agents: [w2.helper.agent.id] })).status).toBe(200);
+    expect(send(w2.p, w2.helper.agent, "chris/muse", "Hello").message.status).toBe("pending");
+    expect(send(w2.p, w2.muse.agent, "dana/helper", "Hello").message).toMatchObject({ status: "held", heldFor: "first_contact" });
+  });
+
+  test("no agent sets either tick: only the person's own answer on Portico's page counts", async () => {
+    const { p, chris, dana, muse, helper, launch, cookies, danaCookie } = await withDana();
+    const tool = (token: string, name: string, args: Record<string, unknown>) => json(callAs(p, { token }, "POST", `/api/agent/portico-tools/${name}`, args));
+    // Chris's agent asks to share and says "allow": the word is ignored. Chris allows the share with his line unticked.
+    const asked = await tool(muse.token, "share_portico", { portico: launch.id, email: "dana@example.com", allow: true });
+    expect(asked.status).toBe("waiting_for_person");
+    const page1 = await page(p, `/c/${asked.request.id}`, cookies.chris);
+    expect(page1.html).toContain('name="allow" checked');
+    expect((await callPerson(p, cookies.chris, "POST", `/api/consents/${asked.request.id}`, { decision: "approve", allow: false })).status).toBe(200);
+    const share = p.shares.openFor(chris.id, launch.id)[0]!;
+    expect(share.allowsBack).toBe(false);
+    // Dana's agent uses the link and says "allow": ignored too. Dana allows with her line unticked.
+    const joining = await tool(helper.token, "join_portico", { link: link(p.shares.secretFor(chris.id, share.id)!), allow: true });
+    expect((await callPerson(p, danaCookie, "POST", `/api/consents/${joining.request.id}`, { decision: "approve", agents: [helper.agent.id] })).status).toBe(200);
+    expect(p.workspaces.hasPerson(launch.id, dana.id)).toBe(true);
+    expect(send(p, muse.agent, "dana/helper", "Plan").message).toMatchObject({ status: "held", heldFor: "first_contact" });
+    expect(send(p, helper.agent, "chris/muse", "Plan").message).toMatchObject({ status: "held", heldFor: "first_contact" });
+    // The same pages, ticked by the people, do allow: a second link, a second person.
+    const w2 = await withDana();
+    const asked2 = await json(callAs(w2.p, { token: w2.muse.token }, "POST", "/api/agent/portico-tools/share_portico", { portico: w2.launch.id, email: "dana@example.com" }));
+    await callPerson(w2.p, w2.cookies.chris, "POST", `/api/consents/${asked2.request.id}`, { decision: "approve", allow: true });
+    const share2 = w2.p.shares.openFor(w2.chris.id, w2.launch.id)[0]!;
+    const joining2 = await json(callAs(w2.p, { token: w2.helper.token }, "POST", "/api/agent/portico-tools/join_portico", { link: link(w2.p.shares.secretFor(w2.chris.id, share2.id)!) }));
+    await callPerson(w2.p, w2.danaCookie, "POST", `/api/consents/${joining2.request.id}`, { decision: "approve", agents: [w2.helper.agent.id], allow: true });
+    expect(send(w2.p, w2.muse.agent, "dana/helper", "Plan").message.status).toBe("pending");
+    expect(send(w2.p, w2.helper.agent, "chris/muse", "Plan").message.status).toBe("pending");
+  });
+});
+
+describe("vouching for a new agent on the page that says the agent joined", () => {
+  test("the person's Yes lets through what waited and stops the hold; nobody else, and no agent, can say it", async () => {
+    const { p, chris, robert, muse, grok, dots, launch, cookies } = await world();
+    acquaint(p, chris.id, robert.id);
+    const rookie = addAppAgent(p, chris, "rookie");
+    p.agents.markUnproven({ agentId: rookie.agent.id });
+    p.workspaces.addAgent(chris.id, launch.id, rookie.agent.id);
+    // New, so its first message to one of Chris's own agents, and what it sends to other people's, waits for Chris.
+    const own = send(p, p.agents.get(rookie.agent.id)!, "muse", "Hi").message;
+    const out = send(p, p.agents.get(rookie.agent.id)!, "robert/dots", "Hi").message;
+    expect([own.heldFor, out.heldFor]).toEqual(["new_agent", "outbound"]);
+    const path = `/api/agents/${rookie.agent.id}/always-allow`;
+    // Another person gets what an unknown agent gets. The agent itself has no way in: this is not on the agents' API.
+    expect((await callPerson(p, cookies.robert, "POST", path)).status).toBe(404);
+    expect((await callPerson(p, null, "POST", path)).status).toBe(401);
+    for (const token of [rookie.token, grok.token]) {
+      const res = await p.app.request(path, { method: "POST", headers: { authorization: `Bearer ${token}`, origin: PUBLIC_URL, host: new URL(PUBLIC_URL).host } });
+      expect(res.status).toBe(401);
+      expect((await callAs(p, { token }, "POST", `/api/agent/agents/${rookie.agent.id}/always-allow`)).status).toBe(404);
+    }
+    expect(p.agents.get(rookie.agent.id)!.unproven).toBe(true);
+    // Chris says yes.
+    expect((await callPerson(p, cookies.chris, "POST", path)).status).toBe(200);
+    expect(p.agents.get(rookie.agent.id)!.unproven).toBe(false);
+    expect(p.messages.get({ agent: muse.agent.id }, own.id)!.status).toBe("pending");
+    expect(p.messages.get({ agent: dots.agent.id }, out.id)!.status).toBe("pending");
+    expect(send(p, p.agents.get(rookie.agent.id)!, "grok", "Later").message.status).toBe("pending");
+  });
+
+  test("a stranger's first message is still held after a vouch", async () => {
+    const { p, chris, pilot, launch, cookies } = await world();
+    const rookie = addAppAgent(p, chris, "rookie");
+    p.agents.markUnproven({ agentId: rookie.agent.id });
+    p.workspaces.addAgent(chris.id, launch.id, rookie.agent.id);
+    expect((await callPerson(p, cookies.chris, "POST", `/api/agents/${rookie.agent.id}/always-allow`)).status).toBe(200);
+    expect(send(p, pilot.agent, "chris/rookie", "Hi").message).toMatchObject({ status: "held", heldFor: "first_contact" });
+    expect(send(p, p.agents.get(rookie.agent.id)!, "maya/pilot", "Hi").message).toMatchObject({ status: "held", heldFor: "first_contact" });
+  });
+});
+
 describe("outbound hold, per agent", () => {
   test("a message to another person's agent waits for the sender's own person first, then goes on to what the receiving side requires", async () => {
     const hooks = fakeWebhooks();

@@ -129,6 +129,14 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
     return c.body(null, 204);
   });
 
+  // "Yes, always allow": the person vouches for an agent of their own that joined lately, from the page that says the
+  // agent joined. A person's page only: an agent has no way to call this for itself or for another.
+  route.post("/:id/always-allow", (c) => {
+    const me = currentPerson(c);
+    core.approvals.vouch(me.id, c.req.param("id"));
+    return c.json({ agent: personViews(core, me).agent(agents.get(c.req.param("id"))!) });
+  });
+
   // The one-step stop for an agent: its tokens die, it leaves every Portico, and what it had on its way is withdrawn.
   route.post("/:id/revoke", (c) => {
     const me = currentPerson(c);

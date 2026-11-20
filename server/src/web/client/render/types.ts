@@ -139,7 +139,7 @@ export type WorkspaceForm =
   /** A new Portico. `thenShare` opens Share on it afterwards: sharing from the person's own Portico starts here. */
   | { kind: "new"; name: string; agentIds: string[]; thenShare: boolean; error: string }
   | { kind: "rename"; name: string; error: string }
-  | { kind: "share"; email: string; agents: "self" | "ask"; error: string }
+  | { kind: "share"; email: string; agents: "self" | "ask"; allow: boolean; error: string }
   /** My agents not in the Portico yet, ticked to put in. */
   | { kind: "agents"; agentIds: string[]; error: string };
 

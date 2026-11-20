@@ -407,3 +407,8 @@ export function renderAddSheet(add: AddState | null, ctx: { publicUrl: string; n
   </section>
 </div>`;
 }
+
+/** A Portico's name as its page's heading: "Launch plan Portico". A name that already ends in "Portico" stays as it is. */
+export function porticoHeading(name: string): string {
+  return /\bportico\s*$/i.test(name) ? name : `${name} Portico`;
+}

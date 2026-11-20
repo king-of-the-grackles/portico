@@ -90,6 +90,10 @@ ${localSignInCard(back)}
     });
 
   /** What happened, for the person who answered. */
+  /** One question with one button, on the page that says something joined: the person vouches for it there. */
+  const vouchBox = (call: string, back: string, ask: string, then: string, button: string): Html =>
+    html`<form class="vouch" method="dialog" data-api="${call}" data-next="${back}"><span class="row-text"><strong>${ask}</strong><span class="help">${then}</span></span><button type="submit" class="btn btn-primary">${button}</button><p class="notice notice-error" data-error role="alert" hidden></p></form>`;
+
   const answered = (c: Context<PersonEnv>, me: Person, view: ConsentView) => {
     const { request, workspace } = view;
     const place = workspace ? `the Portico ${quote(workspace.name)}` : "the Portico";
@@ -116,11 +120,25 @@ ${signedInAs(me, `/c/${request.id}`)}`,
       case "computer": {
         const computer = request.computerId ? core.computers.get(request.computerId) : null;
         done = html`${computer?.name ?? request.name ?? "The computer"} joined. Sessions started there show up as your agents.`;
+        if (computer && computer.ownerId === me.id) {
+          more = computer.unproven
+            ? vouchBox(`PUT /api/computers/${computer.id}/always-allow`, `/c/${request.id}`, `Did you start this on ${computer.name}?`, "Then messages from its sessions go out without asking you first.", `Yes, always allow ${computer.name}`)
+            : html`<p class="help">${computer.name} is always allowed. Undo it in Settings.</p>`;
+        }
         break;
       }
       case "agent":
         done = html`${view.agent?.name ?? request.name ?? "The agent"} joined${workspace ? html` and is in ${place}` : ""}.`;
-        if (view.agent) more = html`<p class="help">Not yours? <a href="/a/${view.agent.id}">Revoke it</a>.</p>`;
+        if (view.agent) {
+          // The person who just handed over the code can vouch for the agent here, so nothing of it has to wait later.
+          const vouch =
+            view.agent.ownerId !== me.id || view.agent.revokedAt !== null
+              ? html``
+              : view.agent.unproven
+                ? vouchBox(`POST /api/agents/${view.agent.id}/always-allow`, `/c/${request.id}`, `Did you start ${view.agent.name}?`, "Then its messages go out without asking you first.", `Yes, always allow ${view.agent.name}`)
+                : html`<p class="help">${view.agent.name} is always allowed.</p>`;
+          more = html`${vouch}<p class="help">Not yours? <a href="/a/${view.agent.id}">Revoke it</a>.</p>`;
+        }
         break;
       case "enter": {
         const mine = workspace ? core.workspaces.agentsOf(workspace.id, me.id).length : 0;
@@ -269,6 +287,16 @@ ${view.candidates.map(
     html`<label class="tick-line"><input type="checkbox" name="agents" data-list value="${agent.id}"${agent.id === view.agent?.id ? html` checked` : ""}> ${quote(core.agents.nameFor(agent, me.id))}${agent.id === view.agent?.id ? " (the agent that asked)" : ""}</label>`,
 )}
 <span class="help">Any number: one Allow covers every agent ticked.${request.kind === "agent" ? " The new agent comes in too." : ""}</span></fieldset>`
+    : ""
+}
+${
+  view.share && view.sharedBy && (request.kind === "enter" || request.kind === "agent") && view.sharedBy.id !== me.id
+    ? html`<label class="tick-line allow-line"><input type="checkbox" name="allow" checked><span><strong>Allow messages from ${view.sharedBy.name}'s agents</strong><span class="help">No question the first time one of those agents writes to yours. Untick to be asked first.</span></span></label>`
+    : ""
+}
+${
+  request.kind === "share"
+    ? html`<label class="tick-line allow-line"><input type="checkbox" name="allow" checked><span><strong>Allow messages from this person's agents</strong><span class="help">No question the first time one of those agents writes to yours. Untick to be asked first.</span></span></label>`
     : ""
 }
 ${

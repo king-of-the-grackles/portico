@@ -30,6 +30,11 @@ export const DIRECTORY_MIGRATIONS: readonly Migration[] = [
       db.query("INSERT INTO workspace_people (workspace_id, person_id, added_at) VALUES ($id, $ownerId, $at)").run({ id, ownerId: person.id, at });
     }
   },
+  // 202: a share link remembers whether its maker chose, when making it, to allow messages from the agents of the
+  // person the link lets in. Links made before never did.
+  (db) => {
+    db.run("ALTER TABLE shares ADD COLUMN allow_back INTEGER NOT NULL DEFAULT 0");
+  },
 ];
 
 /**

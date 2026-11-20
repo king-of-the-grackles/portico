@@ -327,14 +327,14 @@ export function workspaceRoutes(core: Core): Hono<PersonEnv> {
     if (!shares.mayClaim(share, me)) throw new PorticoError("not_found", DEAD_LINK);
     const ids = Array.isArray(body.agents) ? body.agents.filter((id): id is string => typeof id === "string") : [];
     const picked = core.agents.ownedBy(me.id).filter((a) => a.revokedAt === null && ids.includes(a.id));
-    const workspace = core.db.transaction(() => shares.enter(share, me, picked))();
+    const workspace = core.db.transaction(() => shares.enter(share, me, picked, { allowInviter: body.allow === true }))();
     return c.json({ workspace: { id: workspace.id, name: workspace.name } });
   });
 
   route.post("/porticos/:id/shares", async (c) => {
     const me = currentPerson(c);
     const body = await jsonObject(c);
-    const { share, secret } = shares.create(me.id, c.req.param("id"), { email: body.email, agents: body.agents });
+    const { share, secret } = shares.create(me.id, c.req.param("id"), { email: body.email, agents: body.agents, allow: body.allow });
     let mail: string | null = null;
     if (share.email !== null) mail = await core.mail.send(share, `${core.settings.publicUrl()}/share#${secret}`, me, workspaces.get(share.workspaceId)?.name ?? "a Portico");
     return c.json({ share: workspaceViews(core, me).share(share, mail) }, 201);

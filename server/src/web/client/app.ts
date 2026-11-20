@@ -701,7 +701,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
         page.set({ wsForm: null });
         await loadWorkspaces();
         go(`/p/${workspace.id}`);
-        if (form.thenShare) page.set({ wsForm: { kind: "share", email: "", agents: "self", error: "" } });
+        if (form.thenShare) page.set({ wsForm: { kind: "share", email: "", agents: "self", allow: true, error: "" } });
         else note(`Made ${workspace.phrase}.`, true);
       },
       formError,
@@ -715,7 +715,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     void wsRun(
       "ws-form",
       async () => {
-        const { share } = await api<{ share: ShareView }>("POST", `/api/porticos/${encodeURIComponent(w.id)}/shares`, { email: form.email.trim() || undefined, agents: form.agents });
+        const { share } = await api<{ share: ShareView }>("POST", `/api/porticos/${encodeURIComponent(w.id)}/shares`, { email: form.email.trim() || undefined, agents: form.agents, allow: form.allow });
         page.set({ wsForm: null, wsMail: share.mail ? { ...s().wsMail, [share.id]: share.mail } : s().wsMail });
         note(share.email && share.mail === "sent" ? `Share link emailed to ${share.email}.` : "Share link made. Copy the link below and send it.", true);
       },
@@ -978,7 +978,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
           if (!w) return;
           // The person's own Portico can't be shared: sharing from there starts a new Portico first.
           if (w.kind === "personal") return openNewWorkspace(true);
-          return page.set({ wsForm: { kind: "share", email: "", agents: "self", error: "" } });
+          return page.set({ wsForm: { kind: "share", email: "", agents: "self", allow: true, error: "" } });
         }
         case "ws-policy": {
           const form = s().wsForm;
@@ -1012,6 +1012,11 @@ function startHome(root: HTMLElement, data: HomeData): void {
           const w = pageWorkspace();
           if (w) void setWorkspaceAgent(w.id, id, false, `ws-agent:${id}`);
           return;
+        }
+        case "ws-share-allow": {
+          const form = s().wsForm;
+          if (form?.kind !== "share") return;
+          return page.set({ wsForm: { ...form, allow: !form.allow } });
         }
         case "nav-fold": {
           const w = s().workspaces.find((x) => x.id === id);
