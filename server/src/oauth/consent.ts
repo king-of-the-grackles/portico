@@ -69,9 +69,9 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
     <div class="consent-head">
       <span class="logo logo-lg logo-tile" aria-hidden="true">${initial(o.client.name)}</span>
       <div>
-        <h1>Allow ${o.client.name} to join?</h1>
-        <p class="tnum consent-when">Started <time datetime="${o.requestedAt.toISOString()}" data-local-time>${utcClock(o.requestedAt)}</time></p>
-        <p class="consent-where">Access goes to <strong>${quote(redirectHost(o.request.redirectUri))}</strong>. Only allow if that is the app you are adding.</p>
+        <h1>Allow this app to join?</h1>
+        <p class="tnum consent-when">The app gave the name ${quote(o.client.name)}. Started <time datetime="${o.requestedAt.toISOString()}" data-local-time>${utcClock(o.requestedAt)}</time></p>
+        <p class="consent-where">Access goes to <strong>${quote(redirectHost(o.request.redirectUri))}</strong>. Any app can use that name: only allow if you just added Portico in your own app and that address belongs to it.</p>
       </div>
     </div>
     <form method="post" action="/oauth/authorize" data-api="POST /oauth/authorize">
@@ -100,7 +100,7 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
   </div>
 </main>`;
   const res = await sendPage(c, {
-    title: `Allow ${o.client.name} to join?`,
+    title: "Allow this app to join?",
     body,
     scripts: o.suggestedHandle === null ? ["forms.js", "local-time.js"] : ["forms.js", "welcome.js", "local-time.js"],
     styles: ["onboarding.css"],

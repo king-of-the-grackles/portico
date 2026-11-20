@@ -211,7 +211,7 @@ describe("an agent-started join, where signing in creates the account", () => {
     expect(next).toStartWith("/oauth/authorize?");
     const consent = await page(p, next, cookie);
     expect(consent.status).toBe(200);
-    expect(consent.html).toContain("<h1>Allow ");
+    expect(consent.html).toContain("<h1>Allow this app to join?</h1>");
     expect(consent.html).toMatch(/name="handle"[^>]* value="erin"/);
     expect(consent.html).toContain(">Don't allow</a>");
     expect(consent.html).toContain(">Allow</button>");

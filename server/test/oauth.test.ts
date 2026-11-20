@@ -312,12 +312,13 @@ describe("the consent page", () => {
     const res = await getAuthorize(p, authorizeQuery(clientId, pkce().challenge), cookie);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("<h1>Allow Claude Duet to join?</h1>");
-    expect(html).toContain("Started <time");
+    // The name is the app's own claim: never the heading, always a quote.
+    expect(html).toContain("<h1>Allow this app to join?</h1>");
+    expect(html).toContain("The app gave the name “Claude Duet”. Started <time");
     // The client picks its own name; where approval sends access is what can be trusted, shown as a quote above the buttons.
-    expect(html).toContain("Access goes to <strong>“localhost:4567”</strong>. Only allow if that is the app you are adding.");
+    expect(html).toContain("Access goes to <strong>“localhost:4567”</strong>. Any app can use that name: only allow if you just added Portico in your own app and that address belongs to it.");
     expect(html).not.toContain('name="mine"');
-    expect(html.indexOf("Only allow if")).toBeLessThan(html.indexOf('type="submit"'));
+    expect(html.indexOf("only allow if")).toBeLessThan(html.indexOf('type="submit"'));
     expect(html).toContain('value="claude-duet" aria-describedby="c-name-help"');
     expect(html).toMatch(/value="claude-duet" checked>Claude Duet/);
     expect(html).toContain("Lowercase letters, digits and hyphens.");
