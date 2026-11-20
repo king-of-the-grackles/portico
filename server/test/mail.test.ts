@@ -184,7 +184,9 @@ describe("the email and its settings", () => {
     const plain = shareEmail({ inviter: "Chris Ivester", senderEmail: "chris@example.com", portico: "Launch plan", to: "robert@example.com", link: "https://portico.example.com/share#abc", stopUrl: "https://portico.example.com/mail/stop?t=x" });
     expect(copyProblems(visibleCopy(plain.html))).toEqual([]);
     // A name that reads as a link, a domain, an address, markup or a number to call never rides in the email.
-    for (const bad of ["Visit evil.example now", "https://evil.test", "Call 5551234567", "pay@evil.test", "Chris <b>Ivester</b>", "x".repeat(41), "bank.com/login"]) expect(mailName(bad)).toBeNull();
+    for (const bad of ["Visit evil.example now", "https://evil.test", "Call 5551234567", "pay@evil.test", "Chris <b>Ivester</b>", "x".repeat(41), "bank.com/login", "evil\uFF0Etest", "Call 555 123 4567", "ring +1 (555) 123-4567", "a\u3002b"]) expect(mailName(bad)).toBeNull();
+    // The handle that stands in for a refused name passes the same check.
+    expect(shareEmail({ inviter: "see evil.test", handle: "call-5551234567", senderEmail: null, portico: "Launch", to: "r@example.com", link: "https://portico.example.com/share#abc", stopUrl: "https://portico.example.com/mail/stop?t=x" }).subject).toBe("Someone invited you to join Launch");
     for (const fine of ["Chris Ivester", "Launch plan", "Zoë & Co", "Q3 2026 plan"]) expect(mailName(fine)).toBe(fine);
     const mail = shareEmail({ inviter: "Click evil.example", handle: "chris", senderEmail: "chris@example.com", portico: "Launch <i>plan</i>", to: "robert@example.com", link: "https://portico.example.com/share#abc", stopUrl: "https://portico.example.com/mail/stop?t=x&y=1" });
     expect(mail.subject).toBe("chris invited you to join a Portico");

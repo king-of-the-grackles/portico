@@ -64,11 +64,16 @@ export function noticeEmail(o: {
   return { subject: o.subject, text, html };
 }
 
-/** A name as an email may carry it, or null: short, and nothing that reads as a link, a domain, an address or a number to call. */
+/**
+ * A name as an email may carry it, or null. Only what a name is made of gets through: letters, spaces, a few marks and
+ * a few digits, at most 40 characters, read after the look-alike forms are folded (NFKC). No dot, colon, slash or @, so
+ * nothing in it can read as a link, a domain or an address, and too few digits for a number to call.
+ */
 export function mailName(name: string): string | null {
-  const text = name.replace(/\s+/g, " ").trim();
+  const text = name.normalize("NFKC").replace(/\s+/g, " ").trim();
   if (text === "" || Array.from(text).length > 40) return null;
-  if (/https?:|www\.|[:/\\@<>]|\d{6,}|[\p{L}\p{N}-]+\.[\p{L}]{2,}/iu.test(text)) return null;
+  if (!/^[\p{L}\p{M}\p{N} '’&,()-]+$/u.test(text)) return null;
+  if ((text.match(/\p{N}/gu) ?? []).length > 6) return null;
   return text;
 }
 
@@ -81,7 +86,7 @@ export function shareEmail(raw: { inviter: string; handle?: string; senderEmail:
   // A name that could send the reader somewhere else (a link, a domain, an address, a phone number) or is long stays
   // out of the email: the inviter is then the handle, and the Portico goes unnamed.
   const named = mailName(raw.portico);
-  const o = { ...raw, inviter: mailName(raw.inviter) ?? raw.handle ?? "Someone", portico: named ?? "a Portico" };
+  const o = { ...raw, inviter: mailName(raw.inviter) ?? (raw.handle ? mailName(raw.handle) : null) ?? "Someone", portico: named ?? "a Portico" };
   const sender = o.senderEmail ? `${o.inviter} (${o.senderEmail})` : o.inviter;
   const join = `Join ${o.portico}`;
   const lines = [
