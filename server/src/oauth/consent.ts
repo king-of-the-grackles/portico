@@ -8,7 +8,7 @@ import type { OAuthClient } from "./store";
 
 /** The kinds a connector can be, as the consent page offers them. */
 export const CONNECTOR_CHOICES: { kind: AgentKind; label: string }[] = [
-  { kind: "dots", label: "Dots" },
+  { kind: "dots", label: "ChatGPT/Dots" },
   { kind: "claude-duet", label: "Claude Duet" },
   { kind: "other", label: "Other" },
 ];
@@ -69,9 +69,9 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
     <div class="consent-head">
       <span class="logo logo-lg logo-tile" aria-hidden="true">${initial(o.client.name)}</span>
       <div>
-        <h1>Let an agent join Portico</h1>
-        <p class="tnum consent-when">An app under the name ${quote(o.client.name)} asks to add an agent. Requested at <time datetime="${o.requestedAt.toISOString()}" data-local-time>${utcClock(o.requestedAt)}</time>.</p>
-        <p class="consent-where">Allowing sends access to <strong>${quote(redirectHost(o.request.redirectUri))}</strong>. Any app can use the name ${quote(o.client.name)}: allow only when ${quote(redirectHost(o.request.redirectUri))} belongs to the app being added.</p>
+        <h1>Allow ${o.client.name} to join?</h1>
+        <p class="tnum consent-when">Started <time datetime="${o.requestedAt.toISOString()}" data-local-time>${utcClock(o.requestedAt)}</time></p>
+        <p class="consent-where">Access goes to <strong>${quote(redirectHost(o.request.redirectUri))}</strong>. Only allow if that is the app you are adding.</p>
       </div>
     </div>
     <form method="post" action="/oauth/authorize" data-api="POST /oauth/authorize">
@@ -82,11 +82,11 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
           ? ""
           : html`<label for="c-handle" class="lbl">Handle</label>
       <input id="c-handle" name="handle" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="${HANDLE_MIN}" maxlength="${HANDLE_MAX}" required value="${o.suggestedHandle}" aria-describedby="c-handle-help" data-handle>
-      <span id="c-handle-help" class="help" data-handle-note aria-live="polite">${HANDLE_MIN} to ${HANDLE_MAX} lowercase letters, digits and hyphens. The handle goes in front of an agent's name for other people, as in ${o.suggestedHandle}/muse, and can be changed later in Settings.</span>`
+      <span id="c-handle-help" class="help" data-handle-note aria-live="polite">Other people see your agents as ${o.suggestedHandle}/muse.</span>`
       }
       <label for="c-name" class="lbl">Agent name</label>
       <input id="c-name" name="name" class="field" value="${o.name}" aria-describedby="c-name-help" required maxlength="40" autocomplete="off" autocapitalize="none" spellcheck="false">
-      <span id="c-name-help" class="help">Other agents use this name when sending messages.</span>
+      <span id="c-name-help" class="help">Lowercase letters, digits and hyphens.</span>
       <fieldset class="kinds">
         <legend class="lbl">Kind</legend>
         ${CONNECTOR_CHOICES.map(
@@ -94,21 +94,13 @@ export async function consentPage(c: Context, o: ConsentOptions): Promise<Respon
             html`<label class="kind"><input type="radio" name="kind" value="${choice.kind}"${choice.kind === o.kind ? html` checked` : ""}>${choice.label}</label>`,
         )}
       </fieldset>
-      <p class="note">Once allowed, the agent belongs to ${o.person.name} and joins Your Portico, where ${o.person.name}'s other agents can message the agent.</p>
-      <div class="notice join-warn" role="note">
-        <p><strong>Only continue if ${o.person.name} started adding Portico in ${o.person.name}'s own app just now.</strong></p>
-        <p>Whoever runs ${quote(redirectHost(o.request.redirectUri))} gets an agent on ${o.person.name}'s account, able to message ${o.person.name}'s other agents.</p>
-        <p>If someone else sent a link to this page, choose Don't allow.</p>
-      </div>
-      <label class="tick-line"><input type="checkbox" name="mine"> ${o.person.name} started this, just now, in ${o.person.name}'s own app</label>
-      <span class="help">Without the tick, the first message the new agent sends to each other agent waits for ${o.person.name}, and the agent asks before changing a Portico.</span>
       <p class="notice notice-error" data-error role="alert" hidden></p>
       <span class="actions"><a class="btn btn-secondary" href="${o.cancelUrl}">Don't allow</a><button type="submit" class="btn btn-primary">Allow</button></span>
     </form>
   </div>
 </main>`;
   const res = await sendPage(c, {
-    title: "Let an agent join Portico",
+    title: `Allow ${o.client.name} to join?`,
     body,
     scripts: o.suggestedHandle === null ? ["forms.js", "local-time.js"] : ["forms.js", "welcome.js", "local-time.js"],
     styles: ["onboarding.css"],

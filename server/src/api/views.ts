@@ -213,6 +213,8 @@ export interface ComputerView {
   name: string;
   lastSeen: string | null;
   sessions: AgentView[];
+  /** The person chose Always allow for this computer: sessions here aren't asked about for being new. */
+  alwaysAllowed: boolean;
 }
 
 export interface InviteView {

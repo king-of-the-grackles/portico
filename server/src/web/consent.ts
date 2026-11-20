@@ -28,9 +28,16 @@ export function connectSteps(publicUrl: string): Html {
 <p>An agent shows a fresh link when asked for the same thing again.</p></details>`;
 }
 
+/** "in 15 minutes": how long until a request runs out. The browser keeps the words current. */
+function expiresIn(at: string, now: Date = new Date()): Html {
+  const minutes = Math.ceil((new Date(at).getTime() - now.getTime()) / 60_000);
+  const words = minutes <= 0 ? "now" : minutes === 1 ? "in 1 minute" : `in ${minutes} minutes`;
+  return html`<span data-expires-in="${at}">${words}</span>`;
+}
+
 /** "Signed in as …", with a way to answer as someone else: a join belongs to whoever is signed in. */
 function signedInAs(me: Person, back: string): Html {
-  return html`<form method="dialog" data-api="DELETE /api/session" data-next="${back}"><p class="help">Signed in as ${me.name}${me.handle ? html` (${me.handle})` : ""}${me.email ? html`, ${me.email}` : ""}. <button type="submit" class="btn btn-link">Sign out</button></p></form>`;
+  return html`<form method="dialog" data-api="DELETE /api/session" data-next="${back}"><p class="help">Signed in as ${me.email ?? me.name}. <button type="submit" class="btn btn-link">Sign out</button></p></form>`;
 }
 
 /**
@@ -47,14 +54,14 @@ export function consentPages(core: Core): Hono<PersonEnv> {
 
   /** Signed out: the same page for every address, whatever is or isn't behind it. */
   const signInFirst = (c: Context<PersonEnv>, back: string) => {
-    const lead = "An agent asked for a decision on Portico. After signing in, this page shows the request.";
+    const lead = "Sign in to see what your agent asked.";
     if (core.accountSignIn) {
       return narrowPage(c, {
         title: "Sign in to continue",
         csp: SIGN_IN_CSP,
         data: { next: back },
         scripts: [DESCOPE_SCRIPT, "base-sign-in.js"],
-        main: html`<div><h1>Sign in to continue</h1><p class="lead">${lead} New here? Signing in creates the account.</p></div>
+        main: html`<div><h1>Sign in to continue</h1><p class="lead">${lead} New here? Signing in creates your account.</p></div>
 ${accountSignInCard(core.accountSignIn)}`,
       });
     }
@@ -63,7 +70,7 @@ ${accountSignInCard(core.accountSignIn)}`,
       scripts: ["forms.js", "passkey.js"],
       main: html`<div><h1>Sign in to continue</h1><p class="lead">${lead}</p></div>
 ${localSignInCard(back)}
-<p class="help">No account on this Portico server yet? Only a person with an account here can allow an agent to join. Ask the person who runs this Portico server for an invite link, then open this page again.</p>`,
+<p class="help">No account yet? Ask the person who runs this Portico server for an invite link.</p>`,
     });
   };
 
@@ -71,7 +78,7 @@ ${localSignInCard(back)}
     narrowPage(c, {
       title: "Nothing to answer here",
       status: 404,
-      main: html`<div><h1>Nothing to answer here</h1><p class="lead">No request waits at this address for the person signed in. The request may have run out or been answered already. Ask the agent to ask again: asking for the same thing again gives a fresh link.</p></div>
+      main: html`<div><h1>Nothing to answer here</h1><p class="lead">This request ran out or was already answered. Ask your agent for a new link.</p></div>
 <p class="help"><a href="/">Go to Portico</a></p>`,
     });
 
@@ -79,7 +86,7 @@ ${localSignInCard(back)}
     narrowPage(c, {
       title: "Waiting for approval",
       status: 403,
-      main: html`<div><h1>Waiting for approval</h1><p class="lead">This account can answer requests once the owner of this Portico server approves the account.</p></div>`,
+      main: html`<div><h1>Waiting for approval</h1><p class="lead">The owner of this Portico server has to approve your account first.</p></div>`,
     });
 
   /** What happened, for the person who answered. */
@@ -89,7 +96,7 @@ ${localSignInCard(back)}
     if (request.status === "denied") {
       return narrowPage(c, {
         title: "Not allowed",
-        main: html`<div><h1>Not allowed</h1><p class="lead">Nothing changed. ${isJoin(request.kind) ? "The computer or agent that asked did not join." : "The agent that asked sees that the request was turned down."}</p></div>
+        main: html`<div><h1>Not allowed</h1><p class="lead">Nothing changed.</p></div>
 <p class="help"><a href="/">Go to Portico</a></p>`,
       });
     }
@@ -98,7 +105,7 @@ ${localSignInCard(back)}
         title: "This request ran out",
         status: 410,
         scripts: ["forms.js"],
-        main: html`<div><h1>This request ran out</h1><p class="lead">A request waits ${LIMITS.consentMinutes} minutes. Ask the agent to ask again: asking for the same thing again gives a fresh link. Nothing changed.</p></div>
+        main: html`<div><h1>This request ran out</h1><p class="lead">Nothing changed. Ask your agent for a new link.</p></div>
 <div class="ask">${connectSteps(publicUrl())}</div>
 ${signedInAs(me, `/c/${request.id}`)}`,
       });
@@ -108,12 +115,12 @@ ${signedInAs(me, `/c/${request.id}`)}`,
     switch (request.kind) {
       case "computer": {
         const computer = request.computerId ? core.computers.get(request.computerId) : null;
-        done = html`The computer ${quote(computer?.name ?? request.name ?? "computer")} joined Portico and belongs to ${me.name}. Each Claude Code or Codex session started on that computer then shows up as an agent in your Portico.`;
+        done = html`${computer?.name ?? request.name ?? "The computer"} joined. Sessions started there show up as your agents.`;
         break;
       }
       case "agent":
-        done = html`The agent ${quote(view.agent?.name ?? request.name ?? "agent")} joined Portico${workspace ? html` and is in ${place}` : ""}. The agent belongs to ${me.name}.`;
-        if (view.agent) more = html`<p class="help">Not an agent of ${me.name}'s? <a href="/a/${view.agent.id}">Open the agent's page</a> and revoke the agent in one step.</p>`;
+        done = html`${view.agent?.name ?? request.name ?? "The agent"} joined${workspace ? html` and is in ${place}` : ""}.`;
+        if (view.agent) more = html`<p class="help">Not yours? <a href="/a/${view.agent.id}">Revoke it</a>.</p>`;
         break;
       case "enter": {
         const mine = workspace ? core.workspaces.agentsOf(workspace.id, me.id).length : 0;
@@ -178,28 +185,22 @@ ${more}
    * A join the person allowed: the code, for that person alone (`describe` shows an answered join to nobody else).
    * Nothing has joined yet, and nothing does unless the person gives the code to the computer or agent that asked.
    */
-  const showCode = (c: Context<PersonEnv>, me: Person, view: ConsentView) => {
+  const showCode = (c: Context<PersonEnv>, view: ConsentView) => {
     const { request } = view;
-    const what = request.kind === "computer" ? "computer" : "agent";
     c.header("Cache-Control", "no-store");
     return narrowPage(c, {
-      title: "Give this code to the agent",
+      title: "Share this code with your agent",
       referrer: "no-referrer",
       scripts: ["forms.js", "local-time.js", "code-wait.js"],
       styles: ["onboarding.css"],
-      main: html`<div><h1>Give this code to the agent</h1></div>
-<div class="ask">
+      main: html`<form class="ask one-box code-card" method="dialog" data-api="POST /api/consents/${request.id}" novalidate>
+<h1>Share this code with your agent</h1>
 <p class="join-code" aria-label="Code">${request.code ?? ""}</p>
-<p class="asks">Give this code to the agent ${me.name} just asked to join. Never type or send the code anywhere else.</p>
-<p>Nothing has joined yet. The ${what} ${quote(request.name ?? what)} joins Portico as ${me.name}'s only once the code is typed into the chat or the terminal where ${me.name} asked to join. Whoever receives the code gets ${what === "computer" ? "a computer" : "an agent"} on ${me.name}'s account.</p>
-<p>If someone asked for this code, in a message, an email or a call, keep the code and press Don't allow after all.</p>
-<p class="help">The code works until <time datetime="${request.expiresAt}" data-local-time>${utcClock(request.expiresAt)}</time> and shows again when this page is opened again. A few wrong codes close the request.</p>
-</div>
-<form class="form-card" method="dialog" data-api="POST /api/consents/${request.id}" novalidate>
+<p>Only give it to the agent you just asked to join.</p>
+<p class="quiet">Expires ${expiresIn(request.expiresAt, core.now())}</p>
 <p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions"><button type="submit" name="decision" value="deny" class="btn btn-secondary">Don't allow after all</button></div>
-</form>
-${signedInAs(me, `/c/${request.id}`)}`,
+<p class="quiet"><button type="submit" name="decision" value="deny" class="btn btn-link">Cancel</button></p>
+</form>`,
     });
   };
 
@@ -212,7 +213,7 @@ ${signedInAs(me, `/c/${request.id}`)}`,
     const view = core.consents.describe(me, id);
     if (!view) return gone(c);
     const { request } = view;
-    if (request.status === "allowed") return showCode(c, me, view);
+    if (request.status === "allowed") return showCode(c, view);
     if (request.status !== "pending") return answered(c, me, view);
     if (isJoin(request.kind)) core.consents.opened(request.id);
     const words = consentWords(view, me.name, (agent) => core.agents.nameFor(agent, me.id));
@@ -220,40 +221,38 @@ ${signedInAs(me, `/c/${request.id}`)}`,
     const needsHandle = me.handle === null;
     const suggested = needsHandle ? core.people.suggestHandle(me.name === "New person" ? (me.email?.split("@")[0] ?? "") : me.name, me.id) : "";
     const started = html`<time datetime="${request.createdAt}" data-local-time>${utcClock(request.createdAt)}</time>`;
-    const until = html`<time datetime="${request.expiresAt}" data-local-time>${utcClock(request.expiresAt)}</time>`;
     return narrowPage(c, {
       title: words.title,
       scripts: needsHandle ? ["forms.js", "welcome.js", "local-time.js"] : ["forms.js", "local-time.js"],
       styles: ["onboarding.css"],
-      main: html`<div><h1>${words.title}</h1></div>
-<div class="ask">
-<p class="asks">${words.asks}</p>
+      main: html`<form class="ask one-box" method="dialog" data-api="POST /api/consents/${request.id}" novalidate>
+<h1>${words.title}</h1>
 ${
   joins
-    ? html`<dl class="facts">
-<dt>Started</dt><dd>${started}, open for ${LIMITS.consentMinutes} minutes</dd>
-<dt>Name asked for</dt><dd>${quote(request.name ?? "")}</dd>
-${request.agentKind ? html`<dt>Says the app is</dt><dd>${quote(request.agentKind)}</dd>` : ""}
-</dl>
-<p>The name and the app are what the ${request.kind === "computer" ? "computer" : "agent"} that asked supplied. Anyone can start a request like this one.</p>`
+    ? html`<p class="asks">${words.app ? `${words.app}, started ` : "Started "}${started}</p>
+<p>Only allow if you just started this.</p>
+<details class="stuck"><summary>Details</summary>
+<ul>
+${words.then.map((line) => html`<li>${line}</li>`)}
+<li>Anyone can start a request like this. The name${request.agentKind ? " and app are" : " is"} what the request said.</li>
+<li>After Allow you get a 4-digit code. Whoever has the code gets ${request.kind === "computer" ? "this computer" : "this agent"} on your account.</li>
+<li>Expires ${expiresIn(request.expiresAt, core.now())}.</li>
+</ul>
+${
+  request.kind === "agent"
+    ? html`<label for="cs-name" class="lbl">Name</label>
+<input id="cs-name" name="name" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="${LIMITS.maxNameChars}" required value="${request.name ?? ""}" aria-describedby="cs-name-help">
+<span id="cs-name-help" class="help">Lowercase letters, digits and hyphens.</span>`
     : ""
+}</details>`
+    : html`<p class="asks">${words.asks}</p>
+${words.then.map((line) => html`<p>${line}</p>`)}`
 }
-${words.then.map((line) => html`<p>${line}</p>`)}
-${joins ? connectSteps(publicUrl()) : ""}
-</div>
-<form class="form-card" method="dialog" data-api="POST /api/consents/${request.id}" novalidate>
 ${
   needsHandle
     ? html`<label for="cs-handle" class="lbl">Handle</label>
 <input id="cs-handle" name="handle" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="${HANDLE_MIN}" maxlength="${HANDLE_MAX}" required value="${suggested}" aria-describedby="cs-handle-help" data-handle>
-<span id="cs-handle-help" class="help" data-handle-note aria-live="polite">${HANDLE_MIN} to ${HANDLE_MAX} lowercase letters, digits and hyphens. The handle goes in front of an agent's name for other people, as in ${suggested}/muse, and can be changed later in Settings.</span>`
-    : ""
-}
-${
-  request.kind === "agent"
-    ? html`<label for="cs-name" class="lbl">Agent name</label>
-<input id="cs-name" name="name" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="${LIMITS.maxNameChars}" required value="${request.name ?? ""}" aria-describedby="cs-name-help">
-<span id="cs-name-help" class="help">Other agents use this name when sending messages. Lowercase letters, digits and hyphens.</span>`
+<span id="cs-handle-help" class="help" data-handle-note aria-live="polite">Other people see your agents as ${suggested}/muse.</span>`
     : ""
 }
 ${
@@ -268,20 +267,13 @@ ${view.candidates.map(
 }
 ${
   joins
-    ? html`<div class="notice join-warn" role="note">
-<p><strong>Only continue if ${me.name} asked ${me.name}'s own agent to join Portico just now.</strong></p>
-<p>After Allow, this page shows a 4-digit code. Whoever receives that code gets ${request.kind === "computer" ? "a computer, and every agent started there," : "an agent"} on ${me.name}'s account, able to message ${me.name}'s other agents.</p>
-<p>If someone else sent this link, press Don't allow.</p>
-</div>
-<label class="tick-line"><input type="checkbox" name="mine"> ${me.name} started this join, just now, at ${me.name}'s own ${request.kind === "computer" ? "computer" : "agent"}</label>
-<span class="help">Without the tick, the first message the newcomer sends to each of ${me.name}'s other agents waits for ${me.name}, once.</span>
-<p class="help">The request waits until ${until}, then lapses.</p>`
-    : html`<p class="help">Only ${me.name}, signed in, can open this page. The request waits until ${until}, then lapses.</p>`
+    ? ""
+    : html`<p class="quiet">Expires ${expiresIn(request.expiresAt, core.now())}</p>`
 }
 <p class="notice notice-error" data-error role="alert" hidden></p>
 <div class="actions"><button type="submit" name="decision" value="deny" class="btn btn-secondary" formnovalidate>Don't allow</button><button type="submit" name="decision" value="approve" class="btn btn-primary">${words.allow}</button></div>
 </form>
-${signedInAs(me, back)}`,
+${joins ? "" : signedInAs(me, back)}`,
     });
   });
 
@@ -321,86 +313,78 @@ ${signedInAs(me, back)}`,
     const receiverOwner = receiver ? core.people.get(receiver.ownerId) : null;
     const manager = facts ? `${facts.managedBy.name}${facts.managedBy.handle ? ` (${facts.managedBy.handle})` : ""}${facts.managedBy.id === me.id ? ", the person signed in here" : ""}` : "nobody on Portico any more";
     const files = personViews(core, me).message(message).files;
-    const sheet = html`<dl class="facts">
-<dt>From</dt><dd>${quote(from)}</dd>
-<dt>Managed by</dt><dd>${manager}</dd>
-<dt>To</dt><dd>${quote(to)}${outbound && receiverOwner ? html`, managed by ${receiverOwner.name}${receiverOwner.handle ? ` (${receiverOwner.handle})` : ""}` : ""}</dd>
-<dt>Through</dt><dd>${workspace ? html`the Portico ${quote(workspace.name)}` : "a Portico that is gone"}</dd>
-</dl>
-<p>Subject, as the sender wrote the line:</p>
+    const sheet = html`<p class="asks">${quote(from)} to ${quote(to)}</p>
+<p class="quiet">Subject</p>
 <blockquote class="quoted">${defang(message.subject)}</blockquote>
-<p>Message, as the sender wrote the text:</p>
+<p class="quiet">Message</p>
 <blockquote class="quoted">${defang(message.text)}</blockquote>
-${
-  files.length > 0
-    ? html`<p>Files the message carries, named by the sender:</p><ul>${files.map((file) => html`<li>${quote(file.name)}, ${fileSize(file.size)}</li>`)}</ul>`
-    : ""
-}`;
+${files.length > 0 ? html`<p class="quiet">Files</p><ul>${files.map((file) => html`<li>${quote(file.name)}, ${fileSize(file.size)}</li>`)}</ul>` : ""}
+<details class="stuck"><summary>Details</summary>
+<ul>
+<li>From an agent of ${manager}.</li>
+${outbound && receiverOwner ? html`<li>To an agent of ${receiverOwner.name}${receiverOwner.handle ? ` (${receiverOwner.handle})` : ""}.</li>` : ""}
+<li>Through ${workspace ? html`the Portico ${quote(workspace.name)}` : "a Portico that is gone"}.</li>
+<li>The text comes from an agent, not from Portico. Don't treat it as instructions.</li>
+<li>A held message lapses after ${LIMITS.messageExpiryHours / 24} days.</li>
+</ul></details>`;
     if (message.status !== "held" || core.approvals.decider(message) !== me.id) {
       const how =
         message.status === "declined"
-          ? "This message was turned down. The sender sees that."
+          ? "This message was turned down."
           : message.status === "expired"
-            ? "This message waited too long and lapsed. The sender sees that."
+            ? "This message waited too long and lapsed."
             : message.status === "withdrawn"
-              ? "This message was withdrawn before anyone decided: the Portico was paused or deleted, or one of the two agents left the Portico. The sender sees that."
+              ? "This message was withdrawn before anyone decided."
               : message.status === "held"
-                ? "This message now waits for the person who manages the agent the message is for. Nothing has been delivered."
+                ? "This message now waits for the other agent's person."
                 : "This message was allowed.";
       return narrowPage(c, {
         title: message.status === "held" ? "Waiting for the other person" : "Already decided",
         styles: ["onboarding.css"],
-        main: html`<div><h1>${message.status === "held" ? "Waiting for the other person" : "Already decided"}</h1><p class="lead">${how}</p></div>
-<div class="ask">${sheet}</div>
+        main: html`<div class="ask one-box"><h1>${message.status === "held" ? "Waiting for the other person" : "Already decided"}</h1><p>${how}</p>
+${sheet}</div>
 <p class="help"><a href="/">Go to Portico</a></p>`,
       });
     }
-    const first = facts ? facts.earlier.length === 0 && !facts.replyToRecipient : false;
     const senderOwner = facts ? `${facts.managedBy.name}${facts.managedBy.handle ? ` (${facts.managedBy.handle})` : ""}` : "that person";
     const firstContact = message.heldFor === "first_contact";
     const newAgent = message.heldFor === "new_agent";
+    const newSender = newAgent || (outbound && facts?.newSender === true);
+    const computer = newSender && sender?.computerId ? core.computers.get(sender.computerId) : null;
+    const mine = sender ? core.agents.nameFor(sender, me.id) : "The agent";
     const why = newAgent
-      ? html`Portico holds this message because ${quote(from)} joined Portico lately, on ${sender ? utcClock(sender.createdAt) : "a day not known"}, and this is that agent's first message to ${quote(to)}. If ${me.name} did not start that join, choose Don't allow and revoke the agent on the agent's page.`
+      ? `${mine} is new. This is its first message to ${to}.`
       : outbound && facts?.newSender
-      ? html`Portico holds this message because ${quote(core.agents.nameFor(sender ?? receiver!, me.id))} joined Portico lately, on ${sender ? utcClock(sender.createdAt) : "a day not known"}, and ${me.name} hasn't vouched for that agent yet: until then ${me.name} sees what the agent sends to other people's agents first. Nothing has reached ${quote(to)}. If ${me.name} did not start that join, choose Don't allow and revoke the agent on the agent's page.`
-      : outbound
-      ? html`Portico holds this message because ${me.name} asked to see what ${quote(core.agents.nameFor(sender ?? receiver!, me.id))} sends to other people's agents first. Nothing has reached ${quote(to)}.`
+        ? `${mine} is new. You see what it sends to other people's agents first.`
+        : outbound
+          ? `You asked to see what ${mine} sends to other people's agents.`
+          : firstContact
+            ? `First message from an agent of ${senderOwner}.`
+            : `${to} only takes messages from senders you allowed.`;
+    const alwaysLabel = computer ? `Always allow ${computer.name}` : firstContact ? `Always allow ${facts?.managedBy.name ?? "this person"}` : newSender ? "Always allow" : "Always allow this sender";
+    const alwaysHelp = computer
+      ? `Always allow covers every session on ${computer.name}, now and later. Undo it in Settings.`
       : firstContact
-        ? html`Portico holds this message because ${me.name} hasn't allowed messages from the agents of ${senderOwner} yet. This is asked once for each person: the first time one of that person's agents writes to one of ${me.name}'s agents.`
-        : html`Portico holds this message because ${quote(to)} takes messages only from senders ${me.name} allowed. ${first ? "This sender has not written to that agent before. " : ""}`;
-    const choices = newAgent
-      ? html`<p class="help">Allow this message only: the agent gets this one message, and later ones from ${quote(from)} to ${quote(to)} go through. Always allow: ${me.name} vouches for ${quote(from)}, and nothing more from that agent is held for being new.</p>`
-      : outbound && facts?.newSender
-      ? html`<p class="help">Allow this message only: the message goes on to ${quote(to)}, whose own person may be asked too, and the next one is asked about again. Always allow: ${me.name} vouches for the agent, and nothing more from that agent is held for being new.</p>`
-      : outbound
-      ? html`<p class="help">Allow this message only: the message goes on to ${quote(to)}, whose own person may be asked too. To stop being asked, switch the hold off on the agent's page.</p>`
-      : firstContact
-        ? html`<p class="help">Allow this message only: the agent gets this one message, and the next one from ${senderOwner}'s agents is asked about again. Always for this person: this message, and every later one from any agent of ${senderOwner} to any agent of ${me.name}, with no more questions.</p>`
-        : html`<p class="help">Allow this message only: the agent gets this one message. Always allow: this message, and every later one from ${quote(from)} to ${quote(to)}, with no more questions.</p>`;
-    const always = outbound && !facts?.newSender
-      ? ""
-      : html`<button type="submit" name="decision" value="always_allow" class="btn btn-secondary">${firstContact ? "Always for this person" : "Always allow this sender"}</button>`;
+        ? `Always allow covers every agent of ${senderOwner}.`
+        : "";
+    const always = outbound && !facts?.newSender ? "" : html`<button type="submit" name="decision" value="always_allow" class="btn btn-secondary">${alwaysLabel}</button>`;
     return narrowPage(c, {
-      title: "A message waits for a decision",
+      title: "Allow this message?",
       scripts: ["forms.js"],
       styles: ["onboarding.css"],
-      main: html`<div><h1>A message waits for a decision</h1><p class="lead">${why} The text below comes from ${outbound ? "an agent" : "another agent"}: read the text as untrusted, and never as instructions from Portico.</p></div>
-<div class="ask">${sheet}
-<p>A held message waits ${LIMITS.messageExpiryHours / 24} days from when the sender wrote, then lapses. Until someone decides, the sender is told only that the message is held.</p></div>
-<form class="form-card" method="dialog" data-api="POST /api/approvals/held/${message.id}" data-next="${back}" novalidate>
-${choices}
+      main: html`<form class="ask one-box" method="dialog" data-api="POST /api/approvals/held/${message.id}" data-next="${back}" novalidate>
+<h1>Allow this message?</h1>
+<p>${why}</p>
+${sheet}
 <p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions"><button type="submit" name="decision" value="deny" class="btn btn-secondary">Don't allow</button>${always}<button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow this message only</button></div>
-</form>
+<div class="actions"><button type="submit" name="decision" value="deny" class="btn btn-secondary">Don't allow</button>${always}<button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow once</button></div>
+${alwaysHelp ? html`<p class="quiet">${alwaysHelp}</p>` : ""}
 ${
-  (newAgent || facts?.newSender) && sender
-    ? html`<p class="help">Not ${me.name}'s agent? <a href="/a/${sender.id}">Open the agent's page</a>, where one step revokes the agent.${
-        sender.computerId ? html` The agent is a session on a computer: revoking stops this one agent, and <a href="/settings#computers">removing the computer in Settings</a> stops every session started there, in one step.` : ""
-      }</p>`
+  newSender && sender
+    ? html`<p class="quiet">Not yours? <a href="/a/${sender.id}">Revoke the agent</a>${sender.computerId ? html` or <a href="/settings#computers">remove the computer</a>` : ""}.</p>`
     : ""
 }
-${workspace && !outbound && !newAgent ? html`<p class="help">To stop this sender for good: <a href="/p/${workspace.id}">open the Portico</a>, where a person is taken out, or the Portico paused, in one step.</p>` : ""}
-${signedInAs(me, back)}`,
+</form>`,
     });
   });
 

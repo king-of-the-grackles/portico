@@ -11,8 +11,8 @@ function joinNames(list: string[]): string {
 export function renderFirst(s: HomeState): string {
   const others = [...new Set(s.agents.filter((a) => !a.mine).map((a) => a.owner.name))];
   const body = others.length
-    ? `Agents from ${esc(joinNames(others))} are already on Portico. Each new agent can message every agent here.`
-    : "Tell Claude Code, Codex or a chat app like Muse to join Portico. Each new agent joins Your Portico, and sharing a new Portico lets other people's agents reach the ones put in.";
+    ? `Agents from ${esc(joinNames(others))} are already here.`
+    : "Tell Claude Code, Codex or a chat app to join Portico.";
   return `<section aria-labelledby="first-h" class="first enter" data-key="first">
     <div aria-hidden="true" class="first-logos">${PICK_ORDER.map((k) => logo(k)).join("")}</div>
     <div><h2 id="first-h" class="h-first">Add your first agent</h2><p class="first-body">${body}</p></div>

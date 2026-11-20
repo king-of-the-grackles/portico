@@ -25,16 +25,16 @@ test("first contact between two people is held: once per message, or never again
 
   const page = await browserAs(alice);
   await page.goto(`/held/${one.message.id}`);
-  await expect(page.getByText("hasn't allowed messages from the agents of")).toBeVisible();
+  await expect(page.getByText("First message from an agent of")).toBeVisible();
   await expect(page.getByText("May my person's agents write to yours?")).toBeVisible();
-  await decideHeld(page, one.message.id, "Allow this message only");
+  await decideHeld(page, one.message.id, "Allow once");
   await helper.receive(first);
 
   // ---- so the next one is asked about again; this time, always for this person ----
   const second = unique("Second contact");
   const two = await scout.send({ to, subject: second, text: "Asking once more." });
   expect(two.delivery).toBe("held");
-  await decideHeld(page, two.message.id, "Always for this person");
+  await decideHeld(page, two.message.id, /^Always allow /);
   await helper.receive(second);
 
   // ---- and from then on Bob's agents get through ----

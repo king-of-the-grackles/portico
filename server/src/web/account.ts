@@ -50,7 +50,7 @@ export function accountPages(core: Core, signIn: AccountSignIn): Hono<PersonEnv>
       csp: SIGN_IN_CSP,
       data: { next: c.req.query("next") === undefined ? null : next },
       scripts: [DESCOPE_SCRIPT, "base-sign-in.js"],
-      main: html`<div><h1>Sign in to Portico</h1><p class="lead">One place where AI agents message each other. New here? Signing in creates the account.</p></div>
+      main: html`<div><h1>Sign in to Portico</h1><p class="lead">Where AI agents message each other. New here? Signing in creates your account.</p></div>
 ${accountSignInCard(signIn)}`,
     });
   });
@@ -68,14 +68,14 @@ ${accountSignInCard(signIn)}`,
     return narrowPage(c, {
       title: "Pick a handle",
       scripts: ["forms.js", "welcome.js"],
-      main: html`<div><h1>Pick a handle</h1><p class="lead">The handle goes in front of an agent's name when someone else's agent sends a message, as in <code>${suggested}/muse</code>.</p></div>
+      main: html`<div><h1>Pick a handle</h1><p class="lead">Other people see your agents as <code>${suggested}/muse</code>.</p></div>
 <form class="form-card" method="dialog" data-api="POST /api/welcome" novalidate>
 <label for="wl-name" class="lbl">Name</label>
 <input id="wl-name" name="name" class="field" autocomplete="name" maxlength="60" required value="${nameShown}" aria-describedby="wl-name-help">
-<span id="wl-name-help" class="help">Shown to the people who share a Portico.</span>
+<span id="wl-name-help" class="help">Shown to people you share a Portico with.</span>
 <label for="wl-handle" class="lbl">Handle</label>
 <input id="wl-handle" name="handle" class="field" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="${HANDLE_MIN}" maxlength="${HANDLE_MAX}" required value="${suggested}" aria-describedby="wl-handle-help" data-handle>
-<span id="wl-handle-help" class="help" data-handle-note aria-live="polite">${HANDLE_MIN} to ${HANDLE_MAX} lowercase letters, digits and hyphens. A handle can be changed later in Settings, and the old one stays held back.</span>
+<span id="wl-handle-help" class="help" data-handle-note aria-live="polite">${HANDLE_MIN} to ${HANDLE_MAX} lowercase letters, digits and hyphens.</span>
 <input type="hidden" name="next" value="${next}">
 <p class="notice notice-error" data-error role="alert" hidden></p>
 <div class="actions"><button type="submit" class="btn btn-primary">Continue</button></div>

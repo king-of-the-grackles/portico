@@ -38,13 +38,13 @@ function ticks(s: HomeState, agents: AgentView[], chosen: string[]): string {
 function renderNewForm(s: HomeState, f: Extract<WorkspaceForm, { kind: "new" }>): string {
   const mine = s.agents.filter((a) => a.mine);
   return `<form class="sform enter" method="dialog" data-form="ws-create" data-key="ws-new" novalidate>
-    ${when(f.thenShare, `<p class="sec-help">Your Portico holds only ${esc(s.me.name)}'s own agents and can't be shared. Bringing someone else's agents in starts with a new Portico and a pick of agents to put there.</p>`)}
+    ${when(f.thenShare, `<p class="sec-help">Your Portico can't be shared. Make a new Portico to work with someone else's agents.</p>`)}
     <label for="ws-name" class="lbl">Name</label>
     <input id="ws-name" class="field field-narrow${when(f.error, " is-invalid")}" value="${esc(f.name)}" data-input="ws-name" maxlength="60" autocomplete="off" aria-describedby="ws-name-help" aria-invalid="${Boolean(f.error)}" data-autofocus>
-    <span id="ws-name-help" class="help">Optional, such as Launch. Without a name, the Portico is named after the people in it.</span>
+    <span id="ws-name-help" class="help">Optional.</span>
     <span class="lbl" id="ws-agents-lbl">Agents to put in</span>
     <div role="group" aria-labelledby="ws-agents-lbl">${ticks(s, mine, f.agentIds)}</div>
-    <span class="help">Everyone in the new Portico can message the agents put in. Agents can be added and removed later.</span>
+    <span class="help">Everyone in the Portico can message these agents.</span>
     ${when(f.error, `<span role="alert" class="field-error">${esc(f.error)}</span>`)}
     <span class="actions"><button type="button" class="btn btn-link" data-action="ws-form-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "ws-form", " disabled")}>${f.thenShare ? "Create and share" : "Create Portico"}</button></span>
   </form>`;
@@ -59,15 +59,15 @@ function renderShareForm(s: HomeState, w: WorkspaceView, f: Extract<WorkspaceFor
       byEmail
         ? `<label for="ws-email" class="lbl">Email address</label>
     <input id="ws-email" class="field field-narrow${when(f.error, " is-invalid")}" type="email" value="${esc(f.email)}" data-input="ws-email" autocomplete="off" aria-describedby="ws-email-help" aria-invalid="${Boolean(f.error)}" data-autofocus>
-    <span id="ws-email-help" class="help">Optional. With an address, Portico emails the link and only that address can use the link. Without one, the link is made to hand over. Either way the link lets one person into ${esc(w.phrase)}, once, within 7 days. ${esc(s.me.name)} is told who came in.</span>`
-        : `<p class="help">The link is made to hand over: the link lets one person into ${esc(w.phrase)}, whoever uses the link first, once, within 7 days. ${esc(s.me.name)} is told who came in.</p>`
+    <span id="ws-email-help" class="help">Optional. With an address, only that person can use the link. The link works once, for 7 days.</span>`
+        : `<p class="help">The link works once, for 7 days, for whoever uses it first.</p>`
     }
     <span class="lbl" id="ws-policy-lbl">More agents from that person</span>
     <div role="radiogroup" aria-labelledby="ws-policy-lbl" class="ticks">
       <button type="button" class="tick${when(f.agents === "self", " is-on")}" role="radio" aria-checked="${f.agents === "self"}" data-action="ws-policy" data-id="self"><span class="tick-box" aria-hidden="true">${when(f.agents === "self", ICON.check(14))}</span><span class="tick-name">Adds more agents with no further question</span></button>
       <button type="button" class="tick${when(f.agents === "ask", " is-on")}" role="radio" aria-checked="${f.agents === "ask"}" data-action="ws-policy" data-id="ask"><span class="tick-box" aria-hidden="true">${when(f.agents === "ask", ICON.check(14))}</span><span class="tick-name">Asks ${esc(s.me.name)} for each agent added</span></button>
     </div>
-    <span class="help">The person coming in picks the first agents on Portico's page. This choice is about agents added afterwards, and can be changed under People.</span>
+    <span class="help">Applies to agents added later. Change it under People.</span>
     ${when(f.error, `<span role="alert" class="field-error">${esc(f.error)}</span>`)}
     <span class="actions"><button type="button" class="btn btn-link" data-action="ws-form-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "ws-form", " disabled")}>Create share link</button></span>
   </form>`;
@@ -182,11 +182,11 @@ function shareRow(s: HomeState, sh: ShareView): string {
         ? `<span class="actions"><button type="button" class="btn btn-link" data-action="ws-confirm-cancel">Cancel</button><button type="button" class="btn btn-danger" data-action="ws-share-end" data-id="${esc(sh.id)}" data-autofocus${when(s.busy === "ws-confirm", " disabled")}>Confirm: end link</button></span>`
         : `<span class="actions">${when(sh.email && sh.link && sh.mails > 0 && sh.mails < 3, `<button type="button" class="btn btn-secondary" data-action="ws-share-mail" data-id="${esc(sh.id)}"${when(s.busy === `ws-mail:${sh.id}`, " disabled")}>Send again</button>`)}<button type="button" class="btn btn-text" data-action="ws-confirm" data-id="share:${esc(sh.id)}">End link</button></span>`
     }</div>
-    ${when(!sh.link, `<p class="row-help link-flush">Portico can't show this link again. The link still works for whoever has the link: to hand one over now, end this link and make a new one.</p>`)}
+    ${when(!sh.link, `<p class="row-help link-flush">This link can't be shown again. To hand one over, end it and make a new one.</p>`)}
     ${when(
       sh.link,
       () => `<div class="link-line link-flush"><label for="${field}" class="sr">Share link</label><input id="${field}" class="line-field link-field" readonly value="${esc(sh.link)}"><button type="button" class="btn btn-primary" data-action="ws-share-copy" data-id="${esc(sh.id)}">${ICON.copy()}${s.wsCopied[sh.id] ? "Copied" : "Copy link"}</button></div>
-    <p class="row-help link-flush">The link goes to an AI agent of the other person: that agent reads the page behind the link and follows the steps.</p>`,
+    <p class="row-help link-flush">The other person gives this link to an agent.</p>`,
     )}
   </li>`;
 }
@@ -228,7 +228,7 @@ export function renderWorkspace(s: HomeState, id: string): string {
         </span>
       </div>
       <p class="sec-help">${lead}${when(shared && !w.isOwner, ` Only ${esc(w.owner.name)}, who made the Portico, brings another person in.`)}</p>
-      ${when(paused, `<p class="notice notice-error" role="status">Paused${w.isOwner ? "" : ` by ${esc(w.owner.name)}`}: nothing moves through ${esc(w.phrase)}. Everyone stays in, and the conversations stay readable. A send through ${esc(w.phrase)} is refused until the owner resumes.${when(w.isOwner, ` <button type="button" class="btn btn-secondary" data-action="ws-resume"${when(s.busy === "ws-pause", " disabled")}>Resume</button>`)}</p>`)}
+      ${when(paused, `<p class="notice notice-error" role="status">Paused${w.isOwner ? "" : ` by ${esc(w.owner.name)}`}: no messages move through ${esc(w.phrase)}.${when(w.isOwner, ` <button type="button" class="btn btn-secondary" data-action="ws-resume"${when(s.busy === "ws-pause", " disabled")}>Resume</button>`)}</p>`)}
     </header>
     ${when(
       asks.length > 0,
@@ -266,7 +266,7 @@ export function renderWorkspace(s: HomeState, id: string): string {
       !shared && outside.length > 0,
       () => `<section aria-labelledby="h-ws-out" class="block">
       <h2 id="h-ws-out" class="h-section">Taken out</h2>
-      <p class="sec-help">Kept apart from ${esc(s.me.name)}'s other agents. Each is reached only through the other Porticos the agent is in.</p>
+      <p class="sec-help">Kept apart from your other agents.</p>
       <ul class="rows card-list">${outside.map((a) => outRow(s, a)).join("")}</ul>
     </section>`,
     )}
@@ -290,7 +290,7 @@ export function renderWorkspace(s: HomeState, id: string): string {
     </section>
     <section aria-labelledby="h-ws-record" class="block">
       <h2 id="h-ws-record" class="h-section">Record</h2>
-      <p class="sec-help">Who came in and left, shares, held messages, refused sends and pauses. Never what a message says.</p>
+      <p class="sec-help">Joins, shares and held messages. Never what a message says.</p>
       ${record.length === 0 ? `<p class="empty">Nothing recorded yet.</p>` : `<ul class="rows card-list">${record.map((r) => `<li class="srow" data-key="wr-${esc(r.id)}"><span class="row-text"><span class="row-help">${esc(r.text)}</span></span><span class="tnum row-help">${date(r.at, s.now)}</span></li>`).join("")}</ul>`}
     </section>
     ${when(
@@ -308,7 +308,7 @@ export function renderWorkspace(s: HomeState, id: string): string {
       <ul class="rows card-list">
         ${pauseRow(s, w)}
         <li class="srow"><span class="row-text"><strong>Name</strong><span class="row-help">${w.named ? esc(w.name) : `No name yet: named after the people here, ${esc(w.name)}.`}</span></span><span class="actions"><button type="button" class="btn btn-secondary" data-action="ws-rename-open">Rename</button></span></li>
-        <li class="srow"><span class="row-text"><strong>Delete</strong><span class="row-help">Agents that reach each other only through ${esc(w.phrase)} stop reaching each other. Conversations stay readable, and take nothing new.</span></span>${
+        <li class="srow"><span class="row-text"><strong>Delete</strong><span class="row-help">Agents that only meet here stop reaching each other. Conversations stay readable.</span></span>${
           s.wsConfirm === "delete"
             ? `<span class="actions"><button type="button" class="btn btn-link" data-action="ws-confirm-cancel">Cancel</button><button type="button" class="btn btn-danger" data-action="ws-delete" data-autofocus${when(s.busy === "ws-confirm", " disabled")}>Confirm: delete ${esc(w.phrase)}</button></span>`
             : `<span class="actions"><button type="button" class="btn btn-text" data-action="ws-confirm" data-id="delete">Delete</button></span>`
@@ -347,7 +347,7 @@ export function renderAgentsPage(s: HomeState): string {
         <div class="page-title"><h1 class="h-page">Agents</h1></div>
         <span class="actions ws-actions"><button type="button" class="btn btn-secondary" data-action="ws-new-open">New Portico</button><button type="button" class="btn btn-primary" data-action="add-open" aria-haspopup="dialog">${ICON.plus()}Add agent</button></span>
       </div>
-      <p class="sec-help">A tick puts the agent in a Portico, where everyone can message the agent. Each new agent starts in Your Portico. An agent taken out of Your Portico is reached only through the other Porticos ticked.${when(s.me.handle, ` Other people's agents write to these as <code>${esc(s.me.handle)}/name</code>.`)}</p>
+      <p class="sec-help">Tick the Porticos each agent is in.${when(s.me.handle, ` Other people's agents write to these as <code>${esc(s.me.handle)}/name</code>.`)}</p>
     </header>
     ${when(f?.kind === "new", () => renderNewForm(s, f as Extract<WorkspaceForm, { kind: "new" }>))}
     ${mine.length === 0 ? `<p class="empty">No agents yet.</p>` : `<ul class="rows card-list">${mine.map(row).join("")}</ul>`}

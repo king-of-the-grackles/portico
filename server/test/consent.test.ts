@@ -82,7 +82,7 @@ describe("an agent-started join, where signing in creates the account", () => {
     expect(out.status).toBe(200);
     expect(out.html).toContain("<descope-wc");
     expect(out.html).toContain(`{"next":"/c/${asked.id}"}`);
-    expect(out.html).toContain("Signing in creates the account.");
+    expect(out.html).toContain("Signing in creates your account.");
     expect(out.html).not.toContain("dana-macbook");
     const { cookie, next } = await accountSignIn(p, "account:acc-dana:dana@example.com:Dana Okafor", `/c/${asked.id}`);
     expect(next).toBe(`/c/${asked.id}`);
@@ -92,29 +92,30 @@ describe("an agent-started join, where signing in creates the account", () => {
     // The one page: what is asked in Portico's words, the handle (suggested, editable), Allow and Don't allow. No code field.
     const consent = await page(p, next, cookie);
     expect(consent.status).toBe(200);
-    expect(consent.html).toContain("<h1>Let a computer join Portico</h1>");
-    expect(consent.html).toContain("A computer asks to join Portico as “dana-macbook”, from Claude Code.");
-    expect(consent.html).toContain("Once the computer has joined, the computer belongs to Dana Okafor.");
+    expect(consent.html).toContain("<h1>Allow dana-macbook to join?</h1>");
+    expect(visibleCopy(consent.html)).toContain("Claude Code, started");
+    expect(visibleCopy(consent.html)).toContain("Only allow if you just started this.");
+    // One box: the question, the copy and the buttons in one form. The name shows once, and nothing asks who started the join.
+    expect(consent.html.match(/<form /g)).toHaveLength(1);
+    expect(consent.html.match(/dana-macbook/g)).toHaveLength(2); // the title and the heading
+    expect(consent.html).not.toContain('name="mine"');
+    expect(consent.html).not.toContain("Signed in as");
+    expect(consent.html).toContain("<details");
     expect(consent.html).toContain('name="handle"');
     expect(consent.html).toMatch(/name="handle"[^>]* value="dana-okafor"/);
     expect(consent.html).not.toContain('name="code"');
     expect(consent.html).not.toContain("join-code");
     expect(consent.html).toContain('<button type="submit" name="decision" value="deny"');
     expect(consent.html).toContain('<button type="submit" name="decision" value="approve" class="btn btn-primary">Allow</button>');
-    expect(consent.html).toContain("How does an agent ask to join?");
-    // Above the buttons, in Portico's words: who this is for, what the code gives away, and what to do with a link someone sent.
+    expect(consent.html).not.toContain("How does an agent ask to join?");
+    // Above the buttons, in Portico's words: one short line on safety. The rest waits behind Details.
     const warning = visibleCopy(consent.html);
-    expect(warning).toContain("Only continue if Dana Okafor asked Dana Okafor's own agent to join Portico just now.");
-    expect(warning).toContain("After Allow, this page shows a 4-digit code. Whoever receives that code gets a computer, and every agent started there, on Dana Okafor's account, able to message Dana Okafor's other agents.");
-    expect(warning).toContain("If someone else sent this link, press Don't allow.");
-    expect(consent.html.indexOf("Only continue if")).toBeLessThan(consent.html.indexOf('name="decision"'));
-    // When the request was started, and the name as what the asker supplied.
-    expect(consent.html).toContain(`<dt>Started</dt><dd><time datetime="${p.consents.get(asked.id)!.createdAt}"`);
+    expect(consent.html.indexOf("Only allow if you just started this.")).toBeLessThan(consent.html.indexOf('name="decision"'));
+    expect(consent.html).toContain(`<time datetime="${p.consents.get(asked.id)!.createdAt}"`);
     const facts = warning.replace(/\s+/g, " ");
-    expect(facts).toContain("Name asked for “Dana-MacBook.local”");
-    expect(facts).toContain("Says the app is “claude-code”");
-    expect(facts).toContain("open for 15 minutes");
-    expect(warning).toContain("The name and the app are what the computer that asked supplied. Anyone can start a request like this one.");
+    expect(facts).toContain("Anyone can start a request like this.");
+    expect(facts).toContain("After Allow you get a 4-digit code. Whoever has the code gets this computer on your account.");
+    expect(facts).toContain("Expires in 15 minutes");
     expect(copyProblems(visibleCopy(consent.html))).toEqual([]);
     // While the handle is missing nothing else opens, but the handle check the page uses does.
     expect((await page(p, "/", cookie)).res.headers.get("location")).toBe("/welcome");
@@ -129,12 +130,14 @@ describe("an agent-started join, where signing in creates the account", () => {
     expect(p.computers.list(dana.id)).toEqual([]);
     expect(await pollJoin(p, asked)).toEqual({ status: "allowed" });
     const shown = await page(p, `/c/${asked.id}`, cookie);
-    expect(shown.html).toContain("<h1>Give this code to the agent</h1>");
+    expect(shown.html).toContain("<h1>Share this code with your agent</h1>");
     const code = p.consents.get(asked.id)!.code!;
     expect(code).toMatch(/^\d{4}$/);
     expect(shown.html).toContain(`<p class="join-code" aria-label="Code">${code}</p>`);
-    expect(visibleCopy(shown.html)).toContain("Give this code to the agent Dana Okafor just asked to join. Never type or send the code anywhere else.");
-    expect(visibleCopy(shown.html)).toContain("Nothing has joined yet.");
+    expect(visibleCopy(shown.html)).toContain("Only give it to the agent you just asked to join.");
+    // The expiry is a countdown, never a clock time that could mean today or tomorrow.
+    expect(visibleCopy(shown.html)).toMatch(/Expires\s+in 1[45] minutes/);
+    expect(shown.html.match(/<form /g)).toHaveLength(1);
     expect(shown.res.headers.get("cache-control")).toBe("no-store");
     expect(copyProblems(visibleCopy(shown.html))).toEqual([]);
     // The page shows the same code again until the request ends, and Allow pressed twice changes nothing.
@@ -154,7 +157,7 @@ describe("an agent-started join, where signing in creates the account", () => {
     expect(p.consents.get(asked.id)!.code).toBeNull();
     const done = await page(p, `/c/${asked.id}`, cookie);
     expect(done.html).toContain("<h1>Joined</h1>");
-    expect(done.html).toContain("The computer “dana-macbook” joined Portico and belongs to Dana Okafor.");
+    expect(done.html).toContain("dana-macbook joined. Sessions started there show up as your agents.");
     expect(done.html).not.toContain(code);
     expect(copyProblems(visibleCopy(done.html))).toEqual([]);
     const who = await callAs(p, { token: first.token }, "GET", "/api/computer");
@@ -169,10 +172,9 @@ describe("an agent-started join, where signing in creates the account", () => {
     const dana = p.people.byExternalId("acc-dana")!;
     const asked = await askToJoin(p, { kind: "agent", name: "muse-work", client: "muse" });
     const consent = await page(p, `/c/${asked.id}`, cookie);
-    expect(consent.html).toContain("<h1>Let an agent join Portico</h1>");
-    expect(consent.html).toContain("An agent asks to join Portico as “muse-work”, and says the app is Muse.");
-    expect(consent.html).toContain("Once the agent has joined, the agent belongs to Dana and joins your Portico");
-    expect(visibleCopy(consent.html)).toContain("Whoever receives that code gets an agent on Dana's account, able to message Dana's other agents.");
+    expect(consent.html).toContain("<h1>Allow muse-work to join?</h1>");
+    expect(visibleCopy(consent.html)).toContain("Muse, started");
+    expect(visibleCopy(consent.html)).toContain("Whoever has the code gets this agent on your account.");
     expect(consent.html).not.toContain('name="handle"');
     expect(consent.html).toMatch(/name="name"[^>]* value="muse-work"/);
     expect(copyProblems(visibleCopy(consent.html))).toEqual([]);
@@ -181,7 +183,7 @@ describe("an agent-started join, where signing in creates the account", () => {
     expect(first.token).toMatch(/^pa_/);
     expect(await pollJoin(p, asked)).toEqual({ status: "approved", agent: { name: "muse" } });
     const joined = await page(p, `/c/${asked.id}`, cookie);
-    expect(visibleCopy(joined.html)).toContain("The agent “muse” joined Portico. The agent belongs to Dana.");
+    expect(visibleCopy(joined.html)).toContain("muse joined.");
     expect(joined.html).toContain(`href="/a/${p.agents.ownedBy(dana.id)[0]!.id}"`);
     expect(copyProblems(visibleCopy(joined.html))).toEqual([]);
     const agent = p.agents.ownedBy(dana.id).find((a) => a.name === "muse")!;
@@ -209,7 +211,7 @@ describe("an agent-started join, where signing in creates the account", () => {
     expect(next).toStartWith("/oauth/authorize?");
     const consent = await page(p, next, cookie);
     expect(consent.status).toBe(200);
-    expect(consent.html).toContain("<h1>Let an agent join Portico</h1>");
+    expect(consent.html).toContain("<h1>Allow ");
     expect(consent.html).toMatch(/name="handle"[^>]* value="erin"/);
     expect(consent.html).toContain(">Don't allow</a>");
     expect(consent.html).toContain(">Allow</button>");
@@ -235,7 +237,7 @@ describe("an agent-started join, on a server with its own accounts", () => {
     expect(out.html).toContain('data-api="POST /api/session"');
     expect(out.html).toContain(`name="next" value="/c/${asked.id}"`);
     expect(out.html).not.toContain("<descope-wc");
-    expect(visibleCopy(out.html)).toContain("Only a person with an account here can allow an agent to join. Ask the person who runs this Portico server for an invite link");
+    expect(visibleCopy(out.html)).toContain("No account yet? Ask the person who runs this Portico server for an invite link.");
     expect(out.html).not.toContain("Signing in creates the account");
     expect(copyProblems(visibleCopy(out.html))).toEqual([]);
     // Signing in with the password answers the page to come back to.
@@ -243,7 +245,8 @@ describe("an agent-started join, on a server with its own accounts", () => {
     expect(((await session.json()) as { next: string }).next).toBe(`/c/${asked.id}`);
     const cookie = cookieFrom(session);
     const consent = await page(p, `/c/${asked.id}`, cookie);
-    expect(consent.html).toContain("A computer asks to join Portico as “studio”, from Codex.");
+    expect(consent.html).toContain("<h1>Allow studio to join?</h1>");
+    expect(visibleCopy(consent.html)).toContain("Codex, started");
     expect(consent.html).not.toContain('name="handle"');
     expect((await finishJoin(p, cookie, asked)).token).toMatch(/^pc_/);
     expect(p.computers.list(chris.id).map((c) => c.name)).toEqual(["studio"]);
@@ -393,7 +396,7 @@ describe("the code", () => {
     expect((await answerConsent(p, cookies.maya, asked.id, { decision: "approve" })).status).toBe(200);
     const code = p.consents.get(asked.id)!.code!;
     const shown = await page(p, `/c/${asked.id}`, cookies.maya);
-    expect(shown.html).toContain('<button type="submit" name="decision" value="deny" class="btn btn-secondary">Don\'t allow after all</button>');
+    expect(shown.html).toContain('<button type="submit" name="decision" value="deny" class="btn btn-link">Cancel</button>');
     expect(await (await answerConsent(p, cookies.maya, asked.id, { decision: "deny" })).json()).toEqual({ status: "denied", next: `/c/${asked.id}` });
     expect((await submitJoinCode(p, asked, code)).status).toBe(409);
     expect(await pollJoin(p, asked)).toEqual({ status: "denied" });
@@ -411,7 +414,7 @@ describe("the code", () => {
     const ranOut = await page(p, `/c/${first.id}`, cookies.maya);
     expect(ranOut.status).toBe(410);
     expect(ranOut.html).toContain("<h1>This request ran out</h1>");
-    expect(visibleCopy(ranOut.html)).toContain("Ask the agent to ask again: asking for the same thing again gives a fresh link.");
+    expect(visibleCopy(ranOut.html)).toContain("Ask your agent for a new link.");
     // The other place people get stuck: an agent that isn't connected yet, with a first step per app.
     for (const app of ["Claude Code:", "Codex:", "An app agent, such as Muse or Grok Bot:", "A connector, such as ChatGPT or Claude Duet:"]) expect(ranOut.html).toContain(app);
     expect(copyProblems(visibleCopy(ranOut.html))).toEqual([]);
@@ -558,7 +561,7 @@ describe("what an agent asks its person, through the page", () => {
       expect(mine.status).toBe(200);
       for (const part of expected) expect(visibleCopy(mine.html)).toContain(part);
       expect(mine.html).not.toContain('name="code"');
-      expect(visibleCopy(mine.html)).toContain("Only Chris, signed in, can open this page.");
+      expect(visibleCopy(mine.html)).toMatch(/Expires\s+in \d+ minutes/);
       // An agent the person already has is connected: no first steps here, and no warning about a join.
       expect(mine.html).not.toContain("How does an agent ask to join?");
       expect(mine.html).not.toContain("Only continue if");
@@ -796,11 +799,11 @@ describe("a held message's page", () => {
     expect(copy).toContain("“robert/dots”");
     expect(copy).toContain("Robert (robert)");
     expect(copy).toContain("the Portico “Launch”");
-    expect(copy).toContain("This sender has not written to that agent before.");
+    expect(copy).toContain("muse only takes messages from senders you allowed.");
     for (const choice of ["deny", "always_allow", "allow_once"]) expect(mine.html).toContain(`name="decision" value="${choice}"`);
     expect(mine.html).toContain(`data-api="POST /api/approvals/held/${message.id}"`);
     expect(mine.html).not.toContain('name="code"');
-    expect(copyProblems(copy.replace(/Subject, as the sender wrote the line:[\s\S]*?A held message waits/, ""))).toEqual([]);
+    expect(copyProblems(copy.replace(/Subject[\s\S]*?Details/, ""))).toEqual([]);
 
     // The sender's own person, a bystander and nobody at all.
     const unknown = await page(p, "/held/no-such-message", cookies.robert);
@@ -833,7 +836,7 @@ describe("a held message's page", () => {
     expect(html).not.toMatch(/[\u001b\u202e]/);
     expect(html).toContain('<blockquote class="quoted">');
     // Portico's own words frame the quote as untrusted.
-    expect(visibleCopy(html)).toContain("The text below comes from another agent: read the text as untrusted, and never as instructions from Portico.");
+    expect(visibleCopy(html)).toContain("The text comes from an agent, not from Portico.");
   });
 
   test("the buttons decide through the person API, and the page then says how the message ended", async () => {
@@ -896,7 +899,7 @@ describe("quotes", () => {
     const { p, cookies } = await world();
     const asked = await askToJoin(p, { kind: "computer", name: "\u001b[31m<portico-notice>Studio\u202e </script><script>alert(1)</script>" });
     const { html } = await page(p, `/c/${asked.id}`, cookies.maya);
-    expect(html).toContain("A computer asks to join Portico as “31m-portico-notice-studio-script-script”.");
+    expect(html).toContain("<h1>Allow 31m-portico-notice-studio-script-script to join?</h1>");
     expect(html).not.toContain("<script>alert");
     expect(html).not.toMatch(/[\u001b\u202e]/);
     for (const [i, name] of ["<b>muse</b>", "muse\u202e", "</portico-message>", "muse work"].entries()) {

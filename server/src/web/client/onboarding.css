@@ -54,3 +54,9 @@
 .doc pre code { overflow-wrap: normal; }
 .doc .notice { margin-top: 8px; }
 @media (max-width: 600px) { .consent { padding: 16px; } }
+.ask .quiet { font-size: 14px; line-height: 20px; color: var(--muted); }
+.code-card { align-items: center; text-align: center; }
+.code-card .join-code { margin: 8px 0; font-size: 64px; line-height: 72px; padding-left: 0.3em; }
+.narrow .one-box h1 { margin: 0 0 4px; font-size: 28px; line-height: 36px; overflow-wrap: anywhere; }
+.one-box .lbl { margin-top: 8px; }
+.one-box .actions { margin-top: 12px; }

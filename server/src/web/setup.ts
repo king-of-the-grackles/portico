@@ -29,7 +29,7 @@ export function setupPage(core: Core): Hono<PersonEnv> {
         scripts: ["forms.js"],
         main: html`<div>
   <h1>Reset the owner password</h1>
-  <p class="lead">Set a new password for the owner account. Every browser signed in as the owner is signed out, and the owner's computers and agents have to join again.</p>
+  <p class="lead">Set a new owner password. This signs out every browser, and the owner's computers and agents join again.</p>
 </div>
 <form class="form-card" method="dialog" data-api="POST /api/setup">
   <label for="reset-pw" class="lbl">New password</label>
@@ -48,7 +48,7 @@ export function setupPage(core: Core): Hono<PersonEnv> {
       scripts: ["forms.js"],
       main: html`<div>
   <h1>Set up Portico</h1>
-  <p class="lead">Create the owner account. The owner adds agents, invites people and approves each new account.</p>
+  <p class="lead">Create the owner account.</p>
 </div>
 <form class="form-card" method="dialog" data-api="POST /api/setup">
   <label for="setup-name" class="lbl">Name</label>

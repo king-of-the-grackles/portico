@@ -26,7 +26,7 @@ export const KINDS: Record<AgentKind, KindInfo> = {
   codex: { label: "Codex" },
   muse: { label: "Muse" },
   "grok-bot": { label: "Grok Bot" },
-  dots: { label: "Dots" },
+  dots: { label: "ChatGPT/Dots" },
   "claude-duet": { label: "Claude Duet" },
   other: { label: "Other" },
 };
@@ -339,20 +339,20 @@ export function renderReconnecting(on: boolean): string {
 export function addRows(publicUrl: string): { id: string; kinds: AgentKind[]; title: string; say: string; text: string }[] {
   const steps = `${publicUrl}/join`;
   return [
-    { id: "claude-code", kinds: ["claude-code"], title: "Claude Code", say: "Say this in a Claude Code session:", text: `Join Portico at ${publicUrl}. The steps for Claude Code are at ${steps}` },
-    { id: "codex", kinds: ["codex"], title: "Codex", say: "Say this in a Codex conversation:", text: `Join Portico at ${publicUrl}. The steps for Codex are at ${steps}` },
+    { id: "claude-code", kinds: ["claude-code"], title: "Claude Code", say: "Say this in Claude Code:", text: `Join Portico at ${publicUrl}. The steps for Claude Code are at ${steps}` },
+    { id: "codex", kinds: ["codex"], title: "Codex", say: "Say this in Codex:", text: `Join Portico at ${publicUrl}. The steps for Codex are at ${steps}` },
     {
       id: "app",
       kinds: ["muse", "grok-bot"],
-      title: "An app agent, such as Muse or Grok Bot",
-      say: "Say this in a chat with the agent:",
+      title: "Muse, Grok Bot or another app",
+      say: "Say this to the agent:",
       text: `Join Portico at ${publicUrl}. The steps for app agents are at ${steps}`,
     },
     {
       id: "connector",
       kinds: ["dots", "claude-duet"],
-      title: "A connector, such as ChatGPT or Claude Duet",
-      say: "Add this address in the app's settings for connectors or MCP servers:",
+      title: "ChatGPT or Claude Duet",
+      say: "Add this address as a connector:",
       text: `${publicUrl}/mcp`,
     },
   ];
@@ -376,7 +376,7 @@ export function renderAddSheet(add: AddState | null, ctx: { publicUrl: string; n
     .join("");
   const pick = `<div class="add-box">
     ${rows}
-    <p class="add-note">The agent then shows a link. Open the link and choose Allow: the page shows a 4-digit code. Give that code to the agent, and nowhere else: the agent then joins Your Portico. A connector asks on a separate Portico page, with no code.</p>
+    <p class="add-note">Your agent shows a link. Open it, choose Allow, then give your agent the code.</p>
     ${when(
       add.copied !== null,
       `<div role="status" class="waiting enter" data-key="add-waiting"><span class="dot dot-wait"></span><span>Waiting for the agent to join</span></div>`,
@@ -389,7 +389,7 @@ export function renderAddSheet(add: AddState | null, ctx: { publicUrl: string; n
       ? `${logo(a.kind, "logo-lg")}<div class="grow"><strong class="joined-title">${esc(a.display)} joined.</strong><span class="joined-sub">${
           a.computer ? `From ${esc(a.computer.name)}. Other ${esc(kindInfo(a.kind).label)} sessions started there join automatically.` : `${esc(agentState(a, ctx.now).label)}.`
         }</span></div>`
-      : `<div class="grow"><strong class="joined-title">The computer ${esc(add.joinedComputer ?? "")} joined.</strong><span class="joined-sub">Each Claude Code or Codex session started there shows up as an agent.</span></div>`;
+      : `<div class="grow"><strong class="joined-title">The computer ${esc(add.joinedComputer ?? "")} joined.</strong><span class="joined-sub">Sessions started there show up as agents.</span></div>`;
     joined = `<div role="status" class="joined-card enter" data-key="add-joined">
       <div class="req-head">${head}</div>
       <span class="actions"><button type="button" class="btn btn-link" data-action="add-another">Add another agent</button><button type="button" class="btn btn-primary" data-action="add-done" data-autofocus>Done</button></span>
@@ -399,7 +399,7 @@ export function renderAddSheet(add: AddState | null, ctx: { publicUrl: string; n
   <button type="button" class="scrim" aria-label="Close" data-action="add-close" tabindex="-1"></button>
   <section role="dialog" aria-modal="true" aria-labelledby="add-title" class="sheet add-sheet">
     <div class="sheet-head">
-      <div class="grow"><h2 id="add-title" class="sheet-title">Add agent</h2><p class="sheet-sub">Tell the agent to join. The agent asks, and one page on Portico allows the join.</p></div>
+      <div class="grow"><h2 id="add-title" class="sheet-title">Add agent</h2><p class="sheet-sub">Tell your agent to join.</p></div>
       <button type="button" class="icon-btn" aria-label="Close" data-action="add-close">${ICON.close(20)}</button>
     </div>
     ${when(add.stage !== "joined", pick)}

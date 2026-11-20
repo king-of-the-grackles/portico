@@ -502,9 +502,11 @@ export function sseReader(res: Response) {
 import { wordProblems } from "./copy-source";
 export { wordProblems };
 
-/** Pronouns Portico's copy never uses. Errs strict: it also flags "i.e.". */
-export const PRONOUNS =
-  /\b(i|me|my|mine|myself|we|us|our|ours|ourselves|you|your|yours|yourself|yourselves|it|its|itself|they|them|their|theirs|themselves)\b/i;
+/**
+ * Pronouns Portico's copy never uses. Errs strict: it also flags "i.e.". Portico speaks to the reader in short, plain
+ * words, so "you", "your", "it" and "its" are fine; Portico never speaks as "I" or "we", and never says "they".
+ */
+export const PRONOUNS = /\b(i|me|my|mine|myself|we|us|our|ours|ourselves|yourself|yourselves|itself|they|them|their|theirs|themselves)\b/i;
 
 /**
  * The phrases the owner chose to keep: the empty-state heading, and the name of a person's own Portico on that person's

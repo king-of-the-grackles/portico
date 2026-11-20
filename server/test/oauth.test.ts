@@ -312,22 +312,15 @@ describe("the consent page", () => {
     const res = await getAuthorize(p, authorizeQuery(clientId, pkce().challenge), cookie);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("<h1>Let an agent join Portico</h1>");
-    expect(html).toContain("An app under the name “Claude Duet” asks to add an agent.");
-    expect(html).toContain("Requested at");
-    // The client picks its own name; where approval sends access is what can be trusted.
-    expect(html).toContain("Allowing sends access to <strong>“localhost:4567”</strong>.");
-    // The same warning as a join's page, in Portico's words, with the host as a quote, and the tick, unticked.
-    const copy = visibleCopy(html);
-    expect(copy).toContain("Only continue if Chris started adding Portico in Chris's own app just now.");
-    expect(copy).toContain("Whoever runs “localhost:4567” gets an agent on Chris's account, able to message Chris's other agents.");
-    expect(copy).toContain("If someone else sent a link to this page, choose Don't allow.");
-    expect(html).toContain('<input type="checkbox" name="mine">');
-    expect(html.indexOf("Only continue if")).toBeLessThan(html.indexOf('type="submit"'));
+    expect(html).toContain("<h1>Allow Claude Duet to join?</h1>");
+    expect(html).toContain("Started <time");
+    // The client picks its own name; where approval sends access is what can be trusted, shown as a quote above the buttons.
+    expect(html).toContain("Access goes to <strong>“localhost:4567”</strong>. Only allow if that is the app you are adding.");
+    expect(html).not.toContain('name="mine"');
+    expect(html.indexOf("Only allow if")).toBeLessThan(html.indexOf('type="submit"'));
     expect(html).toContain('value="claude-duet" aria-describedby="c-name-help"');
     expect(html).toMatch(/value="claude-duet" checked>Claude Duet/);
-    expect(html).toContain("Other agents use this name when sending messages.");
-    expect(html).toContain("Once allowed, the agent belongs to Chris and joins Your Portico");
+    expect(html).toContain("Lowercase letters, digits and hyphens.");
     // No handle step for a person who has one.
     expect(html).not.toContain('name="handle"');
     expect(html.indexOf(">Don't allow</a>")).toBeLessThan(html.indexOf(">Allow</button>"));
@@ -344,7 +337,7 @@ describe("the consent page", () => {
     const clientId = await client(p, "ChatGPT");
     const html = await (await getAuthorize(p, authorizeQuery(clientId, pkce().challenge), signIn(p, chris))).text();
     expect(html).toContain('value="dots-2" aria-describedby');
-    expect(html).toMatch(/value="dots" checked>Dots/);
+    expect(html).toMatch(/value="dots" checked>ChatGPT\/Dots/);
     expect(guessKind("Claude Duet")).toBe("claude-duet");
     expect(guessKind("Cursor")).toBe("other");
   });

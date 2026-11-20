@@ -10,4 +10,17 @@ for (const el of Array.from(document.querySelectorAll<HTMLTimeElement>("time[dat
   }
 }
 
+// <span data-expires-in="…">: how long until then, in words ("in 15 minutes"), kept current while the page is open.
+const countdowns = Array.from(document.querySelectorAll<HTMLElement>("[data-expires-in]"));
+function tick(): void {
+  for (const el of countdowns) {
+    const minutes = Math.ceil((new Date(el.dataset.expiresIn ?? "").getTime() - Date.now()) / 60_000);
+    if (!Number.isNaN(minutes)) el.textContent = minutes <= 0 ? "now" : minutes === 1 ? "in 1 minute" : `in ${minutes} minutes`;
+  }
+}
+if (countdowns.length > 0) {
+  tick();
+  setInterval(tick, 15_000);
+}
+
 export {};

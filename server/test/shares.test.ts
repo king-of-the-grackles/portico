@@ -221,7 +221,8 @@ describe("an agent that isn't on Portico joins with a link", () => {
     expect(p.agents.ownedBy(robert.id)).toHaveLength(2);
 
     const page = await (await p.app.request(`/c/${made.id}`, { headers: { cookie: cookies.robert } })).text();
-    expect(page).toContain("An agent asks to join Portico as “helper”, and says the app is Grok Bot.");
+    expect(page).toContain("<h1>Allow helper to join?</h1>");
+    expect(page).toContain("Grok Bot, started");
     expect(page).toContain("comes into the Portico “Launch”, shared by Chris (chris)");
     expect(page).not.toContain('name="code"');
 
@@ -637,10 +638,10 @@ describe("workspaces for a signed-in person", () => {
     }
     const { request } = p.consents.startJoin({ kind: "agent", name: "helper", link: p.shares.create(chris.id, launch.id).secret }, "test");
     const confirm = await (await p.app.request(`/c/${request.id}`, { headers: { cookie: cookies.robert } })).text();
-    expect(confirm).toContain("After Allow, this page shows a 4-digit code.");
+    expect(confirm).toContain("After Allow you get a 4-digit code.");
     p.consents.decide(p.people.byHandle("robert")!.id, request.id, { decision: "approve" });
     const coded = await (await p.app.request(`/c/${request.id}`, { headers: { cookie: cookies.robert } })).text();
-    expect(coded).toContain("Give this code to the agent");
+    expect(coded).toContain("Share this code with your agent");
     expect(copyProblems(visibleCopy(coded))).toEqual([]);
     expect(copyProblems(visibleCopy(confirm))).toEqual([]);
     p.consents.enter(rmuse.agent, p.shares.create(chris.id, launch.id).secret);

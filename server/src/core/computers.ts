@@ -17,10 +17,11 @@ interface ComputerRow {
   token_hash: string;
   created_at: string;
   last_seen_at: string | null;
+  unproven: number;
 }
 
 function toComputer(row: ComputerRow): Computer {
-  return { id: row.id, ownerId: row.owner_id, name: row.name, createdAt: row.created_at, lastSeenAt: row.last_seen_at };
+  return { id: row.id, ownerId: row.owner_id, name: row.name, createdAt: row.created_at, lastSeenAt: row.last_seen_at, unproven: row.unproven === 1 };
 }
 
 /** Coding agents on a computer: the computer joins, then each session registers itself. */
@@ -89,6 +90,7 @@ export class Computers {
       id: this.newId(),
       ownerId,
       name: this.freeName(computerSlug(proposedName), ownerId),
+      unproven: false,
       createdAt: this.iso(),
       lastSeenAt: null,
     };

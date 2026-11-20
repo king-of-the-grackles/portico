@@ -50,7 +50,7 @@ function inviteRow(s: SettingsState, i: InviteView): string {
   const field = `invite-${esc(i.id)}`;
   return `<li class="srow srow-stack enter" data-key="i-${esc(i.id)}">
     <div class="srow-line"><span class="av av-round av-invite">${monogram(i.name)}</span><span class="row-text"><strong>Invite for ${esc(i.name)}</strong><span class="row-help tnum">Unclaimed. Single use, expires ${date(i.expiresAt, s.now)}.</span></span><span class="actions"><button type="button" class="btn btn-text" data-action="invite-revoke" data-id="${esc(i.id)}"${when(s.busy === `revoke:${i.id}`, " disabled")}>Revoke</button></span></div>
-    ${when(!link, `<p class="row-help">Portico can't show this link again. The link still works for whoever has the link: to hand one over now, revoke this invite and make a new one.</p>`)}
+    ${when(!link, `<p class="row-help">This link can't be shown again. To hand one over, revoke it and make a new one.</p>`)}
     ${when(
       link,
       `<div class="link-line"><label for="${field}" class="sr">Invite link for ${esc(i.name)}</label><input id="${field}" class="line-field link-field" readonly value="${esc(link)}"><button type="button" class="btn btn-primary" data-action="invite-copy" data-id="${esc(i.id)}">${ICON.copy()}${s.copied[i.id] ? "Copied" : "Copy link"}</button></div>`,
@@ -76,7 +76,7 @@ function renderSharedPeople(s: SettingsState): string {
     `<li class="srow" data-key="p-${esc(p.id)}">${avatar(p)}<span class="row-text"><strong>${esc(p.name)}${when(p.isMe, " (signed in)")}</strong><span class="row-help">${p.handle ? `<code>${esc(p.handle)}</code> ` : ""}${agentsLine(p.agentCount)}</span></span></li>`;
   return `<section id="people" aria-labelledby="people-h" class="ssection">
     <div class="sec-head"><h2 id="people-h" class="h-settings">People</h2></div>
-    <p class="sec-help">Everyone who shares a Portico with ${esc(s.me.name)}. Sharing a Portico, leaving one and removing someone all happen on the Portico's own page.</p>
+    <p class="sec-help">Everyone you share a Portico with.</p>
     <ul class="rows card-list">${people.map(row).join("")}</ul>
   </section>`;
 }
@@ -114,7 +114,10 @@ function computerSub(c: ComputerView, now: number): string {
 
 function computerRow(s: SettingsState, c: ComputerView): string {
   const owner = c.sessions[0] && !c.sessions[0].mine ? c.sessions[0].owner.name : null;
-  return `<li class="srow" data-key="m-${esc(c.id)}"><span class="av av-device">${ICON.laptop()}</span><span class="row-text"><span class="comp-name"><strong>${esc(c.name)}</strong>${when(owner, `<span class="owner-chip">${esc(owner)}</span>`)}</span><span class="row-help tnum">${computerSub(c, s.now)}</span></span>${confirmPair(
+  return `<li class="srow" data-key="m-${esc(c.id)}"><span class="av av-device">${ICON.laptop()}</span><span class="row-text"><span class="comp-name"><strong>${esc(c.name)}</strong>${when(owner, `<span class="owner-chip">${esc(owner)}</span>`)}</span><span class="row-help tnum">${computerSub(c, s.now)}</span>${when(
+    c.alwaysAllowed,
+    `<span class="row-help">Always allowed. <button type="button" class="btn btn-link" data-action="computer-unallow" data-id="${esc(c.id)}"${s.busy === `unallow:${c.id}` ? " disabled" : ""}>Stop</button></span>`,
+  )}</span>${confirmPair(
     s.confirmComputer === c.id,
     c.name,
     "computer-remove",
@@ -129,7 +132,7 @@ export function renderComputers(s: SettingsState): string {
   const list = s.computers ?? [];
   return `<section id="computers" aria-labelledby="computers-h" class="ssection">
     <h2 id="computers-h" class="h-settings">Computers</h2>
-    <p class="sec-help">Claude Code and Codex sessions join Portico from these computers. Removing a computer signs out every session on that computer.</p>
+    <p class="sec-help">Removing a computer signs out every session on it.</p>
     ${notice(s.compNotice, "comp-notice")}
     <ul class="rows card-list">${list.map((c) => computerRow(s, c)).join("")}${when(
       s.computers !== null && list.length === 0,
@@ -158,12 +161,12 @@ export function renderAccount(s: SettingsState): string {
       ? `<li class="srow srow-stack" data-key="acct-handle"><form class="sform-inline" method="dialog" data-form="handle-save" novalidate>
         <label for="acct-handle" class="lbl">Handle</label>
         <input id="acct-handle" class="field field-narrow${when(s.handleForm.error, " is-invalid")}" value="${esc(s.handleForm.handle)}" data-input="handle-field" aria-describedby="acct-handle-help" aria-invalid="${Boolean(s.handleForm.error)}" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="20" data-autofocus>
-        <span id="acct-handle-help" class="help">3 to 20 lowercase letters, digits and hyphens. Other people's agents have to use the new handle from then on, and the old one stays held back from everyone else.</span>
+        <span id="acct-handle-help" class="help">3 to 20 lowercase letters, digits and hyphens. Other people's agents must use the new handle.</span>
         ${when(s.handleForm.error, `<span role="alert" class="field-error">${esc(s.handleForm.error)}</span>`)}
         <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="handle-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "handle", " disabled")}>Save handle</button></span>
       </form></li>`
-    : `<li class="srow" data-key="acct-handle"><span class="row-text"><strong>Handle</strong><span class="row-help"><code>${esc(s.me.handle ?? "")}</code> Goes in front of an agent's name for other people's agents, as in <code>${esc(s.me.handle ?? "")}/muse</code>.</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="handle-open">Change handle</button></span></li>`;
-  const emailRow = s.me.email ? `<li class="srow" data-key="acct-email"><span class="row-text"><strong>Email</strong><span class="row-help">${esc(s.me.email)}. The address signed in with. A share link sent by email works only for this address.</span></span></li>` : "";
+    : `<li class="srow" data-key="acct-handle"><span class="row-text"><strong>Handle</strong><span class="row-help"><code>${esc(s.me.handle ?? "")}</code> Other people see your agents as <code>${esc(s.me.handle ?? "")}/muse</code>.</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="handle-open">Change handle</button></span></li>`;
+  const emailRow = s.me.email ? `<li class="srow" data-key="acct-email"><span class="row-text"><strong>Email</strong><span class="row-help">${esc(s.me.email)}</span></span></li>` : "";
   const pw = s.passwordForm;
   const passwordRow = pw
     ? `<li class="srow srow-stack" data-key="acct-password"><form class="sform-inline" method="dialog" data-form="password-save" novalidate>
@@ -171,7 +174,7 @@ export function renderAccount(s: SettingsState): string {
         <input id="pw-current" type="password" class="field field-narrow" value="${esc(pw.current)}" data-input="pw-current" autocomplete="current-password" data-autofocus>
         <label for="pw-next" class="lbl mt8">New password</label>
         <input id="pw-next" type="password" class="field field-narrow${when(pw.error, " is-invalid")}" value="${esc(pw.next)}" data-input="pw-next" autocomplete="new-password" aria-describedby="pw-help" aria-invalid="${Boolean(pw.error)}">
-        <span id="pw-help" class="help">At least 12 characters. Passkeys are removed and every other browser signs out.</span>
+        <span id="pw-help" class="help">At least 12 characters. Signs out every other browser and removes passkeys.</span>
         ${when(pw.error, `<span role="alert" class="field-error">${esc(pw.error)}</span>`)}
         <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="password-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "password", " disabled")}>Change password</button></span>
       </form></li>`

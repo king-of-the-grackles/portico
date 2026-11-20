@@ -158,10 +158,11 @@ describe("first contact is asked first", () => {
     const mine = await page(p, `/held/${held.id}`, cookies.chris);
     expect(mine.status).toBe(200);
     const copy = visibleCopy(mine.html);
-    expect(copy).toContain("Portico holds this message because Chris hasn't allowed messages from the agents of Robert (robert) yet.");
+    expect(copy).toContain("First message from an agent of Robert (robert).");
     expect(copy).toContain("“robert/dots”");
-    expect(copy).toContain("Always for this person");
-    expect(copy).toContain("Allow this message only");
+    expect(copy).toContain("Always allow Robert");
+    expect(copy).toContain("Always allow covers every agent of Robert (robert).");
+    expect(copy).toContain("Allow once");
     expect(copy).toContain("Don't allow");
     expect(mine.html).toContain("Budget &lt;b&gt;now&lt;/b&gt;");
     expect(copyProblems(copy.replace("Budget  b now /b", ""))).toEqual([]);
@@ -240,7 +241,7 @@ describe("outbound hold, per agent", () => {
     expect(mails(hooks)[0]!.text).toContain(`${PUBLIC_URL}/a/${muse.agent.id}`);
     // The page for the sender's person: no "always", since the switch is the always.
     const held = await page(p, `/held/${sent.message.id}`, cookies.chris);
-    expect(visibleCopy(held.html)).toContain("Portico holds this message because Chris asked to see what “muse” sends to other people's agents first. Nothing has reached “robert/dots”.");
+    expect(visibleCopy(held.html)).toContain("You asked to see what muse sends to other people");
     expect(held.html).not.toContain('value="always_allow"');
     expect(copyProblems(visibleCopy(held.html).replace("Out: the text", ""))).toEqual([]);
     expect((await callPerson(p, cookies.chris, "POST", `/api/approvals/held/${sent.message.id}`, { decision: "always_allow" })).status).toBe(400);
@@ -255,7 +256,7 @@ describe("outbound hold, per agent", () => {
     expect(mails(hooks).map((mail) => mail.to[0])).toEqual(["robert@example.com"]);
     // Chris's page now says who the message waits for; Robert's offers the decision.
     const waiting = await page(p, `/held/${sent.message.id}`, cookies.chris);
-    expect(visibleCopy(waiting.html)).toContain("This message now waits for the person who manages the agent the message is for. Nothing has been delivered.");
+    expect(visibleCopy(waiting.html)).toContain("This message now waits for the other agent");
     expect(waiting.html).not.toContain('name="decision"');
     expect((await callPerson(p, cookies.robert, "POST", `/api/approvals/held/${sent.message.id}`, { decision: "always_allow" })).status).toBe(200);
     expect(p.messages.inbox(dots.agent).messages.map((m) => m.id)).toEqual([sent.message.id]);
@@ -314,7 +315,7 @@ describe("one-step stops", () => {
       "“Chris” (chris) paused the Portico “Launch”: nothing moves through that Portico until the owner resumes the Portico, and a send through that Portico is refused.",
     ]);
     const html = (await page(p, `/p/${launch.id}`, cookies.robert)).html;
-    expect(visibleCopy(html)).toContain("Paused by Chris: nothing moves through the Portico “Launch”.");
+    expect(visibleCopy(html)).toContain("Paused by Chris: no messages move through the Portico “Launch”.");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
     // Resume: only the maker; messages move again, and nothing withdrawn comes back.
     expect((await callPerson(p, cookies.robert, "DELETE", `/api/porticos/${launch.id}/pause`)).status).toBe(403);
@@ -545,7 +546,7 @@ describe("names that cannot be faked", () => {
     const held = send(p, dots.agent, "chris/muse", "Hi").message;
     await flush();
     expect(mails(hooks)[0]!.text).toContain("A message from “robert/dots” to “muse” is held");
-    expect(visibleCopy((await page(p, `/held/${held.id}`, cookies.chris)).html)).toContain("From  “robert/dots”");
+    expect(visibleCopy((await page(p, `/held/${held.id}`, cookies.chris)).html)).toContain("“robert/dots” to “muse”");
     p.approvals.decide(chris.id, held.id, "allow_once");
     const delivered = (await json(callAs(p, muse, "GET", "/api/agent/inbox"))).messages[0];
     expect(delivered.from).toBe("robert/dots");
@@ -600,7 +601,7 @@ describe("a record and alerts", () => {
     expect(everything).not.toContain("the text");
     // The page shows the record to the people in the Portico, in words that pass the copy rules.
     const html = (await page(p, `/p/${launch.id}`, cookies.chris)).html;
-    expect(visibleCopy(html)).toContain("Who came in and left, shares, held messages, refused sends and pauses. Never what a message says.");
+    expect(visibleCopy(html)).toContain("Joins, shares and held messages. Never what a message says.");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
 

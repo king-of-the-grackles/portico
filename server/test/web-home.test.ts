@@ -339,7 +339,7 @@ describe("Today", () => {
     expect(t).toContain("Nothing in progress.");
     expect(t).toContain("Nothing done yet today.");
     expect(t).toContain("Add your first agent");
-    expect(t).toContain("Agents from Maya Okafor are already on Portico.");
+    expect(t).toContain("Agents from Maya Okafor are already here.");
   });
 });
 
@@ -711,7 +711,7 @@ describe("the Add agent sheet", () => {
   test("what to tell each kind of agent: Claude Code, Codex, an app agent and a connector, each with a Copy, and no secret", () => {
     const html = renderAddSheet(add(), ctx);
     const t = text(html);
-    inOrder(t, "Claude Code", "Codex", "An app agent, such as Muse or Grok Bot", "A connector, such as ChatGPT or Claude Duet");
+    inOrder(t, "Claude Code", "Codex", "Muse, Grok Bot or another app", "ChatGPT or Claude Duet");
     expect(html).toContain('value="Join Portico at https://portico.example.com. The steps for Claude Code are at https://portico.example.com/join"');
     expect(html).toContain('value="Join Portico at https://portico.example.com. The steps for Codex are at https://portico.example.com/join"');
     expect(html).toContain('value="Join Portico at https://portico.example.com. The steps for app agents are at https://portico.example.com/join"');
@@ -721,7 +721,7 @@ describe("the Add agent sheet", () => {
     // Nothing here is a credential: the agent asks, the person allows the join on one page and gives the agent the code the page shows.
     expect(html).not.toMatch(/join#|share#/);
     expect(t).not.toMatch(/join line|works once|expires/i);
-    expect(t).toContain("The agent then shows a link. Open the link and choose Allow: the page shows a 4-digit code. Give that code to the agent, and nowhere else");
+    expect(t).toContain("Your agent shows a link. Open it, choose Allow, then give your agent the code.");
     expect(t).not.toContain("Waiting for the agent to join");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
@@ -732,7 +732,7 @@ describe("the Add agent sheet", () => {
     expect(copied.match(/Copied/g)).toHaveLength(1);
     const computer = text(renderAddSheet(add({ stage: "joined", joinedComputer: "macbook" }), ctx));
     expect(computer).toContain("The computer macbook joined.");
-    expect(computer).toContain("Each Claude Code or Codex session started there shows up as an agent.");
+    expect(computer).toContain("Sessions started there show up as agents.");
     expect(computer).not.toContain("Join Portico at");
     expect(copyProblems(computer)).toEqual([]);
   });

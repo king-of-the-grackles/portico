@@ -59,6 +59,8 @@ export interface Computer {
   name: string;
   createdAt: string;
   lastSeenAt: string | null;
+  /** Nobody chose Always allow for this computer yet: each session started here is asked about once per agent it writes to. */
+  unproven: boolean;
 }
 
 export interface Agent {

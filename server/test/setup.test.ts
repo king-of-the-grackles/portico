@@ -305,7 +305,7 @@ describe("/setup", () => {
     const page = await res.text();
     for (const copy of [
       "<h1>Set up Portico</h1>",
-      "Create the owner account. The owner adds agents, invites people and approves each new account.",
+      "Create the owner account.",
       "Shown to invited people.",
       "12 characters or more.",
       "Create owner account",
@@ -339,7 +339,7 @@ describe("/setup", () => {
     await addOwner(p);
     const page = await (await p.app.request("/setup")).text();
     expect(page).toContain("<h1>Reset the owner password</h1>");
-    expect(page).toContain("the owner's computers and agents have to join again.");
+    expect(page).toContain("the owner's computers and agents join again.");
     expect(page).toContain('data-api="POST /api/setup"');
     expect(page).not.toContain('name="publicUrl"');
     expect(page).not.toContain('name="name"');

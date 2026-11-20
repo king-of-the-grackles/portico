@@ -30,14 +30,13 @@ test("an agent joins through the consent page and lists its Portico", async ({ w
   const path = new URL(join.link).pathname;
   expect(await signIn(context, alice.email, path)).toBe(path);
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Let an agent join Portico" })).toBeVisible();
-  await expect(page.getByLabel("Agent name")).toHaveValue(name);
-  await expect(page.locator('input[name="mine"]')).not.toBeChecked();
+  await expect(page.getByRole("heading", { level: 1, name: /^Allow .+ to join\?$/ })).toBeVisible();
+  await expect(page.locator('input[name="name"]')).toHaveValue(name);
+  await expect(page.locator('input[name="mine"]')).toHaveCount(0);
 
-  // Alice started this join herself, says so, and presses Allow: the page shows the code, and nothing has joined yet.
-  await page.locator('input[name="mine"]').check();
+  // Alice started this join herself and presses Allow: the page shows the code, and nothing has joined yet.
   await page.getByRole("button", { name: "Allow", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Give this code to the agent" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Share this code with your agent" })).toBeVisible();
   const code = await readJoinCode(page);
   expect(await joinStatus(join)).toEqual({ status: "allowed" });
 
@@ -76,7 +75,7 @@ test("a join someone else started gets nothing, even after the person presses Al
   const page = await browserAs(alice);
   await page.goto(attack.link);
   await page.getByRole("button", { name: "Allow", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Give this code to the agent" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Share this code with your agent" })).toBeVisible();
   const code = await readJoinCode(page);
 
   // The poll says "allowed" and nothing more; guessing is refused; Alice has no new agent.
@@ -95,8 +94,8 @@ test("a join someone else started gets nothing, even after the person presses Al
   await expect(bobPage.getByRole("heading", { level: 1, name: "Nothing to answer here" })).toBeVisible();
   await expect(bobPage.locator(".join-code")).toHaveCount(0);
 
-  // Alice thinks again: Don't allow after all. Now even the right code joins nothing.
-  await page.getByRole("button", { name: "Don't allow after all" }).click();
+  // Alice thinks again: Cancel. Now even the right code joins nothing.
+  await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Not allowed" })).toBeVisible();
   expect((await joinStatus(attack)).status).toBe("denied");
   const late = await submitJoinCode(attack, code);

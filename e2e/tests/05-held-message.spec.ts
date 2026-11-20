@@ -30,11 +30,12 @@ test("a held message is allowed on its page and then delivered", async ({ world,
 
     // The message's own page: who sent it, through which Portico, the text as written, and the three answers.
     await page.goto(`/held/${sent.message.id}`);
-    await expect(page.getByRole("heading", { level: 1, name: "A message waits for a decision" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Allow this message?" })).toBeVisible();
     await expect(page.getByText(`“${bob.handle}/scout”`).first()).toBeVisible();
+    await page.getByText("Details", { exact: true }).click();
     await expect(page.getByText(`the Portico “${shared.name}”`)).toBeVisible();
     await expect(page.getByText("May I see the budget?")).toBeVisible();
-    await decideHeld(page, sent.message.id, "Allow this message only");
+    await decideHeld(page, sent.message.id, "Allow once");
     await expect(page.getByText("This message was allowed.")).toBeVisible();
 
     // Now helper has it, and scout is told.
@@ -89,7 +90,7 @@ test("an agent's outgoing messages to other people wait for its own person when 
     expect((await probe.send({ to: "helper", subject: unique("Own agent"), text: "No hold here." })).delivery).not.toBe("held");
 
     // Alice reads it on the message's page and lets it go; it reaches scout.
-    await decideHeld(page, sent.message.id, "Allow this message only");
+    await decideHeld(page, sent.message.id, "Allow once");
     expect((await scout.receive(subject)).text).toBe("Here is our offer.");
     expect(await probe.outcome(sent.message.id)).toBe("delivered");
   } finally {

@@ -82,7 +82,7 @@ const KIND_LABELS: Record<AgentKind, string | null> = {
   codex: "Codex",
   muse: "Muse",
   "grok-bot": "Grok Bot",
-  dots: "Dots",
+  dots: "ChatGPT/Dots",
   "claude-duet": "Claude Duet",
   other: null,
 };
@@ -1038,10 +1038,32 @@ export class Agents {
     else this.db.query("UPDATE computers SET unproven = 1 WHERE id = $id").run({ id: target.computerId });
   }
 
-  /** The person vouched for the agent: nothing more of it is held for being new. */
-  proven(agentId: string): void {
-    this.db.query("UPDATE agents SET unproven = 0 WHERE id = $id").run({ id: agentId });
-    this.changes.about({ agents: [agentId] }, "agents");
+  /**
+   * The person chose Always allow for the agent: nothing more of it is held for being new. For a session on a computer
+   * that covers the computer: every session there, and each one started there later. Returns the agents covered.
+   */
+  proven(agentId: string): string[] {
+    const row = this.db.query("SELECT computer_id FROM agents WHERE id = $id").get({ id: agentId }) as { computer_id: string | null } | null;
+    const computerId = row?.computer_id ?? null;
+    if (!computerId) {
+      this.db.query("UPDATE agents SET unproven = 0 WHERE id = $id").run({ id: agentId });
+      this.changes.about({ agents: [agentId] }, "agents");
+      return [agentId];
+    }
+    return this.computerProven(computerId, true);
+  }
+
+  /**
+   * Always allow for a computer, on or off. Off again, each session there, and each one started later, is asked about
+   * once more for every agent it hasn't been allowed to write to. Returns the sessions there.
+   */
+  computerProven(computerId: string, proven: boolean): string[] {
+    const unproven = proven ? 0 : 1;
+    this.db.query("UPDATE computers SET unproven = $unproven WHERE id = $id").run({ id: computerId, unproven });
+    this.db.query("UPDATE agents SET unproven = $unproven WHERE computer_id = $id").run({ id: computerId, unproven });
+    const ids = (this.db.query("SELECT id FROM agents WHERE computer_id = $id").all({ id: computerId }) as { id: string }[]).map((r) => r.id);
+    this.changes.about({ agents: ids }, "agents", "computers");
+    return ids;
   }
 
   /**

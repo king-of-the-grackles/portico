@@ -109,6 +109,7 @@ textarea.field { resize: vertical; }
 
 /* The Add agent sheet. */
 .sheet-wrap { position: fixed; inset: 0; z-index: 40; display: flex; justify-content: flex-end; }
+html:has(.sheet-wrap) { overflow: hidden; }
 .scrim { position: absolute; inset: 0; border: none; background: rgba(16, 43, 37, 0.24); cursor: pointer; }
 .add-sheet { position: relative; width: 100%; max-width: 480px; height: 100%; overflow-y: auto; background: var(--card); box-shadow: -8px 0 24px rgba(16, 43, 37, 0.12); padding: 24px; display: flex; flex-direction: column; gap: 24px; }
 .sheet-head { display: flex; align-items: flex-start; gap: 12px; }

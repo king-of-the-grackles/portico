@@ -487,10 +487,10 @@ describe("invite and share link secrets at rest", () => {
     expect(lost.shares.usable(first.share.secret).id).toBe(first.share.share.id);
     const cookie = signIn(lost, lost.people.require(first.chris.id));
     const settings = await (await lost.app.request(`${PUBLIC_URL}/settings`, { headers: { cookie } })).text();
-    expect(settings).toContain("Portico can't show this link again.");
-    expect(settings).toContain("revoke this invite and make a new one");
+    expect(settings).toContain("This link can't be shown again.");
+    expect(settings).toContain("revoke it and make a new one");
     const page = await (await lost.app.request(`${PUBLIC_URL}/p/${first.launch.id}`, { headers: { cookie } })).text();
-    expect(page).toContain("end this link and make a new one");
+    expect(page).toContain("end it and make a new one");
     expect(copyProblems(visibleCopy(settings))).toEqual([]);
     expect(copyProblems(visibleCopy(page))).toEqual([]);
     // A new link made now shows as ever.

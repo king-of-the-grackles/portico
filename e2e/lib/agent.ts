@@ -62,7 +62,11 @@ export function submitJoinCode(join: Join, code: string) {
 export interface AllowOptions {
   /** A handle for a person who has none yet: the page asks with the first Allow. */
   handle?: string;
-  /** On a join: tick "started this join myself". Default true; without it the newcomer's first messages are held once. */
+  /**
+   * On a join: say "started this join myself". Default true; without it the newcomer's first messages are held once.
+   * The page no longer asks; the person API still takes the field, and the suite sends it as a shortcut, so that a
+   * spec about something else isn't stopped by a held first message.
+   */
   mine?: boolean;
 }
 
@@ -75,12 +79,17 @@ export async function allowOnConsentPage(page: Page, ask: { link: string }, opts
   await page.goto(ask.link);
   const handle = page.getByLabel("Handle");
   if (opts.handle && (await handle.count()) > 0) await handle.fill(opts.handle);
-  const mine = page.locator('input[name="mine"]');
-  if (opts.mine !== false && (await mine.count()) > 0) await mine.check();
+  if (opts.mine !== false) {
+    await page.locator("form[data-api]").first().evaluate((form) => {
+      const tick = document.createElement("input");
+      Object.assign(tick, { type: "checkbox", name: "mine", checked: true, hidden: true });
+      form.append(tick);
+    });
+  }
   await page.locator('button[name="decision"][value="approve"]').click();
-  const heading = page.getByRole("heading", { level: 1, name: /^(Allowed|Joined|Give this code to the agent)$/ });
+  const heading = page.getByRole("heading", { level: 1, name: /^(Allowed|Joined|Share this code with your agent)$/ });
   await expect(heading).toBeVisible();
-  if ((await heading.innerText()).trim() !== "Give this code to the agent") return null;
+  if ((await heading.innerText()).trim() !== "Share this code with your agent") return null;
   return readJoinCode(page);
 }
 
@@ -104,9 +113,9 @@ export async function joinThroughPage(page: Page, join: Join, opts: AllowOptions
 }
 
 /** A held message's own page, /held/<id>, answered by the signed-in person with the button of that name. */
-export async function decideHeld(page: Page, messageId: string, button: "Allow this message only" | "Always allow this sender" | "Always for this person" | "Don't allow"): Promise<void> {
+export async function decideHeld(page: Page, messageId: string, button: "Allow once" | "Don't allow" | RegExp): Promise<void> {
   await page.goto(`/held/${messageId}`);
-  await expect(page.getByRole("heading", { level: 1, name: "A message waits for a decision" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Allow this message?" })).toBeVisible();
   await page.getByRole("button", { name: button }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Already decided" })).toBeVisible();
 }

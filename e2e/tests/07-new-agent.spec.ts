@@ -28,7 +28,7 @@ test("a new agent nobody vouched for is held once, and revoking it stops it", as
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Needs a decision" })).toBeVisible();
   await expect(page.getByText(first).first()).toBeVisible();
-  await decideHeld(page, sent.message.id, "Always allow this sender");
+  await decideHeld(page, sent.message.id, /^Always allow$/);
   expect((await helper.receive(first)).from).toBe(name);
 
   // ---- "Always" vouches for the agent: the next message goes straight through ----

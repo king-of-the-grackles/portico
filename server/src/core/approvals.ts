@@ -212,8 +212,11 @@ export class Approvals {
       }
       let more: Message[] = [];
       if (choice === "always_allow" && from) {
-        this.agents.proven(from.id);
-        if (!from.outboundHold) more = this.messages.heldFor(personId).filter((m) => m.id !== held.id && m.fromId === from.id && m.heldFor === "outbound");
+        const covered = this.agents.proven(from.id);
+        more = this.messages
+          .heldFor(personId)
+          .filter((m) => m.id !== held.id && covered.includes(m.fromId) && m.heldFor === "outbound" && !this.agents.get(m.fromId)?.outboundHold);
+        if (from.outboundHold) more = more.filter((m) => m.fromId !== from.id);
       }
       const message = choice === "deny" ? this.messages.decideHeld([held], choice, personId, at)[0] : this.messages.releaseOutbound(held, personId, at);
       if (!message) throw new PorticoError("wrong_status", "The message was decided a moment ago.");
@@ -238,8 +241,8 @@ export class Approvals {
     if (held.heldFor === "new_agent" && choice !== "deny") {
       this.allowList.add(held.toId, held.fromId, personId, at);
       if (choice === "always_allow") {
-        this.agents.proven(held.fromId);
-        others = this.messages.heldFor(personId).filter((m) => m.id !== held.id && m.fromId === held.fromId && m.heldFor === "new_agent");
+        const covered = this.agents.proven(held.fromId);
+        others = this.messages.heldFor(personId).filter((m) => m.id !== held.id && covered.includes(m.fromId) && m.heldFor === "new_agent");
       } else {
         // The pair is settled, so later messages between the two pass: the ones already held for being new go with
         // this one, or an earlier message would sit behind a later one.

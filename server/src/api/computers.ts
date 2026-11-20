@@ -9,7 +9,7 @@ import { type ComputerView, personViews } from "./views";
 export function computerView(core: Core, me: Person, computer: Computer): ComputerView {
   const views = personViews(core, me);
   const sessions = core.agents.all().filter((agent) => agent.computerId === computer.id);
-  return { id: computer.id, name: computer.name, lastSeen: computer.lastSeenAt, sessions: sessions.map(views.agent) };
+  return { id: computer.id, name: computer.name, lastSeen: computer.lastSeenAt, sessions: sessions.map(views.agent), alwaysAllowed: !computer.unproven };
 }
 
 /** /api/computers: the signed-in person's computers, and removing one, which signs out every session there. */
@@ -28,6 +28,15 @@ export function computerRoutes(core: Core): Hono<PersonEnv> {
     if (!computer || computer.ownerId !== me.id) throw new PorticoError("not_found", "No such computer.");
     core.agents.forget(core.computers.remove(computer.id));
     return c.body(null, 204);
+  });
+
+  // Takes back "Always allow" for a computer: its sessions are asked about again, once for each agent they write to.
+  route.delete("/:id/always-allow", (c) => {
+    const me = currentPerson(c);
+    const computer = core.computers.get(c.req.param("id"));
+    if (!computer || computer.ownerId !== me.id) throw new PorticoError("not_found", "No such computer.");
+    core.agents.computerProven(computer.id, false);
+    return c.json({ computer: computerView(core, me, core.computers.get(computer.id)!) });
   });
 
   return route;

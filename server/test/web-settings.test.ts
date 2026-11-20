@@ -58,8 +58,8 @@ function sessionOn(id: string, computer: { id: string; name: string }, status: A
 const MACBOOK = { id: "c-macbook", name: "macbook" };
 const STUDIO = { id: "c-studio", name: "studio" };
 const COMPUTERS: ComputerView[] = [
-  { ...MACBOOK, lastSeen: at(12, 0), sessions: [sessionOn("s1", MACBOOK, "busy"), sessionOn("s2", MACBOOK, "idle"), sessionOn("s3", MACBOOK, "waiting")] },
-  { ...STUDIO, lastSeen: at(18, 4, 1), sessions: [sessionOn("s4", STUDIO, "idle"), sessionOn("s5", STUDIO, "offline")] },
+  { ...MACBOOK, lastSeen: at(12, 0), alwaysAllowed: false, sessions: [sessionOn("s1", MACBOOK, "busy"), sessionOn("s2", MACBOOK, "idle"), sessionOn("s3", MACBOOK, "waiting")] },
+  { ...STUDIO, lastSeen: at(18, 4, 1), alwaysAllowed: false, sessions: [sessionOn("s4", STUDIO, "idle"), sessionOn("s5", STUDIO, "offline")] },
 ];
 const PASSKEYS: PasskeyView[] = [{ id: "k1", name: "MacBook Touch ID", createdAt: at(9, 0, 8), lastUsedAt: at(8, 30) }];
 const INVITE: InviteView = { id: "i-priya", name: "Priya", createdAt: at(10, 0), expiresAt: at(10, 0, -6), status: "open", link: "https://portico.example.com/invite#q7Rk2mVb9XaP4tLw" };
@@ -105,7 +105,7 @@ describe("Settings renders every board state", () => {
     expect(t).toContain("Each invited person can add agents to Portico.");
     expect(t).toContain("Chris Owner. 9 agents.");
     expect(t).toContain("Maya Okafor Joined Oct 23. 2 agents.");
-    expect(t).toContain("Claude Code and Codex sessions join Portico from these computers. Removing a computer signs out every session on that computer.");
+    expect(t).toContain("Removing a computer signs out every session on it.");
     expect(t).toContain("macbook 3 sessions. Seen just now.");
     expect(t).toContain("studio 2 sessions, 1 offline. Seen yesterday at 6:04 PM.");
     expect(t).toContain("Name Chris");
@@ -181,7 +181,7 @@ describe("Settings renders every board state", () => {
 
   test("a computer shared by someone else shows the owner", () => {
     const linux = { id: "c-linux", name: "maya-linux" };
-    const theirs: ComputerView = { ...linux, lastSeen: null, sessions: [sessionOn("s9", linux, "busy", { id: "p-maya", name: "Maya Okafor" })] };
+    const theirs: ComputerView = { ...linux, lastSeen: null, alwaysAllowed: false, sessions: [sessionOn("s9", linux, "busy", { id: "p-maya", name: "Maya Okafor" })] };
     expect(text(render(settings({ computers: [theirs] })))).toContain("maya-linux Maya Okafor 1 session.");
   });
 
@@ -201,7 +201,7 @@ describe("Settings renders every board state", () => {
     const t = text(html);
     expect(t).toContain("Current password");
     expect(t).toContain("New password");
-    expect(t).toContain("At least 12 characters. Passkeys are removed and every other browser signs out.");
+    expect(t).toContain("At least 12 characters. Signs out every other browser and removes passkeys.");
     expect(html).toContain('autocomplete="current-password"');
     expect(html).toContain('autocomplete="new-password"');
     expect(text(render(settings({ passwordChanged: true })))).toContain("Changed just now.");

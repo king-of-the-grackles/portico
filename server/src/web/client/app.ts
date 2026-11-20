@@ -1452,6 +1452,18 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
             (message) => page.set({ compNotice: message }),
           );
         }
+        case "computer-unallow":
+          return void run(
+            `unallow:${id}`,
+            async () => {
+              const { computer } = await api<{ computer: ComputerView }>("DELETE", `/api/computers/${encodeURIComponent(id)}/always-allow`);
+              page.set({
+                computers: (s().computers ?? []).map((c) => (c.id === id ? computer : c)),
+                compNotice: `New sessions on ${computer.name} are asked about again.`,
+              });
+            },
+            (message) => page.set({ compNotice: message }),
+          );
         case "name-open":
           return page.set({ nameForm: { name: s().me.name, error: "" } });
         case "name-cancel":

@@ -46,10 +46,10 @@ function renderWakeForm(s: HomeState, a: AgentView): string {
   return `<form class="edit-form enter" method="dialog" data-form="wake-save" data-key="wake-form" novalidate>
     <label for="wk-url" class="lbl">Wake URL</label>
     <input id="wk-url" class="field${when(w.error, " is-invalid")}" value="${esc(w.url)}" data-input="wake-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="wk-url-help" aria-invalid="${Boolean(w.error)}" data-autofocus>
-    <span id="wk-url-help" class="help">Where the app's webhook trigger listens. For a Grok Bot routine, the POST to field.</span>
+    <span id="wk-url-help" class="help">The app's webhook address.</span>
     <label for="wk-key" class="lbl mt8">Key</label>
     <input id="wk-key" type="password" class="field" value="${esc(w.key)}" data-input="wake-key" autocomplete="off" spellcheck="false" aria-describedby="wk-key-help">
-    <span id="wk-key-help" class="help">Sent as a bearer token with each wake. Portico doesn't show the key again.</span>
+    <span id="wk-key-help" class="help">Sent with each wake. Shown once.</span>
     ${when(w.error, `<span role="alert" class="field-error">${esc(w.error)}</span>`)}
     <span class="actions mt8"><button type="button" class="btn btn-link" data-action="wake-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === `wake:${a.id}`, " disabled")}>Save</button></span>
   </form>`;
@@ -155,7 +155,7 @@ function renderSettingsFold(s: HomeState, data: AgentPageData): string {
                 (w) => `<li class="allow-row" data-key="w-${esc(w.sender.id)}">${logo(w.sender.kind, "logo-sm")}<span class="allow-name">${esc(w.sender.label)}</span><span class="tnum allow-since">since ${sinceDay(w.addedAt, s.now)}</span><span class="actions"><button type="button" class="btn btn-text" data-action="allow-remove" data-id="${esc(w.sender.id)}">Remove</button></span></li>`,
               )
               .join("")}</ul>`
-          : `<p class="row-help">None yet. Choosing Always allow on a decision adds the sender here.</p>`
+          : `<p class="row-help">None yet.</p>`
       }
     </div>`);
   }
@@ -170,7 +170,7 @@ function renderSettingsFold(s: HomeState, data: AgentPageData): string {
   if (a.type !== "session") parts.push(renderWakeRow(s, data));
   if (a.revokedAt === null) {
     parts.push(`<div class="srow-line">
-      <span class="row-text"><span class="row-title">Revoke ${esc(a.label)}</span><span class="row-help">One step stops the agent: every token stops working, the agent leaves every Portico, and messages on the way are withdrawn. Conversations stay readable. Revoking can't be undone.</span></span>
+      <span class="row-text"><span class="row-title">Revoke ${esc(a.label)}</span><span class="row-help">Signs the agent out everywhere. Conversations stay readable. This can't be undone.</span></span>
       <span class="actions">${
         s.confirmRevoke
           ? `<button type="button" class="btn btn-link" data-action="revoke-cancel">Cancel</button><button type="button" class="btn btn-danger" data-action="revoke-confirm" data-id="${esc(a.id)}" data-autofocus${when(s.busy === `revoke:${a.id}`, " disabled")}>Confirm: revoke ${esc(a.label)}</button>`
@@ -178,7 +178,7 @@ function renderSettingsFold(s: HomeState, data: AgentPageData): string {
       }</span>
     </div>`);
   } else {
-    parts.push(`<div class="srow-line"><span class="row-text"><span class="row-title">Revoked</span><span class="row-help">${esc(a.label)} is signed out and in no Portico. Removing the agent deletes the agent's conversations too.</span></span></div>`);
+    parts.push(`<div class="srow-line"><span class="row-text"><span class="row-title">Revoked</span><span class="row-help">${esc(a.label)} is signed out. Removing it deletes its conversations too.</span></span></div>`);
   }
   if (a.type === "session") {
     const on = a.joinFromFolder !== false;

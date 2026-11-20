@@ -14,7 +14,7 @@ const KIND_LABELS: Record<string, string> = {
   codex: "Codex",
   muse: "Muse",
   "grok-bot": "Grok Bot",
-  dots: "Dots",
+  dots: "ChatGPT/Dots",
   "claude-duet": "Claude Duet",
 };
 
@@ -28,6 +28,8 @@ export interface ConsentWords {
   then: string[];
   /** The Allow button. */
   allow: string;
+  /** On a join: the app that asked, when it named one Portico knows. */
+  app?: string | null;
 }
 
 /**
@@ -50,23 +52,20 @@ function wordsFor(view: ConsentView, me: string, agentName: (agent: Agent) => st
     case "computer": {
       const app = request.agentKind ? KIND_LABELS[request.agentKind] : null;
       return {
-        title: "Let a computer join Portico",
-        asks: `A computer asks to join Portico as ${quote(computerSlug(request.name ?? "computer"))}${app ? `, from ${app}` : ""}.`,
-        then: [
-          `Once the computer has joined, the computer belongs to ${me}. Each Claude Code or Codex session started there joins your Portico as an agent, and ${me}'s other agents can message that session.`,
-        ],
+        title: `Allow ${computerSlug(request.name ?? "computer")} to join?`,
+        asks: `A computer asks to join${app ? `, from ${app}` : ""}.`,
+        app,
+        then: ["Each Claude Code or Codex session on this computer becomes one of your agents."],
         allow: "Allow",
       };
     }
     case "agent": {
       const app = request.agentKind && request.agentKind !== "other" ? KIND_LABELS[request.agentKind] : null;
-      const into = view.share
-        ? `Once the agent has joined, the agent belongs to ${me}, joins your Portico, and comes into ${place}, shared by ${by}. Everyone in that Portico can message the agent.`
-        : `Once the agent has joined, the agent belongs to ${me} and joins your Portico, where ${me}'s other agents can message the agent.`;
       return {
-        title: "Let an agent join Portico",
-        asks: `An agent asks to join Portico as ${quote(request.name ?? "agent")}${app ? `, and says the app is ${app}` : ""}.`,
-        then: [into],
+        title: `Allow ${request.name ?? "an agent"} to join?`,
+        asks: `An agent asks to join${app ? `, from ${app}` : ""}.`,
+        app,
+        then: [view.share ? `This becomes one of your agents and comes into ${place}, shared by ${by}.` : "This becomes one of your agents."],
         allow: "Allow",
       };
     }

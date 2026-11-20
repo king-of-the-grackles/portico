@@ -9,7 +9,7 @@ import { filesUnder, sourceWordProblems, stringPieces } from "./copy-source";
 import { addOwner, callAs, copyProblems, makePortico, PUBLIC_URL, signIn, visibleCopy, wordProblems, workedExample } from "./helpers";
 
 /**
- * The copy sweeps: no pronouns (except "Add your first agent" and "Your Portico"), no "hub", and the word rule for
+ * The copy sweeps: no "I", "we" or "they" (the reader is "you"), no "hub", and the word rule for
  * Porticos, on every page and in agent-facing text. Each track adds its pages and renderers to PAGES or its own sweep
  * test, using copyProblems(visibleCopy(html)).
  *
@@ -193,7 +193,8 @@ describe("copy sweeps", () => {
   test("the allowed phrases are the only exceptions", () => {
     expect(copyProblems(visibleCopy("<h2>Add your first agent</h2>"))).toEqual([]);
     expect(copyProblems(visibleCopy("<h1>Your Portico</h1><p>Each new agent starts in Your Portico.</p>"))).toEqual([]);
-    expect(copyProblems(visibleCopy("<p>Your agents</p>"))).toHaveLength(1);
+    expect(copyProblems(visibleCopy("<p>Your agents</p>"))).toEqual([]);
+    expect(copyProblems(visibleCopy("<p>We keep their agents</p>"))).toHaveLength(2);
     expect(copyProblems(visibleCopy("<p>The hub is down</p>"))).toHaveLength(1);
     expect(copyProblems(visibleCopy("<pre>you can paste this</pre><p>Portico</p>"))).toEqual([]);
   });
