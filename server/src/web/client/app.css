@@ -81,7 +81,7 @@ textarea.field { resize: vertical; }
 .first-logos { display: flex; flex-wrap: wrap; gap: 8px; }
 .h-first { margin: 0 0 4px; font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -0.01em; }
 .first-body { margin: 0; max-width: 60ch; color: var(--ink-soft); }
-.first-actions { align-self: stretch; display: flex; flex-wrap: wrap; flex-direction: row-reverse; justify-content: flex-start; gap: 8px; }
+.first-actions { align-self: stretch; display: flex; flex-wrap: nowrap; flex-direction: row-reverse; justify-content: flex-start; gap: 8px; }
 
 .msg-box { padding: 12px; border-radius: 8px; background: #ffffff; box-shadow: 0 0 0 1px #eadfc8; display: flex; flex-direction: column; gap: 8px; }
 .msg-full { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -227,7 +227,7 @@ html:has(.sheet-wrap) { overflow: hidden; }
 .npage svg { color: var(--muted); }
 .npage .badge, .nrow .badge { margin-left: auto; }
 .nav-agents { flex: 1 1 auto; display: flex; flex-direction: column; gap: 4px; }
-.nav-h { margin: 8px 12px 4px; font-size: 12px; line-height: 16px; font-weight: 700; color: var(--muted); }
+.nav-h { margin: 12px 12px 4px; font-size: 20px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
 .nav-person { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
 .nrow { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 6px 12px; border: none; border-radius: 10px; background: transparent; color: var(--ink); font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
 .nrow:hover { background: #e9ede7; color: var(--ink); }
@@ -273,6 +273,7 @@ html:has(.sheet-wrap) { overflow: hidden; }
 .dcard { padding: 16px 20px; border-radius: 14px; background: var(--surface); box-shadow: 0 0 0 1px var(--hairline), 0 1px 3px rgba(16, 43, 37, 0.06); display: flex; flex-direction: column; gap: 12px; }
 .dcard-head { display: flex; align-items: flex-start; gap: 12px; }
 .dcard-title { margin: 0; font-size: 17px; line-height: 24px; font-weight: 600; overflow-wrap: anywhere; }
+.actions-links { display: flex; align-items: center; gap: 8px; margin-right: auto; }
 .dcard-why { margin: 4px 0 0; font-size: 14px; line-height: 20px; color: var(--ink-soft); }
 .code-inline { font-size: 16px; letter-spacing: 0.08em; }
 .dcard .msg-box { box-shadow: 0 0 0 1px var(--hairline); }
@@ -371,8 +372,11 @@ button.trow-main:hover { background: #f5f7f3; }
   .fsels { margin-left: 0; width: 100%; }
   .fsel { flex: 1 1 160px; min-width: 0; }
   .dcard { padding: 16px; }
-  .dcard .actions .start { margin-right: 0; flex-basis: 100%; justify-content: flex-start; padding-left: 0; }
-  .dcard .actions .btn:not(.start) { flex: 1 1 auto; }
+  /* Phones: the two links on one line, the decision on the next, each line whole. */
+  .dcard .actions { flex-wrap: wrap; gap: 4px 6px; }
+  .dcard .actions-links { flex-basis: 100%; }
+  .dcard .actions > .btn { flex: 1 1 auto; padding: 8px 6px; }
+  .dcard .actions .btn-name { display: none; }
   .fold-body { padding-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .nav { transition: none; } }

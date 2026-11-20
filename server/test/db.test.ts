@@ -55,9 +55,9 @@ describe("the two kinds of database", () => {
     for (const table of ["threads", "messages", "message_files", "files", "released_names"]) expect(tables).not.toContain(table);
     expect(versionOf(db)).toBe(SCHEMA_VERSION);
     expect(kindOf(db)).toBe(DIRECTORY.applicationId);
-    // The baseline is the whole schema: nothing is migrated yet.
-    expect(DIRECTORY_MIGRATIONS).toEqual([]);
-    expect(SCHEMA_VERSION).toBe(200);
+    // One migration since the baseline: the shared Portico every person starts with, for the people already here.
+    expect(DIRECTORY_MIGRATIONS).toHaveLength(1);
+    expect(SCHEMA_VERSION).toBe(201);
   });
 
   test("a new content database holds threads, messages and files, at its own version, and nothing of the directory", () => {
@@ -230,6 +230,22 @@ describe("migrations, for both kinds", () => {
     expect(tablesOf(db)).toContain("notes");
     expect(tablesOf(db)).not.toContain("half_done");
     db.close();
+  });
+
+  test("people who came before the shared Portico every person starts with get theirs, once", () => {
+    const db = new Database(":memory:", { strict: true });
+    db.run("PRAGMA foreign_keys = ON");
+    prepare(db, { migrations: [] });
+    const at = "2026-10-27T12:00:00.000Z";
+    for (const id of ["p1", "p2"]) {
+      db.query("INSERT INTO people (id, name, role, status, password_hash, created_at) VALUES ($id, $id, 'member', 'active', '', $at)").run({ id, at });
+      db.query("INSERT INTO workspaces (id, name, kind, owner_id, created_at) VALUES ($w, 'Personal', 'personal', $id, $at)").run({ w: `own-${id}`, id, at });
+    }
+    db.query("INSERT INTO workspaces (id, name, kind, owner_id, created_at) VALUES ('s2', 'Shared', 'shared', 'p2', $at)").run({ at });
+    prepare(db);
+    expect(versionOf(db)).toBe(SCHEMA_VERSION);
+    const starters = db.query("SELECT w.owner_id AS owner, (SELECT count(*) FROM workspace_people p WHERE p.workspace_id = w.id) AS people FROM workspaces w WHERE w.name = 'Shared' ORDER BY owner").all();
+    expect(starters).toEqual([{ owner: "p1", people: 1 }, { owner: "p2", people: 0 }]);
   });
 
   test("a migration that breaks a foreign key is rolled back", () => {

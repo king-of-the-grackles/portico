@@ -18,4 +18,18 @@ async function check(): Promise<void> {
 
 if (id) setTimeout(() => void check(), 3000);
 
+// One click copies the code. The button says so for a moment, then goes back.
+for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-copy]")) {
+  const label = button.textContent ?? "";
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(button.dataset.copy ?? "");
+      button.textContent = button.dataset.copied ?? "Copied";
+    } catch {
+      button.textContent = "Select the code to copy";
+    }
+    setTimeout(() => (button.textContent = label), 2000);
+  });
+}
+
 export {};

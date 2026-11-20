@@ -376,7 +376,7 @@ describe("isolation sweep: tools", () => {
     const agents = (await (await callAs(w.p, w.b1, "GET", "/api/agent/agents")).json()) as { agents: { name: string }[] };
     expect(agents.agents.map((a) => a.name)).toEqual(["alice/beta-helper"]);
     const porticos = (await (await callAs(w.p, w.b1, "POST", "/api/agent/portico-tools/list_porticos", {})).json()) as { porticos: { name: string }[] };
-    expect(porticos.porticos.map((x) => x.name)).toEqual(["Bob's Portico", "Beta"]);
+    expect(porticos.porticos.map((x) => x.name)).toEqual(["Bob's Portico", "Bob's shared Portico", "Beta"]);
     const people = (await (await callPerson(w.p, w.cookie, "GET", "/api/people")).json()) as { people: { name: string }[] };
     expect(people.people.map((x) => x.name).sort()).toEqual(["Alice", "Bob"]);
   });

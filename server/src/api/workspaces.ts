@@ -12,12 +12,14 @@ import { type PersonRef, porticoPhrase, porticoTitle } from "./views";
 /** A Portico (a workspace, in this code) as the signed-in person sees it. */
 export interface WorkspaceView {
   id: string;
-  /** Its heading: "Your Portico" for the person's own, otherwise the name someone gave it or the people in it. */
+  /** Its heading: "Personal Portico" for the person's own, otherwise the name someone gave it or the people in it. */
   name: string;
-  /** The same inside a sentence: "your Portico", "the Launch Portico". */
+  /** The same inside a sentence: "your Personal Portico", "the Launch Portico". */
   phrase: string;
   /** Whether someone gave it a name. Without one it is named after the people in it. */
   named: boolean;
+  /** The shared Portico the person started with, not renamed yet. */
+  starter: boolean;
   kind: WorkspaceKind;
   owner: PersonRef;
   isOwner: boolean;
@@ -76,6 +78,7 @@ export function workspaceViews(core: Core, me: Person) {
     name: porticoTitle(w, me),
     phrase: porticoPhrase(w, me),
     named: w.named,
+    starter: w.starter === true,
     kind: w.kind,
     owner: ref(w.ownerId),
     isOwner: w.ownerId === me.id,

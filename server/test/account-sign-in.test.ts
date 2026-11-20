@@ -52,7 +52,7 @@ describe("signing in with an account", () => {
     const done = await callPerson(p, cookie, "POST", "/api/welcome", { name: "Chris I", handle: "Chris", next: "/settings" });
     expect(((await done.json()) as { next: string }).next).toBe("/settings");
     expect(p.people.get(chris.id)).toMatchObject({ handle: "chris", name: "Chris I" });
-    expect(p.workspaces.forPerson(chris.id).map((w) => w.kind)).toEqual(["personal"]);
+    expect(p.workspaces.forPerson(chris.id).map((w) => w.kind)).toEqual(["personal", "shared"]);
     expect((await page("/", cookie)).status).toBe(200);
     expect((await page("/welcome", cookie)).headers.get("location")).toBe("/");
   });

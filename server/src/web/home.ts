@@ -82,7 +82,7 @@ export function homePage(core: Core): Hono<PersonEnv> {
               ? "Agents"
               : "Today";
     return sendPage(c, {
-      // "Launch on Portico", but "Your Portico" as it is.
+      // "Launch on Portico", but "Personal Portico" as it is.
       title: /\bPortico$/.test(title) ? title : `${title} on Portico`,
       body: html`<div id="app">${raw(first)}</div>`,
       data,

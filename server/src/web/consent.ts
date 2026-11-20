@@ -196,6 +196,7 @@ ${more}
       main: html`<form class="ask one-box code-card" method="dialog" data-api="POST /api/consents/${request.id}" novalidate>
 <h1>Share this code with your agent</h1>
 <p class="join-code" aria-label="Code">${request.code ?? ""}</p>
+<p class="code-copy"><button type="button" class="btn btn-primary" data-copy="${request.code ?? ""}" data-copied="Copied">Copy code</button></p>
 <p>Only give it to the agent you just asked to join.</p>
 <p class="quiet">Expires ${expiresIn(request.expiresAt, core.now())}</p>
 <p class="notice notice-error" data-error role="alert" hidden></p>
@@ -361,13 +362,13 @@ ${sheet}</div>
           : firstContact
             ? `First message from an agent of ${senderOwner}.`
             : `${to} only takes messages from senders you allowed.`;
-    const alwaysLabel = computer ? `Always allow ${computer.name}` : firstContact ? `Always allow ${facts?.managedBy.name ?? "this person"}` : newSender ? "Always allow" : "Always allow this sender";
+    const alwaysName = computer ? computer.name : firstContact ? (facts?.managedBy.name ?? "this person") : newSender ? "" : "this sender";
     const alwaysHelp = computer
       ? `Always allow covers every session on ${computer.name}, now and later. Undo it in Settings.`
       : firstContact
         ? `Always allow covers every agent of ${senderOwner}.`
         : "";
-    const always = outbound && !facts?.newSender ? "" : html`<button type="submit" name="decision" value="always_allow" class="btn btn-secondary">${alwaysLabel}</button>`;
+    const always = outbound && !facts?.newSender ? "" : html`<button type="submit" name="decision" value="always_allow" class="btn btn-secondary">Always allow${alwaysName ? html` <span class="btn-name">${alwaysName}</span>` : ""}</button>`;
     return narrowPage(c, {
       title: "Allow this message?",
       scripts: ["forms.js"],
@@ -377,7 +378,7 @@ ${sheet}</div>
 <p>${why}</p>
 ${sheet}
 <p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions"><button type="submit" name="decision" value="deny" class="btn btn-secondary">Don't allow</button>${always}<button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow once</button></div>
+<div class="actions actions-fit"><button type="submit" name="decision" value="deny" class="btn btn-secondary">Don't allow</button>${always}<button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow once</button></div>
 ${alwaysHelp ? html`<p class="quiet">${alwaysHelp}</p>` : ""}
 ${
   newSender && sender

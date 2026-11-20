@@ -451,9 +451,9 @@ describe("removals, with no cascade between databases", () => {
     // Robert's workspace is archived, not left behind: nobody is in it or reaches through it.
     expect(p.workspaces.get(owned.id)).toBeNull();
     expect(p.workspaces.forPerson(bill.id).map((w) => w.id)).not.toContain(owned.id);
-    expect(p.workspaces.archived().sort()).toEqual([owned.id, p.db.query("SELECT id FROM workspaces WHERE kind = 'personal' AND owner_id = $id").get({ id: robert.id })].map((v) => (typeof v === "string" ? v : (v as { id: string }).id)).sort());
+    expect(p.workspaces.archived().sort()).toEqual([owned.id, ...(p.db.query("SELECT id FROM workspaces WHERE (kind = 'personal' OR name = 'Shared') AND owner_id = $id").all({ id: robert.id }) as { id: string }[]).map((v) => v.id)].sort());
     // With nothing left in them, the next daily sweep drops the rows.
-    expect(await p.sweepArchived()).toBe(2);
+    expect(await p.sweepArchived()).toBe(3);
     expect(p.workspaces.archived()).toEqual([]);
   });
 

@@ -39,6 +39,8 @@ export interface Workspace {
   name: string;
   /** Whether someone gave it a name. */
   named: boolean;
+  /** The shared Portico its owner started with, not renamed yet: "Shared Portico" to its owner. */
+  starter?: boolean;
   /** How a sentence names it: "the Launch Portico", "Chris's Portico". */
   phrase: string;
   kind: WorkspaceKind;

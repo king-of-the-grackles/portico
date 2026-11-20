@@ -181,7 +181,9 @@ export function findPortico(workspaces: Workspaces, personId: string, named: unk
   const byId = mine.find((w) => w.id === wanted);
   if (byId) return byId;
   const lower = wanted.toLowerCase().replace(/^the\s+/, "");
-  const found = mine.filter((w) => [w.name, w.phrase.replace(/^the\s+/i, "")].some((name) => name.toLowerCase() === lower));
+  // What the person reads on the pages names the same Portico: "Personal Portico", and "Shared Portico" for the one the person started with.
+  const onPages = (w: Workspace) => (w.ownerId !== personId ? [] : w.kind === "personal" ? ["Personal Portico"] : w.starter ? ["Shared Portico"] : []);
+  const found = mine.filter((w) => [w.name, w.phrase.replace(/^the\s+/i, ""), ...onPages(w)].some((name) => name.toLowerCase() === lower));
   if (found.length === 1) return found[0]!;
   if (found.length > 1) {
     throw new PorticoError("bad_request", `${found.length} Porticos are named "${wanted}". Use an ID from list_porticos: ${found.map((w) => w.id).join(", ")}.`);

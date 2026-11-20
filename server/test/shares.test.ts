@@ -422,10 +422,11 @@ describe("the Portico tools", () => {
     expect(listed.body.handle).toBe("chris");
     expect(listed.body.porticos.map((w: any) => [w.name, w.kind, w.this_agent_is_in])).toEqual([
       ["Chris's Portico", "own", true],
+      ["Chris's shared Portico", "shared", false],
       ["Launch", "shared", true],
     ]);
-    expect(listed.body.porticos[1]).toMatchObject({ people: [{ name: "Chris", handle: "chris" }], agents: ["muse"], owned_by_this_person: true });
-    expect((await tool(p, rmuse.token, "list_porticos")).body.porticos.map((w: any) => w.name)).toEqual(["Robert's Portico"]);
+    expect(listed.body.porticos[2]).toMatchObject({ people: [{ name: "Chris", handle: "chris" }], agents: ["muse"], owned_by_this_person: true });
+    expect((await tool(p, rmuse.token, "list_porticos")).body.porticos.map((w: any) => w.name)).toEqual(["Robert's Portico", "Robert's shared Portico"]);
 
     const made = await tool(p, muse.token, "create_portico", { name: "Design" });
     expect(made.body.portico).toMatchObject({ name: "Design", agents: ["muse"], owned_by_this_person: true });
@@ -463,7 +464,7 @@ describe("the Portico tools", () => {
       expect(back.body.message).toContain("“Chris” took `muse` out of “Chris's Portico”, so only “Chris” can put `muse` into");
     }
     expect((await tool(p, grok.token, "create_portico", { name: "Side door", agents: ["grok-bot", "muse"] })).status).toBe(403);
-    expect(p.workspaces.forPerson(chris.id).map((w) => w.name)).toEqual(["Chris's Portico", "Launch"]);
+    expect(p.workspaces.forPerson(chris.id).map((w) => w.name)).toEqual(["Chris's Portico", "Chris's shared Portico", "Launch"]);
     expect((await tool(p, muse.token, "add_to_portico", { portico: own.id, agent: "muse" })).status).toBe(403);
     // Chris can, on the pages.
     p.workspaces.addAgent(chris.id, own.id, muse.agent.id);
@@ -547,7 +548,7 @@ describe("the Portico tools", () => {
     expect(p.workspaces.get(launch.id)).not.toBeNull();
     expect((await answerConsent(p, cookies.chris, gone.body.request.id, { decision: "approve" })).status).toBe(200);
     expect(p.workspaces.get(launch.id)).toBeNull();
-    expect(p.workspaces.forPerson(chris.id).map((w) => w.name)).toEqual(["Chris's Portico"]);
+    expect(p.workspaces.forPerson(chris.id).map((w) => w.name)).toEqual(["Chris's Portico", "Chris's shared Portico"]);
     // The page that allowed the delete still says what happened, and the request to take Robert out stopped waiting.
     const page = await (await p.app.request(`/c/${gone.body.request.id}`, { headers: { cookie: cookies.chris } })).text();
     expect(page).toContain("The Portico “Launch” is deleted.");
@@ -559,7 +560,7 @@ describe("the Portico tools", () => {
     const listed = (await mcp(p, muse.token, "tools/list")).tools.map((t: { name: string }) => t.name);
     expect(listed.slice(-8)).toEqual(["list_porticos", "create_portico", "add_to_portico", "remove_from_portico", "rename_portico", "delete_portico", "share_portico", "join_portico"]);
     const called = await mcp(p, muse.token, "tools/call", { name: "list_porticos", arguments: {} });
-    expect(JSON.parse(called.content[0].text).porticos).toHaveLength(2);
+    expect(JSON.parse(called.content[0].text).porticos).toHaveLength(3);
     expect(copyProblems(JSON.stringify(porticoTools()))).toEqual([]);
   });
 });
@@ -568,7 +569,7 @@ describe("workspaces for a signed-in person", () => {
   test("a person lists, makes, renames and deletes workspaces, and puts only their own agents in", async () => {
     const { p, muse, grok, rmuse, launch, cookies } = await world();
     const list = (await (await callPerson(p, cookies.chris, "GET", "/api/porticos")).json()) as { workspaces: { name: string; kind: string; agentIds: string[] }[] };
-    expect(list.workspaces.map((w) => [w.name, w.kind])).toEqual([["Your Portico", "personal"], ["Launch", "shared"]]);
+    expect(list.workspaces.map((w) => [w.name, w.kind])).toEqual([["Personal Portico", "personal"], ["Shared Portico", "shared"], ["Launch", "shared"]]);
     const made = await callPerson(p, cookies.chris, "POST", "/api/porticos", { name: "Design", agentIds: [grok.agent.id] });
     expect(made.status).toBe(201);
     const design = ((await made.json()) as { workspace: { id: string; agentIds: string[] } }).workspace;

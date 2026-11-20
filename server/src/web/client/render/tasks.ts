@@ -157,11 +157,20 @@ export function taskHead(): string {
 // ---- decisions ----
 
 /** Don't allow, Always allow <sender> and Allow once on a held message: the primary action last, at the right. */
+/**
+ * What Always allow covers, as the held message's own page names it: the sender's computer (every session there), the
+ * other person for a first contact, or the sender.
+ */
+function alwaysName(s: HomeState, m: HeldCard): string {
+  if (m.facts.heldFor === "first_contact") return m.facts.managedBy.name;
+  return s.agents.find((a) => a.id === m.from.id)?.computer?.name ?? m.from.label;
+}
+
 export function decideButtons(s: HomeState, m: HeldCard): string {
   const busy = s.busy === `decide:${m.id}`;
   const id = esc(m.id);
   return `<button type="button" class="btn btn-text" data-action="decide" data-id="${id}" data-decision="deny"${when(busy, " disabled")}>Don't allow</button>
-      ${when(m.facts.heldFor !== "outbound" || m.facts.newSender, () => `<button type="button" class="btn btn-secondary" data-action="decide" data-id="${id}" data-decision="always_allow"${when(busy, " disabled")}>${m.facts.heldFor === "first_contact" ? `Always for ${esc(m.facts.managedBy.name)}` : `Always allow ${esc(m.from.label)}`}</button>`)}
+      ${when(m.facts.heldFor !== "outbound" || m.facts.newSender, () => `<button type="button" class="btn btn-secondary" data-action="decide" data-id="${id}" data-decision="always_allow"${when(busy, " disabled")}>Always allow <span class="btn-name">${esc(alwaysName(s, m))}</span></button>`)}
       <button type="button" class="btn btn-primary" data-action="decide" data-id="${id}" data-decision="allow_once"${when(busy, " disabled")}>Allow once</button>`;
 }
 
@@ -191,8 +200,7 @@ export function renderHeldCard(s: HomeState, m: HeldCard): string {
     ${when(shown, () => `<div class="msg-box enter" data-key="dm-${esc(m.id)}"><p class="msg-full">${esc(m.text)}</p></div>`)}
     ${renderFiles(m.files)}
     <div class="actions">
-      <button type="button" class="btn btn-link start" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Hide message" : "Show message"}</button>
-      <a class="btn btn-link" href="/held/${encodeURIComponent(m.id)}">Open the page</a>
+      <span class="actions-links"><button type="button" class="btn btn-link" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Hide message" : "Show message"}</button><a class="btn btn-link" href="/held/${encodeURIComponent(m.id)}">Open the page</a></span>
       ${decideButtons(s, m)}
     </div>
   </article>`;

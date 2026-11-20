@@ -133,6 +133,9 @@ describe("an agent-started join, where signing in creates the account", () => {
     expect(shown.html).toContain("<h1>Share this code with your agent</h1>");
     const code = p.consents.get(asked.id)!.code!;
     expect(code).toMatch(/^\d{4}$/);
+    // One click copies the code.
+    expect(shown.html).toContain(`data-copy="${code}"`);
+    expect(shown.html).toContain(">Copy code</button>");
     expect(shown.html).toContain(`<p class="join-code" aria-label="Code">${code}</p>`);
     expect(visibleCopy(shown.html)).toContain("Only give it to the agent you just asked to join.");
     // The expiry is a countdown, never a clock time that could mean today or tomorrow.

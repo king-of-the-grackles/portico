@@ -38,7 +38,7 @@ test("the plugin's Portico tools match Portico's exactly, and Portico runs them"
   expect(data(await runTool(client, "remove_from_portico", { portico: "Design", agent: "muse" })).portico.agents).toEqual(["api-claude@macbook"]);
   expect(data(await runTool(client, "rename_portico", { portico: "Design", name: "Studio" })).note).toBe("The Portico “Design” is now the Portico “Studio”.");
   const listed = data(await runTool(client, "list_porticos", {}));
-  expect(listed.porticos.map((w: { name: string }) => w.name)).toEqual(["Chris's Portico", "Studio"]);
+  expect(listed.porticos.map((w: { name: string }) => w.name)).toEqual(["Chris's Portico", "Chris's shared Portico", "Studio"]);
   // A call that waits for the person says so, in a sentence to show.
   const shared = data(await runTool(client, "share_portico", { portico: "Studio" }));
   expect(shared).toMatchObject({ status: "waiting_for_person", portico: { name: "Studio" } });

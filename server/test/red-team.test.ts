@@ -747,7 +747,7 @@ describe("Always allow covers the whole computer", () => {
     expect([first.heldFor, second.heldFor]).toEqual(["new_agent", "new_agent"]);
     // The page offers Always allow for the computer, by name.
     const heldPage = (await page(p, `/held/${first.id}`, cookies.chris)).html;
-    expect(heldPage).toContain(">Always allow studio</button>");
+    expect(heldPage).toContain('>Always allow <span class="btn-name">studio</span></button>');
     expect(visibleCopy(heldPage)).toContain("Always allow covers every session on studio, now and later. Undo it in Settings.");
     p.approvals.decide(chris.id, first.id, "always_allow");
     // The other session's waiting message goes with it, and neither session is asked about again.

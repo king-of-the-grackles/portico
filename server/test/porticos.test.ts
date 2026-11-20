@@ -182,7 +182,7 @@ describe("your Portico: taking an agent out and putting it back", () => {
     // The conversation stays readable to Chris, marked read-only.
     const cookie = signIn(p, chris);
     const threads = (await (await callPerson(p, cookie, "GET", "/api/threads")).json()) as { threads: { id: string; workspaceId: string; portico: string; readOnly: boolean }[] };
-    expect(threads.threads).toMatchObject([{ id: first.message.threadId, workspaceId: own.id, portico: "Your Portico", readOnly: true }]);
+    expect(threads.threads).toMatchObject([{ id: first.message.threadId, workspaceId: own.id, portico: "Personal Portico", readOnly: true }]);
     // Put back: the same row, the same thread, and messages go again.
     p.workspaces.addAgent(chris.id, own.id, muse.agent.id);
     const again = p.messages.send(grok.agent, { replyTo: first.message.id, subject: "More", text: "x" });
@@ -210,7 +210,7 @@ describe("your Portico: taking an agent out and putting it back", () => {
     expect((await callPerson(p, cookies.chris, "DELETE", path)).status).toBe(204);
     type Listed = { workspaces: { id: string; name: string; phrase: string; named: boolean; kind: string; agentIds: string[] }[] };
     const list = async () => ((await (await callPerson(p, cookies.chris, "GET", "/api/porticos")).json()) as Listed).workspaces;
-    expect((await list())[0]).toMatchObject({ id: own.id, name: "Your Portico", phrase: "your Portico", named: false, kind: "personal" });
+    expect((await list())[0]).toMatchObject({ id: own.id, name: "Personal Portico", phrase: "your Personal Portico", named: false, kind: "personal" });
     expect((await list())[0]!.agentIds).not.toContain(muse.agent.id);
     // Still Chris's agent, on Chris's pages, with the way back.
     const home = await (await p.app.request(`/p/${own.id}`, { headers: { cookie: cookies.chris } })).text();
@@ -337,7 +337,7 @@ describe("a DM that continued elsewhere", () => {
     say(p, grok.agent, "bill/scout", "Plan");
     say(p, grok.agent, "muse", "Notes");
     const before = agentPageData(p, chris, grok.agent.id);
-    expect(before.worksWith.map((w) => w.parts.map((part) => [part.portico, part.readOnly])).sort()).toEqual([[["Launch", false]], [["Your Portico", false]]]);
+    expect(before.worksWith.map((w) => w.parts.map((part) => [part.portico, part.readOnly])).sort()).toEqual([[["Launch", false]], [["Personal Portico", false]]]);
     const state = homeState({ ...homeData(p, chris, { page: "agent", id: grok.agent.id }), now: p.now().getTime() });
     for (const w of before.worksWith) expect(renderParts(state, w.parts)).toBe("");
 

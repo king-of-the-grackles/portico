@@ -43,9 +43,15 @@ export function porticoKey(name: string): string {
 
 /**
  * What the directory stores as the name of a person's own Portico. Never shown: everyone sees "Chris's Portico", and
- * its owner sees "Your Portico" on the pages.
+ * its owner sees "Personal Portico" on the pages.
  */
 export const PERSONAL_NAME = "Personal";
+/**
+ * What the directory stores as the name of the shared Portico every person starts with, until its owner renames it.
+ * Never shown: its owner sees "Shared Portico" on the pages, and everyone else "Chris's shared Portico", so two
+ * people's starting Porticos never read the same. Nobody can give a Portico this name (`posesAsOwnPortico`).
+ */
+export const STARTER_NAME = "Shared";
 export const MAX_WORKSPACE_NAME = 60;
 
 /**
@@ -227,6 +233,11 @@ export class Workspaces {
       const name = owner === "" ? "A Portico" : `${owner}'s Portico`;
       return { ...base, name, named: false, phrase: owner === "" ? "a Portico" : quote(name) };
     }
+    if (row.name === STARTER_NAME) {
+      const owner = personName(row.owner_id);
+      const name = owner === "" ? "A shared Portico" : `${owner}'s shared Portico`;
+      return { ...base, name, named: false, starter: true, phrase: owner === "" ? "a shared Portico" : quote(name) };
+    }
     if (row.name !== "") {
       return { ...base, name: row.name, named: true, phrase: `the Portico ${quote(row.name)}` };
     }
@@ -260,11 +271,12 @@ export class Workspaces {
     return workspace;
   }
 
-  /** The workspaces the person is in, personal first. */
+  /* The person's own first, then the shared one the person started with, then the oldest. */
   forPerson(personId: string): Workspace[] {
     const rows = this.db
-      .query(`SELECT w.* FROM workspaces w JOIN workspace_people p ON p.workspace_id = w.id WHERE p.person_id = $personId AND w.archived_at IS NULL ${ORDER}`)
-      .all({ personId }) as WorkspaceRow[];
+      .query(`SELECT w.* FROM workspaces w JOIN workspace_people p ON p.workspace_id = w.id WHERE p.person_id = $personId AND w.archived_at IS NULL
+         ORDER BY w.kind = 'personal' DESC, (w.name = $starter AND w.owner_id = $personId) DESC, w.created_at, w.id`)
+      .all({ personId, starter: STARTER_NAME }) as WorkspaceRow[];
     return rows.map((row) => this.view(row));
   }
 
@@ -355,7 +367,7 @@ export class Workspaces {
   /**
    * Refuses a name that could be taken for another Portico by any of the people: one that reads the same as a Portico
    * one of them is in (look-alike characters folded, as for handles), or as a form Portico itself gives a Portico nobody
-   * named: "Chris's Portico", "Your Portico", or the people's names, "Chris and Robert".
+   * named: "Chris's Portico", "Personal Portico", "Shared Portico", or the people's names, "Chris and Robert".
    */
   requireFreeName(name: string, personIds: string[], exceptId: string | null = null): void {
     if (name === "") return;
@@ -389,7 +401,8 @@ export class Workspaces {
 
   /**
    * The person's personal workspace, made on first use with every agent the person has. It holds only that person's
-   * agents and never takes anyone else.
+   * agents and never takes anyone else. The shared workspace every person starts with is made at the same moment,
+   * once: empty but for its owner, with no agents until the person puts some in. Renamed or deleted, it is not made again.
    */
   personal(personId: string): Workspace {
     const row = this.db.query("SELECT * FROM workspaces WHERE owner_id = $personId AND kind = 'personal' AND archived_at IS NULL").get({ personId }) as
@@ -398,13 +411,16 @@ export class Workspaces {
     if (row) return this.view(row);
     const at = this.iso();
     const id = this.newId();
+    const starterId = this.newId();
     this.db.transaction(() => {
       this.insert({ id, name: PERSONAL_NAME, kind: "personal", ownerId: personId, createdAt: at });
       this.db
         .query("INSERT INTO workspace_agents (workspace_id, agent_id, added_at) SELECT $id, id, $at FROM agents WHERE owner_id = $personId")
         .run({ id, personId, at });
+      this.insert({ id: starterId, name: STARTER_NAME, kind: "shared", ownerId: personId, createdAt: at });
     })();
     this.log("workspace_created", { workspace_id: id, kind: "personal" });
+    this.log("workspace_created", { workspace_id: starterId, kind: "shared", starter: true });
     return this.get(id)!;
   }
 

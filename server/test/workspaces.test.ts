@@ -137,6 +137,38 @@ describe("workspaces", () => {
     expect(p.workspaces.agentsIn(personal.id)).toEqual([muse.id]);
   });
 
+  test("every person starts with a shared Portico: empty, named for its owner to everyone else, and not made again", async () => {
+    const p = on();
+    const chris = p.people.setHandle((await addOwner(p, "Chris")).id, "chris");
+    const robert = p.people.setHandle((await addMember(p, "Robert")).id, "robert");
+    const muse = addAppAgent(p, chris, "muse");
+    addAppAgent(p, robert, "dots");
+    const [own, starter] = p.workspaces.forPerson(chris.id);
+    expect([own!.kind, starter!.kind, starter!.starter, starter!.named]).toEqual(["personal", "shared", true, false]);
+    // Nobody else is there, and no agent: the person's agents go in only when the person chooses.
+    expect(p.workspaces.peopleIn(starter!.id)).toEqual([chris.id]);
+    expect(p.workspaces.agentsIn(starter!.id)).toEqual([]);
+    expect(starter!.name).toBe("Chris's shared Portico");
+    // Its owner reads "Shared Portico" on the pages, and "Personal Portico" for the person's own.
+    const cookie = signIn(p, chris);
+    const mine = ((await (await callPerson(p, cookie, "GET", "/api/porticos")).json()) as { workspaces: { name: string; starter: boolean }[] }).workspaces;
+    expect(mine.map((w) => [w.name, w.starter])).toEqual([["Personal Portico", false], ["Shared Portico", true]]);
+    // Robert has one of his own and still comes into Chris's: the two never read the same.
+    p.workspaces.admit(starter!.id, robert.id);
+    expect(p.workspaces.forPerson(robert.id).map((w) => w.name)).toEqual(["Robert's Portico", "Robert's shared Portico", "Chris's shared Portico"]);
+    const theirs = ((await (await callPerson(p, signIn(p, robert), "GET", "/api/porticos")).json()) as { workspaces: { name: string }[] }).workspaces;
+    expect(theirs.map((w) => w.name)).toEqual(["Personal Portico", "Shared Portico", "Chris's shared Portico"]);
+    p.workspaces.addAgent(chris.id, starter!.id, muse.agent.id);
+    expect(p.workspaces.agentsIn(starter!.id)).toEqual([muse.agent.id]);
+    // Nobody can give a Portico either name.
+    for (const name of ["Shared Portico", "shared", "Personal Portico", "Chris's shared Portico"]) expect(errorCode(() => p.workspaces.create(chris.id, name))).toBe("conflict");
+    // Renamed, it is a Portico like any other. Deleted, it stays deleted.
+    expect(p.workspaces.rename(chris.id, starter!.id, "Launch")).toMatchObject({ name: "Launch", named: true });
+    p.workspaces.remove(chris.id, starter!.id);
+    expect(p.workspaces.personal(chris.id).id).toBe(own!.id);
+    expect(p.workspaces.forPerson(chris.id).map((w) => w.kind)).toEqual(["personal"]);
+  });
+
   test("a person's own Portico can't be shared, renamed or deleted", async () => {
     const { p, chris, robert, muse, rmuse } = await world();
     const personal = p.workspaces.personal(chris.id);
@@ -200,7 +232,7 @@ describe("workspaces", () => {
     expect(p.workspaces.reach(muse.agent.id, rmuse.agent.id)).toBe(false);
     p.workspaces.admit(launch.id, robert.id);
     p.workspaces.removePerson(chris.id, launch.id, robert.id);
-    expect(p.workspaces.forPerson(robert.id).map((w) => w.kind)).toEqual(["personal"]);
+    expect(p.workspaces.forPerson(robert.id).map((w) => w.kind)).toEqual(["personal", "shared"]);
   });
 
   test("only the owner renames or deletes a shared workspace", async () => {
@@ -240,7 +272,7 @@ describe("workspaces", () => {
     const maya = await addMember(p);
     const { agent: muse } = addAppAgent(p, chris, "muse");
     const { agent: scout } = addAppAgent(p, maya, "scout");
-    expect(p.workspaces.forPerson(chris.id).map((w) => w.kind)).toEqual(["personal"]);
+    expect(p.workspaces.forPerson(chris.id).map((w) => w.kind)).toEqual(["personal", "shared"]);
     expect(p.workspaces.reach(muse.id, scout.id)).toBe(false);
     expect(p.workspaces.reachable(muse.id)).toEqual(new Set());
     expect(errorCode(() => say(p, muse, "maya/scout"))).toBe("unknown_agent");

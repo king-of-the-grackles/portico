@@ -160,7 +160,7 @@ describe("first contact is asked first", () => {
     const copy = visibleCopy(mine.html);
     expect(copy).toContain("First message from an agent of Robert (robert).");
     expect(copy).toContain("“robert/dots”");
-    expect(copy).toContain("Always allow Robert");
+    expect(copy).toMatch(/Always allow\s+Robert/);
     expect(copy).toContain("Always allow covers every agent of Robert (robert).");
     expect(copy).toContain("Allow once");
     expect(copy).toContain("Don't allow");
@@ -472,7 +472,7 @@ describe("names that cannot be faked", () => {
     expect(titleKey("  LAUNCH\u200b  team ")).toBe(titleKey("launch team"));
     expect(titleKey("Caf\u00e9")).toBe(titleKey("Cafe"));
     expect(porticoKey("The Launch Portico")).toBe(porticoKey("launch"));
-    for (const name of ["Your Portico", "your  portico", "Chris's Portico", "Chris\u2019s Portico", "Dana's new Portico", "A Portico", "Portico"]) expect(posesAsOwnPortico(name)).toBe(true);
+    for (const name of ["Your Portico", "Personal Portico", "Shared Portico", "shared", "your  portico", "Chris's Portico", "Chris\u2019s Portico", "Dana's new Portico", "A Portico", "Portico"]) expect(posesAsOwnPortico(name)).toBe(true);
     for (const name of ["Launch", "Portico plans", "Your plans"]) expect(posesAsOwnPortico(name)).toBe(false);
   });
 

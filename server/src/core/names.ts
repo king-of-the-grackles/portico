@@ -57,7 +57,8 @@ export function titleKey(name: string): string {
 
 /**
  * The names a Portico can't be given, whatever else exists: the forms Portico itself uses for a Portico nobody named.
- * "Chris's Portico" is how everyone reads a person's own, "Your Portico" how its owner does, and "A Portico" what is
+ * "Chris's Portico" is how everyone reads a person's own, "Personal Portico" how its owner does, "Shared Portico" and
+ * "Chris's shared Portico" the shared one every person starts with, and "A Portico" what is
  * left when its owner is gone.
  */
 export function posesAsOwnPortico(name: string): boolean {
@@ -65,6 +66,11 @@ export function posesAsOwnPortico(name: string): boolean {
   const ends = (suffix: string) => key.endsWith(titleKey(suffix));
   return (
     key === titleKey("Your Portico") ||
+    key === titleKey("Personal Portico") ||
+    key === titleKey("Personal") ||
+    key === titleKey("Shared Portico") ||
+    key === titleKey("Shared") ||
+    key === titleKey("A shared Portico") ||
     key === titleKey("A Portico") ||
     key === titleKey("A new Portico") ||
     key === titleKey("Portico") ||

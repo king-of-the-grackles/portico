@@ -33,7 +33,7 @@ test("two agents of one person exchange messages and the dashboard shows the con
   await expect(page.getByText("Forty-two rows.").first()).toBeVisible();
 
   // The same conversation is on the page of the Portico it went through.
-  await page.getByRole("link", { name: "Your Portico" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Your Portico" })).toBeVisible();
+  await page.getByRole("link", { name: "Personal Portico" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Personal Portico" })).toBeVisible();
   await expect(page.getByText(subject, { exact: true }).first()).toBeVisible();
 });

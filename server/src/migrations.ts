@@ -13,7 +13,24 @@ export type Migration = ((db: Database) => void) & {
 // in db.ts. After that, each change is a migration here, oldest first, and a shipped one is never edited.
 
 /** Every change to the directory since its baseline (version 200): the first is version 201. */
-export const DIRECTORY_MIGRATIONS: readonly Migration[] = [];
+export const DIRECTORY_MIGRATIONS: readonly Migration[] = [
+  // 201: every person starts with a shared Portico (stored name "Shared", see STARTER_NAME in core/workspaces.ts).
+  // People who came before that get theirs here: empty but for its owner, with no agents.
+  (db) => {
+    const people = db
+      .query(
+        `SELECT w.owner_id AS id FROM workspaces w WHERE w.kind = 'personal' AND w.archived_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM workspaces s WHERE s.owner_id = w.owner_id AND s.kind = 'shared' AND s.name = 'Shared')`,
+      )
+      .all() as { id: string }[];
+    const at = new Date().toISOString();
+    for (const person of people) {
+      const id = crypto.randomUUID();
+      db.query("INSERT INTO workspaces (id, name, kind, owner_id, created_at) VALUES ($id, 'Shared', 'shared', $ownerId, $at)").run({ id, ownerId: person.id, at });
+      db.query("INSERT INTO workspace_people (workspace_id, person_id, added_at) VALUES ($id, $ownerId, $at)").run({ id, ownerId: person.id, at });
+    }
+  },
+];
 
 /**
  * Every change to a workspace's content database since its baseline (version 1): the first is version 2. Each content

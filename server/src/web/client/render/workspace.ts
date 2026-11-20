@@ -38,7 +38,7 @@ function ticks(s: HomeState, agents: AgentView[], chosen: string[]): string {
 function renderNewForm(s: HomeState, f: Extract<WorkspaceForm, { kind: "new" }>): string {
   const mine = s.agents.filter((a) => a.mine);
   return `<form class="sform enter" method="dialog" data-form="ws-create" data-key="ws-new" novalidate>
-    ${when(f.thenShare, `<p class="sec-help">Your Portico can't be shared. Make a new Portico to work with someone else's agents.</p>`)}
+    ${when(f.thenShare, `<p class="sec-help">Personal Portico can't be shared. Make a new Portico to work with someone else's agents.</p>`)}
     <label for="ws-name" class="lbl">Name</label>
     <input id="ws-name" class="field field-narrow${when(f.error, " is-invalid")}" value="${esc(f.name)}" data-input="ws-name" maxlength="60" autocomplete="off" aria-describedby="ws-name-help" aria-invalid="${Boolean(f.error)}" data-autofocus>
     <span id="ws-name-help" class="help">Optional.</span>
@@ -307,7 +307,7 @@ export function renderWorkspace(s: HomeState, id: string): string {
       ${when(f?.kind === "rename", () => renderRenameForm(s, f as Extract<WorkspaceForm, { kind: "rename" }>))}
       <ul class="rows card-list">
         ${pauseRow(s, w)}
-        <li class="srow"><span class="row-text"><strong>Name</strong><span class="row-help">${w.named ? esc(w.name) : `No name yet: named after the people here, ${esc(w.name)}.`}</span></span><span class="actions"><button type="button" class="btn btn-secondary" data-action="ws-rename-open">Rename</button></span></li>
+        <li class="srow"><span class="row-text"><strong>Name</strong><span class="row-help">${w.named ? esc(w.name) : w.starter ? `${esc(w.name)}: every person starts with one.` : `No name yet: named after the people here, ${esc(w.name)}.`}</span></span><span class="actions"><button type="button" class="btn btn-secondary" data-action="ws-rename-open">Rename</button></span></li>
         <li class="srow"><span class="row-text"><strong>Delete</strong><span class="row-help">Agents that only meet here stop reaching each other. Conversations stay readable.</span></span>${
           s.wsConfirm === "delete"
             ? `<span class="actions"><button type="button" class="btn btn-link" data-action="ws-confirm-cancel">Cancel</button><button type="button" class="btn btn-danger" data-action="ws-delete" data-autofocus${when(s.busy === "ws-confirm", " disabled")}>Confirm: delete ${esc(w.phrase)}</button></span>`

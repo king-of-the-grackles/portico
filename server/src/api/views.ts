@@ -132,20 +132,25 @@ export interface ThreadAgent extends AgentRef {
  */
 export interface Place {
   workspaceId: string;
-  /** The Portico's name as the signed-in person reads it: "Your Portico", "Launch". Empty once the Portico's row is gone. */
+  /** The Portico's name as the signed-in person reads it: "Personal Portico", "Launch". Empty once the Portico's row is gone. */
   portico: string;
   /** The Portico no longer joins the two agents: nothing new goes in this conversation. */
   readOnly: boolean;
 }
 
-/** A Portico's name as its heading: a person's own is "Your Portico" to that person. */
-export function porticoTitle(w: Pick<Workspace, "kind" | "ownerId" | "name">, me: Pick<Person, "id">): string {
-  return w.kind === "personal" && w.ownerId === me.id ? "Your Portico" : w.name;
+/**
+ * A Portico's name as its heading: a person's own is "Personal Portico" to that person, and the shared one the person
+ * started with is "Shared Portico".
+ */
+export function porticoTitle(w: Pick<Workspace, "kind" | "ownerId" | "name" | "starter">, me: Pick<Person, "id">): string {
+  if (w.ownerId !== me.id) return w.name;
+  return w.kind === "personal" ? "Personal Portico" : w.starter ? "Shared Portico" : w.name;
 }
 
-/** The same Portico inside a sentence: "your Portico", "the Launch Portico". */
-export function porticoPhrase(w: Pick<Workspace, "kind" | "ownerId" | "phrase">, me: Pick<Person, "id">): string {
-  return w.kind === "personal" && w.ownerId === me.id ? "your Portico" : w.phrase;
+/** The same Portico inside a sentence: "your Personal Portico", "the Launch Portico". */
+export function porticoPhrase(w: Pick<Workspace, "kind" | "ownerId" | "phrase" | "starter">, me: Pick<Person, "id">): string {
+  if (w.ownerId !== me.id) return w.phrase;
+  return w.kind === "personal" ? "your Personal Portico" : w.starter ? "your Shared Portico" : w.phrase;
 }
 
 export interface ThreadView extends Place {
