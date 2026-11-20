@@ -6,11 +6,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { z } from "zod";
-import type { Agent, AgentKind, Person } from "../../server/src/core/types";
+import type { Agent, AgentKind, Computer, Person } from "../../server/src/core/types";
 import { addAppAgent, addComputer, addOwner, makePortico } from "../../server/test/helpers";
 import type { Logger } from "../src/log";
 import { createPorticoPlugin, type FolderSwitch, type PorticoPlugin } from "../src/plugin";
-import type { ApprovalPrompt, DialogRunner, PanelOutcome } from "../src/popup";
 import { PorticoClient, type StreamRegistration } from "../src/portico-client";
 import { InboxSocket } from "../src/socket";
 import type { SessionWatcher } from "../src/status";
@@ -18,12 +17,9 @@ import { type AppServer, AppServerError } from "../src/codex/app-server";
 
 /**
  * A real Portico (in-memory database, fake clock, 50 ms heartbeats) on a random local port, set up, with its owner.
- * With `realTime`, its clock starts at the real time, so held messages expire a day from now: the plugin's panels
- * compare the expiry with the real clock, and a request already expired shows no panel.
  */
-export async function startPortico(opts: { newNonce?: () => string; realTime?: boolean } = {}) {
-  const p = makePortico({ newNonce: opts.newNonce });
-  if (opts.realTime) p.clock.advance(Date.now() - p.clock.now().getTime());
+export async function startPortico() {
+  const p = makePortico();
   const owner: Person = await addOwner(p);
   const server = Bun.serve({ port: 0, fetch: p.app.fetch, idleTimeout: 60 });
   return Object.assign(p, { owner, url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) });
@@ -35,6 +31,25 @@ export type TestPortico = Awaited<ReturnType<typeof startPortico>>;
 export function joinTestComputer(p: TestPortico, name = "macbook"): { token: string; computer: string; computerId: string } {
   const { computer, token } = addComputer(p, p.owner, name);
   return { token, computer: computer.name, computerId: computer.id };
+}
+
+/**
+ * Stands in for the person on the consent page: presses Allow on every join that waits on this Portico, as its owner,
+ * and answers the code the page then shows for the newest one, or null when no join waits. Passed to a join as its
+ * `readCode`, the person reads the code off the page and types it at the command's prompt.
+ */
+export function codeFromPage(p: TestPortico): () => Promise<string | null> {
+  return async () => {
+    const waiting = p.db.query("SELECT id FROM consent_requests WHERE status = 'pending' AND kind = 'computer'").all() as { id: string }[];
+    for (const request of waiting) p.consents.decide(p.owner.id, request.id, { decision: "approve" });
+    const allowed = p.db.query("SELECT code FROM consent_requests WHERE status = 'allowed' AND kind = 'computer' ORDER BY created_at DESC, rowid DESC LIMIT 1").get() as { code: string } | null;
+    return allowed?.code ?? null;
+  };
+}
+
+/** The owner's computer with the name, or null. */
+export function computerNamed(p: TestPortico, name: string): Computer | null {
+  return p.computers.list(p.owner.id).find((computer) => computer.name === name) ?? null;
 }
 
 /** An app agent of the owner's, with its API token. */
@@ -109,7 +124,6 @@ export interface SessionOptions {
   folderId?: string;
   /** Replaces the registration made from repo and folderId. */
   registration?: () => Promise<StreamRegistration>;
-  runner?: DialogRunner | null;
   folder?: FolderSwitch;
   watcher?: Pick<SessionWatcher, "start" | "stop" | "resend"> | null;
   client?: PorticoClient;
@@ -131,10 +145,8 @@ export async function startSession(p: TestPortico, opts: SessionOptions) {
     log: opts.log ?? logs.log,
     socket: opts.socket ?? sock.socket,
     registration: opts.registration ?? (async () => ({ repo: opts.repo ?? "api", folderId: opts.folderId ?? "a".repeat(64) })),
-    popup: opts.runner ?? null,
     folder: opts.folder,
     watcher: opts.watcher ?? null,
-    answerRetryMs: [5],
     deliveryRetryMs: opts.deliveryRetryMs ?? [30],
     stream: { initialBackoffMs: 10 },
   });
@@ -230,59 +242,67 @@ export async function fakeInboxSocket(opts: { token?: string | null; settleMs?: 
   return fake;
 }
 
-export interface FakePanel {
-  prompt: ApprovalPrompt;
-  killed: boolean;
-  answer(outcome: PanelOutcome): void;
-}
-
-/** A dialog runner that shows nothing: each panel waits for the test to answer it, or for a kill. */
-export function fakeRunner(): { runner: DialogRunner; panels: FakePanel[] } {
-  const panels: FakePanel[] = [];
-  const runner: DialogRunner = (prompt) => {
-    let settle!: (outcome: PanelOutcome) => void;
-    const result = new Promise<PanelOutcome>((resolve) => (settle = resolve));
-    const panel: FakePanel = { prompt, killed: false, answer: (outcome) => settle(outcome) };
-    panels.push(panel);
-    return {
-      result,
-      kill: () => {
-        panel.killed = true;
-        settle({ kind: "dismissed" });
-      },
-    };
-  };
-  return { runner, panels };
-}
-
 /**
- * A stand-in for Portico's computer API, which another track builds, following the shared contract:
- * - `POST /api/computer/join { token, computer }` → 201 `{ computer: { id, name }, token }`, each join token once;
- * - `PUT /api/computer/folders/:folderId { joins, name }` → `{ folder: { folder_id, name, joins } }`;
- * - `DELETE /api/computer` → 204.
- * The last two need a computer token it gave out. `joinTokens` are the join lines' tokens it accepts.
+ * A stand-in for Portico's join and computer APIs, following the shared contract:
+ * - `POST /api/join { kind: "computer", name, client?, replaces? }` → 201 `{ id, link, poll_secret, expires_at, show }`,
+ *   and never a code;
+ * - `GET /api/join/:id` with the poll secret → `{ status }`: pending, allowed (a person pressed Allow and holds the
+ *   code), approved, denied or expired;
+ * - `POST /api/join/:id/code { code }` with the poll secret → `{ status: "approved", computer: { id, name }, token }`
+ *   for the right code, once; 400 for a wrong one, and 409 after five, before Allow, or once the request is over;
+ * - `GET /api/computer` → `{ computer }`; `PUT /api/computer/folders/:folderId { joins, name }` → `{ folder }`;
+ *   `DELETE /api/computer` → 204. These three need a computer token it gave out.
+ * `person` is what the person does on the consent page: "allow" (the default), "deny", "wait" (not yet) or "late"
+ * (the request ran out). Set it at any time. `typeCode` is the person reading the code off the page: the newest
+ * request's code once allowed, else null.
  */
-export function contractPortico(joinTokens: string[] = []) {
-  const unused = new Set(joinTokens);
+export function contractPortico(person: "allow" | "deny" | "wait" | "late" = "allow") {
   const computers = new Map<string, string>(); // token → name
   const folders = new Map<string, { name: string; joins: boolean }>();
+  const asked = new Map<string, { name: string; pollSecret: string; code: string; tries: number; computer: string | null; closed: boolean }>();
   let made = 0;
+  const state = { person, minutes: 15 };
   const fake = fakePortico(({ method, path, body }) => {
     const request = fake.requests.at(-1)!;
     const json = (status: number, value: unknown) => Response.json(value, { status });
-    if (method === "POST" && path === "/api/computer/join") {
-      const { token, computer } = (body ?? {}) as { token?: string; computer?: string };
-      if (!token || !unused.delete(token)) {
-        return json(404, { error: "not_found", message: "The join line isn't valid any more. Ask for a new one." });
-      }
-      let name = computer ?? "computer";
-      const taken = new Set(computers.values());
-      for (let n = 2; taken.has(name); n++) name = `${computer}-${n}`;
-      const issued = `pc_token-${++made}-aaaaaaaaaaaaaaaaaaaaaaaa`;
-      computers.set(issued, name);
-      return json(201, { computer: { id: `c${made}`, name }, token: issued });
+    if (method === "POST" && path === "/api/join") {
+      const { kind, name, replaces } = (body ?? {}) as { kind?: string; name?: string; replaces?: { id: string; poll_secret: string } };
+      if (kind !== "computer") return json(400, { error: "bad_request", message: "kind must be computer or agent." });
+      const old = replaces ? asked.get(replaces.id) : undefined;
+      if (old && old.pollSecret === replaces!.poll_secret) old.closed = true;
+      const id = `r${asked.size + 1}`;
+      const pollSecret = `ps_poll-${id}-aaaaaaaaaaaaaaaaaaaa`;
+      asked.set(id, { name: name ?? "computer", pollSecret, code: String(4820 + asked.size + 1), tries: 0, computer: null, closed: false });
+      const link = `${fake.url}/c/${id}`;
+      return json(201, { id, link, poll_secret: pollSecret, expires_at: new Date(Date.now() + state.minutes * 60_000).toISOString(), show: `open ${link} and press Allow` });
     }
-    if (!request.token || !computers.has(request.token)) return json(401, { error: "unauthorized", message: "Missing or invalid bearer token." });
+    const join = /^\/api\/join\/([A-Za-z0-9_-]+)(\/code)?$/.exec(path);
+    if (join && (method === "GET" || method === "POST")) {
+      const one = asked.get(join[1]!);
+      if (!one || request.token !== one.pollSecret) return json(401, { error: "unauthorized", message: "Missing or wrong poll secret for this request." });
+      const status = one.computer !== null ? "approved" : one.closed ? "denied" : state.person === "late" ? "expired" : state.person === "wait" ? "pending" : state.person === "deny" ? "denied" : "allowed";
+      if (method === "GET" && !join[2]) return json(200, status === "approved" ? { status, computer: { id: join[1], name: one.computer } } : { status });
+      if (method !== "POST" || !join[2]) return json(404, { error: "not_found", message: "No such endpoint." });
+      if (status === "pending") return json(409, { error: "wrong_status", message: "Nobody has pressed Allow on Portico's page yet. The page shows the code after Allow." });
+      if (status !== "allowed") return json(409, { error: "wrong_status", message: "This request was turned down or closed. Ask to join again." });
+      if ((body as { code?: unknown } | null)?.code !== one.code) {
+        const left = 5 - ++one.tries;
+        if (left <= 0) {
+          one.closed = true;
+          return json(409, { error: "wrong_status", message: "Too many wrong codes. This request is closed: ask to join again." });
+        }
+        return json(400, { error: "bad_request", message: `That code doesn't match the one Portico's page shows. ${left === 1 ? "1 try is" : `${left} tries are`} left.` });
+      }
+      let computer = one.name;
+      const taken = new Set(computers.values());
+      for (let n = 2; taken.has(computer); n++) computer = `${one.name}-${n}`;
+      one.computer = computer;
+      const issued = `pc_token-${++made}-aaaaaaaaaaaaaaaaaaaaaaaa`;
+      computers.set(issued, computer);
+      return json(200, { status: "approved", computer: { id: join[1], name: computer }, token: issued });
+    }
+    if (!request.token || !computers.has(request.token)) return json(401, { error: "unauthorized", message: "Missing or invalid computer token." });
+    if (method === "GET" && path === "/api/computer") return json(200, { computer: { id: "c", name: computers.get(request.token) } });
     const folder = /^\/api\/computer\/folders\/([a-f0-9]{64})$/.exec(path);
     if (method === "PUT" && folder) {
       const { joins, name } = body as { joins: boolean; name: string };
@@ -295,7 +315,8 @@ export function contractPortico(joinTokens: string[] = []) {
     }
     return json(404, { error: "not_found", message: "No such endpoint." });
   });
-  return { ...fake, computers, folders, addJoinToken: (token: string) => void unused.add(token) };
+  const typeCode = async (): Promise<string | null> => (state.person === "allow" ? ([...asked.values()].at(-1)?.code ?? null) : null);
+  return { ...fake, computers, folders, asked, state, typeCode };
 }
 
 /**

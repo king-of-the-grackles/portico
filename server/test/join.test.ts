@@ -9,9 +9,7 @@ import {
   callAs,
   callPerson,
   copyProblems,
-  DAY,
   flush,
-  HOUR,
   makePortico,
   openSessionStream,
   PUBLIC_URL,
@@ -21,268 +19,12 @@ import {
 
 const json = async <T>(res: Response | Promise<Response>) => (await (await res).json()) as T;
 
-interface LineAnswer {
-  joinLine: { id: string; line: string; expiresAt: string };
-}
-interface LineState {
-  joinLine: {
-    id: string;
-    usedAt: string | null;
-    agent: { id: string; name: string; computer: { name: string } | null } | null;
-    signIn: unknown;
-  };
-}
-
 async function setup() {
   const p = makePortico();
   const chris = await addOwner(p);
   const maya = await addMember(p);
   return { p, chris, maya, owner: signIn(p, chris), member: signIn(p, maya) };
 }
-
-/** A line for any agent, or with a kind, a line for that kind only. */
-async function makeLine(p: ReturnType<typeof makePortico>, cookie: string, kind?: string) {
-  const res = await callPerson(p, cookie, "POST", "/api/join-lines", kind ? { kind } : {});
-  expect(res.status).toBe(201);
-  const { joinLine } = (await res.json()) as LineAnswer;
-  return { ...joinLine, secret: joinLine.line.split("#")[1]! };
-}
-
-function join(p: ReturnType<typeof makePortico>, token: unknown, computer: unknown = "Chris-MacBook.local", from?: string, client?: string) {
-  return p.app.request("/api/computer/join", {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(from ? { "x-forwarded-for": from } : {}) },
-    body: JSON.stringify({ token, computer, ...(client ? { client } : {}) }),
-  });
-}
-
-describe("join lines", () => {
-  test("one line for any agent: Join Portico, the public URL, /join and a secret after #", async () => {
-    const { p, owner } = await setup();
-    const line = await makeLine(p, owner);
-    expect(line.line).toMatch(/^Join Portico: https:\/\/portico\.example\.com\/join#[A-Za-z0-9_-]{22}$/);
-    expect(Date.parse(line.expiresAt) - p.now().getTime()).toBe(24 * HOUR);
-    expect(p.computers.joinLine(line.id)?.kind).toBeNull();
-    // A line can still be made for one kind only.
-    for (const kind of ["claude-code", "codex", "muse", "grok-bot", "dots", "claude-duet", "other"]) {
-      expect(p.computers.joinLine((await makeLine(p, owner, kind)).id)?.kind).toBe(kind as never);
-    }
-  });
-
-  test("a line for any agent adds a computer, and takes the kind of the coding agent that used the line", async () => {
-    const { p, owner } = await setup();
-    const line = await makeLine(p, owner);
-    const res = await join(p, line.secret, "studio", undefined, "codex");
-    expect(res.status).toBe(201);
-    const { token, kind } = (await res.json()) as { token: string; kind: string };
-    expect(kind).toBe("codex");
-    // The sheet waits for a Codex session, not the Claude Code session that starts first.
-    await openSessionStream(p, token, { key: "claude-session", repo: "api" });
-    let state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine.agent).toBeNull();
-    const codex = await openSessionStream(p, token, { key: "codex-session", repo: "api", client: "codex" });
-    state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine.agent).toMatchObject({ name: "api-codex" });
-    await codex.events.cancel();
-  });
-
-  test("a line for any agent used by a client that doesn't say which takes the first session of any client", async () => {
-    const { p, owner } = await setup();
-    const line = await makeLine(p, owner);
-    const { token, kind } = (await (await join(p, line.secret)).json()) as { token: string; kind: string | null };
-    expect(kind).toBeNull();
-    const codex = await openSessionStream(p, token, { key: "codex-session", repo: "api", client: "codex" });
-    const state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine.agent).toMatchObject({ name: "api-codex" });
-    await codex.events.cancel();
-  });
-
-  test("a line for any agent lets an app ask to sign in, as the kind the app says", async () => {
-    const { p, owner } = await setup();
-    const ask = (token: string, kind?: string) =>
-      p.app.request("/api/sign-in-requests", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token, name: "helper", ...(kind ? { kind } : {}) }),
-      });
-    const grok = await makeLine(p, owner);
-    const asked = (await (await ask(grok.secret, "grok-bot")).json()) as { id: string };
-    expect(p.computers.signInRequest(asked.id)?.kind).toBe("grok-bot");
-    // No kind, or a coding agent's kind, joins as Other.
-    for (const kind of [undefined, "codex"]) {
-      const line = await makeLine(p, owner);
-      const plain = (await (await ask(line.secret, kind)).json()) as { id: string };
-      expect(p.computers.signInRequest(plain.id)?.kind).toBe("other");
-    }
-    // Used by the app, the line can't add a computer.
-    expect((await join(p, grok.secret)).status).toBe(409);
-  });
-
-  test("unknown kinds are refused, and signing in comes first", async () => {
-    const { p, owner } = await setup();
-    expect((await callPerson(p, owner, "POST", "/api/join-lines", { kind: "robot" })).status).toBe(400);
-    expect((await callPerson(p, null, "POST", "/api/join-lines", { kind: "claude-code" })).status).toBe(401);
-  });
-
-  test("only the person who made a line can watch the line", async () => {
-    const { p, owner, member } = await setup();
-    const line = await makeLine(p, owner);
-    expect((await callPerson(p, member, "GET", `/api/join-lines/${line.id}`)).status).toBe(404);
-    const state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine).toMatchObject({ id: line.id, usedAt: null, agent: null, signIn: null });
-  });
-});
-
-describe("computer join", () => {
-  test("redeems once: a computer for the line's maker, its token, and a slugged name", async () => {
-    const { p, chris, owner } = await setup();
-    const line = await makeLine(p, owner);
-    const res = await join(p, line.secret);
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as { computer: { id: string; name: string }; token: string };
-    expect(body.computer.name).toBe("chris-macbook");
-    expect(body.token).toStartWith("pc_");
-    expect(p.computers.byToken(body.token)).toMatchObject({ id: body.computer.id, ownerId: chris.id });
-
-    const again = await join(p, line.secret);
-    expect(again.status).toBe(409);
-    expect(await again.json()).toMatchObject({ error: "wrong_status", message: expect.stringContaining("already used") });
-  });
-
-  test("the whole line works as the token, and a second computer with the same name gets -2", async () => {
-    const { p, owner } = await setup();
-    addComputer(p, (await p.people.byName("Chris"))!, "chris-macbook");
-    const line = await makeLine(p, owner);
-    const res = await join(p, line.line);
-    expect(await res.json()).toMatchObject({ computer: { name: "chris-macbook-2" } });
-  });
-
-  test("expired, unknown and app lines are refused; an app line stays usable", async () => {
-    const { p, owner } = await setup();
-    const old = await makeLine(p, owner);
-    p.clock.advance(24 * HOUR);
-    expect(await json(join(p, old.secret))).toMatchObject({ error: "wrong_status", message: expect.stringContaining("expired") });
-    expect((await join(p, "x".repeat(22))).status).toBe(404);
-    expect((await join(p, 42)).status).toBe(404);
-
-    const muse = await makeLine(p, owner, "muse");
-    const res = await join(p, muse.secret);
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { message: string }).message).toContain("app agent");
-    expect(p.computers.joinLine(muse.id)?.usedAt).toBeNull();
-  });
-
-  test("ten unknown lines in 15 minutes from one address close the route to that address for a while", async () => {
-    const { p, owner } = await setup();
-    const line = await makeLine(p, owner);
-    for (let i = 0; i < 10; i++) expect((await join(p, `unknown-secret-${i}`.padEnd(22, "x"), "mac", "6.6.6.6")).status).toBe(404);
-    expect((await join(p, line.secret, "mac", "6.6.6.6")).status).toBe(429);
-    p.clock.advance(15 * 60_000 + 1);
-    expect((await join(p, line.secret, "mac", "6.6.6.6")).status).toBe(201);
-  });
-
-  test("one address's failures don't close joining for others", async () => {
-    const { p, owner } = await setup();
-    const line = await makeLine(p, owner);
-    for (let i = 0; i < 10; i++) await join(p, `unknown-secret-${i}`.padEnd(22, "x"), "mac", "6.6.6.6");
-    expect((await join(p, line.secret, "mac", "1.2.3.4")).status).toBe(201);
-  });
-
-  test("joining stays closed until setup is done", async () => {
-    const p = makePortico({ setup: false });
-    expect(await json(join(p, "x".repeat(22)))).toMatchObject({ error: "setup_required" });
-  });
-
-  test("the sheet sees the first session that registers on the new computer", async () => {
-    const { p, owner } = await setup();
-    const topics: Topic[][] = [];
-    p.changes.on((batch) => topics.push(batch));
-    const line = await makeLine(p, owner);
-    const { token } = (await (await join(p, line.secret)).json()) as { token: string };
-    let state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine.usedAt).not.toBeNull();
-    expect(state.joinLine.agent).toBeNull();
-
-    await flush();
-    topics.length = 0;
-    const stream = await openSessionStream(p, token, { key: "first-session", repo: "api" });
-    await flush();
-    await flush();
-    expect(topics.flat()).toContain("join-lines");
-    state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine.agent).toMatchObject({ name: "api-claude", computer: { name: "chris-macbook" } });
-
-    // A later session doesn't replace the first.
-    await openSessionStream(p, token, { key: "second-session", repo: "web", folderId: "b".repeat(64) });
-    state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine.agent?.name).toBe("api-claude");
-    await stream.events.cancel();
-  });
-});
-
-describe("Codex on a computer", () => {
-  test("a Codex line joins a computer, says its kind, and the sheet waits for the first Codex session", async () => {
-    const { p, owner } = await setup();
-    const line = await makeLine(p, owner, "codex");
-    const res = await join(p, line.secret);
-    expect(res.status).toBe(201);
-    const { token, kind } = (await res.json()) as { token: string; kind: string };
-    expect(kind).toBe("codex");
-    // A Claude Code session on the computer isn't what the Codex line waits for.
-    await openSessionStream(p, token, { key: "claude-session", repo: "api" });
-    let state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine.agent).toBeNull();
-    const codex = await openSessionStream(p, token, { key: "codex-session", repo: "api", client: "codex" });
-    expect(codex.hello).toMatchObject({ name: "api-codex", address: "api-codex@chris-macbook" });
-    state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine.agent).toMatchObject({ name: "api-codex", computer: { name: "chris-macbook" } });
-    await codex.events.cancel();
-  });
-
-  test("a computer that already joined uses a Codex line with POST /lines: no second computer", async () => {
-    const { p, owner } = await setup();
-    const first = (await (await join(p, (await makeLine(p, owner)).secret)).json()) as { token: string; computer: { id: string } };
-    const line = await makeLine(p, owner, "codex");
-    const res = await callAs(p, { token: first.token }, "POST", "/api/computer/lines", { token: line.secret });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ computer: { id: first.computer.id, name: "chris-macbook" }, kind: "codex" });
-    expect(p.computers.joinLine(line.id)).toMatchObject({ computerId: first.computer.id, usedAt: expect.any(String) });
-    // Used once.
-    expect((await callAs(p, { token: first.token }, "POST", "/api/computer/lines", { token: line.secret })).status).toBe(409);
-    const codex = await openSessionStream(p, first.token, { key: "codex-session", repo: "web", client: "codex" });
-    const state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine.agent?.name).toBe("web-codex");
-    await codex.events.cancel();
-  });
-
-  test("a Codex session that takes over an older Codex row in its folder still counts as the line's session", async () => {
-    const { p, owner } = await setup();
-    const first = (await (await join(p, (await makeLine(p, owner, "codex")).secret)).json()) as { token: string };
-    const old = await openSessionStream(p, first.token, { key: "codex-old", repo: "api", client: "codex" });
-    await old.events.cancel();
-    await flush();
-    p.clock.advance(5 * 60_000);
-    const line = await makeLine(p, owner, "codex");
-    expect((await callAs(p, { token: first.token }, "POST", "/api/computer/lines", { token: line.secret })).status).toBe(200);
-    const next = await openSessionStream(p, first.token, { key: "codex-new", repo: "api", client: "codex" });
-    expect(next.hello.name).toBe("api-codex");
-    const state = await json<LineState>(callPerson(p, owner, "GET", `/api/join-lines/${line.id}`));
-    expect(state.joinLine.agent?.name).toBe("api-codex");
-    await next.events.cancel();
-  });
-
-  test("POST /lines needs the computer token, and only the computer's own person's line attaches", async () => {
-    const { p, owner, member } = await setup();
-    const first = (await (await join(p, (await makeLine(p, owner)).secret)).json()) as { token: string };
-    const mayas = await makeLine(p, member, "codex");
-    expect((await p.app.request("/api/computer/lines", { method: "POST", body: "{}" })).status).toBe(401);
-    const res = await callAs(p, { token: first.token }, "POST", "/api/computer/lines", { token: mayas.secret });
-    expect(res.status).toBe(403);
-    expect(p.computers.joinLine(mayas.id)?.usedAt).toBeNull();
-    const muse = await makeLine(p, owner, "muse");
-    expect((await callAs(p, { token: first.token }, "POST", "/api/computer/lines", { token: muse.secret })).status).toBe(400);
-  });
-});
 
 describe("leaving and folders", () => {
   test("DELETE /api/computer removes the computer and its sessions, and closes their streams", async () => {
@@ -346,32 +88,15 @@ describe("computers in the person API", () => {
     const { p, chris, owner, member } = await setup();
     const { computer, token } = addComputer(p, chris);
     const stream = await openSessionStream(p, token, { key: "removed-session" });
-    expect((await callPerson(p, member, "DELETE", `/api/computers/${computer.id}`)).status).toBe(403);
+    // Someone else's computer answers exactly as one that doesn't exist.
+    const theirs = await callPerson(p, member, "DELETE", `/api/computers/${computer.id}`);
+    const none = await callPerson(p, member, "DELETE", "/api/computers/nope");
+    expect([theirs.status, await theirs.text()]).toEqual([404, await none.text()]);
+    expect(p.computers.get(computer.id)).not.toBeNull();
     expect((await callPerson(p, owner, "DELETE", "/api/computers/nope")).status).toBe(404);
     expect((await callPerson(p, owner, "DELETE", `/api/computers/${computer.id}`)).status).toBe(204);
     expect(p.computers.byToken(token)).toBeNull();
     await expect(stream.events.next(500)).rejects.toThrow();
-  });
-});
-
-describe("sweeps", () => {
-  test("join lines go a day after they expire", async () => {
-    const { p, owner } = await setup();
-    const line = await makeLine(p, owner);
-    p.clock.advance(47 * HOUR);
-    p.computers.sweep();
-    expect(p.computers.joinLine(line.id)).not.toBeNull();
-    p.clock.advance(2 * HOUR);
-    expect(p.computers.sweep().joinLines).toBe(1);
-    expect(p.computers.joinLine(line.id)).toBeNull();
-  });
-
-  test("the daily sweep runs from Portico's own sweep", async () => {
-    const { p, owner } = await setup();
-    await makeLine(p, owner);
-    p.clock.advance(3 * DAY);
-    p.sweepDaily();
-    expect((p.db.query("SELECT COUNT(*) AS n FROM join_lines").get() as { n: number }).n).toBe(0);
   });
 });
 
@@ -381,18 +106,29 @@ describe("/join", () => {
     const html = await (await p.app.request("/join")).text();
     expect(html).toContain("claude plugin marketplace add chrisivester/portico");
     expect(html).toContain("claude plugin install portico@portico");
-    expect(html).toContain(`/portico:join Join Portico: ${PUBLIC_URL}/join#`);
-    expect(html).toContain(`${PUBLIC_URL}/api/sign-in-requests`);
+    expect(html).toContain(`/portico:join ${PUBLIC_URL}`);
+    expect(html).toContain(`curl -sS -X POST ${PUBLIC_URL}/api/join `);
+    expect(html).toContain(`<code>GET ${PUBLIC_URL}/api/join/&lt;id&gt;</code>`);
+    // No secret anywhere on the page: the agent asks, a person allows the join on one page, and gives the agent the code that page shows.
+    expect(html).not.toContain("#&lt;secret&gt;");
+    expect(visibleCopy(html)).toContain("The link alone lets nothing in");
+    expect(visibleCopy(html)).toContain("Allow alone lets nothing in");
+    expect(visibleCopy(html)).toContain(`the request works for ${LIMITS.consentMinutes} minutes`);
+    expect(visibleCopy(html)).toContain("Portico never sends the code to an agent");
+    // The second call for an agent whose shell can't prompt, and the endpoint an app hands the code to.
+    expect(html).toContain("src/cli.ts&quot; join --code &lt;the 4 digits&gt;");
+    expect(html).toContain(`curl -sS -X POST ${PUBLIC_URL}/api/join/&lt;id&gt;/code `);
+    expect(html).not.toContain("a 4-digit <code>code</code>");
     expect(html).toContain(`${PUBLIC_URL}/api/agent/openapi.json`);
     expect(html).toContain("Notes for an AI agent reading this page");
-    expect(html).not.toContain("Ask the person who runs Portico for the source");
+    expect(html).not.toContain("Ask the person who runs the server for the source");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
 
   test("app agents set up waking by default, and check on a schedule only as a backup or when waking isn't possible", async () => {
     const { p } = await setup();
     const html = await (await p.app.request("/join")).text();
-    expect(html).toContain("One line works for every kind of agent.");
+    expect(html).toContain("Follow the one section below that matches the agent reading this page");
     // Apps that can have a webhook trigger register the trigger themselves; ChatGPT watches message.received.
     expect(html).toContain("Waking is the default for every agent: do this now, without waiting to be asked");
     expect(html).toContain("never settle for a scheduled check");
@@ -401,7 +137,7 @@ describe("/join", () => {
     expect(html).toContain(`curl -sS -X PUT ${PUBLIC_URL}/api/agent/wake`);
     expect(html).toContain(`every ${LIMITS.wokenCheckHours} hours when the last step set up waking`);
     expect(html).toContain(`every ${LIMITS.appCheckMinutes} minutes only when this app has no webhook trigger at all`);
-    expect(html).toContain(`"kind": "muse"`);
+    expect(html).toContain(`"client": "muse"`);
     expect(html).toContain("<code>message.received</code>");
     expect(html).toContain("ends quietly when nothing arrived");
     // Apps describe themselves, mark long work with done: false, and pick up what an earlier check left open.
@@ -416,12 +152,15 @@ describe("/join", () => {
     const html = await (await p.app.request("/join")).text();
     const copy = visibleCopy(html);
     expect(copy).toContain("ChatGPT and dots");
-    expect(copy).toContain("Guide the person through the first three steps, one at a time, and leave the join line unused");
+    expect(copy).toContain("Guide the person through the first three steps, one at a time");
+    expect(copy).not.toMatch(/join line/i);
     expect(html).toContain('href="https://chatgpt.com/plugins"');
     expect(html).toContain(`<pre><code>${PUBLIC_URL}/mcp</code></pre>`);
     expect(html).toContain("without waiting to be asked, watch Portico's <code>message.received</code> event");
-    // No custom MCP server option: the line still works, as a dot.
-    expect(html).toContain(`"kind": "dots"`);
+    // No custom MCP server option: the dot joins over HTTP instead.
+    expect(html).toContain(`"client": "dots"`);
+    // A person with no account: where signing in makes one, and where an invite comes first.
+    expect(copy).toContain("only a person with an account can allow a join");
     expect(copy).toContain("When the steps above don't work");
     expect(copy).toContain("in the app's settings for connectors or MCP servers");
     expect(copyProblems(copy)).toEqual([]);
@@ -429,25 +168,32 @@ describe("/join", () => {
 
   test("without a plugin source, the page says who to ask", async () => {
     const html = await (await makePortico().app.request("/join")).text();
-    expect(html).toContain("Ask the person who runs Portico for the source");
+    expect(html).toContain("Ask the person who runs the server for the source");
     expect(copyProblems(visibleCopy(html))).toEqual([]);
   });
 });
 
 describe("error copy", () => {
   test("join and computer errors use no pronouns", async () => {
-    const { p, owner, member } = await setup();
-    const line = await makeLine(p, owner);
+    const { p, member } = await setup();
     const messages: string[] = [];
     const collect = async (res: Response | Promise<Response>) => messages.push(((await (await res).json()) as { message: string }).message);
-    await collect(join(p, "x".repeat(22)));
-    await collect(join(p, (await makeLine(p, owner, "muse")).secret));
-    await join(p, line.secret);
-    await collect(join(p, line.secret));
-    await collect(callPerson(p, owner, "POST", "/api/join-lines", { kind: "dots" }));
-    await collect(callPerson(p, owner, "POST", "/api/join-lines", { kind: "x" }));
+    const start = (body: unknown) => p.app.request("/api/join", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    await collect(start({ kind: "x", name: "a" }));
+    await collect(start({ kind: "agent", name: "Not A Name" }));
+    await collect(start({ kind: "agent", name: "muse", client: "claude-code" }));
+    await collect(start({ kind: "agent", name: "muse", link: `${PUBLIC_URL}/share#${"x".repeat(22)}` }));
+    await collect(p.app.request("/api/join/nope", { headers: { authorization: "Bearer ps_nope" } }));
+    // Handing in a code: before Allow, a wrong one, and once the request has closed.
+    const asked = (await (await start({ kind: "agent", name: "muse" })).json()) as { id: string; poll_secret: string };
+    const hand = () => p.app.request(`/api/join/${asked.id}/code`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${asked.poll_secret}` }, body: JSON.stringify({ code: "x" }) });
+    await collect(hand());
+    p.consents.decide((await p.people.byName("Chris"))!.id, asked.id, { decision: "approve" });
+    for (let i = 0; i < LIMITS.consentCodeTries + 1; i++) await collect(hand());
+    await collect(callAs(p, { token: "pc_nope" }, "GET", "/api/computer"));
     const { computer } = addComputer(p, (await p.people.byName("Chris"))!, "studio");
     await collect(callPerson(p, member, "DELETE", `/api/computers/${computer.id}`));
+    expect(messages).toHaveLength(8 + LIMITS.consentCodeTries + 1);
     expect(copyProblems(messages.join(" | "))).toEqual([]);
   });
 });

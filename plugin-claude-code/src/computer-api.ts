@@ -20,13 +20,13 @@ export interface PorticoAnswer {
 }
 
 /**
- * One call to Portico's computer API: `/api/computer/*`, with the computer token when there is one. A redirect is
- * answered, not followed, so a token goes only to the Portico named in computer.json or the join line. Throws
+ * One call to Portico for a computer: `/api/computer/*` with the computer token, or `/api/join` while joining. A redirect is
+ * answered, not followed, so a token goes only to the Portico named in computer.json or in the join command. Throws
  * CommandError when Portico can't be reached; any HTTP answer is returned.
  */
 export async function callPortico(
   url: string,
-  method: "POST" | "PUT" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   opts: { token?: string; body?: unknown; fetch?: typeof fetch } = {},
 ): Promise<PorticoAnswer> {
@@ -50,13 +50,31 @@ export async function callPortico(
   return { status: res.status, ok: res.ok, body };
 }
 
-/** Why Portico refused: its own message, or the HTTP status when it sent none. */
+/** The most of a server's own message that is passed on. */
+const MAX_REFUSAL_CHARS = 300;
+
+/**
+ * Why Portico refused: its own message, or the HTTP status when it sent none. The message is the server's text, and the
+ * command's output is read by an agent as much as a person, so it is cut to a length and shown as a quote from that
+ * server: never as the command's own words.
+ */
 export function refusal(url: string, answer: PorticoAnswer): string {
-  const message = typeof answer.body?.message === "string" ? withoutControls(answer.body.message).trim() : "";
-  return message || `Portico at ${url} answered HTTP ${answer.status}.`;
+  const message = typeof answer.body?.message === "string" ? withoutControls(answer.body.message).replace(/\s+/g, " ").replace(/"/g, "'").trim() : "";
+  if (!message) return `Portico at ${url} answered HTTP ${answer.status}.`;
+  const chars = Array.from(message);
+  const shown = chars.length > MAX_REFUSAL_CHARS ? `${chars.slice(0, MAX_REFUSAL_CHARS).join("")}…` : message;
+  return `Portico at ${url} answered: "${shown}"`;
 }
 
-/** Portico's text without control characters (C0, DEL and C1, ESC included), so it can't drive the terminal. */
+/** A computer's name as Portico makes one: lowercase letters, digits and single hyphens: a slug of at most 40 characters, with room for the ending Portico adds to keep names apart. */
+const COMPUTER_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** Whether a name a server sent is a computer name of the shape Portico makes, and nothing else. */
+export function isComputerName(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 60 && COMPUTER_NAME.test(value);
+}
+
+/** Portico's text without control characters (C0, DEL and C1, ESC included), format characters or line separators, so it can't drive the terminal or reorder what shows. */
 export function withoutControls(text: string): string {
-  return text.replace(/\p{Cc}/gu, "");
+  return text.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
 }

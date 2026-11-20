@@ -5,8 +5,8 @@ import type { Agents } from "../core/agents";
 import type { Files } from "../core/files";
 import { PorticoError } from "../core/errors";
 import type { Messages } from "../core/messages";
-import { letThrough, TASK_OUTCOMES, type Task, type TaskOutcome, type TaskReason, type Tasks } from "../core/tasks";
-import type { Agent } from "../core/types";
+import { letThrough, neverSent, TASK_OUTCOMES, type Task, type TaskOutcome, type TaskReason, type Tasks } from "../core/tasks";
+import type { Agent, Message } from "../core/types";
 import type { AgentViews, FileOutView, MessageOutView } from "./views";
 
 /** What list_tasks filters by: open (needs approval or in progress, the default), all, or one outcome. */
@@ -68,7 +68,7 @@ export function agentTaskView(views: AgentViews, agent: Agent, t: Task): AgentTa
     id: t.id,
     subject: t.subject,
     direction: sent ? "sent" : "received",
-    with: views.nameOf(sent ? t.toId : t.fromId),
+    with: views.nameOf(sent ? t.toId : t.fromId, agent),
     outcome: t.outcome,
     reason: t.reason,
     started_at: t.startedAt,
@@ -85,6 +85,7 @@ export function agentTaskView(views: AgentViews, agent: Agent, t: Task): AgentTa
 /** Whether the agent may see the task at all: it asked, or a person let the first message through to it. */
 function visibleTo(agent: Agent, t: Task): boolean {
   if (t.fromId === agent.id) return true;
+  if (t.outboundHeld) return false;
   return t.toId === agent.id && (t.heldAt === null || t.steps.some((s) => s.kind === "allowed"));
 }
 
@@ -113,7 +114,7 @@ export function listAgentTasks(
   const since = checkTime(args.since, "since");
   const before = checkTime(args.before, "before");
   const tasks = deps.tasks
-    .all({ visible: null, agentId: agent.id, anyOf: other ? [other.id] : undefined })
+    .all({ agent: agent.id }, { visible: null, agentId: agent.id, anyOf: other ? [other.id] : undefined })
     .filter(
       (t) =>
         visibleTo(agent, t) &&
@@ -133,14 +134,18 @@ export async function getAgentTask(
   id: unknown,
 ): Promise<{ task: AgentTaskView; messages: AgentTaskMessageView[] }> {
   if (typeof id !== "string" || id.trim() === "") throw new PorticoError("bad_request", "task must be a task or message ID.");
-  const root = deps.tasks.rootOf(id.trim());
-  const found = root ? deps.tasks.get(root) : null;
+  // Looked for only in the workspaces this agent is or was in.
+  const scope = { agent: agent.id };
+  // A message that never left the other side names no task for this agent.
+  const asked = deps.messages.get(scope, id.trim());
+  const root = asked && asked.fromId !== agent.id && neverSent(asked) ? null : deps.tasks.rootOf(scope, id.trim());
+  const found = root ? deps.tasks.get(scope, root, [agent.id]) : null;
   if (!found || !visibleTo(agent, found.task)) throw new PorticoError("not_found", "No such task among this agent's tasks.");
   deps.agents.checkedIn(agent);
   /** Each file with a fresh download address; a file Portico won't hand out says why instead. */
-  const withLinks = (messageId: string): Promise<AgentTaskFileView[]> =>
+  const withLinks = (message: Message): Promise<AgentTaskFileView[]> =>
     Promise.all(
-      deps.files.of(messageId).map(async (file): Promise<AgentTaskFileView> => {
+      deps.files.of(message).map(async (file): Promise<AgentTaskFileView> => {
         try {
           const link = await deps.files.link(file);
           return { ...deps.views.file(file), download_url: link.url, download_expires_at: link.expiresAt };
@@ -152,17 +157,18 @@ export async function getAgentTask(
     );
   const messages: AgentTaskMessageView[] = [];
   for (const messageId of found.messageIds) {
-    const m = deps.messages.get(messageId);
-    if (!m) continue;
-    const { text, subject, thread_id: _thread, expires_at: _expires, attachments: _files, ...rest } = deps.views.message(m);
+    const m = deps.messages.get({ agent: agent.id, workspace: found.task.workspaceId }, messageId);
+    // A message that never left its sender's side isn't there at all for the other agent.
+    if (!m || (m.fromId !== agent.id && neverSent(m))) continue;
+    const { text, subject, thread_id: _thread, expires_at: _expires, attachments: _files, ...rest } = deps.views.message(m, agent);
     if (m.fromId !== agent.id && !letThrough(m)) {
       messages.push({ ...rest, done: m.final, withheld: true });
       continue;
     }
-    const files = await withLinks(m.id);
+    const files = await withLinks(m);
     const attachments = files.length > 0 ? { attachments: files } : {};
     if (m.fromId === agent.id) messages.push({ ...rest, subject, done: m.final, text, ...attachments });
-    else messages.push({ ...rest, subject, done: m.final, framed_message: deps.views.delivery(m).framed_message, ...attachments });
+    else messages.push({ ...rest, subject, done: m.final, framed_message: deps.views.delivery(m, agent).framed_message, ...attachments });
   }
   return { task: agentTaskView(deps.views, agent, found.task), messages };
 }

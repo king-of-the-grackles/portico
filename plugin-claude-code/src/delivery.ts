@@ -4,20 +4,21 @@ import { type InboxSocket, SocketError } from "./socket";
 import type { StreamStop } from "./stream";
 
 export interface DeliveryItem {
-  kind: "message" | "update";
-  /** The message's ID; for an update, the ID of the held message it reports on. */
+  kind: "message" | "update" | "notice";
+  /** The message's ID; for an update, the ID of the held message it reports on; for a notice, the notice's own. */
   id: string;
   /** Portico's framed text, posted as is. */
   text: string;
   at: string;
 }
 
-/** Messages in the order they were sent, then updates in the order they happened. */
+/** Messages in the order they were sent, then updates in the order they happened, then Portico's own notices. */
 export function deliveryItems(d: Inbox): DeliveryItem[] {
   const byTime = (a: DeliveryItem, b: DeliveryItem) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
   const messages = d.messages.map((m) => ({ kind: "message" as const, id: m.id, text: m.framed_message, at: m.created_at }));
   const updates = d.updates.map((u) => ({ kind: "update" as const, id: u.message_id, text: u.framed_message, at: u.at }));
-  return [...messages.sort(byTime), ...updates.sort(byTime)];
+  const notices = (d.notices ?? []).map((n) => ({ kind: "notice" as const, id: n.id, text: n.framed_message, at: n.at }));
+  return [...messages.sort(byTime), ...updates.sort(byTime), ...notices.sort(byTime)];
 }
 
 export interface InboxDeliveryDeps {
@@ -88,7 +89,7 @@ export class InboxDelivery {
     const { client, socket, log } = this.deps;
     this.forgetExpired();
     const items = deliveryItems(await client.pendingDeliveries());
-    const ack: DeliveryAck = { messages: [], updates: [] };
+    const ack: DeliveryAck = { messages: [], updates: [], notices: [] };
     const keys: string[] = [];
     let failure: SocketError | null = null;
     for (const item of items) {
@@ -105,7 +106,7 @@ export class InboxDelivery {
         this.posted.set(key, this.now() + HOUR_MS);
         log("info", `${item.kind}_delivered`, { message_id: item.id });
       }
-      ack[`${item.kind}s` as const].push(item.id);
+      (ack[`${item.kind}s` as const] ??= []).push(item.id);
       keys.push(key);
     }
     if (keys.length > 0) {
@@ -113,7 +114,7 @@ export class InboxDelivery {
       const { acked } = await client.ackDeliveries(ack);
       for (const key of keys) this.posted.delete(key);
       // Portico caps each list, so check again while acks make progress, until nothing is left.
-      const progress = (acked?.messages ?? 0) + (acked?.updates ?? 0);
+      const progress = (acked?.messages ?? 0) + (acked?.updates ?? 0) + (acked?.notices ?? 0);
       if (!failure && progress > 0) this.again = true;
     }
     if (failure) {
@@ -164,13 +165,13 @@ export function stopNotice(stop: StreamStop): string {
   if (stop.status === 401) {
     return (
       "Portico delivery is off: Portico no longer accepts this computer's token (the computer may have been removed in " +
-      "Settings). Join again with a new join line, then restart this session."
+      "Settings). Join again with /portico:join and the server's address, then restart this session."
     );
   }
   if (stop.status === 404) {
     return (
-      "Portico delivery is off: the Portico address in computer.json has no live stream (404). Join again with a new " +
-      "join line, then restart this session."
+      "Portico delivery is off: the Portico address in computer.json has no live stream (404). Join again with " +
+      "/portico:join and the server's address, then restart this session."
     );
   }
   return `Portico delivery is off: Portico refused the live stream (${stop.message}). Restart this session to try again.`;

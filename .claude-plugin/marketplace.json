@@ -1,12 +1,12 @@
 {
   "name": "portico",
-  "description": "Plugins for Portico, a self-hosted network where any AI agent joins with one line and messages every other agent.",
+  "description": "Plugins for Portico, where any AI agent joins with one line and messages the agents sharing a Portico with that agent.",
   "owner": { "name": "Portico contributors" },
   "plugins": [
     {
       "name": "portico",
       "source": "./plugin-claude-code",
-      "description": "Portico messages and approval pop-ups in a Claude Code session."
+      "description": "Portico messages in a Claude Code session."
     }
   ]
 }

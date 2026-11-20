@@ -24,7 +24,8 @@ describe("sending", () => {
     const sent = p.messages.send(grok, { to: "muse", subject: "Flights to Denver", text: "Under $400 if possible." });
     expect(sent).toMatchObject({ delivery: "queued", note: null });
     expect(sent.message).toMatchObject({ status: "pending", heldAt: null, fromId: grok.id, toId: muse.id });
-    const thread = p.messages.thread(sent.message.threadId)!;
+    const thread = p.messages.thread({ agent: grok.id }, sent.message.threadId)!;
+    expect(thread.workspaceId).toBe(sent.message.workspaceId);
     expect(thread.startedBy).toBe(grok.id);
     expect(p.messages.unreadCount(muse.id)).toBe(1);
     const inbox = p.messages.inbox(muse);
@@ -70,7 +71,7 @@ describe("sending", () => {
     expect(errorCode(() => p.messages.send(muse, { replyTo: ask.id, subject: "On it", text: "x", done: "no" }))).toBe("bad_request");
     const update = p.messages.send(muse, { replyTo: ask.id, subject: "On it", text: "Checking fares.", done: false }).message;
     expect(update.final).toBe(false);
-    const framed = agentViews(p.agents, p.people, p.files, () => p.settings.publicUrl()).delivery(p.messages.inbox(grok).messages[0]!).framed_message;
+    const framed = agentViews(p.agents, p.people, p.files, p.workspaces, () => p.settings.publicUrl()).delivery(p.messages.inbox(grok).messages[0]!, grok).framed_message;
     expect(framed).toContain('done="false"');
     expect(framed).toContain("still working, and the final answer comes later");
     expect(p.messages.send(muse, { replyTo: ask.id, subject: "Booked", text: "UA 1234" }).message.final).toBe(true);
@@ -215,7 +216,7 @@ describe("holds", () => {
     expect(p.messages.inbox(muse).messages).toEqual([]);
     const { updates } = p.messages.inbox(grok);
     expect(updates.map((m) => [m.subject, m.status])).toEqual([["s", "expired"]]);
-    expect(agentViews(p.agents, p.people, p.files, () => p.settings.publicUrl()).update(updates[0]!).framed_message).toContain("expired before `muse` picked the message up");
+    expect(agentViews(p.agents, p.people, p.files, p.workspaces, () => p.settings.publicUrl()).update(updates[0]!, grok).framed_message).toContain("expired before `muse` picked the message up");
     expect(p.messages.inbox(grok).updates).toEqual([]);
   });
 });
@@ -227,28 +228,28 @@ describe("history", () => {
     p.messages.inbox(p.agents.require(message.toId));
     p.clock.advance(31 * DAY);
     expect(p.messages.prune()).toEqual({ messages: 1, threads: 1 });
-    expect(p.messages.threads()).toEqual([]);
+    expect(p.messages.threads({ agent: grok.id })).toEqual([]);
   });
 
   test("a thread comes a page at a time: the newest first, then the page before a message", async () => {
     const { p, grok, muse } = await setup();
     const sent = ["a", "b", "c", "d", "e"].map((text, i) => p.messages.send(i % 2 ? muse : grok, { to: i % 2 ? "grok" : "muse", subject: text, text }).message);
-    const threadId = sent[0]!.threadId;
-    const newest = p.messages.inThread(threadId, { limit: 2 });
+    const thread = p.messages.thread({ agent: grok.id }, sent[0]!.threadId)!;
+    const newest = p.messages.inThread(thread, { limit: 2 });
     expect([newest.messages.map((m) => m.text), newest.more]).toEqual([["d", "e"], true]);
-    const earlier = p.messages.inThread(threadId, { before: newest.messages[0]!.id, limit: 2 });
+    const earlier = p.messages.inThread(thread, { before: newest.messages[0]!.id, limit: 2 });
     expect([earlier.messages.map((m) => m.text), earlier.more]).toEqual([["b", "c"], true]);
-    const first = p.messages.inThread(threadId, { before: earlier.messages[0]!.id, limit: 2 });
+    const first = p.messages.inThread(thread, { before: earlier.messages[0]!.id, limit: 2 });
     expect([first.messages.map((m) => m.text), first.more]).toEqual([["a"], false]);
     // A cursor that's gone means everything older is gone too.
-    expect(p.messages.inThread(threadId, { before: "no-such-message" })).toEqual({ messages: [], more: false });
+    expect(p.messages.inThread(thread, { before: "no-such-message" })).toEqual({ messages: [], more: false });
   });
 
   test("members see threads only with their own agents, through the thread filter", async () => {
     const { p, grok, muse } = await setup();
     p.messages.send(grok, { to: "muse", subject: "s", text: "t" });
-    expect(p.messages.threads({ involving: [grok.id] })).toHaveLength(1);
-    expect(p.messages.threads({ involving: ["someone-else"] })).toHaveLength(0);
-    expect(p.messages.threads({ agentId: muse.id })).toHaveLength(1);
+    expect(p.messages.threads({ agent: grok.id }, { involving: [grok.id] })).toHaveLength(1);
+    expect(p.messages.threads({ agent: grok.id }, { involving: ["someone-else"] })).toHaveLength(0);
+    expect(p.messages.threads({ agent: grok.id }, { agentId: muse.id })).toHaveLength(1);
   });
 });

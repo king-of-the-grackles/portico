@@ -1,7 +1,7 @@
 // Tasks and decisions, shared by Today, Activity and the agent pages: one row per task (status, task, who, when) whose
 // steps open inside the row, and the cards for what needs a person's decision. Pure: state in, HTML out.
 import { agentState, clock, duration, esc, expiresIn, kindInfo, logo, pav, when } from "./common.js";
-import type { AgentRef, AgentView, FileView, HeldCard, HomeState, MessageView, SignInView, TaskDetail, TaskOutcome, TaskView } from "./types.js";
+import type { AgentRef, AgentView, ConsentCard, FileView, HeldCard, HomeState, MessageView, TaskDetail, TaskOutcome, TaskView } from "./types.js";
 
 /** The four outcomes, in plain words. */
 export const OUTCOME_LABEL: Record<TaskOutcome, string> = {
@@ -36,6 +36,7 @@ export function taskLine(t: TaskView): string {
         const by = t.steps.find((s) => s.kind === "denied")?.by;
         return by ? `Not allowed by ${by.name}.` : "Not allowed.";
       }
+      if (t.reason === "withdrawn") return "Withdrawn before delivery: the Portico was paused or deleted, or one of the two agents left the Portico.";
       if (t.reason === "expired") {
         return t.heldAt && !t.steps.some((s) => s.kind === "allowed")
           ? `Expired: no decision within ${TASK_WINDOW}.`
@@ -64,6 +65,7 @@ const STEP_LABEL = {
   denied: (_t: TaskView, by: string | null) => `Not allowed${by ? ` by ${by}` : ""}`,
   picked_up: (t: TaskView) => `Picked up by ${t.to.label}`,
   expired: () => "Expired",
+  withdrawn: () => "Withdrawn",
   answered: () => "Answered",
 } as const;
 
@@ -134,12 +136,17 @@ export function renderTaskRow(s: HomeState, t: TaskView, perspective: string | n
   return `<li class="trow${when(open, " is-open")}" data-key="t-${esc(t.id)}">
     <button type="button" class="trow-main" data-action="task-toggle" data-id="${esc(t.id)}" aria-expanded="${open}">
       <span class="trow-status">${statusPill(t.outcome)}</span>
-      <span class="trow-task"><span class="trow-subject">${esc(t.subject)}</span><span class="trow-line">${esc(taskLine(t))}</span></span>
+      <span class="trow-task"><span class="trow-subject">${esc(t.subject)}</span><span class="trow-line">${esc(taskLine(t))}${when(t.readOnly, () => ` ${esc(readOnlyLine(t))}`)}</span></span>
       <span class="trow-who">${who(t, t.from, t.to, perspective)}</span>
       <span class="trow-when tnum">${taskWhen(t)}</span>
     </button>
     ${when(open, () => renderOpened(s, t, s.openTasks[t.id] ?? null))}
   </li>`;
+}
+
+/** Why nothing new goes in a conversation: its Portico stopped joining the two agents. */
+export function readOnlyLine(t: TaskView): string {
+  return `Read-only: ${t.portico || "a deleted Portico"} no longer joins ${t.from.label} and ${t.to.label}.`;
 }
 
 /** The column heads above a list of task rows; hidden on phones, where each row stacks. */
@@ -150,17 +157,30 @@ export function taskHead(): string {
 // ---- decisions ----
 
 /** Don't allow, Always allow <sender> and Allow once on a held message: the primary action last, at the right. */
+/**
+ * What Always allow covers, as the held message's own page names it: the sender's computer (every session there), the
+ * other person for a first contact, or the sender.
+ */
+function alwaysName(s: HomeState, m: HeldCard): string {
+  if (m.facts.heldFor === "first_contact") return m.facts.managedBy.name;
+  return s.agents.find((a) => a.id === m.from.id)?.computer?.name ?? m.from.label;
+}
+
 export function decideButtons(s: HomeState, m: HeldCard): string {
   const busy = s.busy === `decide:${m.id}`;
   const id = esc(m.id);
   return `<button type="button" class="btn btn-text" data-action="decide" data-id="${id}" data-decision="deny"${when(busy, " disabled")}>Don't allow</button>
-      <button type="button" class="btn btn-secondary" data-action="decide" data-id="${id}" data-decision="always_allow"${when(busy, " disabled")}>Always allow ${esc(m.from.label)}</button>
+      ${when(m.facts.heldFor !== "outbound" || m.facts.newSender, () => `<button type="button" class="btn btn-secondary" data-action="decide" data-id="${id}" data-decision="always_allow"${when(busy, " disabled")}>Always allow <span class="btn-name">${esc(alwaysName(s, m))}</span></button>`)}
       <button type="button" class="btn btn-primary" data-action="decide" data-id="${id}" data-decision="allow_once"${when(busy, " disabled")}>Allow once</button>`;
 }
 
 /** Why the message waits, in Portico's own words: never anything the sender wrote. */
 function heldReason(s: HomeState, m: HeldCard): string {
   const parts: string[] = [];
+  if (m.facts.heldFor === "outbound" && m.facts.newSender) return `${m.from.label} joined Portico lately, so ${s.me.name} sees what ${m.from.label} sends to other people's agents first. Nothing has reached ${m.to.label}. Always allow vouches for ${m.from.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
+  if (m.facts.heldFor === "outbound") return `${m.from.label} sends to other people's agents only once ${s.me.name} has seen each message. Nothing has reached ${m.to.label}.`;
+  if (m.facts.heldFor === "new_agent") return `${m.from.label} joined Portico lately, and this is the first message from ${m.from.label} to ${m.to.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
+  if (m.facts.heldFor === "first_contact") parts.push(`${s.me.name} hasn't allowed messages from ${m.facts.managedBy.name}'s agents yet.`);
   if (m.facts.replyToRecipient) parts.push(`Follows a message from ${m.to.label}, but starts a new conversation.`);
   else if (m.facts.earlier.length === 0) parts.push(`First time ${m.from.label} has asked ${m.to.label} for anything, and new contacts need approval.`);
   else parts.push(`New contacts need approval. ${m.from.label} has asked before.`);
@@ -180,25 +200,23 @@ export function renderHeldCard(s: HomeState, m: HeldCard): string {
     ${when(shown, () => `<div class="msg-box enter" data-key="dm-${esc(m.id)}"><p class="msg-full">${esc(m.text)}</p></div>`)}
     ${renderFiles(m.files)}
     <div class="actions">
-      <button type="button" class="btn btn-link start" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Hide message" : "Show message"}</button>
+      <span class="actions-links"><button type="button" class="btn btn-link" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Hide message" : "Show message"}</button><a class="btn btn-link" href="/held/${encodeURIComponent(m.id)}">Open the page</a></span>
       ${decideButtons(s, m)}
     </div>
   </article>`;
 }
 
-/** An app asks to join: compare the 4-digit code with the one in its chat. */
-export function renderSignInCard(s: HomeState, r: SignInView): string {
-  const kind = kindInfo(r.kind).label;
-  const busy = s.busy === `signin:${r.id}`;
-  return `<article class="dcard" aria-labelledby="ds-${esc(r.id)}" data-key="ds-${esc(r.id)}">
-    <div class="dcard-head">${logo(r.kind, "", kind)}<div class="grow">
-      <h3 id="ds-${esc(r.id)}" class="dcard-title">${esc(kind)} wants to join Portico as ${esc(r.name)}</h3>
-      <p class="dcard-why tnum">Approve only if ${esc(kind)} shows the code <strong class="code-inline">${esc(r.code)}</strong>. ${expiresIn(r.expiresAt, s.now)}</p>
+/**
+ * An agent asked the person for something only the person can allow. The answer is given on the consent page, with
+ * Allow or Don't allow: this card only leads there.
+ */
+export function renderConsentCard(s: HomeState, r: ConsentCard): string {
+  return `<article class="dcard" aria-labelledby="dq-${esc(r.id)}" data-key="dq-${esc(r.id)}">
+    <div class="dcard-head"><div class="grow">
+      <h3 id="dq-${esc(r.id)}" class="dcard-title">${esc(r.title)}</h3>
+      <p class="dcard-why tnum">${esc(r.asks)} ${expiresIn(r.expiresAt, s.now)}</p>
     </div></div>
-    <div class="actions">
-      <button type="button" class="btn btn-text" data-action="signin-deny" data-id="${esc(r.id)}"${when(busy, " disabled")}>Don't allow</button>
-      <button type="button" class="btn btn-primary" data-action="signin-approve" data-id="${esc(r.id)}"${when(busy, " disabled")}>Approve ${esc(r.name)}</button>
-    </div>
+    <div class="actions"><a class="btn btn-primary" href="${esc(r.link)}">Open the page</a></div>
   </article>`;
 }
 

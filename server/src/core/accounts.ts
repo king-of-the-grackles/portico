@@ -16,16 +16,28 @@ import { cleanPublicUrl, type Settings } from "./settings";
 import { hashSecret, LINK_SECRET, newLinkSecret, newToken } from "./tokens";
 import type { Person } from "./types";
 
+/** What a new password hash costs to make and to check. Null: Bun's defaults for argon2id (64 MiB, two passes). */
+let passwordCost: { memoryCost: number; timeCost: number } | null = null;
+
+/**
+ * For the test suites only: makes new hashes cheap, so a test of the sign-in limits that checks a wrong password
+ * thirty times runs in milliseconds instead of seconds, and never comes near a test timeout on a busy machine. A hash
+ * carries its own cost, so checking one made this way is as cheap. A server never calls this.
+ */
+export function setPasswordCostForTests(cost: { memoryCost: number; timeCost: number } | null): void {
+  passwordCost = cost;
+}
+
 /** Passwords are stored only as argon2id hashes. */
 export function hashPassword(password: string): Promise<string> {
-  return Bun.password.hash(password, { algorithm: "argon2id" });
+  return Bun.password.hash(password, { algorithm: "argon2id", ...(passwordCost ?? {}) });
 }
 
 export function verifyPassword(password: string, hash: string): Promise<boolean> {
   return Bun.password.verify(password, hash).catch(() => false);
 }
 
-/** Stored for a person who signs in through hosted Portico's base domain: no password matches this. */
+/** Stored for a person who signs in with an outside account: no password matches this. */
 export const NO_PASSWORD = "!";
 
 const MAX_PASSWORD_CHARS = 1000;
@@ -49,8 +61,6 @@ const TOUCH_INTERVAL_MS = 60_000;
 
 /** Sign in allows this many failures per address and name within the window, */
 const SIGN_IN_FAILURES = 10;
-/** and this many per name from all addresses together, since a client can choose the address it reports, */
-const SIGN_IN_FAILURES_PER_NAME = 30;
 /** and this many attempts per address whatever the names, successes included. */
 const SIGN_IN_ATTEMPTS_PER_ADDRESS = 30;
 const SIGN_IN_WINDOW_MS = 15 * MINUTE_MS;
@@ -176,7 +186,6 @@ export class Accounts {
   private readonly now: () => Date;
   private readonly newId: () => string;
   private readonly signInFailures: FailureLimiter;
-  private readonly nameFailures: FailureLimiter;
   private readonly addressAttempts: FailureLimiter;
   /** Every sign-in password check, server-wide. */
   private readonly passwordChecks: PasswordChecks;
@@ -190,7 +199,6 @@ export class Accounts {
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
     this.signInFailures = new FailureLimiter(SIGN_IN_FAILURES, SIGN_IN_WINDOW_MS, this.now);
-    this.nameFailures = new FailureLimiter(SIGN_IN_FAILURES_PER_NAME, SIGN_IN_WINDOW_MS, this.now);
     this.addressAttempts = new FailureLimiter(SIGN_IN_ATTEMPTS_PER_ADDRESS, SIGN_IN_WINDOW_MS, this.now);
     this.passwordChecks = new PasswordChecks(MAX_PASSWORD_CHECKS, MAX_PASSWORD_CHECKS_WAITING);
     this.passkeys = new Passkeys({ db: this.db, people: this.people, now: this.now, newId: this.newId });
@@ -226,6 +234,13 @@ export class Accounts {
     return this.people.get(row.person_id);
   }
 
+  /** Whether the session with this token still stands for the person: read only, so a page left open keeps nothing alive. */
+  sessionLive(token: string | undefined, personId: string): boolean {
+    if (!token) return false;
+    const row = this.db.query("SELECT person_id, expires_at FROM web_sessions WHERE token_hash = $hash").get({ hash: hashSecret(token) }) as { person_id: string; expires_at: string } | null;
+    return row !== null && row.person_id === personId && Date.parse(row.expires_at) > this.now().getTime();
+  }
+
   endSession(token: string | undefined): void {
     if (!token) return;
     this.db.query("DELETE FROM web_sessions WHERE token_hash = $hash").run({ hash: hashSecret(token) });
@@ -243,11 +258,15 @@ export class Accounts {
   /**
    * The person with this name and password. A wrong name and a wrong password get the same answer, and so does a name
    * or password longer than any person's, without being counted or checked. 10 failures in 15 minutes from one address
-   * for one name, 30 for one name from anywhere, or 30 attempts of any kind from one address stop further attempts
-   * until the oldest leaves the window. Each attempt counts before the slow check, so parallel attempts can't all slip
-   * past the limits; a success clears the counts per name, not the one per address. "local" (no proxy reported an
-   * address) is every client at once, so it gets no per-address cap: one client could lock out everyone. While every
-   * place for a password check is taken, an attempt is refused at once and not counted.
+   * for one name, or 30 attempts of any kind from one address, stop further attempts from that address until the
+   * oldest leaves the window. Failures from other addresses never refuse a sign-in: a count of one name's failures
+   * from everywhere would let anyone lock that person out by guessing wrong. What holds guessing from many addresses
+   * back is the password checks themselves: two at once, server-wide. Each attempt counts before the slow check, so
+   * parallel attempts can't all slip past the limits; a success clears the count for the name, not the one per
+   * address. "local" (no proxy reported an address) is every client at once, so it gets no per-address cap: one
+   * client could lock out everyone. The count for a name is then shared by every client too, which is the one brake
+   * on guessing there is without addresses. While every place for a password check is taken, an attempt is refused at
+   * once and not counted.
    */
   async signIn(input: { name: unknown; password: unknown; ip: string }): Promise<Person> {
     const name = typeof input.name === "string" ? input.name.replace(/\s+/g, " ").trim() : "";
@@ -259,11 +278,9 @@ export class Accounts {
     const address = input.ip.slice(0, MAX_SIGN_IN_ADDRESS_CHARS);
     const addressKey = `sign-in-address\n${address}`;
     const key = `sign-in\n${address}\n${name.toLowerCase()}`;
-    const nameKey = `sign-in\n${name.toLowerCase()}`;
     const perAddress = address !== "local";
     if (perAddress) this.addressAttempts.check(addressKey, "sign in");
     this.signInFailures.check(key, "sign in");
-    this.nameFailures.check(nameKey, "sign in");
     // A place first, so an attempt refused while every place is taken stores nothing.
     const check = this.passwordChecks.run(async () => {
       const person = this.people.byName(name);
@@ -273,11 +290,9 @@ export class Accounts {
     });
     if (perAddress) this.addressAttempts.fail(addressKey);
     this.signInFailures.fail(key);
-    this.nameFailures.fail(nameKey);
     const person = await check;
     if (!person) throw new PorticoError("unauthorized", "Wrong name or password.");
     this.signInFailures.clear(key);
-    this.nameFailures.clear(nameKey);
     return person;
   }
 
@@ -383,28 +398,20 @@ export class Accounts {
 
   /**
    * Recovery's revocations beyond the browser: whatever the owner account made can carry the evicted party's access
-   * too. The owner's computers keep their rows but their tokens fail, so each joins again with a new line. Agents the
-   * owner manages lose their app, access and refresh tokens. Unused join lines and unexchanged OAuth codes go. Sign-in
-   * requests from the owner's lines never hand over a token: pending ones expire, and approved ones count as issued.
+   * too. The owner's computers keep their rows but their tokens fail, so each joins again. Agents the owner manages
+   * lose their app, access and refresh tokens. Unexchanged OAuth codes go. A join the owner allowed never hands over
+   * a token afterwards, and what the owner's agents asked stops waiting.
    * Call inside the recovery's transaction; the caller closes the agents' open streams once it commits.
    */
   private revokeOwnerCredentials(ownerId: string): void {
     const owner = { personId: ownerId };
     const ownerAgents = "SELECT id FROM agents WHERE owner_id = $personId";
-    const ownerLines = "SELECT id FROM join_lines WHERE created_by = $personId";
     this.db.query("UPDATE computers SET token_hash = 'revoked:' || id WHERE owner_id = $personId").run(owner);
     this.db.query(`DELETE FROM agent_tokens WHERE agent_id IN (${ownerAgents})`).run(owner);
     this.db.query(`DELETE FROM oauth_codes WHERE used_at IS NULL AND agent_id IN (${ownerAgents})`).run(owner);
-    this.db
-      .query(`UPDATE sign_in_requests SET status = 'expired' WHERE status = 'pending' AND join_line_id IN (${ownerLines})`)
-      .run(owner);
-    this.db
-      .query(
-        `UPDATE sign_in_requests SET issued_at = $at
-         WHERE status = 'approved' AND issued_at IS NULL AND join_line_id IN (${ownerLines})`,
-      )
-      .run({ ...owner, at: this.now().toISOString() });
-    this.db.query("DELETE FROM join_lines WHERE created_by = $personId AND used_at IS NULL").run(owner);
+    this.db.query("UPDATE consent_requests SET status = 'expired' WHERE status = 'pending' AND person_id = $personId").run(owner);
+    // A join the owner's session allowed, still waiting for its code: the code dies, so nothing joins with it.
+    this.db.query("UPDATE consent_requests SET status = 'expired', code = NULL WHERE status = 'allowed' AND decided_by = $personId").run(owner);
   }
 
   /** The usable link with this secret. Throws not_found for an unknown one, wrong_status for one used or expired. */
@@ -436,14 +443,12 @@ export class Accounts {
   sweepLimiters(): void {
     this.addressAttempts.sweep();
     this.signInFailures.sweep();
-    this.nameFailures.sweep();
   }
 
   /** Daily: deletes expired browser sessions and setup links, and forgets old sign-in failures. */
   sweep(): number {
     const now = this.now().toISOString();
     this.signInFailures.sweep();
-    this.nameFailures.sweep();
     this.passkeys.sweep();
     const sessions = this.db.query("DELETE FROM web_sessions WHERE expires_at <= $now").run({ now }).changes;
     const links = this.db.query("DELETE FROM setup_links WHERE expires_at <= $now").run({ now }).changes;

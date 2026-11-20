@@ -17,15 +17,52 @@ export interface Person {
   inviteId: string | null;
   createdAt: string;
   approvedAt: string | null;
+  /** The prefix other people's agents address this person's agents by (`robert/muse`). Null until the person picks one. */
+  handle: string | null;
+  /** The verified email of the person's sign-in, where Portico knows one. */
+  email: string | null;
 }
 
-/** A computer that joined with a join line. Its sessions' addresses end in `@<name>`. */
+/** `personal` is a person's own Portico: only that person's agents, never shared. `shared` brings other people's agents in. */
+export type WorkspaceKind = "personal" | "shared";
+
+/**
+ * A Portico, the place: a list of people and agents. Two agents reach each other only while both are in one. The code
+ * calls it a workspace, since `Portico` here names the running app; nothing a person or an agent sees does.
+ */
+export interface Workspace {
+  id: string;
+  /**
+   * What everyone calls it: the name someone gave it, the people in it when nobody has ("Chris and Robert"), or
+   * "Chris's Portico" for a person's own.
+   */
+  name: string;
+  /** Whether someone gave it a name. */
+  named: boolean;
+  /** The shared Portico its owner started with, not renamed yet: "Shared Portico" to its owner. */
+  starter?: boolean;
+  /** How a sentence names it: "the Launch Portico", "Chris's Portico". */
+  phrase: string;
+  kind: WorkspaceKind;
+  ownerId: string;
+  createdAt: string;
+  /** Set while its owner has it paused: everyone stays in it, and nothing moves through it. */
+  pausedAt: string | null;
+}
+
+/** The owner's choice for one person in a Portico: the person adds more of the person's own agents alone, or each waits for the owner. */
+export type AgentsPolicy = "self" | "ask";
+export const AGENTS_POLICIES: readonly AgentsPolicy[] = ["self", "ask"];
+
+/** A computer a person let join Portico. Its sessions' addresses end in `@<name>`. */
 export interface Computer {
   id: string;
   ownerId: string;
   name: string;
   createdAt: string;
   lastSeenAt: string | null;
+  /** Nobody chose Always allow for this computer yet: each session started here is asked about once per agent it writes to. */
+  unproven: boolean;
 }
 
 export interface Agent {
@@ -46,6 +83,12 @@ export interface Agent {
    */
   folderId: string | null;
   approvalRequired: boolean;
+  /** "Ask me before this agent sends to other people's agents": each such message waits for the agent's own person first. */
+  outboundHold: boolean;
+  /** Joined without its person saying "I started this myself": its first message to each of the person's other agents is held once. */
+  unproven: boolean;
+  /** Set once the agent's person revoked it: its tokens are gone, it is in no Portico, and it can't come back. */
+  revokedAt: string | null;
   createdAt: string;
   lastSeenAt: string | null;
   /** What the agent said it's doing, with update_profile, and when. One line, defanged. */
@@ -93,7 +136,15 @@ export interface DirectoryEntry {
  */
 export type DeliveryTier = "pushed" | "queued" | "offline" | "held";
 
-export type MessageStatus = "held" | "pending" | "delivered" | "declined" | "expired";
+export type MessageStatus = "held" | "pending" | "delivered" | "declined" | "expired" | "withdrawn";
+/**
+ * Whose decision a held message waits on, and why. `outbound`: the sender's own person, who asked to see what that
+ * agent sends to other people's agents. `first_contact`: the receiver's person, who hasn't allowed the sender's person
+ * yet. `approval`: the receiver's person, for an agent that takes messages only from senders on its own list.
+ * `new_agent`: the same person manages both, and the sender joined lately without that person saying "I started this
+ * myself": if a stranger talked the person into allowing the join, this is where the person sees it.
+ */
+export type HeldFor = "outbound" | "first_contact" | "approval" | "new_agent";
 export type Decision = "allow_once" | "always_allow" | "deny";
 export const DECISIONS: readonly Decision[] = ["allow_once", "always_allow", "deny"];
 
@@ -106,10 +157,18 @@ export interface Thread {
   startedBy: string;
   createdAt: string;
   lastMessageAt: string;
+  /**
+   * The workspace the thread lives in: the one whose content database holds it. A thread never moves. Once the
+   * workspace stops joining the two agents, the thread is read-only, and the pair's next conversation starts a thread
+   * in another workspace the two share.
+   */
+  workspaceId: string;
 }
 
 export interface Message {
   id: string;
+  /** The workspace the message went through: the one whose content database holds the message. */
+  workspaceId: string;
   threadId: string;
   fromId: string;
   toId: string;
@@ -129,6 +188,8 @@ export interface Message {
   status: MessageStatus;
   /** Set when the message was held for approval; it stays set after the decision. */
   heldAt: string | null;
+  /** Why the message is or was held, and so who decides. */
+  heldFor: HeldFor | null;
   decision: Decision | null;
   /** The person who decided. */
   decidedBy: string | null;
@@ -137,16 +198,27 @@ export interface Message {
   /** A held or pending message expires after this. */
   expiresAt: string;
   deliveredAt: string | null;
+  /** When the message was withdrawn: its Portico was paused, or one of its two agents left the Portico or was revoked. */
+  withdrawnAt: string | null;
   /** When the sender was told how a held message ended. */
   senderNotifiedAt: string | null;
 }
 
-/** Things the outside world acts on: stream nudges, pop-ups and person updates. portico.ts routes them. */
+/** Things the outside world acts on: stream nudges, wake URLs and person updates. portico.ts routes them. */
 export type Notice =
   | { kind: "message_sent"; message: Message }
   | { kind: "message_decided"; message: Message }
   | { kind: "message_expired"; message: Message }
+  | { kind: "message_withdrawn"; message: Message }
   | { kind: "message_delivered"; message: Message };
+
+/** Sending email through Resend: the API key, the sender, and the secret that signs Resend's webhooks. */
+export interface MailConfig {
+  apiKey: string;
+  /** Such as `Portico <invites@mail.portico.example>`. */
+  from: string;
+  webhookSecret: string | null;
+}
 
 /** An S3-compatible bucket for files (Tigris on Fly, say). */
 export interface BucketConfig {
@@ -157,27 +229,31 @@ export interface BucketConfig {
   secretAccessKey: string;
 }
 
+/** An account with the outside sign-in service, as a checked sign-in token names it. */
+export interface Account {
+  id: string;
+  /** The account's verified email address, when the token carries one. */
+  email: string | null;
+  name: string | null;
+}
+
 /**
- * Hosted Portico's sign-in on the base domain, as one workspace sees it. People sign in once on the base domain, which
- * hands the browser to a workspace with a pass: good once, for a minute, for that workspace and the browser that asked.
- * With this set, the workspace takes no passwords or passkeys of its own.
+ * Signing in with an outside account (Descope, on hosted Portico): the first sign-in makes the person, and the welcome
+ * page asks for a name and handle. No passwords, passkeys, setup link or invites. Where Core has none, people sign in
+ * with this server's own passwords and passkeys. After sign-in nothing differs between the two.
  */
-export interface CentralSignIn {
-  /** The base domain's own address, where the account's workspaces are listed. */
-  homeUrl: string;
-  /** Where the browser goes to sign in and come back with a pass. `state` ties the pass to the browser that asked. */
-  startUrl(state: string, next: string): string;
-  /** The account a pass names. Null for a pass that is unknown, used, expired, or asked for with another state. */
-  take(pass: string, state: string): string | null;
-  /** The account now has a place in this workspace: the base domain lists the workspace for the account. */
-  joined(accountId: string): void;
+export interface AccountSignIn {
+  /** The sign-in service's project, shown on the sign-in page. */
+  projectId: string;
+  /** The account a sign-in token belongs to, or `unauthorized`. */
+  account(token: unknown): Promise<Account>;
 }
 
 export interface PorticoConfig {
   port: number;
-  /** ":memory:" in tests. */
+  /** The directory database, `<dataDir>/portico.db`. ":memory:" in tests, where every workspace's content is in memory too. */
   dbPath: string;
-  /** The database's folder: the signing key lives here. */
+  /** PORTICO_DATA_DIR, the data folder: the directory, each workspace's content under `porticos`, the signing key and files live here. */
   dataDir: string;
   /** PORTICO_PLUGIN_SOURCE: the marketplace source /join tells computers to install from. */
   pluginSource: string | null;
@@ -186,10 +262,25 @@ export interface PorticoConfig {
   /** HMAC key for short-lived signed values, generated into the data folder on first start. */
   signingKey: string;
   /**
+   * PORTICO_SECRETS_KEY: 32 bytes as base64, kept outside the data folder. Encrypts the secrets Portico must be able to
+   * read again (wake URL keys, event secrets). Null when unset: commands that only read settings still run, and the
+   * server refuses to start.
+   */
+  secretsKey: string | null;
+  /** PORTICO_SECRETS_KEY_OLD: the key before a change of key. A start moves every value under it to the new one. */
+  secretsKeyOld: string | null;
+  /**
    * PORTICO_WEBHOOKS_ALLOW_PRIVATE=1: wake URLs and event callbacks may use http:// and private addresses. For local
    * development only; otherwise Portico posts only to public https:// addresses.
    */
   webhooksAllowPrivate: boolean;
-  /** Where files live: a bucket when one is configured, otherwise `files` in the data folder. */
+  /** Where files' bytes live: a bucket when one is configured, otherwise the data folder. */
   files: BucketConfig | null;
+  /** Emails share links when set. Null: Share gives the link only. */
+  mail: MailConfig | null;
+  /**
+   * PORTICO_DESCOPE_PROJECT_ID: people sign in with Descope, and signing in creates the account (hosted Portico). Null:
+   * passwords and passkeys, with a setup link for the first account and invites for the rest (a self-hosted server).
+   */
+  descopeProjectId: string | null;
 }

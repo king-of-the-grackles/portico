@@ -117,7 +117,11 @@ describe("MCP", () => {
     const inbox = (await (await callAs(p, { token: muse.token }, "POST", "/mcp", rpc("tools/call", { name: "check_inbox" }))).json()) as {
       result: { content: { text: string }[] };
     };
-    expect(inbox.result.content[0]!.text).toBe("No new messages.");
+    // muse requires approval, so the message is held: nothing is delivered, and the agent hears how many messages
+    // wait for the person, to pass on when no email is set up.
+    expect(inbox.result.content[0]!.text).toStartWith("No new messages.");
+    expect(inbox.result.content[0]!.text).toContain("1 message waits for a decision by Chris, on Portico's page: https://portico.example.com/.");
+    expect(JSON.parse(inbox.result.content[1]!.text)).toMatchObject({ messages: [], notices: [], held_for_person: 1 });
   });
 
   test("tools other than check_inbox mention unread messages", async () => {
@@ -312,7 +316,7 @@ describe("tasks and profiles for agents", () => {
       done: false,
     });
     expect(update.status).toBe(201);
-    expect(p.tasks.get(first.message.id)!.task.outcome).toBe("in_progress");
+    expect(p.tasks.get({ agent: session.agent.id }, first.message.id)!.task.outcome).toBe("in_progress");
   });
 });
 
@@ -324,7 +328,12 @@ describe("OpenAPI", () => {
     const doc = (await res.json()) as ReturnType<typeof openApiDocument>;
     expect(doc.servers).toEqual([{ url: PUBLIC_URL }]);
     for (const [path, operations] of Object.entries(doc.paths)) {
-      for (const method of Object.keys(operations)) {
+      for (const [method, operation] of Object.entries(operations)) {
+        // Asking to join is the one operation open to an app with no token yet.
+        if (Array.isArray((operation as { security?: unknown }).security)) {
+          expect(`${method} ${path}`).toBe("post /api/join");
+          continue;
+        }
         const status = (await p.app.request(path, { method: method.toUpperCase() })).status;
         expect(`${method} ${path} ${status}`).toBe(`${method} ${path} 401`);
       }

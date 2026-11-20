@@ -8,7 +8,6 @@ import { folderId, readComputerFile, writeComputerFile } from "../src/computer";
 import { contractPortico, tempDir } from "./helpers";
 
 const CLI = join(import.meta.dir, "../src/cli.ts");
-const TOKEN = "T4mWq8Zr2LpX6Kd1";
 
 const servers: { stop: () => void }[] = [];
 // Every run sets PORTICO_COMPUTER_CONFIG and PORTICO_CLAUDE_HOME. The home folder is stubbed too, so an override name the
@@ -22,9 +21,13 @@ afterEach(() => {
   for (const server of servers.splice(0)) server.stop();
 });
 
-function portico(tokens: string[] = [TOKEN]) {
-  const server = contractPortico(tokens);
+/** The Portico the test's person looks at: the code on its page is what that person types at the prompt. */
+let current: ReturnType<typeof contractPortico> | null = null;
+
+function portico(person: Parameters<typeof contractPortico>[0] = "allow") {
+  const server = contractPortico(person);
   servers.push(server);
+  current = server;
   return server;
 }
 
@@ -59,20 +62,28 @@ async function cli(argv: string[], opts: { path: string; cwd: string; deps?: Cli
       lines.push(line);
     },
   };
-  const code = await runCli(argv, io, { ...NO_CLAUDE, ...opts.deps });
+  // As in a terminal, once the person has pressed Allow: the code the page shows is typed at the prompt. Until then, and
+  // with `noPrompt`, the command runs as in an agent's shell.
+  const server = current;
+  const readCode = server?.state.person === "allow" ? () => server.typeCode() : undefined;
+  const code = await runCli(argv, io, { ...NO_CLAUDE, pollMs: 1, readCode, ...opts.deps });
   return { code, out, err, lines };
 }
 
 const settingsOf = (path: string) => join(dirname(dirname(path)), ".claude", "settings.json");
 
 describe("join", () => {
-  test("prints what was written and what happens next", async () => {
+  test("prints the link for a person, takes the code, then says what was written and what happens next", async () => {
     const server = portico();
     const { dir, path } = computerDir();
-    const run = await cli(["join", `Join Portico: ${server.url}/join#${TOKEN}`], { path, cwd: dir, deps: { hostname: () => "macbook.local" } });
+    const run = await cli(["join", server.url], { path, cwd: dir, deps: { hostname: () => "macbook.local" } });
     expect(run.code).toBe(0);
     expect(run.err).toEqual([]);
-    expect(run.out.slice(0, 4)).toEqual([
+    expect(run.out.slice(0, 8)).toEqual([
+      "A person allows this computer on one Portico page:",
+      `  1. Open ${server.url}/c/r1 in a browser, sign in and press Allow.`,
+      "  2. The page then shows a 4-digit code. Type that code here, and nowhere else.",
+      expect.stringMatching(/^The request runs out at .*\.$/),
       `Joined Portico at ${server.url} as computer "macbook".`,
       `Wrote ${path} (mode 600).`,
       "New Claude Code sessions on this computer join Portico automatically. Sessions already open join within a few seconds, or after a restart when the plugin was installed after the session started.",
@@ -81,40 +92,88 @@ describe("join", () => {
     const file = readComputerFile(path)!;
     expect(file.computer).toBe("macbook");
     expect(run.lines.join("\n")).not.toContain(file.token);
+    expect(run.lines.join("\n")).not.toContain("ps_");
+    expect(run.lines.join("\n")).not.toContain("4821");
   });
 
-  test("the join line may come as several words, with --name", async () => {
+  test("the address may come as the sentence a person says, with --name", async () => {
     const server = portico();
     const { dir, path } = computerDir();
-    const run = await cli(["join", "Join", "Portico:", `${server.url}/join#${TOKEN}`, "--name", "studio"], { path, cwd: dir });
+    const run = await cli(["join", "Join", "Portico", "at", `${server.url}/join`, "--name", "studio"], { path, cwd: dir });
     expect(run.code).toBe(0);
-    expect(run.out[0]).toBe(`Joined Portico at ${server.url} as computer "studio".`);
-    expect(server.requests[0]!.body).toEqual({ token: TOKEN, computer: "studio", client: "claude-code" });
-    const missing = await cli(["join", `${server.url}/join#${TOKEN}`, "--name", "--replace"], { path, cwd: dir });
+    expect(run.out[4]).toBe(`Joined Portico at ${server.url} as computer "studio".`);
+    expect(server.requests[0]!.body).toEqual({ kind: "computer", name: "studio", client: "claude-code" });
+    const missing = await cli(["join", server.url, "--name", "--replace"], { path, cwd: dir });
     expect(missing.code).toBe(1);
-    expect(missing.err).toEqual(["--name needs a value. Usage: join <line> [--name <computer>] [--replace] [--no-allow]"]);
+    expect(missing.err).toEqual(["--name needs a value. Usage: join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>] | join --code <4 digits> [--no-allow]"]);
+    const wait = await cli(["join", server.url, "--wait", "soon"], { path, cwd: dir });
+    expect(wait.err).toEqual(["--wait takes a number of seconds. Usage: join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>] | join --code <4 digits> [--no-allow]"]);
+  });
+
+  test("--wait 0 only asks and prints the link; join --code hands in the code the person read on the page", async () => {
+    const server = portico("wait");
+    const { dir, path } = computerDir();
+    const noPrompt = { hostname: () => "macbook", readCode: undefined, command: 'bun "/plugin/src/cli.ts"' };
+    const asked = await cli(["join", server.url, "--wait", "0"], { path, cwd: dir, deps: noPrompt });
+    expect(asked.code).toBe(0);
+    expect(asked.out).toHaveLength(5);
+    expect(asked.out[1]).toBe(`  1. Open ${server.url}/c/r1 in a browser, sign in and press Allow.`);
+    expect(asked.out[4]).toMatch(
+      /^Waiting for a person to press Allow on Portico's page, which then shows a 4-digit code\. To finish the join, run: bun "\/plugin\/src\/cli\.ts" join --code <the 4 digits>\. The request runs out at .*\.$/,
+    );
+    expect(existsSync(path)).toBe(false);
+    // Nothing is allowed in Claude Code's settings before the computer has joined.
+    expect(existsSync(settingsOf(path))).toBe(false);
+    // A code handed in before Allow, a code that isn't 4 digits, and a wrong code: each says so and exits 1.
+    const early = await cli(["join", "--code", "4821"], { path, cwd: dir, deps: noPrompt });
+    expect([early.code, early.err[0]]).toEqual([1, `Nobody has pressed Allow yet. Open ${server.url}/c/r1 in a browser, sign in and press Allow: the page then shows the code.`]);
+    server.state.person = "allow";
+    const odd = await cli(["join", "--code", "48211"], { path, cwd: dir, deps: noPrompt });
+    expect([odd.code, odd.err[0]]).toEqual([1, `--code takes the 4 digits Portico's page shows. Usage: ${"join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>] | join --code <4 digits> [--no-allow]"}`]);
+    const wrong = await cli(["join", "--code", "0000"], { path, cwd: dir, deps: noPrompt });
+    expect([wrong.code, wrong.err[0]]).toEqual([1, `Portico at ${server.url} answered: "That code doesn't match the one Portico's page shows. 4 tries are left."`]);
+    // The same first call again, once Allow was pressed, says the code is showing and makes no new request.
+    const again = await cli(["join", server.url, "--wait", "100"], { path, cwd: dir, deps: noPrompt });
+    expect(again.out.slice(0, 4)).toEqual(asked.out.slice(0, 4));
+    expect(again.out[4]).toStartWith("Allow was pressed on Portico's page, which shows the 4-digit code now. To finish the join, run: ");
+    const done = await cli(["join", "--code", "4821"], { path, cwd: dir, deps: noPrompt });
+    expect(done.code).toBe(0);
+    expect(done.out[0]).toBe(`Joined Portico at ${server.url} as computer "macbook".`);
+    expect(server.requests.filter((r) => r.method === "POST" && r.path === "/api/join")).toHaveLength(1);
+    expect(existsSync(settingsOf(path))).toBe(true);
+    for (const run of [asked, early, odd, wrong, again, done]) expect(run.lines.join("\n")).not.toMatch(/ps_|pc_/);
   });
 
   test("allows the Portico tools in Claude Code's settings once, and --no-allow skips it", async () => {
-    const server = portico([TOKEN, `${TOKEN}-2`, `${TOKEN}-3`]);
+    const server = portico();
     const deps = { hostname: () => "macbook" };
     const { dir, path } = computerDir();
     const settings = settingsOf(path);
-    const first = await cli(["join", `${server.url}/join#${TOKEN}`], { path, cwd: dir, deps });
+    const first = await cli(["join", server.url], { path, cwd: dir, deps });
     expect(first.code).toBe(0);
     expect(first.out).toContain(
       `Added mcp__plugin_portico_portico to permissions.allow in ${settings}, so Claude Code runs the Portico tools without asking. To skip this step, join with --no-allow.`,
     );
     expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ permissions: { allow: ["mcp__plugin_portico_portico"] } });
-    const again = await cli(["join", `${server.url}/join#${TOKEN}-2`, "--replace"], { path, cwd: dir, deps });
+    const again = await cli(["join", server.url, "--replace"], { path, cwd: dir, deps });
     expect(again.code).toBe(0);
     expect(again.out.some((text) => text.includes("permissions.allow"))).toBe(false);
 
     const other = computerDir();
-    const skipped = await cli(["join", `${server.url}/join#${TOKEN}-3`, "--no-allow"], { path: other.path, cwd: other.dir, deps });
+    const skipped = await cli(["join", server.url, "--no-allow"], { path: other.path, cwd: other.dir, deps });
     expect(skipped.code).toBe(0);
     expect(existsSync(settingsOf(other.path))).toBe(false);
     expect(skipped.out.some((text) => text.includes("permissions.allow"))).toBe(false);
+  });
+
+  test("a computer that joined already is told so, with nothing to allow", async () => {
+    const server = portico();
+    const { dir, path } = computerDir();
+    await cli(["join", server.url], { path, cwd: dir, deps: { hostname: () => "macbook" } });
+    const again = await cli(["join", server.url], { path, cwd: dir });
+    expect(again.code).toBe(0);
+    expect(again.out[0]).toBe(`This computer is already on Portico at ${server.url} as computer "macbook". Nothing to allow.`);
+    expect(server.requests.filter((r) => r.method === "POST" && r.path === "/api/join")).toHaveLength(1);
   });
 
   test("a settings file with invalid JSON is left alone, the rule to add by hand is printed, and the join still succeeds", async () => {
@@ -123,7 +182,7 @@ describe("join", () => {
     const settings = settingsOf(path);
     mkdirSync(dirname(settings), { recursive: true });
     writeFileSync(settings, "{ broken");
-    const run = await cli(["join", `${server.url}/join#${TOKEN}`], { path, cwd: dir, deps: { hostname: () => "macbook" } });
+    const run = await cli(["join", server.url], { path, cwd: dir, deps: { hostname: () => "macbook" } });
     expect(run.code).toBe(0);
     expect(readFileSync(settings, "utf8")).toBe("{ broken");
     expect(run.out).toContain(
@@ -131,22 +190,26 @@ describe("join", () => {
     );
   });
 
-  test("a failed join never touches the settings", async () => {
-    const server = portico([]);
+  test("a join that isn't allowed never touches the settings", async () => {
+    const server = portico("deny");
     const { dir, path } = computerDir();
-    const run = await cli(["join", `${server.url}/join#${TOKEN}`], { path, cwd: dir });
+    const run = await cli(["join", server.url], { path, cwd: dir });
     expect(run.code).toBe(1);
-    expect(run.err).toEqual(["The join line isn't valid any more. Ask for a new one."]);
+    expect(run.err).toEqual(["The join wasn't allowed on Portico. Nothing was written."]);
     expect(existsSync(dirname(settingsOf(path)))).toBe(false);
   });
 
   test("prints no control characters from Portico", async () => {
     const { dir, path } = computerDir();
-    const fetch = (async () =>
-      Response.json({ computer: { id: "c1", name: `studio${String.fromCharCode(27)}[2J` }, token: "pc_x" }, { status: 201 })) as unknown as typeof globalThis.fetch;
-    const run = await cli(["join", `https://portico.example.com/join#${TOKEN}`], { path, cwd: dir, deps: { fetch } });
-    expect(run.code).toBe(0);
-    expect(run.out[0]).toBe('Joined Portico at https://portico.example.com as computer "studio[2J".');
+    const fetch = (async (input: string | URL | Request) =>
+      String(input).endsWith("/api/join")
+        ? Response.json({ id: "r1", link: "https://portico.example.com/c/r1", poll_secret: "ps_x", expires_at: new Date(Date.now() + 60_000).toISOString() }, { status: 201 })
+        : Response.json({ status: "approved", computer: { id: "c1", name: `studio${String.fromCharCode(27)}[2J` }, token: "pc_x" })) as unknown as typeof globalThis.fetch;
+    const run = await cli(["join", "https://portico.example.com"], { path, cwd: dir, deps: { fetch, readCode: async () => "1234" } });
+    // A name that isn't one Portico makes is never written or printed.
+    expect(run.code).toBe(1);
+    expect(run.err).toEqual(["Portico at https://portico.example.com finished the join with a computer name that isn't one Portico makes. Nothing was written. Remove the new computer in Settings › Computers, then run the join again."]);
+    expect(existsSync(path)).toBe(false);
     for (const line of run.lines) expect(line).not.toMatch(/\p{Cc}/u);
   });
 });
@@ -155,7 +218,7 @@ describe("off and on", () => {
   async function joined() {
     const server = portico();
     const { dir, path } = computerDir();
-    await cli(["join", `${server.url}/join#${TOKEN}`], { path, cwd: dir, deps: { hostname: () => "macbook" } });
+    await cli(["join", server.url], { path, cwd: dir, deps: { hostname: () => "macbook" } });
     const work = join(dir, "work");
     mkdirSync(work);
     return { server, dir, path, work, token: readComputerFile(path)!.token };
@@ -210,7 +273,7 @@ describe("off and on", () => {
     const refused = await cli(["off"], { path: otherPath, cwd: otherDir });
     expect(refused.code).toBe(1);
     expect(refused.err).toEqual([
-      "Portico no longer accepts this computer's token (the computer may have been removed in Settings). Join again with a new join line.",
+      "Portico no longer accepts this computer's token (the computer may have been removed in Settings). Join again with the join command and the server's address.",
     ]);
   });
 
@@ -220,7 +283,7 @@ describe("off and on", () => {
       const result = await cli([command], { path, cwd: dir });
       expect(result.code).toBe(1);
       expect(result.out).toEqual([]);
-      expect(result.err).toEqual([`This computer hasn't joined Portico: ${path} doesn't exist. Run join with a join line first.`]);
+      expect(result.err).toEqual([`This computer hasn't joined Portico: ${path} doesn't exist. Run join with the Portico server's address first.`]);
     }
     expect(existsSync(path)).toBe(false);
   });
@@ -252,7 +315,7 @@ describe("leave", () => {
   test("removes the computer on Portico, then the computer file, the settings rule and the plugin", async () => {
     const server = portico();
     const { dir, path } = computerDir();
-    await cli(["join", `${server.url}/join#${TOKEN}`], { path, cwd: dir, deps: { hostname: () => "macbook" } });
+    await cli(["join", server.url], { path, cwd: dir, deps: { hostname: () => "macbook" } });
     const token = readComputerFile(path)!.token;
     const ran: string[] = [];
     const run = await cli(["leave"], {
@@ -339,15 +402,16 @@ describe("leave", () => {
 describe("copy", () => {
   test("output has no pronouns and never says hub", async () => {
     // Every command's lines: happy paths, refusals, CommandError messages, computer file errors and the usage.
-    const server = portico([TOKEN, `${TOKEN}-2`]);
+    const server = portico();
     const { dir, path } = computerDir();
     const work = join(dir, "work");
     mkdirSync(work);
     const runs = [
       await cli(["off"], { path, cwd: work }),
       await cli(["status"], { path, cwd: work }),
-      await cli(["join", `Join Portico: ${server.url}/join#${TOKEN}`], { path, cwd: work, deps: { hostname: () => "macbook" } }),
-      await cli(["join", `${server.url}/join#${TOKEN}-2`], { path, cwd: work }),
+      await cli(["join", `Join Portico at ${server.url}`], { path, cwd: work, deps: { hostname: () => "macbook" } }),
+      await cli(["join", server.url], { path, cwd: work }),
+      await cli(["join", "https://other.example.com"], { path, cwd: work }),
       await cli(["off"], { path, cwd: work }),
       await cli(["status"], { path, cwd: work }),
       await cli(["on"], { path, cwd: work }),
@@ -366,19 +430,30 @@ describe("copy", () => {
     const other = computerDir();
     for (const line of [
       "no address here",
-      `https://[bad/join#${TOKEN}`,
-      `http://portico.example.com/join#${TOKEN}`,
-      `https://u:p@portico.example.com/join#${TOKEN}`,
-      "https://portico.example.com/join#short",
-      `${server.url}/join#${"B".repeat(22)}`,
-      `http://127.0.0.1:1/join#${TOKEN}`,
+      "https://[bad",
+      "http://portico.example.com",
+      "https://u:p@portico.example.com",
+      "https://portico.example.com/join#T4mWq8Zr2LpX6Kd1",
+      "http://127.0.0.1:1",
     ]) {
       runs.push(await cli(["join", line], { path: other.path, cwd: other.dir }));
     }
+    // The person turns the join down, lets the request run out, or hasn't answered when the wait ends; then a code
+    // too early, a wrong one, Allow seen by the waiting command, and too many wrong codes.
+    for (const person of ["deny", "late", "wait"] as const) {
+      server.state.person = person;
+      runs.push(await cli(["join", server.url, "--wait", "0"], { path: other.path, cwd: other.dir }));
+    }
+    const noPrompt = { readCode: undefined };
+    runs.push(await cli(["join", "--code", "0000"], { path: other.path, cwd: other.dir, deps: noPrompt }));
+    server.state.person = "allow";
+    runs.push(await cli(["join", server.url, "--wait", "0"], { path: other.path, cwd: other.dir, deps: noPrompt }));
+    for (let i = 0; i < 6; i++) runs.push(await cli(["join", "--code", "0000"], { path: other.path, cwd: other.dir, deps: noPrompt }));
+    runs.push(await cli(["join", "--code", "12"], { path: other.path, cwd: other.dir, deps: noPrompt }));
     const bare = (async () => new Response("", { status: 502 })) as unknown as typeof fetch;
     const odd = (async () => Response.json({}, { status: 201 })) as unknown as typeof fetch;
     for (const fetch of [bare, odd]) {
-      runs.push(await cli(["join", `https://portico.example.com/join#${TOKEN}`], { path: other.path, cwd: other.dir, deps: { fetch } }));
+      runs.push(await cli(["join", "https://portico.example.com"], { path: other.path, cwd: other.dir, deps: { fetch } }));
     }
     writeComputerFile(other.path, { url: "http://127.0.0.1:1", computer: "macbook", token: "pc_x", off: [] });
     runs.push(await cli(["off"], { path: other.path, cwd: other.dir }));
@@ -407,7 +482,7 @@ describe("copy", () => {
     expect(result.out).toEqual([]);
     expect(result.err[0]).toBe("Unknown command: launch");
     const usage = result.err.slice(1).join("\n");
-    for (const command of ["join <line> [--name <computer>] [--replace] [--no-allow]", "off [folder]", "on [folder]", "leave", "status"]) {
+    for (const command of ["join <address> [--name <computer>] [--replace] [--no-allow] [--wait <seconds>]", "off [folder]", "on [folder]", "leave", "status"]) {
       expect(usage).toContain(command);
     }
     const help = await cli(["help"], { path, cwd: dir });

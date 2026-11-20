@@ -1,4 +1,4 @@
-// Browser code for hosted Portico's sign-in page on the base domain. Descope's component runs the sign-in; when it
+// Browser code for the sign-in page where people sign in with Descope. Descope's component runs the sign-in; when it
 // finishes, Portico checks the result once (POST /api/session), sets its own cookie, and the page goes on to `next`.
 import { api, ApiError, firstData } from "./api.js";
 
@@ -9,6 +9,7 @@ import { api, ApiError, firstData } from "./api.js";
 const KEPT_NEXT = "portico-next";
 const KEPT_MS = 10 * 60_000;
 
+/** The page that was kept to go to. */
 function kept(): string | null {
   try {
     const value = JSON.parse(localStorage.getItem(KEPT_NEXT) ?? "null") as { next?: unknown; at?: unknown } | null;
@@ -24,7 +25,7 @@ let next = data?.next ?? null;
 try {
   if (next !== null) localStorage.setItem(KEPT_NEXT, JSON.stringify({ next, at: Date.now() }));
 } catch {
-  // No storage: a sign-in that leaves the page lands on the workspace list.
+  // No storage: a sign-in that leaves the page lands on the first page.
 }
 next ??= kept() ?? "/";
 

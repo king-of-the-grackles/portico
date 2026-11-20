@@ -5,6 +5,7 @@ import { renderAddSheet, renderNotice, renderReconnecting, when } from "./common
 import { renderNav, renderPhoneBar } from "./nav.js";
 import { renderToday } from "./today.js";
 import type { HomeData, HomeState } from "./types.js";
+import { renderWorkspace } from "./workspace.js";
 
 function renderPage(s: HomeState): string {
   switch (s.route.page) {
@@ -14,6 +15,8 @@ function renderPage(s: HomeState): string {
       return renderActivity(s);
     case "agent":
       return renderAgent(s, s.route.id);
+    case "workspace":
+      return renderWorkspace(s, s.route.id);
   }
 }
 
@@ -40,7 +43,14 @@ export function homeState(data: Omit<HomeData, "page"> & { now: number }): HomeS
     publicUrl: data.publicUrl,
     agents: data.agents,
     held: data.approvals.held,
-    signIns: data.approvals.signIns,
+    consents: data.approvals.consents ?? [],
+    workspaces: data.workspaces,
+    workspacePage: data.workspacePage ?? null,
+    wsForm: null,
+    peopleOpen: false,
+    wsConfirm: null,
+    wsCopied: {},
+    wsMail: {},
     route: data.route,
     today: data.today,
     tasks: data.tasks,
@@ -52,9 +62,10 @@ export function homeState(data: Omit<HomeData, "page"> & { now: number }): HomeS
     shownMessages: {},
     detailsOpen: false,
     settingsOpen: false,
-    quietOpen: false,
     acctOpen: false,
     navOpen: false,
+    navFold: {},
+    navAll: {},
     notice: null,
     reconnecting: false,
     add: null,
@@ -62,6 +73,7 @@ export function homeState(data: Omit<HomeData, "page"> & { now: number }): HomeS
     wakeEdit: null,
     saved: false,
     confirmRemove: false,
+    confirmRevoke: false,
     loadingMore: false,
     busy: null,
   };

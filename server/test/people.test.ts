@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { hashSecret } from "../src/core/tokens";
-import { addAppAgent, addComputer, addMember, addOwner, addSession, DAY, errorCode, flush, makePortico, T0 } from "./helpers";
+import { addAppAgent, addComputer, addMember, addOwner, addSession, DAY, errorCode, flush, makePortico, T0, together } from "./helpers";
 
 const HASH = "argon2id-test-hash";
 
@@ -166,7 +166,8 @@ describe("removing a member", () => {
     const session = addSession(p, computer).agent;
     const dot = addAppAgent(p, maya, "maya-dot", { kind: "dots" }).agent;
     const grok = addAppAgent(p, chris, "grok", { kind: "grok-bot" }).agent;
-    p.messages.send(grok, { to: "maya-dot", subject: "Churn", text: "Last quarter?" });
+    together(p, grok, dot);
+    p.messages.send(grok, { to: "maya-okafor/maya-dot", subject: "Churn", text: "Last quarter?" });
     const { token } = p.accounts.startSession(maya.id);
 
     expect(errorCode(() => p.people.removeMember(maya.id, chris.id))).toBe("not_allowed");
@@ -179,7 +180,8 @@ describe("removing a member", () => {
     expect(p.agents.get(dot.id)).toBeNull();
     expect(p.computers.get(computer.id)).toBeNull();
     expect(p.accounts.personForSession(token)).toBeNull();
-    expect(p.messages.threads({})).toEqual([]);
+    expect(p.messages.threads({ person: chris.id })).toEqual([]);
+    expect(p.content.for(p.workspaces.forPerson(chris.id).at(-1)!.id).db.query("SELECT COUNT(*) AS n FROM messages").get()).toEqual({ n: 0 });
     expect(p.agents.get(grok.id)).not.toBeNull();
   });
 });

@@ -11,8 +11,6 @@ export interface StreamClientOptions {
   onEvent: (event: string, data: unknown) => void;
   /** Called once, when the client stops for good: another connection took over, or Portico refused the stream. */
   onStop: (stop: StreamStop) => void;
-  /** Called whenever a connection that reached Portico ends, however it ends. Not for a refused or failed open. */
-  onDisconnect?: () => void;
   log: Logger;
   /** A connection open this long counts as healthy, and the backoff starts over. Default 30 s, longer than Portico's 25 s heartbeat. */
   healthyMs?: number;
@@ -145,7 +143,6 @@ export class StreamClient {
       clearTimeout(timer);
       controller.abort();
       if (this.current === controller) this.current = null;
-      if (connected) this.opts.onDisconnect?.();
     }
   }
 

@@ -1,11 +1,10 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import type { Core } from "../core/core";
 import type { Person } from "../core/types";
 import { PorticoError } from "../core/errors";
-import { checkNewPassword, hashPassword, NO_PASSWORD } from "../core/accounts";
+import { checkNewPassword, hashPassword } from "../core/accounts";
 import { cleanPersonName, type Claim, type Invite } from "../core/people";
 import { log } from "../log";
-import { clearWaitingAccount, waitingAccount } from "../web/central";
 import { type PersonEnv, currentOwner, currentPerson } from "./context";
 import { jsonObject, startBrowserSession } from "./session";
 import { type ClaimView, type InviteView, type PersonView, personViews } from "./views";
@@ -25,18 +24,20 @@ export function inviteView(invite: Invite, link: string | null = null): InviteVi
 }
 
 /**
- * What GET /api/people answers, and Settings' first data: everyone active, and for the owner, open invites (with their
- * links) and claims waiting for approval.
+ * What GET /api/people answers, and Settings' first data: the people the person shares a workspace with. On a server
+ * with its own sign-in, the owner invites and removes people, so the owner also gets everyone with an account, open
+ * invites (with their links) and claims waiting for approval. That is a list of accounts, never of conversations.
  */
 export function peopleListing(core: Core, me: Person): { people: PeopleEntry[]; invites: InviteView[]; claims: ClaimView[] } {
   const { people, settings } = core;
   const views = personViews(core, me);
-  const isOwner = me.role === "owner";
+  const isOwner = me.role === "owner" && core.accountSignIn === null;
+  const visible = core.workspaces.visiblePeople(me.id);
   const link = (secret: string | null) => (secret ? `${settings.publicUrl()}/invite#${secret}` : null);
   return {
     people: people
       .list()
-      .filter((p) => p.status === "active")
+      .filter((p) => p.status === "active" && (isOwner || visible.has(p.id)))
       .map((p) => ({ ...views.person(p), joinedAt: p.approvedAt ?? p.createdAt })),
     invites: isOwner ? people.openInvites().map((invite) => inviteView(invite, link(people.inviteSecret(invite.id)))) : [],
     claims: isOwner ? people.claims().map(claimView) : [],
@@ -48,8 +49,9 @@ export function claimView(claim: Claim): ClaimView {
 }
 
 /**
- * The People section and invite links:
- * - GET /api/people: everyone on Portico, and, for the owner, open invites and claims waiting for approval.
+ * The People section and invite links. Invites exist where this server signs people in itself; with an outside
+ * sign-in, signing in makes the account and every invite route answers 404.
+ * - GET /api/people: see peopleListing.
  * - POST /api/invites and DELETE /api/invites/:id: the owner creates and revokes invites.
  * - POST /api/invites/check and POST /api/invites/claim: public, for the invite page. The secret travels in the body.
  * - POST /api/claims/:personId: the owner approves or declines a claim.
@@ -61,6 +63,16 @@ export function peopleRoutes(core: Core): Hono<PersonEnv> {
   const inviteLink = (secret: string | null) => (secret ? `${settings.publicUrl()}/invite#${secret}` : null);
 
   route.get("/people", (c) => c.json(peopleListing(core, currentPerson(c))));
+
+  // With an outside sign-in nobody runs the accounts: signing in makes one.
+  if (core.accountSignIn) {
+    const gone = (c: Context) => c.json({ error: "not_found", message: "Signing in creates the account here: there are no invites." }, 404);
+    route.all("/invites", gone);
+    route.all("/invites/*", gone);
+    route.all("/claims/*", gone);
+    route.delete("/people/:id", gone);
+    return route;
+  }
 
   route.post("/invites", async (c) => {
     const me = currentOwner(c);
@@ -87,18 +99,8 @@ export function peopleRoutes(core: Core): Hono<PersonEnv> {
     people.openInvite(body.secret);
     const name = cleanPersonName(body.name);
     if (people.byName(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
-    let person: Person;
-    if (core.central) {
-      // Hosted: the claim belongs to the account that just signed in on the base domain. No password is ever set.
-      const accountId = waitingAccount(c, core);
-      if (!accountId) throw new PorticoError("unauthorized", "Sign in first, then join with this invite link.");
-      person = people.claim({ secret: body.secret, name, passwordHash: NO_PASSWORD, externalId: accountId });
-      clearWaitingAccount(c, core);
-      core.central.joined(accountId);
-    } else {
-      const password = checkNewPassword(body.password);
-      person = people.claim({ secret: body.secret, name, passwordHash: await hashPassword(password) });
-    }
+    const password = checkNewPassword(body.password);
+    const person = people.claim({ secret: body.secret, name, passwordHash: await hashPassword(password) });
     startBrowserSession(c, core, person.id);
     log("info", "invite_claimed", { invite_id: person.inviteId, person_id: person.id });
     return c.json({ person: personViews(core, person).person(person), next: "/invite" }, 201);

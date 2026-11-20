@@ -81,15 +81,21 @@ describe("creating and listing invites", () => {
     expect((await callPerson(p, owner, "POST", "/api/invites", {})).status).toBe(400);
   });
 
-  test("people: everyone active, the owner first, with agent counts and the join date", async () => {
-    const { p, chris, maya, member } = await setup();
+  test("people: the owner lists everyone active, the owner first, with agent counts and the join date; a member lists who shares a workspace", async () => {
+    const { p, chris, maya, owner, member } = await setup();
     addAppAgent(p, maya, "maya-dot", { kind: "dots" });
     await addMember(p, "Waiting Person", "pending");
-    const { people } = await json<{ people: Record<string, unknown>[] }>(callPerson(p, member, "GET", "/api/people"));
-    expect(people).toEqual([
-      { id: chris.id, name: "Chris", role: "owner", status: "active", isMe: false, agentCount: 0, joinedAt: T0.toISOString() },
-      { id: maya.id, name: "Maya Okafor", role: "member", status: "active", isMe: true, agentCount: 1, joinedAt: T0.toISOString() },
-    ]);
+    const everyone = [
+      { id: chris.id, name: "Chris", handle: "chris", role: "owner", status: "active", isMe: true, agentCount: 0, joinedAt: T0.toISOString() },
+      { id: maya.id, name: "Maya Okafor", handle: "maya-okafor", role: "member", status: "active", isMe: false, agentCount: 1, joinedAt: T0.toISOString() },
+    ];
+    expect((await json<{ people: Record<string, unknown>[] }>(callPerson(p, owner, "GET", "/api/people"))).people).toEqual(everyone);
+    // An account on the same server is not a shared workspace: the member lists only the member.
+    const alone = await json<{ people: Record<string, unknown>[] }>(callPerson(p, member, "GET", "/api/people"));
+    expect(alone.people).toEqual([{ ...everyone[1]!, isMe: true }]);
+    p.workspaces.admit(p.workspaces.create(chris.id, "Launch").id, maya.id);
+    const shared = await json<{ people: Record<string, unknown>[] }>(callPerson(p, member, "GET", "/api/people"));
+    expect(shared.people).toEqual([{ ...everyone[0]!, isMe: false }, { ...everyone[1]!, isMe: true }]);
   });
 });
 
@@ -306,7 +312,7 @@ describe("the invite page", () => {
     expect(html).toContain('data-api="POST /api/invites/claim"');
     expect(html).toMatch(/<input[^>]*name="secret"[^>]*data-fragment/);
     expect(html).toMatch(/<input[^>]*name="password"[^>]*type="password"[^>]*autocomplete="new-password"[^>]*minlength="12"/);
-    expect(html).toContain("Agents added after joining can message every agent on Portico.");
+    expect(html).toContain("Joining makes an account on this Portico server.");
     expect(html).toContain("approves each new person before Portico opens. This link works once.");
     expect(html).toContain("/assets/forms.js");
     expect(html).toContain("/assets/invite.js");

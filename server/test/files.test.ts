@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { addAppAgent, addMember, addOwner, callAs, callPerson, DAY, fakeBucket, flush, HOUR, makePortico, MINUTE, PUBLIC_URL, signIn } from "./helpers";
-import type { FileStore } from "../src/core/file-store";
+import { addAppAgent, addMember, addOwner, callAs, callPerson, DAY, fakeBucket, flush, HOUR, makePortico, MINUTE, PUBLIC_URL, signIn, together } from "./helpers";
+import { type FileStore, uploadKey, workspaceFileKey } from "../src/core/file-store";
 
 interface Slot {
   file: { id: string; name: string; type: string; size: number; status?: string; url: string };
@@ -92,7 +92,7 @@ describe("files in the data folder", () => {
     expect(await put.json()).toMatchObject({ file: { status: "ready", size: 5 } });
     // A finished upload can't be replaced.
     expect((await p.app.request(url, { method: "PUT", body: "54321" })).status).toBe(409);
-    expect(p.files.get(started.body.file.id)!.checksum).toBe(new Bun.CryptoHasher("sha256").update("12345").digest("hex"));
+    expect(p.files.upload(started.body.file.id)!.checksum).toBe(new Bun.CryptoHasher("sha256").update("12345").digest("hex"));
 
     expect((await send(grok, { to: "muse", attachments: [started.body.file.id] })).status).toBe(201);
   });
@@ -108,8 +108,8 @@ describe("files in the data folder", () => {
     expect((await p.app.request(url, { method: "PUT", body: "abc" })).status).toBe(404);
   });
 
-  test("checks the name, the size, the count and the storage cap", async () => {
-    const { p, grok, upload, send } = await setup();
+  test("checks the name, the size, the count and the storage caps", async () => {
+    const { p, chris, grok, muse, upload, send } = await setup();
     expect((await upload(grok, { name: "../etc/passwd", text: "x" })).status).toBe(400);
     expect((await upload(grok, { name: "a.txt" })).status).toBe(400);
     expect((await upload(grok, { name: "a.txt", size: 100 * 1024 * 1024 + 1 })).status).toBe(413);
@@ -122,10 +122,21 @@ describe("files in the data folder", () => {
     expect((await send(grok, { to: "muse", attachments: ids.slice(0, 5) })).status).toBe(201);
     expect((await send(grok, { to: "muse", attachments: ["nope"] })).status).toBe(400);
 
-    // Sizes count from the moment an upload starts, so parallel uploads can't pass the cap.
-    p.db.run("UPDATE files SET size = 5 * 1024 * 1024 * 1024 - 10 WHERE id = ?", [ids[0]!]);
-    expect((await upload(grok, { name: "big.bin", size: 11 })).status).toBe(413);
-    expect((await upload(grok, { name: "ok.bin", size: 4 })).status).toBe(201);
+    // Uploads no message carries yet count together from the moment each starts, so parallel uploads can't pass the cap.
+    p.db.run("UPDATE uploads SET size = 5 * 1024 * 1024 * 1024 - 10 WHERE id = ?", [ids[5]!]);
+    expect((await upload(muse, { name: "big.bin", size: 11 })).status).toBe(413);
+    expect((await upload(muse, { name: "ok.bin", size: 4 })).status).toBe(201);
+    p.db.run("UPDATE uploads SET size = 1 WHERE id = ?", [ids[5]!]);
+
+    // Each workspace has a storage cap of its own, checked as a file is attached: a send past the cap is refused whole.
+    const personal = p.content.for(p.workspaces.personal(chris.id).id).db;
+    personal.run("UPDATE files SET size = 5 * 1024 * 1024 * 1024 - 10 WHERE id = ?", [ids[0]!]);
+    const big = (await upload(muse, { name: "big.txt", text: "x".repeat(11) })).body.file.id;
+    const small = (await upload(muse, { name: "small.txt", text: "x".repeat(4) })).body.file.id;
+    const before = personal.query("SELECT COUNT(*) AS n FROM messages").get();
+    expect((await send(muse, { to: "grok", attachments: [big] })).status).toBe(413);
+    expect(personal.query("SELECT COUNT(*) AS n FROM messages").get()).toEqual(before);
+    expect((await send(muse, { to: "grok", attachments: [small] })).status).toBe(201);
   });
 
   test("a held message's files are the owner's to see first, and go when the message is declined", async () => {
@@ -147,7 +158,9 @@ describe("files in the data folder", () => {
     p.approvals.decide(chris.id, sent.body.message.id, "deny");
     await flush();
     await flush();
-    expect(p.files.get(file.id)).toBeNull();
+    // The workspace's copy and the upload it came from are both gone.
+    expect(p.files.forPerson(chris, file.id)).toBeNull();
+    expect(p.files.upload(file.id)).toBeNull();
     expect((await p.app.request(download.headers.get("location")!.slice(PUBLIC_URL.length))).status).toBe(404);
   });
 
@@ -174,7 +187,7 @@ describe("files in the data folder", () => {
     const first = await send(grok, { to: "muse", key: "k1", attachments: [a] });
     const again = await send(grok, { to: "muse", key: "k1", attachments: [a] });
     expect(again.body.message.id).toBe(first.body.message.id);
-    expect(p.files.of(first.body.message.id)).toHaveLength(1);
+    expect(p.files.of(p.messages.require({ agent: grok.agent.id }, first.body.message.id))).toHaveLength(1);
     expect((await send(grok, { to: "muse", key: "k1", attachments: [a, b] })).status).toBe(409);
     expect((await send(grok, { to: "muse", key: "k1" })).status).toBe(409);
   });
@@ -210,13 +223,14 @@ describe("files in the data folder", () => {
     const file = (await upload(grok, { name: "a.txt", text: "a" })).body.file.id;
     await send(grok, { to: "muse", attachments: [file] });
     expect((await callPerson(p, signIn(p, maya), "GET", `/api/files/${file}`)).status).toBe(404);
-    await send(grok, { to: "maya-muse", attachments: [file] });
+    together(p, grok.agent, hers.agent);
+    await send(grok, { to: "maya/maya-muse", attachments: [file] });
     expect((await callPerson(p, signIn(p, maya), "GET", `/api/files/${file}`)).status).toBe(302);
     expect(hers.agent.ownerId).toBe(maya.id);
   });
 
   test("a file no message carries goes after an hour, and an attached one with the history", async () => {
-    const { p, grok, upload, send } = await setup();
+    const { p, chris, grok, upload, send } = await setup();
     const loose = (await upload(grok, { name: "loose.txt", text: "x" })).body.file.id;
     const kept = (await upload(grok, { name: "kept.txt", text: "y" })).body.file.id;
     await send(grok, { to: "muse", attachments: [kept] });
@@ -224,14 +238,15 @@ describe("files in the data folder", () => {
     expect(await p.sweepFiles()).toBe(0);
     p.clock.advance(2 * MINUTE);
     expect(await p.sweepFiles()).toBe(1);
-    expect(p.files.get(loose)).toBeNull();
-    expect(p.files.get(kept)).not.toBeNull();
+    expect(p.files.forAgent(grok.agent, loose)).toBeNull();
+    expect(p.files.forAgent(grok.agent, kept)).toMatchObject({ workspaceId: p.workspaces.personal(chris.id).id, source: null });
 
     p.clock.advance(31 * DAY);
     p.messages.expireDue();
     p.sweepDaily();
     expect(await p.sweepFiles()).toBe(1);
-    expect(p.files.get(kept)).toBeNull();
+    expect(p.files.forAgent(grok.agent, kept)).toBeNull();
+    expect(p.files.upload(kept)).toBeNull();
   });
 
   test("create_upload and attachments work over MCP", async () => {
@@ -253,22 +268,36 @@ describe("files in the data folder", () => {
   });
 });
 
+/** Copies in the bucket fail from here on, as when storage is down. Returns the working copy, to put back. */
+function down(bucket: ReturnType<typeof fakeBucket>): FileStore["copy"] {
+  const copy = bucket.store.copy;
+  bucket.store.copy = async () => {
+    throw new Error("storage down");
+  };
+  return copy;
+}
+
 describe("files in a bucket", () => {
   test("upload and download addresses go straight to the bucket, and the size is checked at send", async () => {
     const bucket = fakeBucket();
-    const { p, grok, muse, upload, send, task } = await setup({ fileStore: bucket.store });
+    const { p, chris, grok, muse, upload, send, task } = await setup({ fileStore: bucket.store });
     const started = await upload(grok, { name: "big.bin", size: 4 });
-    expect(started.body.upload!.url).toBe(`https://bucket.example/${started.body.file.id}?upload=900`);
+    const id = started.body.file.id;
+    expect(started.body.upload!.url).toBe(`https://bucket.example/uploads/${id}?upload=900`);
     expect(p.files.takesUploads).toBe(false);
 
     // Nothing uploaded yet.
-    expect((await send(grok, { to: "muse", attachments: [started.body.file.id] })).status).toBe(400);
-    bucket.put(started.body.file.id, "abcd");
-    const sent = await send(grok, { to: "muse", attachments: [started.body.file.id] });
+    expect((await send(grok, { to: "muse", attachments: [id] })).status).toBe(400);
+    bucket.put(uploadKey(id), "abcd");
+    const sent = await send(grok, { to: "muse", attachments: [id] });
     expect(sent.status).toBe(201);
+    await flush();
 
+    // The bytes were copied under the workspace's own prefix, and downloads come from there.
+    const own = workspaceFileKey(p.workspaces.personal(chris.id).id, id);
+    expect(new TextDecoder().decode(bucket.objects.get(own))).toBe("abcd");
     const read = await task(muse, sent.body.message.id);
-    expect(read.messages[0]!.attachments![0]!.download_url).toBe(`https://bucket.example/${started.body.file.id}?download=big.bin&for=900`);
+    expect(read.messages[0]!.attachments![0]!.download_url).toBe(`https://bucket.example/${own}?download=big.bin&for=900`);
     // Portico's own /files routes carry nothing for a bucket.
     expect((await p.app.request(`/files/${started.body.file.id}?exp=1&sig=x`)).status).toBe(404);
   });
@@ -277,55 +306,115 @@ describe("files in a bucket", () => {
     const bucket = fakeBucket();
     const { p, grok, upload, send } = await setup({ fileStore: bucket.store });
     const started = await upload(grok, { name: "big.bin", size: 4 });
-    bucket.put(started.body.file.id, "abcdefgh");
+    bucket.put(uploadKey(started.body.file.id), "abcdefgh");
     expect((await send(grok, { to: "muse", attachments: [started.body.file.id] })).status).toBe(400);
-    expect(p.files.get(started.body.file.id)).toBeNull();
-    expect(bucket.objects.has(started.body.file.id)).toBe(false);
+    expect(p.files.upload(started.body.file.id)).toBeNull();
+    expect(bucket.objects.has(uploadKey(started.body.file.id))).toBe(false);
   });
 
   test("bytes swapped after the send are never handed out", async () => {
     const bucket = fakeBucket();
-    const { p, grok, muse, upload, send, task } = await setup({ fileStore: bucket.store });
+    const { p, chris, grok, muse, upload, send, task } = await setup({ fileStore: bucket.store });
     const started = await upload(grok, { name: "big.bin", size: 4 });
-    bucket.put(started.body.file.id, "abcd");
-    const sent = await send(grok, { to: "muse", attachments: [started.body.file.id] });
-    // The upload address still works for a few minutes: the sender swaps the bytes.
-    bucket.put(started.body.file.id, "evil");
+    const id = started.body.file.id;
+    bucket.put(uploadKey(id), "abcd");
+    const sent = await send(grok, { to: "muse", attachments: [id] });
+    await flush();
+    // The upload address still works for a few minutes: the sender swaps the bytes. The workspace has its own copy by
+    // then, which no address writes to.
+    bucket.put(uploadKey(id), "evil");
+    const own = workspaceFileKey(p.workspaces.personal(chris.id).id, id);
+    const read = await task(muse, sent.body.message.id);
+    expect(read.messages[0]!.attachments![0]!.download_url).toStartWith(`https://bucket.example/${own}?`);
+    expect(new TextDecoder().decode(bucket.objects.get(own))).toBe("abcd");
+  });
+
+  test("bytes swapped before the copy into the workspace went through are never handed out, nor copied", async () => {
+    const bucket = fakeBucket();
+    const { p, chris, grok, muse, upload, send, task } = await setup({ fileStore: bucket.store });
+    const copy = down(bucket);
+    const started = await upload(grok, { name: "big.bin", size: 4 });
+    const id = started.body.file.id;
+    bucket.put(uploadKey(id), "abcd");
+    const sent = await send(grok, { to: "muse", attachments: [id] });
+    await flush();
+    bucket.put(uploadKey(id), "evil");
     const read = await task(muse, sent.body.message.id);
     expect(read.messages[0]!.attachments![0]!.download_url).toBeUndefined();
     expect(read.messages[0]!.attachments![0]!.unavailable).toContain("changed after the upload finished");
-    expect((await callAs(p, muse, "GET", `/api/agent/files/${started.body.file.id}`)).status).toBe(409);
+    expect((await callAs(p, muse, "GET", `/api/agent/files/${id}`)).status).toBe(409);
+    // Storage is back: the sweep's retry finds the bytes changed and copies nothing.
+    bucket.store.copy = copy;
+    await p.sweepFiles();
+    expect(bucket.objects.has(workspaceFileKey(p.workspaces.personal(chris.id).id, id))).toBe(false);
+    expect((await callAs(p, muse, "GET", `/api/agent/files/${id}`)).status).toBe(409);
+  });
+
+  test("a copy that didn't go through is finished by the sweep, and the file reads from the upload until then", async () => {
+    const bucket = fakeBucket();
+    const { p, chris, grok, muse, upload, send } = await setup({ fileStore: bucket.store });
+    const copy = down(bucket);
+    const started = await upload(grok, { name: "big.bin", size: 4 });
+    const id = started.body.file.id;
+    bucket.put(uploadKey(id), "abcd");
+    await send(grok, { to: "muse", attachments: [id] });
+    await flush();
+    const own = workspaceFileKey(p.workspaces.personal(chris.id).id, id);
+    expect(p.files.forAgent(muse.agent, id)).toMatchObject({ source: uploadKey(id) });
+    expect((await callAs(p, muse, "GET", `/api/agent/files/${id}`)).headers.get("location")).toStartWith(`https://bucket.example/${uploadKey(id)}?`);
+    // An upload a workspace still reads from outlives its day.
+    p.clock.advance(2 * DAY);
+    await p.sweepFiles();
+    expect(p.files.upload(id)).not.toBeNull();
+    bucket.store.copy = copy;
+    await p.sweepFiles();
+    expect(p.files.upload(id)).toBeNull();
+    expect(p.files.forAgent(muse.agent, id)).toMatchObject({ source: null });
+    expect(bucket.objects.has(own)).toBe(true);
+    expect((await callAs(p, muse, "GET", `/api/agent/files/${id}`)).headers.get("location")).toStartWith(`https://bucket.example/${own}?`);
   });
 
   test("bytes swapped just before the upload address stops working are caught after it has", async () => {
     const bucket = fakeBucket();
     const { p, grok, muse, upload, send } = await setup({ fileStore: bucket.store });
+    down(bucket);
     const started = await upload(grok, { name: "big.bin", size: 4 });
-    bucket.put(started.body.file.id, "abcd");
+    bucket.put(uploadKey(started.body.file.id), "abcd");
     await send(grok, { to: "muse", attachments: [started.body.file.id] });
     p.clock.advance(14 * MINUTE);
-    bucket.put(started.body.file.id, "evil");
+    bucket.put(uploadKey(started.body.file.id), "evil");
     p.clock.advance(5 * MINUTE);
     expect((await callAs(p, muse, "GET", `/api/agent/files/${started.body.file.id}`)).status).toBe(409);
   });
 
-  test("an untouched file is checked one last time after the upload address stops working, then never again", async () => {
+  test("an untouched upload is checked one last time after the upload address stops working, then never again", async () => {
     const bucket = fakeBucket();
     const { p, grok, muse, upload, send } = await setup({ fileStore: bucket.store });
+    down(bucket);
     const started = await upload(grok, { name: "big.bin", size: 4 });
-    bucket.put(started.body.file.id, "abcd");
+    bucket.put(uploadKey(started.body.file.id), "abcd");
     await send(grok, { to: "muse", attachments: [started.body.file.id] });
     p.clock.advance(20 * MINUTE);
     expect((await callAs(p, muse, "GET", `/api/agent/files/${started.body.file.id}`)).status).toBe(302);
-    expect(p.files.get(started.body.file.id)!.uploadExpiresAt).toBeNull();
+    expect(p.files.upload(started.body.file.id)!.uploadExpiresAt).toBeNull();
+    let stats = 0;
+    const stat = bucket.store.stat;
+    bucket.store.stat = (key) => {
+      stats++;
+      return stat(key);
+    };
+    expect((await callAs(p, muse, "GET", `/api/agent/files/${started.body.file.id}`)).status).toBe(302);
+    expect(stats).toBe(0);
   });
 
   test("storage that can't be reached marks the file unavailable, and the task still reads", async () => {
     const bucket = fakeBucket();
     const { grok, muse, upload, send, task } = await setup({ fileStore: bucket.store });
+    down(bucket);
     const started = await upload(grok, { name: "big.bin", size: 4 });
-    bucket.put(started.body.file.id, "abcd");
+    bucket.put(uploadKey(started.body.file.id), "abcd");
     const sent = await send(grok, { to: "muse", attachments: [started.body.file.id] });
+    await flush();
     bucket.store.stat = async () => {
       throw new Error("network");
     };

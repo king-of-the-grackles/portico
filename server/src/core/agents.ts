@@ -3,16 +3,18 @@ import type { Bindings } from "../db";
 import type { Activity } from "./activity";
 import type { Changes } from "./changes";
 import type { Computers } from "./computers";
+import type { Content } from "./content";
 import { PorticoError } from "./errors";
 import { defang } from "./framing";
 import { isBroadcast } from "./guards";
 import { DAY_MS, HOUR_MS, LIMITS, NAME } from "./limits";
+import { nameKey, requireUnreservedName } from "./names";
 import type { Presence } from "./presence";
-import { releasedByOther, releaseNames } from "./released-names";
-import { hashSecret, newToken } from "./tokens";
+import { hashSecret, newToken, sessionKeyHash } from "./tokens";
 import { AGENT_KINDS } from "./types";
 import type { Agent, AgentKind, AgentType, Computer, DeliveryTier, DirectoryEntry, LiveStatus } from "./types";
 import { slugify } from "./words";
+import type { Workspaces } from "./workspaces";
 
 interface AgentRow {
   id: string;
@@ -26,6 +28,9 @@ interface AgentRow {
   folder: string | null;
   folder_id: string | null;
   approval_required: number;
+  outbound_hold: number;
+  unproven: number;
+  revoked_at: string | null;
   created_at: string;
   last_seen_at: string | null;
   doing: string | null;
@@ -45,6 +50,9 @@ function toAgent(row: AgentRow): Agent {
     folder: row.folder,
     folderId: row.folder_id,
     approvalRequired: row.approval_required === 1,
+    outboundHold: row.outbound_hold === 1,
+    unproven: row.unproven === 1,
+    revokedAt: row.revoked_at,
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
     doing: row.doing,
@@ -74,7 +82,7 @@ const KIND_LABELS: Record<AgentKind, string | null> = {
   codex: "Codex",
   muse: "Muse",
   "grok-bot": "Grok Bot",
-  dots: "Dots",
+  dots: "ChatGPT/Dots",
   "claude-duet": "Claude Duet",
   other: null,
 };
@@ -216,6 +224,8 @@ export interface AgentChanges {
   name?: unknown;
   description?: unknown;
   approvalRequired?: unknown;
+  /** "Ask me before this agent sends to other people's agents." */
+  outboundHold?: unknown;
   joinFromFolder?: unknown;
 }
 
@@ -224,6 +234,10 @@ export interface AgentsDeps {
   computers: Computers;
   presence: Presence;
   changes: Changes;
+  /** Who reaches whom. Names are unique per owner, and other people's agents carry a handle. */
+  workspaces: Workspaces;
+  /** Each workspace's own database: a removed agent's threads are deleted there. */
+  content: Content;
   activity?: Activity;
   /** Whether the agent has an open stream. A connected session stays listed however long ago its row was written. */
   isConnected?: (agentId: string) => boolean;
@@ -241,6 +255,9 @@ export interface AgentsDeps {
   log?: (msg: string, fields: Record<string, unknown>) => void;
 }
 
+const REVOKED_SESSION = (repo: string, computer: string) =>
+  `The agent for ${repo} on ${computer} was revoked, so sessions there stay off Portico. The person who manages the agent can remove the agent on Portico's pages; the next session in the folder then joins as a new agent.`;
+
 /**
  * Every agent on Portico: sessions on joined computers, apps that signed in, and connectors. Addresses, the live agent
  * list, session registration, credentials, and the changes an agent's manager can make.
@@ -250,6 +267,8 @@ export class Agents {
   private readonly computers: Computers;
   private readonly presence: Presence;
   private readonly changes: Changes;
+  private readonly workspaces: Workspaces;
+  private readonly content: Content;
   private readonly activity: Activity | undefined;
   private readonly isConnected: (agentId: string) => boolean;
   readonly liveRuns: (agentId: string) => number;
@@ -266,6 +285,8 @@ export class Agents {
     this.computers = deps.computers;
     this.presence = deps.presence;
     this.changes = deps.changes;
+    this.workspaces = deps.workspaces;
+    this.content = deps.content;
     this.activity = deps.activity;
     this.isConnected = deps.isConnected ?? (() => false);
     this.liveRuns = deps.liveRuns ?? ((id) => (this.isConnected(id) ? 1 : 0));
@@ -325,16 +346,34 @@ export class Agents {
     return addressOf(agent);
   }
 
-  /** A session's short name when it alone resolves to the session, otherwise the full address. */
+  /**
+   * The name the agent's own owner knows it by: a session's short name when no other agent of that owner has the name,
+   * otherwise the full address.
+   */
   display(agent: Agent): string {
     if (agent.type !== "session") return agent.name;
-    if (this.byAddress(agent.name)) return addressOf(agent);
-    const n = (
-      this.db.query("SELECT COUNT(*) AS n FROM agents WHERE computer_id IS NOT NULL AND name = $name").get({
-        name: agent.name,
-      }) as { n: number }
-    ).n;
-    return n === 1 && !this.releasedByOther(agent.name, agent.ownerId) ? agent.name : addressOf(agent);
+    return this.ownedNamed(agent.ownerId, agent.name).length === 1 ? agent.name : addressOf(agent);
+  }
+
+  /**
+   * The name to address the agent by, for a viewer owned by `viewerOwnerId`: the plain name for that person's own
+   * agents, and `<handle>/<name>` for anyone else's.
+   */
+  nameFor(agent: Agent, viewerOwnerId: string): string {
+    return this.prefixFor(agent, viewerOwnerId) + this.display(agent);
+  }
+
+  /** The full address for the same viewer: `<handle>/<name>@<computer>` for another person's session. */
+  addressFor(agent: Agent, viewerOwnerId: string): string {
+    return this.prefixFor(agent, viewerOwnerId) + addressOf(agent);
+  }
+
+  private prefixFor(agent: Agent, viewerOwnerId: string): string {
+    if (agent.ownerId === viewerOwnerId) return "";
+    const handle = this.workspaces.handleOf(agent.ownerId);
+    // Everyone in a shared workspace has a handle. Without one the plain name stays, which only the owner's own agents
+    // resolve, so nothing can be misrouted.
+    return handle === null ? "" : `${handle}/`;
   }
 
   /**
@@ -349,9 +388,9 @@ export class Agents {
       const twins = this.db
         .query(
           `SELECT SUM(computer_id IS $computerId) AS here, SUM(computer_id IS NOT $computerId) AS elsewhere FROM agents
-           WHERE type = 'session' AND kind = $kind AND folder = $folder AND id != $id`,
+           WHERE type = 'session' AND kind = $kind AND folder = $folder AND id != $id AND owner_id = $ownerId`,
         )
-        .get({ kind: agent.kind, folder, computerId: agent.computerId, id: agent.id }) as { here: number | null; elsewhere: number | null };
+        .get({ kind: agent.kind, folder, computerId: agent.computerId, id: agent.id, ownerId: agent.ownerId }) as { here: number | null; elsewhere: number | null };
       // Another folder with the same name on this computer: the agent's own name tells them apart.
       if ((twins.here ?? 0) > 0) return `${client} (${agent.name})`;
       return (twins.elsewhere ?? 0) > 0 && agent.computer ? `${client} (${folder} on ${agent.computer})` : `${client} (${folder})`;
@@ -360,21 +399,44 @@ export class Agents {
     if (!kind) return agent.name;
     const twins = (
       this.db
-        .query("SELECT COUNT(*) AS n FROM agents WHERE type != 'session' AND kind = $kind AND id != $id")
-        .get({ kind: agent.kind, id: agent.id }) as { n: number }
+        .query(
+          "SELECT COUNT(*) AS n FROM agents WHERE type != 'session' AND kind = $kind AND id != $id AND owner_id = $ownerId",
+        )
+        .get({ kind: agent.kind, id: agent.id, ownerId: agent.ownerId }) as { n: number }
     ).n;
     return twins > 0 ? `${kind} (${agent.name})` : kind;
   }
 
   /**
-   * Each listed agent but `exceptId` as the agent list shows it: connected sessions by status (busy, waiting, idle),
-   * then apps and connectors, then offline sessions, alphabetical within each.
+   * What list_agents shows the agent: every listed agent it reaches, named as it addresses them. Connected sessions
+   * come first by status (busy, waiting, idle), then apps and connectors, then offline sessions, alphabetical within each.
    */
-  entries(exceptId?: string): DirectoryEntry[] {
-    return this.listed()
-      .filter((agent) => agent.id !== exceptId)
-      .map((agent) => this.entry(agent))
-      .sort((a, b) => order(a) - order(b) || compare(a.display, b.display) || compare(a.address, b.address));
+  entriesFor(viewer: Agent): DirectoryEntry[] {
+    const reachable = this.workspaces.reachable(viewer.id);
+    return this.sorted(
+      this.listed()
+        .filter((agent) => reachable.has(agent.id))
+        .map((agent) => this.entryFor(agent, viewer.ownerId)),
+    );
+  }
+
+  /** The agents a person sees, named as that person's agents address them: the person's own, and those in a workspace the person is in. */
+  entriesForPerson(personId: string): DirectoryEntry[] {
+    const visible = this.workspaces.visibleAgents(personId);
+    return this.sorted(
+      this.listed()
+        .filter((agent) => visible.has(agent.id))
+        .map((agent) => this.entryFor(agent, personId)),
+    );
+  }
+
+  /** An entry named for a viewer: see nameFor. */
+  entryFor(agent: Agent, viewerOwnerId: string): DirectoryEntry {
+    return { ...this.entry(agent), address: this.addressFor(agent, viewerOwnerId), display: this.nameFor(agent, viewerOwnerId) };
+  }
+
+  private sorted(entries: DirectoryEntry[]): DirectoryEntry[] {
+    return entries.sort((a, b) => order(a) - order(b) || compare(a.display, b.display) || compare(a.address, b.address));
   }
 
   /**
@@ -410,40 +472,63 @@ export class Agents {
   }
 
   /**
-   * The agent a sender means by `to`: an exact address, or a session's short name when only one session has it and no
-   * other person let the name go within the history window. Patterns are refused, since a message goes to one agent.
+   * The agent a sender means by `to`. A plain name always means one of the caller's owner's own agents, and
+   * `<handle>/<name>` one of that person's. Only an agent the caller reaches is found: any other answers exactly as a
+   * name nobody has. Patterns are refused, since a message goes to one agent.
    */
   resolve(to: unknown, callerId: string): Agent {
     if (typeof to !== "string" || to.trim() === "") throw new PorticoError("bad_request", "to must be an agent name.");
     if (isBroadcast(to)) {
       throw new PorticoError("bad_request", `"${to}" is a pattern. Name one agent from list_agents.`);
     }
-    const exact = this.byAddress(to);
-    if (exact) return exact;
-    if (!to.includes("@")) {
-      const named = (
-        this.db.query(`${SELECT} WHERE a.computer_id IS NOT NULL AND a.name = $name ORDER BY c.name`).all({
-          name: to,
-        }) as AgentRow[]
-      ).map(toAgent);
-      if (named.length === 1) {
-        const only = named[0]!;
-        if (!this.releasedByOther(to, only.ownerId)) return only;
-        throw new PorticoError(
-          "unknown_agent",
-          `The name "${to}" moved to a different person's agent recently. Use the full address to send there: ${addressOf(only)}.`,
-        );
-      }
-      if (named.length > 1) {
-        const addresses = named.map(addressOf).join(", ");
-        throw new PorticoError("unknown_agent", `"${to}" is on ${named.length} computers. Use one of: ${addresses}.`);
-      }
+    return this.resolveReached(to.trim(), this.require(callerId));
+  }
+
+  private resolveReached(to: string, caller: Agent): Agent {
+    const slash = to.indexOf("/");
+    const ownerId =
+      slash < 0
+        ? caller.ownerId
+        : ((this.db.query("SELECT id FROM people WHERE handle = $handle").get({ handle: to.slice(0, slash) }) as { id: string } | null)?.id ??
+          null);
+    const named = ownerId === null ? [] : this.ownedNamed(ownerId, to.slice(slash + 1));
+    const reached = named.filter((agent) => this.workspaces.reach(caller.id, agent.id));
+    if (reached.length === 1) return reached[0]!;
+    // A plain name is an app's or connector's whole address, so the app has it even when a session shares the name.
+    const app = reached.filter((agent) => agent.computerId === null);
+    if (app.length === 1) return app[0]!;
+    if (reached.length > 1) {
+      const addresses = reached.map((agent) => this.addressFor(agent, caller.ownerId)).join(", ");
+      throw new PorticoError("unknown_agent", `"${to}" is on ${reached.length} computers. Use one of: ${addresses}.`);
     }
-    const valid = this.listed()
-      .filter((agent) => agent.id !== callerId)
-      .map((agent) => this.display(agent))
+    // Said only of an agent the caller already knew: the two were in one Portico once. Anyone else's agent answers
+    // below, exactly as a name nobody has.
+    const before = named.filter((agent) => agent.id !== caller.id && this.workspaces.everShared(caller.id, agent.id));
+    if (before.length > 0) {
+      throw new PorticoError(
+        "not_allowed",
+        `You and \`${this.nameFor(before[0]!, caller.ownerId)}\` no longer share a Portico. list_agents shows who can be reached now.`,
+      );
+    }
+    const valid = this.entriesFor(caller)
+      .map((entry) => entry.display)
       .join(", ");
     throw new PorticoError("unknown_agent", `No agent named "${to}". Valid agents: ${valid || "none yet"}.`);
+  }
+
+  /**
+   * The person's agents an address names: `name@computer` is one session; a plain name is the person's app or connector
+   * with that name and every session of the person with it.
+   */
+  private ownedNamed(ownerId: string, address: string): Agent[] {
+    const at = address.indexOf("@");
+    const rows =
+      at < 0
+        ? this.db.query(`${SELECT} WHERE a.owner_id = $ownerId AND a.name = $name ORDER BY c.name`).all({ ownerId, name: address })
+        : this.db
+            .query(`${SELECT} WHERE a.owner_id = $ownerId AND a.name = $name AND c.name = $computer`)
+            .all({ ownerId, name: address.slice(0, at), computer: address.slice(at + 1) });
+    return (rows as AgentRow[]).map(toAgent);
   }
 
   /** Claude Code sessions are pushed to; Codex sessions, apps and connectors check their inbox. */
@@ -475,8 +560,10 @@ export class Agents {
     const outcome = this.db.transaction(() => {
       const same = this.db
         .query("SELECT agent_id, id FROM agent_runs WHERE computer_id = $computerId AND session_key = $key")
-        .get({ computerId: computer.id, key: reg.key }) as { agent_id: string; id: string } | null;
+        .get({ computerId: computer.id, key: sessionKeyHash(reg.key) }) as { agent_id: string; id: string } | null;
       if (same) {
+        // A revoked agent's own session comes back with the key it had: refused like any new session in the folder.
+        if (this.get(same.agent_id)?.revokedAt) throw new PorticoError("folder_off", REVOKED_SESSION(reg.repo, computer.name));
         this.presence.startRun(same.id);
         this.db.query("UPDATE agent_runs SET last_seen_at = $at, ended_at = NULL WHERE id = $id").run({ id: same.id, at });
         this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: same.agent_id, at });
@@ -493,15 +580,19 @@ export class Agents {
 
       const existing = this.db
         .query(
-          `SELECT id FROM agents WHERE type = 'session' AND computer_id = $computerId AND folder_id = $folderId AND kind = $kind`,
+          `SELECT id, revoked_at FROM agents WHERE type = 'session' AND computer_id = $computerId AND folder_id = $folderId AND kind = $kind`,
         )
-        .get({ computerId: computer.id, folderId: reg.folderId, kind: reg.client }) as { id: string } | null;
+        .get({ computerId: computer.id, folderId: reg.folderId, kind: reg.client }) as { id: string; revoked_at: string | null } | null;
+      if (existing?.revoked_at) {
+        throw new PorticoError("folder_off", REVOKED_SESSION(reg.repo, computer.name));
+      }
       let agentId = existing?.id;
       if (!agentId) {
         const base = sessionBaseName(reg.repo, reg.client);
-        const taken = new Set(this.sessionsOn(computer.id).map((s) => s.name));
+        // A name that reads like another session's on the computer, or like one of the owner's apps, is passed over.
+        const free = (candidate: string) => this.lookAlike(candidate, computer.ownerId, undefined, computer.id) === null;
         let name = base;
-        for (let n = 2; taken.has(name); n++) {
+        for (let n = 2; !free(name); n++) {
           if (n > MAX_DEDUPE) throw new PorticoError("rate_limited", `Too many sessions named ${base} on ${computer.name}.`);
           name = `${base}-${n}`;
         }
@@ -531,11 +622,11 @@ export class Agents {
           `INSERT INTO agent_runs (id, agent_id, computer_id, session_key, client, started_at, last_seen_at)
            VALUES ($id, $agentId, $computerId, $key, $client, $at, $at)`,
         )
-        .run({ id: runId, agentId, computerId: computer.id, key: reg.key, client: reg.client, at });
+        .run({ id: runId, agentId, computerId: computer.id, key: sessionKeyHash(reg.key), client: reg.client, at });
       this.log("run_started", { agent_id: agentId, run_id: runId });
       return { agent: this.require(agentId), runId, created: !existing };
     })();
-    this.changes.emit("agents");
+    this.changes.about({ people: [computer.ownerId] }, "agents");
     return outcome;
   }
 
@@ -543,9 +634,10 @@ export class Agents {
   sessionByKey(computerId: string, key: string): { agent: Agent; runId: string } | null {
     const row = this.db
       .query("SELECT agent_id, id FROM agent_runs WHERE computer_id = $computerId AND session_key = $key")
-      .get({ computerId, key }) as { agent_id: string; id: string } | null;
+      .get({ computerId, key: sessionKeyHash(key) }) as { agent_id: string; id: string } | null;
     const agent = row ? this.get(row.agent_id) : null;
-    return agent ? { agent, runId: row!.id } : null;
+    // A revoked agent's sessions are signed out: the key answers as one that was never registered.
+    return agent && agent.revokedAt === null ? { agent, runId: row!.id } : null;
   }
 
   /** The agent a run belongs to, or null when the run is gone. */
@@ -594,7 +686,7 @@ export class Agents {
     this.db.query("UPDATE agent_runs SET last_seen_at = $at, ended_at = $at WHERE id = $id").run({ id: runId, at });
     this.db.query("UPDATE agents SET last_seen_at = $at WHERE id = $id").run({ id: agentId, at });
     this.presence.endRun(agentId, runId);
-    this.changes.emit("agents");
+    this.changes.about({ agents: [agentId] }, "agents");
   }
 
   /** Writes a session's last_seen_at for a status report, at most once a minute, on the agent and its run. */
@@ -609,16 +701,15 @@ export class Agents {
   // ---- apps and connectors ----
 
   /**
-   * An app or connector agent. Throws `conflict` when another agent has the name, or another person let the name go
-   * within the history window.
+   * An app or connector agent. Throws `conflict` when another agent of the owner has the name.
    */
   create(input: { ownerId: string; name: unknown; kind: unknown; type: "app" | "connector"; description?: unknown }): Agent {
     const name = checkAgentName(input.name);
     if (!AGENT_KINDS.some((kind) => kind === input.kind)) {
       throw new PorticoError("bad_request", `kind must be one of: ${AGENT_KINDS.join(", ")}.`);
     }
-    if (this.nameTaken(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
-    this.refuseReleased(name, input.ownerId);
+    requireUnreservedName(name);
+    this.requireFreeName(name, input.ownerId, undefined, null);
     const id = this.newId();
     this.insert({
       id,
@@ -635,13 +726,35 @@ export class Agents {
     });
     this.log("agent_added", { agent_id: id, kind: input.kind, type: input.type });
     this.activity?.record("agent_joined", { agentId: id, personId: input.ownerId, detail: { via: input.type } });
-    this.changes.emit("agents");
+    this.changes.about({ people: [input.ownerId] }, "agents");
     return this.require(id);
   }
 
   /** Whether create would give the person's new app or connector this name. */
   nameFree(name: string, ownerId: string): boolean {
-    return !this.nameTaken(name) && !this.releasedByOther(name, ownerId);
+    return this.lookAlike(name, ownerId) === null;
+  }
+
+  /**
+   * Refuses a name another agent of the same person has, or one that reads the same at a glance (look-alike
+   * characters folded, as for handles): `claude-c0de` beside `claude-code` would pass for it in every list.
+   */
+  private requireFreeName(name: string, ownerId: string, exceptId: string | undefined, computerId: string | null): void {
+    const other = this.lookAlike(name, ownerId, exceptId, computerId);
+    if (other === null) return;
+    throw new PorticoError("conflict", other === name ? `The name ${name} is already in use.` : `The name ${name} reads too much like ${other}, another agent of the same person. Pick a name that can't be mistaken for the other.`);
+  }
+
+  /**
+   * The name of another agent of the owner that this name is or reads like, or null. An app's or connector's name is
+   * its whole address, so every agent of the owner counts. A session's address ends in its computer, so only the
+   * sessions on that computer and the owner's apps count: one repo on two computers keeps one name.
+   */
+  private lookAlike(name: string, ownerId: string, exceptId?: string, computerId: string | null = null): string | null {
+    const key = nameKey(name);
+    const rows = this.db.query("SELECT id, name, computer_id FROM agents WHERE owner_id = $ownerId").all({ ownerId }) as { id: string; name: string; computer_id: string | null }[];
+    const others = rows.filter((row) => row.id !== exceptId && (computerId === null || row.computer_id === null || row.computer_id === computerId));
+    return others.find((row) => row.name === name)?.name ?? others.find((row) => nameKey(row.name) === key)?.name ?? null;
   }
 
   /** Mints a token for the agent, returned only here and stored only as a hash. */
@@ -664,14 +777,15 @@ export class Agents {
     return token;
   }
 
-  /** The agent an unexpired token of one of these kinds belongs to. */
+  /** The agent an unexpired token of one of these kinds belongs to. Never a revoked agent. */
   byToken(token: string, kinds: ("api" | "access" | "refresh")[] = ["api", "access"]): Agent | null {
     const row = this.db
       .query("SELECT agent_id, kind, expires_at FROM agent_tokens WHERE token_hash = $hash")
       .get({ hash: hashSecret(token) }) as { agent_id: string; kind: "api" | "access" | "refresh"; expires_at: string | null } | null;
     if (!row || !kinds.includes(row.kind)) return null;
     if (row.expires_at !== null && Date.parse(row.expires_at) <= this.now().getTime()) return null;
-    return this.get(row.agent_id);
+    const agent = this.get(row.agent_id);
+    return agent && agent.revokedAt === null ? agent : null;
   }
 
   /** Deletes one token, e.g. a refresh token once it's used. */
@@ -699,8 +813,8 @@ export class Agents {
 
   /**
    * Name and description edits go live at once. A name already in use answers `conflict`: for a session, a name on its
-   * computer or one another person's agent goes by; for an app or connector, any agent's name. So does a name another
-   * person let go within the history window. A rename releases the old name.
+   * computer, or the name of the owner's own app or connector; for an app or connector, the name of any agent of the
+   * owner.
    */
   update(personId: string, agentId: string, changes: AgentChanges): Agent {
     const agent = this.requireManaged(personId, agentId);
@@ -711,13 +825,8 @@ export class Agents {
     if (changes.name !== undefined) {
       const name = checkAgentName(changes.name);
       if (name !== agent.name) {
-        const taken = agent.computerId
-          ? this.db
-              .query("SELECT 1 FROM agents WHERE computer_id = $computerId AND name = $name")
-              .get({ computerId: agent.computerId, name }) !== null || this.usedByOther(name, agent.ownerId)
-          : this.nameTaken(name, agent.id);
-        if (taken) throw new PorticoError("conflict", `The name ${name} is already in use.`);
-        this.refuseReleased(name, agent.ownerId);
+        requireUnreservedName(name);
+        this.requireFreeName(name, agent.ownerId, agent.id, agent.computerId);
         sets.push("name = $name");
         bindings.name = name;
         renamed = true;
@@ -736,6 +845,13 @@ export class Agents {
       sets.push("approval_required = $approval");
       bindings.approval = changes.approvalRequired ? 1 : 0;
     }
+    if (changes.outboundHold !== undefined) {
+      if (typeof changes.outboundHold !== "boolean") {
+        throw new PorticoError("bad_request", "outboundHold must be true or false.");
+      }
+      sets.push("outbound_hold = $outbound");
+      bindings.outbound = changes.outboundHold ? 1 : 0;
+    }
     if (changes.joinFromFolder !== undefined) {
       if (typeof changes.joinFromFolder !== "boolean") {
         throw new PorticoError("bad_request", "joinFromFolder must be true or false.");
@@ -746,16 +862,18 @@ export class Agents {
       this.computers.setFolder(agent.computerId, agent.folderId, agent.folder ?? "session", changes.joinFromFolder);
     }
     if (sets.length > 0) this.db.query(`UPDATE agents SET ${sets.join(", ")} WHERE id = $id`).run(bindings);
-    if (renamed) releaseNames(this.db, agent.ownerId, [{ scope: "agent", name: agent.name }], this.now());
     const updated = this.require(agent.id);
     const record = (
-      kind: "renamed" | "description_changed" | "approval_switched" | "folder_switched",
+      kind: "renamed" | "description_changed" | "approval_switched" | "folder_switched" | "outbound_switched",
       detail: Record<string, string | boolean>,
     ) => this.activity?.record(kind, { agentId: agent.id, personId, detail });
     if (renamed) record("renamed", { from: agent.name, to: updated.name });
     if (described) record("description_changed", { by: "person" });
     if (typeof changes.approvalRequired === "boolean" && changes.approvalRequired !== agent.approvalRequired) {
       record("approval_switched", { on: changes.approvalRequired });
+    }
+    if (typeof changes.outboundHold === "boolean" && changes.outboundHold !== agent.outboundHold) {
+      record("outbound_switched", { on: changes.outboundHold });
     }
     if (typeof changes.joinFromFolder === "boolean" && changes.joinFromFolder !== folderBefore) {
       record("folder_switched", { on: changes.joinFromFolder });
@@ -764,7 +882,7 @@ export class Agents {
       this.log("agent_renamed", { agent_id: agent.id });
       this.renamed(updated);
     }
-    this.changes.emit("agents", "threads", "approvals");
+    this.changes.about({ agents: [agent.id] }, "agents", "threads", "approvals");
     return updated;
   }
 
@@ -795,7 +913,7 @@ export class Agents {
     this.db.query(`UPDATE agents SET ${sets.join(", ")} WHERE id = $id`).run(bindings);
     if (described) this.activity?.record("description_changed", { agentId: agent.id, detail: { by: "agent" } });
     this.log("agent_profile_updated", { agent_id: agent.id, description: described, doing: changes.doing !== undefined });
-    this.changes.emit("agents");
+    this.changes.about({ agents: [agent.id] }, "agents");
     return this.require(agent.id);
   }
 
@@ -811,18 +929,51 @@ export class Agents {
     return this.computers.folderJoins(agent.computerId, agent.folderId) !== false;
   }
 
-  /** Removes the agent, its credentials and its threads, and signs it out. The name is released. */
+  /**
+   * Removes the agent, its credentials and its threads, and signs it out. The directory row goes first; then the
+   * agent's threads and messages are deleted in each workspace the agent was in.
+   */
   remove(personId: string, agentId: string): Agent {
     const agent = this.requireManaged(personId, agentId);
-    this.db.transaction(() => {
-      releaseNames(this.db, agent.ownerId, [{ scope: "agent", name: agent.name }], this.now());
-      this.db.query("DELETE FROM agents WHERE id = $id").run({ id: agent.id });
-    })();
+    const clearContent = this.content.gather([agent.id]);
+    this.db.query("DELETE FROM agents WHERE id = $id").run({ id: agent.id });
+    clearContent();
     this.activity?.record("agent_removed", { personId, detail: { name: addressOf(agent), kind: agent.kind } });
     this.forget([agent.id]);
     this.log("agent_removed", { agent_id: agent.id });
-    this.changes.emit("agents", "threads", "approvals", "computers");
+    this.changes.about({ people: [personId, agent.ownerId] }, "agents", "threads", "approvals", "computers");
     return agent;
+  }
+
+  /**
+   * Revokes the agent, in one step: its tokens are deleted, so every call with one fails at once; it leaves every
+   * Portico it is in, its owner's own included; and its sessions are signed out. The agent's row and conversations
+   * stay, readable to its person, until the person removes the agent. Revoking can't be undone: an app joins again as
+   * a new agent. Only the person who manages the agent can.
+   */
+  revoke(personId: string, agentId: string): Agent {
+    const agent = this.requireManaged(personId, agentId);
+    if (agent.revokedAt !== null) return agent;
+    this.db.transaction(() => {
+      this.db.query("UPDATE agents SET revoked_at = $at WHERE id = $id").run({ id: agent.id, at: this.iso() });
+      this.db.query("DELETE FROM agent_tokens WHERE agent_id = $id").run({ id: agent.id });
+      this.db.query("DELETE FROM oauth_codes WHERE agent_id = $id").run({ id: agent.id });
+      this.db.query("DELETE FROM wake_urls WHERE agent_id = $id").run({ id: agent.id });
+      this.db.query("DELETE FROM event_subscriptions WHERE agent_id = $id").run({ id: agent.id });
+      // What the agent asked a person, and what was asked about putting the agent somewhere, stops waiting.
+      this.db
+        .query(
+          `UPDATE consent_requests SET status = 'expired', code = NULL
+           WHERE status IN ('pending', 'allowed') AND (agent_id = $id OR json_extract(detail, '$.agentId') = $id)`,
+        )
+        .run({ id: agent.id });
+    })();
+    this.workspaces.agentRevoked(agent.id, personId);
+    this.activity?.record("agent_revoked", { agentId: agent.id, personId, detail: { name: addressOf(agent) } });
+    this.forget([agent.id]);
+    this.log("agent_revoked", { agent_id: agent.id });
+    this.changes.about({ people: [personId, agent.ownerId] }, "agents", "threads", "approvals", "computers", "workspaces");
+    return this.require(agent.id);
   }
 
   /** Closes the streams of agents whose rows are gone and drops their live state. */
@@ -849,47 +1000,13 @@ export class Agents {
 
   // ---- helpers ----
 
-  /**
-   * Whether an app or connector can't take the name: another app or connector has it, or a session does. A session's
-   * short name is how agents address it, so an app taking it would receive that session's messages.
-   */
-  private nameTaken(name: string, exceptId?: string): boolean {
-    const row = this.db
-      .query("SELECT id FROM agents WHERE name = $name AND id != $exceptId LIMIT 1")
-      .get({ name, exceptId: exceptId ?? "" });
-    return row !== null;
-  }
-
-  /**
-   * Whether another person's agent goes by the name. A session taking it would be one rename or removal away from
-   * receiving that agent's messages.
-   */
-  private usedByOther(name: string, ownerId: string): boolean {
-    return this.db.query("SELECT 1 FROM agents WHERE name = $name AND owner_id != $ownerId LIMIT 1").get({ name, ownerId }) !== null;
-  }
-
-  /** Whether another person let the name go within the history window, so the name still stays with them. */
-  private releasedByOther(name: string, ownerId: string): boolean {
-    return releasedByOther(this.db, "agent", name, ownerId, this.now());
-  }
-
-  /** Throws `conflict` when another person let the name go within the history window. */
-  private refuseReleased(name: string, ownerId: string): void {
-    if (this.releasedByOther(name, ownerId)) {
-      throw new PorticoError(
-        "conflict",
-        `The name ${name} was in use until recently. A released name stays reserved for ${LIMITS.historyDays} days.`,
-      );
-    }
-  }
-
   private sessionsOn(computerId: string): Agent[] {
     return (this.db.query(`${SELECT} WHERE a.computer_id = $computerId ORDER BY a.name`).all({ computerId }) as AgentRow[]).map(
       toAgent,
     );
   }
 
-  private insert(a: Omit<Agent, "computer" | "approvalRequired" | "doing" | "doingAt">): void {
+  private insert(a: Omit<Agent, "computer" | "approvalRequired" | "outboundHold" | "unproven" | "revokedAt" | "doing" | "doingAt">): void {
     this.db
       .query(
         `INSERT INTO agents (id, owner_id, name, kind, type, description, computer_id, folder, folder_id,
@@ -910,7 +1027,50 @@ export class Agents {
         createdAt: a.createdAt,
         lastSeenAt: a.lastSeenAt,
       });
+    // A session on a computer whose join nobody vouched for starts unproven, like an app that joined that way.
+    if (a.computerId) this.db.query("UPDATE agents SET unproven = (SELECT unproven FROM computers WHERE id = $computerId) WHERE id = $id").run({ id: a.id, computerId: a.computerId });
+    this.workspaces.agentCreated(a.id, a.ownerId);
   }
+
+  /** Marks an agent, or a computer and so each session started there, as joined without the person's "I started this myself". */
+  markUnproven(target: { agentId: string } | { computerId: string }): void {
+    if ("agentId" in target) this.db.query("UPDATE agents SET unproven = 1 WHERE id = $id").run({ id: target.agentId });
+    else this.db.query("UPDATE computers SET unproven = 1 WHERE id = $id").run({ id: target.computerId });
+  }
+
+  /**
+   * The person chose Always allow for the agent: nothing more of it is held for being new. For a session on a computer
+   * that covers the computer: every session there, and each one started there later. Returns the agents covered.
+   */
+  proven(agentId: string): string[] {
+    const row = this.db.query("SELECT computer_id FROM agents WHERE id = $id").get({ id: agentId }) as { computer_id: string | null } | null;
+    const computerId = row?.computer_id ?? null;
+    if (!computerId) {
+      this.db.query("UPDATE agents SET unproven = 0 WHERE id = $id").run({ id: agentId });
+      this.changes.about({ agents: [agentId] }, "agents");
+      return [agentId];
+    }
+    return this.computerProven(computerId, true);
+  }
+
+  /**
+   * Always allow for a computer, on or off. Off again, each session there, and each one started later, is asked about
+   * once more for every agent it hasn't been allowed to write to. Returns the sessions there.
+   */
+  computerProven(computerId: string, proven: boolean): string[] {
+    const unproven = proven ? 0 : 1;
+    this.db.query("UPDATE computers SET unproven = $unproven WHERE id = $id").run({ id: computerId, unproven });
+    this.db.query("UPDATE agents SET unproven = $unproven WHERE computer_id = $id").run({ id: computerId, unproven });
+    const ids = (this.db.query("SELECT id FROM agents WHERE computer_id = $id").all({ id: computerId }) as { id: string }[]).map((r) => r.id);
+    this.changes.about({ agents: ids }, "agents", "computers");
+    return ids;
+  }
+
+  /**
+   * Set by portico.ts, and called where a person allowed a join (the consent page, a connector's sign-in): a new app or
+   * connector is on the person's account, and the person is told at once.
+   */
+  onJoined: ((agent: Agent) => void) | null = null;
 
   private iso(offsetMs = 0): string {
     return new Date(this.now().getTime() + offsetMs).toISOString();

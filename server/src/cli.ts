@@ -2,29 +2,29 @@
 import { doctorCommand } from "./commands/doctor";
 import type { CliIo } from "./commands/io";
 import { joinCommand } from "./commands/join";
+import { terminalCode } from "../../plugin-claude-code/src/join";
 import { leaveCommand } from "./commands/leave";
 import { serveCommand } from "./commands/serve";
 import { setupCommand } from "./commands/setup";
-import { workspaceCommand } from "./commands/workspace";
+import { newSecretsKey } from "./core/secrets";
 
 const USAGE = `Usage: portico <command>
 
 Commands:
-  serve             Run Portico. Every setting is optional: PORT, PORTICO_DB_PATH,
-                    PORTICO_PUBLIC_URL and PORTICO_PLUGIN_SOURCE.
+  serve             Run Portico. Needs PORTICO_SECRETS_KEY: the key that encrypts the keys
+                    and secrets Portico stores. Every other setting is optional: PORT,
+                    PORTICO_DATA_DIR (the data folder, ./data unless set),
+                    PORTICO_PUBLIC_URL and PORTICO_PLUGIN_SOURCE. With PORTICO_DESCOPE_PROJECT_ID, people sign
+                    in with Descope and signing in creates the account.
   setup [--reset]   Print a one-time link that creates the owner account. With --reset,
-                    print a new link.
+                    print a new link. Not used with Descope sign-in.
+  key               Print a new key for PORTICO_SECRETS_KEY. Keep the key with the
+                    server's settings, never in the data folder.
   doctor            Check that Portico answers at the public URL and that setup is done.
-  join '<line>'     Join this computer to Portico with a join line from Add agent.
+  join <address>    Ask to join this computer to a Portico server: prints a link for a person
+                    to allow on one page, then asks for the 4-digit code that page shows.
+                    Outside a terminal, join --code <4 digits> hands the code in.
   leave             Take this computer off Portico and undo the join.
-  workspace create <name> | import <name> <folder> | link <name> <person> |
-            remove <name> | list
-                    Hosted Portico only (PORTICO_HOSTED_DOMAIN): make a workspace and print
-                    the workspace's setup link, make one from a single Portico's data
-                    folder (portico.db and signing.key), print a one-use link that moves a
-                    person from a password to sign-in on the base domain, remove a
-                    workspace for good (asks for --confirm <name> first), or list the
-                    workspaces.
   help              Show this message.
 `;
 
@@ -32,6 +32,7 @@ const io: CliIo = {
   env: process.env,
   cwd: process.cwd(),
   out: (line) => console.log(line),
+  tty: process.stdout.isTTY === true,
   err: (line) => console.error(line),
 };
 
@@ -42,12 +43,13 @@ async function main(argv: string[]): Promise<number | "running"> {
       return serveCommand(io);
     case "setup":
       return setupCommand(args, io);
+    case "key":
+      io.out(newSecretsKey());
+      return 0;
     case "doctor":
       return doctorCommand(args, io);
     case "join":
-      return joinCommand(args, io);
-    case "workspace":
-      return workspaceCommand(args, io);
+      return joinCommand(args, io, { readCode: terminalCode() });
     case "leave":
       return leaveCommand(args, io);
     case undefined:

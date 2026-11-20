@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { addAppAgent, addComputer, addOwner, callAs, flush, makePortico, openSessionStream } from "./helpers";
+import { addAppAgent, addComputer, addOwner, callAs, flush, makePortico, openSessionStream, sseReader } from "./helpers";
 
 async function setup() {
-  const p = makePortico({ newNonce: () => "nonce-1" });
+  const p = makePortico();
   const chris = await addOwner(p);
   const { computer, token } = addComputer(p, chris);
   const grok = addAppAgent(p, chris, "grok", { kind: "grok-bot" });
@@ -14,7 +14,7 @@ describe("a session's live stream", () => {
     const { p, token, grok } = await setup();
     const { hello, events } = await openSessionStream(p, token, { key: "key-000001", repo: "api" });
     expect(hello).toEqual({ address: "api-claude@macbook", name: "api-claude", computer: "macbook" });
-    expect(p.agents.entries().find((e) => e.display === "api-claude")?.status).toBe("idle");
+    expect(p.agents.entriesFor(grok.agent).find((e) => e.display === "api-claude")?.status).toBe("idle");
     await callAs(p, { token: grok.token }, "POST", "/api/agent/messages", { to: "api-claude", subject: "s", text: "t" });
     expect((await events.next()).event).toBe("nudge");
     await events.cancel();
@@ -24,7 +24,7 @@ describe("a session's live stream", () => {
     const { p, chris, token, grok } = await setup();
     expect((await callAs(p, { token: grok.token }, "GET", "/api/agent/stream")).status).toBe(403);
     const { events } = await openSessionStream(p, token, { key: "key-000001", repo: "api", folderId: "d".repeat(64) });
-    const agent = p.agents.resolve("api-claude", "x");
+    const agent = p.agents.byAddress("api-claude@macbook")!;
     p.agents.update(chris.id, agent.id, { joinFromFolder: false });
     const res = await p.app.request("/api/agent/stream?repo=api", {
       headers: { authorization: `Bearer ${token}`, "x-portico-session": "key-000002", "x-portico-folder": "d".repeat(64) },
@@ -39,7 +39,7 @@ describe("a session's live stream", () => {
     const older = await openSessionStream(p, token, { key: "key-000001", repo: "api" });
     const newer = await openSessionStream(p, token, { key: "key-000002", repo: "api" });
     expect(newer.hello).toEqual(older.hello);
-    const agent = p.agents.resolve("api-claude", "x");
+    const agent = p.agents.byAddress("api-claude@macbook")!;
     expect(p.agents.all().filter((a) => a.type === "session")).toHaveLength(1);
     expect(p.agentStreams.liveRuns(agent.id)).toBe(2);
     await callAs(p, { token: grok.token }, "POST", "/api/agent/messages", { to: "api-claude", subject: "s", text: "t" });
@@ -66,7 +66,7 @@ describe("a session's live stream", () => {
       return ((await res.json()) as { delivery: string }).delivery;
     };
     const plain = await openSessionStream(p, token, { key: "key-000001", repo: "api", client: "codex" });
-    const agent = p.agents.resolve("api-codex", "x");
+    const agent = p.agents.byAddress("api-codex@macbook")!;
     expect(await send("first")).toBe("queued");
     expect(p.agentStreams.canWake(agent.id)).toBe(false);
     // The first message still waits, so each new stream starts with a nudge.
@@ -92,7 +92,7 @@ describe("a session's live stream", () => {
     const two = await openSessionStream(p, token, { key: "key-000002", repo: "api" });
     await callAs(p, { token, key: "key-000001" }, "POST", "/api/agent/status", { status: "busy", doing: "Running tests" });
     await callAs(p, { token, key: "key-000002" }, "POST", "/api/agent/status", { status: "idle" });
-    const agent = p.agents.resolve("api-claude", "x");
+    const agent = p.agents.byAddress("api-claude@macbook")!;
     expect(p.agents.entry(agent)).toMatchObject({ status: "busy", doing: "Running tests" });
     await one.events.cancel();
     await flush();
@@ -117,7 +117,7 @@ describe("a session's live stream", () => {
     await flush();
     // The closed terminal's last heartbeat arrives late: it doesn't bring Working back.
     await callAs(p, { token, key: "key-000001" }, "POST", "/api/agent/status", { status: "busy", doing: "Tests" });
-    expect(p.agents.entry(p.agents.resolve("api-claude", "x")).status).toBe("idle");
+    expect(p.agents.entry(p.agents.byAddress("api-claude@macbook")!).status).toBe("idle");
     await two.events.cancel();
   });
 
@@ -133,7 +133,7 @@ describe("a session's live stream", () => {
   test("a rename reaches the open stream", async () => {
     const { p, chris, token } = await setup();
     const { events } = await openSessionStream(p, token, { key: "key-000001", repo: "api" });
-    p.agents.update(chris.id, p.agents.resolve("api-claude", "x").id, { name: "billing-claude" });
+    p.agents.update(chris.id, p.agents.byAddress("api-claude@macbook")!.id, { name: "billing-claude" });
     expect(await events.next()).toEqual({
       event: "renamed",
       data: { address: "billing-claude@macbook", name: "billing-claude", computer: "macbook" },
@@ -141,23 +141,24 @@ describe("a session's live stream", () => {
     await events.cancel();
   });
 
-  test("a pop-up session gets held messages for its owner, and its answer decides them", async () => {
+  test("a held message goes to no stream: it waits for the person in the dashboard, and the stream ignores a pop-up header", async () => {
     const { p, chris, token, grok } = await setup();
     const muse = addAppAgent(p, chris, "muse", { approvalRequired: true });
-    const { events } = await openSessionStream(p, token, { key: "key-000001", repo: "api", popup: true });
+    const res = await p.app.request("/api/agent/stream?repo=api", {
+      headers: { authorization: `Bearer ${token}`, "x-portico-session": "key-000001", "x-portico-folder": "a".repeat(64), "x-portico-popup": "1" },
+    });
+    const events = sseReader(res);
+    expect((await events.next()).event).toBe("hello");
     const sent = (await (
       await callAs(p, { token: grok.token }, "POST", "/api/agent/messages", { to: "muse", subject: "Add the doc link", text: "t" })
     ).json()) as { message: { id: string } };
-    const request = await events.next();
-    expect(request).toMatchObject({ event: "approval_request", data: { messageId: sent.message.id, from: "grok", to: "muse", nonce: "nonce-1" } });
-    const auth = { token, key: "key-000001" };
-    expect((await callAs(p, auth, "POST", `/api/agent/approvals/${sent.message.id}`, { nonce: "wrong", decision: "allow_once" })).status).toBe(403);
-    const ok = await callAs(p, auth, "POST", `/api/agent/approvals/${sent.message.id}`, { nonce: "nonce-1", decision: "always_allow" });
-    expect(ok.status).toBe(200);
-    expect(p.approvals.allowListFor(chris.id, muse.agent.id)).toHaveLength(1);
     await flush();
-    expect(await events.next()).toEqual({ event: "approval_closed", data: { messageId: sent.message.id, outcome: "allowed" } });
-    expect((await callAs(p, auth, "POST", `/api/agent/approvals/${sent.message.id}`, { nonce: "nonce-1", decision: "deny" })).status).toBe(409);
+    await expect(events.next(200)).rejects.toThrow("timed out");
+    // The route that took pop-up answers is gone.
+    const answer = await callAs(p, { token, key: "key-000001" }, "POST", `/api/agent/approvals/${sent.message.id}`, { nonce: "nonce-1", decision: "allow_once" });
+    expect(answer.status).toBe(404);
+    expect(p.approvals.heldFor(chris.id).map((m) => m.id)).toEqual([sent.message.id]);
+    expect(p.approvals.allowListFor(chris.id, muse.agent.id)).toHaveLength(0);
     await events.cancel();
   });
 

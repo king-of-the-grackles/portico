@@ -1,18 +1,17 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, type CallToolResult, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { ApprovalPanels } from "./approvals";
 import { frameNotice, InboxDelivery, stopNotice } from "./delivery";
 import { INSTRUCTIONS } from "./instructions";
 import { errorName, type Logger } from "./log";
-import type { DialogRunner } from "./popup";
 import type { Inbox, PorticoClient, StatusReport, StreamRegistration } from "./portico-client";
 import { type InboxSocket, SocketError } from "./socket";
 import type { SessionWatcher } from "./status";
 import { StreamClient, type StreamClientOptions } from "./stream";
 import { inboxText, runTool, TOOLS, WAIT_HINT, WAKE_HINT } from "./tools";
+import { PORTICO_TOOLS } from "./portico-tools";
 
 export const SERVER_NAME = "portico";
-export const SERVER_VERSION = "0.8.3";
+export const SERVER_VERSION = "0.11.0";
 
 /**
  * A Codex conversation whose status Codex doesn't report shows available after this long with no Portico tool call, in
@@ -31,7 +30,7 @@ export const FOLDER_OFF_NOTE =
 export const JOINING_NOTE = "Portico hasn't registered this session yet. Try again in a few seconds.";
 
 /** What a tool call gets on a computer that hasn't joined Portico. */
-export const NOT_JOINED_NOTE = "This computer hasn't joined Portico. To join, paste a join line from Portico (Add agent › Claude Code).";
+export const NOT_JOINED_NOTE = "This computer hasn't joined Portico. To join, run /portico:join with the Portico server's address, such as /portico:join https://portico.example.com.";
 
 /** Posted into a session that joined while open: the computer joined Portico, and Portico registered the session. */
 export function joinedNotice(name: string): string {
@@ -87,6 +86,7 @@ export function porticoPrompt(inbox: Inbox): string {
  * decision whose reason Codex takes as the next prompt, so the session handles the messages without being asked.
  */
 export function stopHookOutput(inbox: Inbox): string {
+  // A notice from Portico alone keeps no conversation going: it rides along with the next message or check.
   if (inbox.messages.length === 0 && inbox.updates.length === 0) return "";
   return JSON.stringify({ decision: "block", reason: porticoPrompt(inbox) });
 }
@@ -139,8 +139,6 @@ export interface PorticoPluginDeps {
   registration?: () => Promise<StreamRegistration>;
   /** Reports the session's status. Started by the first hello, told to resend on each later one, stopped with the plugin. */
   watcher?: Pick<SessionWatcher, "start" | "stop" | "resend"> | null;
-  /** Shows approval pop-ups. Null or absent, the session never declares pop-ups. */
-  popup?: DialogRunner | null;
   /** The folder's switch. Absent, the folder counts as on. */
   folder?: FolderSwitch;
   /**
@@ -152,8 +150,6 @@ export interface PorticoPluginDeps {
   joining?: boolean;
   /** Codex only: makes the link to the conversation, given the plugin's hooks. Absent, Portico can't start turns. */
   conversation?: (hooks: ConversationHooks) => ConversationLink;
-  /** Test override for the pauses before retrying a pop-up's answer. */
-  answerRetryMs?: number[];
   /** Test override for the pauses before retrying a post the socket didn't take. */
   deliveryRetryMs?: number[];
   /** Test overrides for the live stream. */
@@ -173,7 +169,7 @@ export interface PorticoPlugin {
 const SAFE_NAME = /^[a-z0-9][a-z0-9@.-]{0,120}$/;
 
 /**
- * The plugin's MCP server: the seven Portico tools, and delivery through Claude Code's inbox socket. In a folder that
+ * The plugin's MCP server: the agent tools and the Portico tools, and delivery through Claude Code's inbox socket. In a folder that
  * is off Portico, the session stays quiet: no tools, a short note for any call, and no retries.
  */
 export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
@@ -203,7 +199,10 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
       },
     }) ?? null;
   // These replace a waiting server's handlers.
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: quiet === null || host.client === "codex" ? TOOLS : [] }));
+  // The whole list from the start: every Portico server has Porticos. Quiet (not joined, or the folder is off) offers none.
+  server.setRequestHandler(ListToolsRequestSchema, () => ({
+    tools: quiet === null || host.client === "codex" ? [...TOOLS, ...PORTICO_TOOLS] : [],
+  }));
   server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     // The link's own call, finding which conversation this server belongs to: not the model's, and never run.
@@ -270,7 +269,7 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
       const text = stopHookOutput(pending);
       if (!text) return NO_DECISION;
       await client.ackDeliveries(
-        { messages: pending.messages.map((m) => m.id), updates: pending.updates.map((u) => u.message_id) },
+        { messages: pending.messages.map((m) => m.id), updates: pending.updates.map((u) => u.message_id), notices: (pending.notices ?? []).map((n) => n.id) },
         { signal, timeoutMs: STOP_HOOK_MS },
       );
       return signal.aborted ? NO_DECISION : { content: [{ type: "text", text }] };
@@ -335,23 +334,14 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
     void post(`This session is now \`${name}\` on Portico (address \`${address}\`). Other agents send messages to that name.`);
   };
 
-  const panels = new ApprovalPanels({
-    client,
-    runner: deps.popup ?? null,
-    log,
-    retryMs: deps.answerRetryMs,
-    // A panel failed to show: reconnect without declaring pop-ups, so Portico hands the request to another session.
-    onUnavailable: () => stream.reconnect(),
-  });
-
   const stream: StreamClient = new StreamClient({
-    // Pop-ups and waking are declared on each open, so a session whose panel failed stops declaring pop-ups on its next
-    // connection, and one whose Codex conversation turned up declares waking.
+    // Waking is declared on each open, so a session whose Codex conversation turned up declares waking on its next
+    // connection.
     open: async (signal) => {
       await link?.settled(CONVERSATION_WAIT_MS);
       const registration = deps.registration ? await deps.registration() : undefined;
       declaredWake = link?.canWake ?? false;
-      return client.openStream(signal, registration, { popup: panels.available, wake: declaredWake });
+      return client.openStream(signal, registration, { wake: declaredWake });
     },
     onEvent: (event, data) => {
       if (event === "hello") onHello(data);
@@ -360,11 +350,7 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
         void delivery?.run();
         link?.nudge();
       }
-      else if (event === "approval_request") panels.request(data);
-      else if (event === "approval_closed") panels.closed(data);
     },
-    // Portico sends open requests again on reconnect, to whichever session it then elects on the computer.
-    onDisconnect: () => panels.closeAll(),
     onStop: (stop) => {
       // Delivery is over for good too: a retry armed by an earlier socket failure must not peek, post or ack now.
       delivery?.stop();
@@ -397,7 +383,6 @@ export function createPorticoPlugin(deps: PorticoPluginDeps): PorticoPlugin {
       delivery?.stop();
       link?.stop();
       clearTimeout(codexIdleTimer);
-      panels.closeAll();
       await stream.stop();
     },
     notice: (text) => void post(text),
@@ -421,7 +406,7 @@ export function createWaitingServer(host: Host = CLAUDE_CODE_HOST): Server {
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: { listChanged: true } }, ...(codex ? { instructions: host.instructions } : {}) },
   );
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: codex ? TOOLS : [] }));
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: codex ? [...TOOLS, ...PORTICO_TOOLS] : [] }));
   server.setRequestHandler(CallToolRequestSchema, (request) =>
     isStopHook(host, request.params.name, (request.params.arguments ?? {}) as Record<string, unknown>)
       ? NO_DECISION

@@ -3,7 +3,7 @@ import { PorticoClient } from "../src/portico-client";
 import type { OwnSession } from "../src/registry";
 import { SessionWatcher } from "../src/status";
 import { runTool } from "../src/tools";
-import { agentAt, captureLog, connected, joinTestComputer, startPortico, startSession, type TestPortico, waitFor } from "./helpers";
+import { agentAt, captureLog, connected, joinTestComputer, startPortico, startSession, type TestPortico, waitFor, computerNamed } from "./helpers";
 
 let p: TestPortico;
 let token: string;
@@ -130,7 +130,7 @@ test("the status watcher starts on the first hello, resends on a later hello, an
   expect(calls).toEqual(["start", "resend"]);
 
   // The computer is removed: the reconnect gets 401, and the stream stops for good.
-  p.agents.forget(p.computers.remove(p.computers.byName("macbook")!.id));
+  p.agents.forget(p.computers.remove(computerNamed(p, "macbook")!.id));
   await waitFor(() => calls.length === 3, 3000);
   expect(calls).toEqual(["start", "resend", "stop"]);
 });
@@ -138,8 +138,8 @@ test("the status watcher starts on the first hello, resends on a later hello, an
 test("a removed computer's session is told to join again", async () => {
   const { sock } = await computerPlugin({ key: "key-aaaaaaaa", repo: "dialog", folderId: "a".repeat(64) });
   await waitFor(() => connected(p, "dialog-claude@macbook"), 3000);
-  p.agents.forget(p.computers.remove(p.computers.byName("macbook")!.id));
+  p.agents.forget(p.computers.remove(computerNamed(p, "macbook")!.id));
   await waitFor(() => sock.posts.length === 1, 3000);
   expect(sock.posts[0]!.content).toContain("Portico no longer accepts this computer's token");
-  expect(sock.posts[0]!.content).toContain("Join again with a new join line");
+  expect(sock.posts[0]!.content).toContain("Join again with /portico:join and the server's address");
 });

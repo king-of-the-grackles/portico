@@ -2,12 +2,12 @@ import { Hono } from "hono";
 import type { Core } from "../core/core";
 import { readJson } from "../agent-api/rest";
 import { type PersonEnv, currentPerson } from "./context";
-import { pendingSignIns, signInRoutes } from "./sign-ins";
+import { consentCards } from "./consents";
 import { personViews } from "./views";
 
 /**
- * /api/approvals: what waits for the signed-in person. Held messages to agents the person manages, and app agents'
- * sign-in requests from join lines the person made.
+ * /api/approvals: what waits for the signed-in person. Held messages to agents the person manages, and what the
+ * person's agents asked that waits on the consent page.
  */
 export function approvalRoutes(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
@@ -15,7 +15,7 @@ export function approvalRoutes(core: Core): Hono<PersonEnv> {
   route.get("/", (c) => {
     const me = currentPerson(c);
     const views = personViews(core, me);
-    return c.json({ held: core.approvals.heldFor(me.id).map(views.held), signIns: pendingSignIns(core, me) });
+    return c.json({ held: core.approvals.heldFor(me.id).map(views.held), consents: consentCards(core, me) });
   });
 
   route.post("/held/:messageId", async (c) => {
@@ -25,6 +25,5 @@ export function approvalRoutes(core: Core): Hono<PersonEnv> {
     return c.json({ message: personViews(core, me).message(message) });
   });
 
-  route.route("/sign-ins", signInRoutes(core));
   return route;
 }

@@ -1,8 +1,10 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hashPassword } from "../src/core/accounts";
+import { hashPassword, setPasswordCostForTests } from "../src/core/accounts";
 import { type FileStore, FolderStore } from "../src/core/file-store";
 import type { Registration } from "../src/core/agents";
+import type { AccountCheck } from "../src/core/descope";
+import type { Workspace } from "../src/core/types";
 import { PorticoError } from "../src/core/errors";
 import type { Agent, AgentKind, Computer, Notice, Person, PorticoConfig } from "../src/core/types";
 import { openDb } from "../src/db";
@@ -10,12 +12,19 @@ import { createPortico, type Portico } from "../src/portico";
 import type { WebhookRequest, WebhookResult } from "../src/core/webhooks";
 import type { HelloEvent, StreamConnection } from "../src/agent-api/stream";
 
+// The tests stand behind a proxy of their own: each names its client's address in X-Forwarded-For, which Portico reads
+// only where the deploy says a proxy writes that header.
+process.env.PORTICO_TRUST_FORWARDED_FOR = "1";
+
 export const T0 = new Date("2026-10-27T12:00:00.000Z");
 export const MINUTE = 60_000;
 export const HOUR = 3_600_000;
 export const DAY = 86_400_000;
 export const PUBLIC_URL = "https://portico.example.com";
 export const PASSWORD = "correct-horse-battery";
+
+/** The secrets key every test Portico gets: 32 bytes, base64, and nothing anyone runs a server with. */
+export const TEST_SECRETS_KEY = Buffer.alloc(32, 7).toString("base64");
 
 export function testClock(start: Date = T0) {
   let current = start.getTime();
@@ -35,13 +44,34 @@ export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfi
     pluginSource: null,
     publicUrl: PUBLIC_URL,
     signingKey: "a".repeat(64),
+    secretsKey: TEST_SECRETS_KEY,
+    secretsKeyOld: null,
     webhooksAllowPrivate: false,
+    mail: null,
     files: null,
+    descopeProjectId: null,
     ...overrides,
   };
 }
 
-/** A hashed test password, made once: argon2id is slow on purpose. */
+/**
+ * Stands in for Descope: sign-in tokens are `account:<id>:<email>:<name>`. Passed as `accountCheck`, it makes a Portico
+ * where signing in creates the person, who then picks a handle on the welcome page.
+ */
+export const fakeAccounts: AccountCheck = {
+  accountFor: async (token) => (await fakeAccounts.account!(token)).id,
+  account: async (token) => {
+    const [kind, id, email, name] = String(token).split(":");
+    if (kind !== "account" || !id) throw new PorticoError("unauthorized", "The sign-in didn't check out. Sign in again.");
+    return { id, email: email || null, name: name || null };
+  },
+};
+
+// Password hashes made in tests are cheap ones: the suites check wrong passwords by the dozen to test the sign-in
+// limits, and at full cost (64 MiB a check) those tests ran for seconds and timed out when the machine was busy.
+setPasswordCostForTests({ memoryCost: 8, timeCost: 1 });
+
+/** A hashed test password, made once. */
 let passwordHash: Promise<string> | null = null;
 function testPasswordHash(): Promise<string> {
   passwordHash ??= hashPassword(PASSWORD);
@@ -66,6 +96,11 @@ export function fakeBucket() {
       const bytes = objects.get(key);
       return bytes ? { size: bytes.length, etag: etags.get(key)! } : null;
     },
+    copy: async (fromKey, toKey) => {
+      const bytes = objects.get(fromKey);
+      if (!bytes) throw new Error(`nothing stored at ${fromKey}`);
+      put(toKey, bytes);
+    },
     remove: async (key) => {
       objects.delete(key);
     },
@@ -83,37 +118,52 @@ export interface TestPortico extends Portico {
 }
 
 /**
- * Portico over an in-memory database, with a fake clock and counting IDs. With `setup` (the default), setup is marked
+ * Portico over an in-memory directory, with each workspace's content database in memory too, a fake clock and counting
+ * IDs. With `dataDir`, everything is on disk in that folder instead, as a real server keeps it: `portico.db`, and
+ * `porticos/<workspace ID>/` with `content.db` and the workspace's files. With `setup` (the default), setup is marked
  * done, so Portico is open; the owner still has to be added with addOwner.
  */
 export function makePortico(
   opts: {
     config?: Partial<PorticoConfig>;
     setup?: boolean;
-    newNonce?: () => string;
     webhooks?: FakeWebhooks;
     fileStore?: FileStore;
+    /** Where share emails go: a fake's `post`. */
+    mailPost?: FakeWebhooks["post"];
+    /** Sign-in with an outside account, as Descope does it: who a sign-in token belongs to. */
+    accountCheck?: AccountCheck;
+    /** A real data folder: the directory, every content database and the files are written there. */
+    dataDir?: string;
   } = {},
 ): TestPortico {
   const clock = testClock();
   const notices: Notice[] = [];
   let counter = 0;
-  const portico = createPortico(testConfig(opts.config), {
-    db: openDb(":memory:"),
+  const onDisk = opts.dataDir ? { dataDir: opts.dataDir, dbPath: join(opts.dataDir, "portico.db") } : {};
+  const config = testConfig({ ...onDisk, ...opts.config });
+  const portico = createPortico(config, {
+    db: openDb(config.dbPath),
     now: clock.now,
     newId: () => `id-${String(++counter).padStart(4, "0")}`,
-    newNonce: opts.newNonce,
     heartbeatMs: 50,
     onNotice: (notice) => notices.push(notice),
-    // A folder of its own per Portico, made only when a test writes a file.
-    fileStore: opts.fileStore ?? new FolderStore(join(tmpdir(), `portico-test-files-${process.pid}-${++stores}`)),
+    // A folder of its own per Portico, made only when a test writes a file; the data folder itself when there is one.
+    fileStore: opts.fileStore ?? new FolderStore(opts.dataDir ?? join(tmpdir(), `portico-test-files-${process.pid}-${++stores}`)),
     webhookPost: opts.webhooks?.post,
+    // Never the network: a test without a fake gets an email that didn't go out.
+    mailPost: opts.mailPost ?? (async () => ({ status: null, error: "no_mail_in_tests" })),
     schedule: opts.webhooks?.schedule,
+    accountCheck: opts.accountCheck,
   });
   if (opts.setup !== false) portico.settings.set("setup_done_at", T0.toISOString());
   return Object.assign(portico, { clock, notices });
 }
 
+/**
+ * People made here get a handle from the name (`chris`, `maya`), as every person on a server with its own sign-in
+ * does. With `accountCheck`, a person starts without one, as before the welcome page.
+ */
 export async function addOwner(p: Portico, name = "Chris"): Promise<Person> {
   return p.people.create({ name, role: "owner", status: "active", passwordHash: await testPasswordHash() });
 }
@@ -122,7 +172,70 @@ export async function addMember(p: Portico, name = "Maya", status: "active" | "p
   return p.people.create({ name, role: "member", status, passwordHash: await testPasswordHash() });
 }
 
+/**
+ * Puts agents of different people where they reach each other: a shared workspace owned by the first agent's owner,
+ * with every other owner admitted and every agent added by its own owner. Agents of one person already reach each
+ * other through that person's personal workspace.
+ */
+export function together(p: Portico, ...agents: Agent[]): Workspace {
+  const [first, ...rest] = agents;
+  if (!first) throw new Error("together needs at least one agent");
+  // Two Porticos one person is in can't read the same, so a second one gets a number.
+  const taken = new Set(p.workspaces.forPerson(first.ownerId).map((w) => w.name));
+  let name = "Together";
+  for (let n = 2; taken.has(name); n++) name = `Together ${n}`;
+  const workspace = p.workspaces.create(first.ownerId, name);
+  for (const agent of rest) if (!p.workspaces.hasPerson(workspace.id, agent.ownerId)) p.workspaces.admit(workspace.id, agent.ownerId);
+  for (const agent of agents) p.workspaces.addAgent(agent.ownerId, workspace.id, agent.id);
+  acquaint(p, ...agents.map((agent) => agent.ownerId));
+  // What Portico told each agent about the others coming in is not what these tests are about.
+  for (const agent of agents) p.agentNotices.take(agent.id);
+  return workspace;
+}
+
+/**
+ * The people have each said "always for this person" about the others, so their agents' messages aren't held as a
+ * first contact. Tests of the first-contact rule itself leave this out.
+ */
+export function acquaint(p: Portico, ...personIds: string[]): void {
+  for (const a of personIds) for (const b of personIds) if (a !== b) p.contacts.add(a, b, T0.toISOString());
+}
+
 /** A browser sign-in for the person: the Cookie header value to send. */
+/**
+ * The plan's worked example. Chris has grok-bot, claude-code and muse. Three Porticos: his own (all three), an unnamed
+ * one with Robert, so "Chris and Robert" (grok-bot, robert/dots), and "Launch" with Robert, Bill and Dana (grok-bot,
+ * robert/dots, bill/scout, dana/muse).
+ */
+export async function workedExample(p: Portico) {
+  const person = async (name: string, owner = false) =>
+    p.people.setHandle((owner ? await addOwner(p, name) : await addMember(p, name)).id, name.toLowerCase());
+  const chris = await person("Chris", true);
+  const robert = await person("Robert");
+  const bill = await person("Bill");
+  const dana = await person("Dana");
+  const grok = addAppAgent(p, chris, "grok-bot", { kind: "grok-bot" });
+  const claude = addAppAgent(p, chris, "claude-code", { kind: "other" });
+  const muse = addAppAgent(p, chris, "muse");
+  const dots = addAppAgent(p, robert, "dots", { kind: "dots" });
+  const scout = addAppAgent(p, bill, "scout", { kind: "other" });
+  const dmuse = addAppAgent(p, dana, "muse");
+  const own = p.workspaces.personal(chris.id);
+  const pair = p.workspaces.create(chris.id);
+  p.workspaces.admit(pair.id, robert.id);
+  p.workspaces.addAgent(chris.id, pair.id, grok.agent.id);
+  p.workspaces.addAgent(robert.id, pair.id, dots.agent.id);
+  const launch = p.workspaces.create(chris.id, "Launch");
+  for (const other of [robert, bill, dana]) p.workspaces.admit(launch.id, other.id);
+  p.workspaces.addAgent(chris.id, launch.id, grok.agent.id);
+  p.workspaces.addAgent(robert.id, launch.id, dots.agent.id);
+  p.workspaces.addAgent(bill.id, launch.id, scout.agent.id);
+  p.workspaces.addAgent(dana.id, launch.id, dmuse.agent.id);
+  acquaint(p, chris.id, robert.id, bill.id, dana.id);
+  for (const { agent } of [grok, claude, muse, dots, scout, dmuse]) p.agentNotices.take(agent.id);
+  return { chris, robert, bill, dana, grok, claude, muse, dots, scout, dmuse, own, pair: p.workspaces.get(pair.id)!, launch };
+}
+
 export function signIn(p: Portico, person: Person): string {
   const { token } = p.accounts.startSession(person.id);
   return `portico_session=${token}`;
@@ -181,6 +294,63 @@ export async function callAs(
   return await p.app.request(path, { method, headers, body: payload });
 }
 
+export interface AskedToJoin {
+  id: string;
+  link: string;
+  poll_secret: string;
+  expires_at: string;
+  show: string;
+}
+
+type App = { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } };
+
+/** A computer or an app agent asks to join, as anyone can: POST /api/join with no credential. */
+export async function askToJoin(p: App, body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<AskedToJoin> {
+  const res = await p.app.request("/api/join", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+  if (res.status !== 201) throw new Error(`asking to join failed with ${res.status}: ${await res.text()}`);
+  return (await res.json()) as AskedToJoin;
+}
+
+/** The asker's poll, with its poll secret. */
+export async function pollJoin(p: App, asked: Pick<AskedToJoin, "id" | "poll_secret">): Promise<Record<string, any>> {
+  const res = await p.app.request(`/api/join/${asked.id}`, { headers: { authorization: `Bearer ${asked.poll_secret}` } });
+  return (await res.json()) as Record<string, any>;
+}
+
+/** The asker hands in the code its person read on the consent page, with its poll secret. */
+export async function submitJoinCode(p: App, asked: Pick<AskedToJoin, "id" | "poll_secret">, code: string): Promise<Response> {
+  return await p.app.request(`/api/join/${asked.id}/code`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${asked.poll_secret}`, "content-type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+}
+
+/** The code the consent page shows the signed-in person after Allow, read off the page as that person would, or null. */
+export async function joinCodeOn(p: App, cookie: string | null, id: string): Promise<string | null> {
+  const res = await p.app.request(`/c/${id}`, { headers: cookie ? { cookie } : {} });
+  return /<p class="join-code"[^>]*>([0-9]{4})<\/p>/.exec(await res.text())?.[1] ?? null;
+}
+
+/**
+ * A whole join, as its person and its asker do it: Allow on the page (with whatever else the form sends), the code
+ * read off the page, and the asker handing the code in. Returns the asker's answer: the token, once.
+ */
+export async function finishJoin(p: App, cookie: string, asked: Pick<AskedToJoin, "id" | "poll_secret">, form: Record<string, unknown> = {}): Promise<Record<string, any>> {
+  const allowed = await answerConsent(p, cookie, asked.id, { decision: "approve", ...form });
+  if (allowed.status !== 200) throw new Error(`Allow failed with ${allowed.status}: ${await allowed.text()}`);
+  const code = await joinCodeOn(p, cookie, asked.id);
+  if (!code) throw new Error("The page showed no code after Allow.");
+  const res = await submitJoinCode(p, asked, code);
+  if (res.status !== 200) throw new Error(`Handing in the code failed with ${res.status}: ${await res.text()}`);
+  return (await res.json()) as Record<string, any>;
+}
+
+/** The person's answer on the consent page: the form's POST. */
+export function answerConsent(p: App, cookie: string | null, id: string, body: Record<string, unknown>): Promise<Response> {
+  return callPerson(p, cookie, "POST", `/api/consents/${id}`, body);
+}
+
 /** Calls the person API as a signed-in browser would: the cookie, JSON, and the page's own Origin on changes. */
 export async function callPerson(
   p: { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } },
@@ -200,18 +370,17 @@ export async function callPerson(
   return await p.app.request(`${PUBLIC_URL}${path}`, { method, headers, body: payload });
 }
 
-/** Opens a session's live stream as the plugin does, and reads its hello. `popup` declares pop-ups, `wake` waking. */
+/** Opens a session's live stream as the plugin does, and reads its hello. `wake` declares waking. */
 export async function openSessionStream(
   p: { app: { request: (path: string, init?: RequestInit) => Response | Promise<Response> } },
   token: string,
-  opts: { key: string; repo?: string; folderId?: string; popup?: boolean; wake?: boolean; client?: "claude-code" | "codex" },
+  opts: { key: string; repo?: string; folderId?: string; wake?: boolean; client?: "claude-code" | "codex" },
 ): Promise<{ res: Response; events: ReturnType<typeof sseReader>; hello: HelloEvent }> {
   const headers: Record<string, string> = {
     authorization: `Bearer ${token}`,
     "x-portico-session": opts.key,
     "x-portico-folder": opts.folderId ?? "a".repeat(64),
   };
-  if (opts.popup) headers["x-portico-popup"] = "1";
   if (opts.wake) headers["x-portico-wake"] = "1";
   if (opts.client) headers["x-portico-client"] = opts.client;
   const res = await p.app.request(`/api/agent/stream?repo=${encodeURIComponent(opts.repo ?? "api")}`, { headers });
@@ -275,9 +444,12 @@ export function fakeWebhooks(answer: (req: WebhookRequest) => WebhookResult = ()
 
 export type FakeWebhooks = ReturnType<typeof fakeWebhooks>;
 
-/** Lets queued microtasks and zero-delay timers run, e.g. notices and change batches. */
+/**
+ * Lets queued microtasks and zero-delay timers run, e.g. notices and change batches, and gives a wake or an event its
+ * time to leave: decrypting its key is WebCrypto's work on another thread, a few steps of well under a millisecond each.
+ */
 export function flush(): Promise<void> {
-  return Bun.sleep(1);
+  return Bun.sleep(10);
 }
 
 export interface SseEvent {
@@ -327,12 +499,20 @@ export function sseReader(res: Response) {
 
 // ---- copy sweeps ----
 
-/** Pronouns Portico's copy never uses. Errs strict: it also flags "i.e.". */
-export const PRONOUNS =
-  /\b(i|me|my|mine|myself|we|us|our|ours|ourselves|you|your|yours|yourself|yourselves|it|its|itself|they|them|their|theirs|themselves)\b/i;
+import { wordProblems } from "./copy-source";
+export { wordProblems };
 
-/** The one phrase the owner chose to keep: the empty-state heading. */
-const ALLOWED_PHRASES = [/\badd your first agent\b/gi];
+/**
+ * Pronouns Portico's copy never uses. Errs strict: it also flags "i.e.". Portico speaks to the reader in short, plain
+ * words, so "you", "your", "it" and "its" are fine; Portico never speaks as "I" or "we", and never says "they".
+ */
+export const PRONOUNS = /\b(i|me|my|mine|myself|we|us|our|ours|ourselves|yourself|yourselves|itself|they|them|their|theirs|themselves)\b/i;
+
+/**
+ * The phrases the owner chose to keep: the empty-state heading, and the name of a person's own Portico on that person's
+ * pages.
+ */
+const ALLOWED_PHRASES = [/\badd your first agent\b/gi, /\byour portico\b/gi];
 
 /** The retired word. */
 export const HUB = /\bhubs?\b/i;
@@ -353,9 +533,12 @@ export function visibleCopy(page: string): string {
   return text;
 }
 
-/** The words that break the copy rules in a piece of copy: pronouns and "hub". Empty when the copy is clean. */
+/**
+ * The words that break the copy rules in a piece of copy: pronouns, "hub", and the word rule for Porticos (never
+ * "workspace" or "Personal"; an installation is a Portico server). Empty when the copy is clean.
+ */
 export function copyProblems(copy: string): string[] {
-  const problems: string[] = [];
+  const problems: string[] = wordProblems(copy);
   for (const re of [new RegExp(PRONOUNS.source, "gi"), new RegExp(HUB.source, "gi")]) {
     for (const match of copy.matchAll(re)) {
       const start = Math.max(0, match.index! - 30);

@@ -18,13 +18,15 @@ describe("addresses and the agent list", () => {
     expect(p.agents.display(second)).toBe("dialog-claude@studio");
   });
 
-  test("an app that had the name first keeps the short name; a later session goes by its full address", async () => {
+  test("an app that had the name first keeps the name; a later session takes the next name that can't be mistaken for the app's", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     addAppAgent(p, chris, "api-claude");
+    const viewer = addAppAgent(p, chris, "viewer").agent;
     const session = addSession(p, addComputer(p, chris).computer, { repo: "api" }).agent;
-    expect(p.agents.display(session)).toBe("api-claude@macbook");
-    expect(p.agents.resolve("api-claude", "x").type).toBe("app");
+    expect(p.agents.display(session)).toBe("api-claude-2");
+    expect(p.agents.resolve("api-claude", viewer.id).type).toBe("app");
+    expect(p.agents.resolve("api-claude-2@macbook", viewer.id).id).toBe(session.id);
   });
 
   test("resolve refuses patterns, names a duplicate short name's computers, and lists valid names", async () => {
@@ -51,7 +53,7 @@ describe("addresses and the agent list", () => {
     const { agent: live } = addSession(p, computer, { repo: "live" });
     p.agentStreams.connect(live.id, live.id, { send() {}, close() {} });
     p.clock.advance(25 * HOUR);
-    const names = p.agents.entries().map((e) => e.display);
+    const names = p.agents.entriesForPerson(chris.id).map((e) => e.display);
     expect(names).toEqual(["live-claude"]);
     expect(p.agents.byAddress(`${old.name}@macbook`)).not.toBeNull();
   });
@@ -66,7 +68,7 @@ describe("addresses and the agent list", () => {
     addAppAgent(p, chris, "muse");
     for (const a of [busy, idle]) p.agentStreams.connect(a.id, a.id, { send() {}, close() {} });
     p.presence.report(busy.id, busy.id, { status: "busy", doing: "Fixing", repo: "busy", branch: "main" }, p.now().toISOString());
-    const entries = p.agents.entries();
+    const entries = p.agents.entriesForPerson(chris.id);
     expect(entries.map((e) => [e.display, e.status])).toEqual([
       ["busy-claude", "busy"],
       ["idle-claude", "idle"],
@@ -263,11 +265,14 @@ describe("what an agent's manager can change", () => {
     const chris = await addOwner(p);
     const maya = await addMember(p);
     addSession(p, addComputer(p, chris).computer, { repo: "portico" });
-    expect(() => p.agents.create({ ownerId: maya.id, name: "portico-claude", kind: "muse", type: "app" })).toThrow(
+    expect(() => p.agents.create({ ownerId: chris.id, name: "portico-claude", kind: "muse", type: "app" })).toThrow(
       "The name portico-claude is already in use.",
     );
-    const { agent } = addAppAgent(p, maya, "maya-muse");
-    expect(errorCode(() => p.agents.update(maya.id, agent.id, { name: "portico-claude" }))).toBe("conflict");
+    const { agent } = addAppAgent(p, chris, "chris-muse");
+    expect(errorCode(() => p.agents.update(chris.id, agent.id, { name: "portico-claude" }))).toBe("conflict");
+    // Another person's names sit behind that person's handle, so the same name is free there and reaches nobody else.
+    const theirs = p.agents.create({ ownerId: maya.id, name: "portico-claude", kind: "muse", type: "app" });
+    expect(p.agents.nameFor(theirs, chris.id)).toBe("maya/portico-claude");
   });
 
   test("only the person who manages an agent can change or remove it", async () => {

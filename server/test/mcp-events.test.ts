@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { EVENTS_EXTENSION, MODERN_PROTOCOL_VERSION } from "../src/agent-api/mcp";
 import { verifyWebhook, type WebhookRequest } from "../src/core/webhooks";
-import { addAppAgent, addOwner, callPerson, DAY, fakeWebhooks, flush, HOUR, makePortico, MINUTE, signIn } from "./helpers";
+import { addAppAgent, addComputer, addOwner, addSession, callPerson, DAY, fakeWebhooks, flush, HOUR, makePortico, MINUTE, signIn } from "./helpers";
 
 const SECRET = `whsec_${Buffer.alloc(32, 1).toString("base64")}`;
 const SECRET_2 = `whsec_${Buffer.alloc(32, 2).toString("base64")}`;
@@ -85,6 +85,16 @@ describe("MCP 2026-07-28", () => {
     expect(list.body.result).toMatchObject({ resultType: "complete", ttlMs: HOUR, cacheScope: "public" });
     const sent = await call(p, dot.token, "tools/call", { name: "send_message", arguments: { to: "muse", subject: "Hi", text: "t" } });
     expect(sent.body.result).toMatchObject({ resultType: "complete", isError: false });
+  });
+
+  test("a session's tool list leaves set_wake_url out, as its calls do", async () => {
+    const { p, chris, dot } = await setup();
+    const { computer, token } = addComputer(p, chris);
+    const session = addSession(p, computer);
+    const { body, headers } = modern("tools/list");
+    const names = (res: { body: Rpc }) => (res.body.result!.tools as { name: string }[]).map((tool) => tool.name);
+    expect(names(await post(p, token, body, { ...headers, "x-portico-session": session.key }))).not.toContain("set_wake_url");
+    expect(names(await call(p, dot.token, "tools/list"))).toContain("set_wake_url");
   });
 
   test("initialize-based clients are served exactly as before", async () => {
@@ -322,5 +332,29 @@ describe("MCP Events", () => {
     await call(p, dot.token, "events/subscribe", subscribeParams());
     const page = (await (await callPerson(p, signIn(p, chris), "GET", `/api/agents/${dot.agent.id}`)).json()) as Record<string, unknown>;
     expect(page).toMatchObject({ woken: true, wake: null, events: { count: 1 } });
+  });
+  test("an agent gets 10 callback checks an hour, one at a time, so subscribing can't make Portico post at will", async () => {
+    const { p, hooks, dot, muse } = await setup();
+    hooks.answer = () => ({ status: 404, body: "" });
+    const to = (n: number) => subscribeParams({ delivery: { mode: "webhook", url: `https://victim.example/hook/${n}`, secret: SECRET } });
+    // At once: one check goes out, the rest are turned away without a post.
+    const burst = await Promise.all(Array.from({ length: 20 }, (_, n) => call(p, dot.token, "events/subscribe", to(n))));
+    expect(hooks.sent).toHaveLength(1);
+    const limited = burst.filter((res) => res.body.error?.code === -32000);
+    expect(limited).toHaveLength(19);
+    expect(limited[0]!.body.error).toMatchObject({ data: { reason: "rate_limited" } });
+    // One after another: ten in the hour, then no more posts.
+    for (let n = 20; n < 40; n++) await call(p, dot.token, "events/subscribe", to(n));
+    expect(hooks.sent).toHaveLength(10);
+    const refused = await call(p, dot.token, "events/subscribe", to(99));
+    expect(refused.body.error).toMatchObject({ code: -32000, data: { reason: "rate_limited" } });
+    // Another agent is unaffected, and the hour passes.
+    await call(p, muse.token, "events/subscribe", to(100));
+    expect(hooks.sent).toHaveLength(11);
+    p.clock.advance(HOUR + MINUTE);
+    hooks.answer = echoChallenge;
+    expect((await call(p, dot.token, "events/subscribe", to(101))).body.result).toMatchObject({ resultType: "complete" });
+    // Refreshing a subscription whose callback was checked lately costs no check.
+    for (let n = 0; n < 15; n++) expect((await call(p, dot.token, "events/subscribe", to(101))).body.error).toBeUndefined();
   });
 });

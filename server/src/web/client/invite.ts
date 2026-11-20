@@ -3,7 +3,7 @@
 // the owner approves, or says the request was declined.
 import { api, ApiError, firstData } from "./api.js";
 
-type PageData = { view: "claim"; central?: boolean; signedIn?: boolean } | { view: "waiting" };
+type PageData = { view: "claim" } | { view: "waiting" };
 type Check = { status: "open" | "claimed" | "revoked" | "expired"; invitedBy: string; expiresAt: string };
 
 const main = document.querySelector("main");
@@ -20,63 +20,22 @@ function show(templateId: string, owner = ""): void {
   if (title) document.title = title;
 }
 
-/**
- * Where the link's secret waits while the browser is away signing in, for half an hour. Kept for this address in any
- * tab, since an emailed sign-in link opens a new one; removed once the link is claimed or can't be.
- */
-const KEPT_SECRET = "portico-invite";
-const KEPT_MS = 30 * 60_000;
-
-function kept(): string {
+/** The secret in the link's fragment. */
+function secretFromLink(): string {
   try {
-    const value = JSON.parse(localStorage.getItem(KEPT_SECRET) ?? "null") as { secret?: unknown; at?: unknown } | null;
-    if (value && typeof value.secret === "string" && typeof value.at === "number" && Date.now() - value.at < KEPT_MS) return value.secret;
-  } catch {
-    // Nothing kept, or nothing readable.
-  }
-  return "";
-}
-
-function keep(secret: string): void {
-  try {
-    if (secret) localStorage.setItem(KEPT_SECRET, JSON.stringify({ secret, at: Date.now() }));
-    else localStorage.removeItem(KEPT_SECRET);
-  } catch {
-    // No storage: the link has to be opened again after signing in.
-  }
-}
-
-/** The secret in the link's fragment, or the one kept while the browser signed in. */
-function secretFromLink(central: boolean): string {
-  try {
-    const secret = decodeURIComponent(location.hash.replace(/^#/, "")).trim();
-    return secret || (central ? kept() : "");
+    return decodeURIComponent(location.hash.replace(/^#/, "")).trim();
   } catch {
     return "";
   }
 }
 
-async function checkLink(data: { central?: boolean; signedIn?: boolean }): Promise<void> {
-  const central = Boolean(data.central);
-  const secret = secretFromLink(central);
+async function checkLink(): Promise<void> {
+  const secret = secretFromLink();
   if (!secret) return show("invite-invalid");
   try {
     const check = await api<Check>("POST", "/api/invites/check", { secret });
-    if (check.status !== "open") {
-      keep("");
-      return show(`invite-${check.status}`, check.invitedBy);
-    }
-    if (central && !data.signedIn) {
-      // Kept now, not on the click: the sign-in may be opened in another tab.
-      keep(secret);
-      show("invite-sign-in", check.invitedBy);
-      return;
-    }
+    if (check.status !== "open") return show(`invite-${check.status}`, check.invitedBy);
     show("invite-claim", check.invitedBy);
-    const field = document.querySelector<HTMLInputElement>("input[data-secret]");
-    if (field) field.value = secret;
-    // Joined: the kept secret has done its work.
-    document.querySelector("form[data-api]")?.addEventListener("portico:done", () => keep(""));
     document.getElementById("join-name")?.focus();
   } catch (err) {
     show(err instanceof ApiError && err.status === 404 ? "invite-invalid" : "invite-offline");
@@ -143,6 +102,6 @@ function waitForApproval(): void {
 const data = firstData<PageData>();
 if (data?.view === "waiting") waitForApproval();
 else if (data?.view === "claim") {
-  void checkLink(data);
-  window.addEventListener("hashchange", () => void checkLink(data));
+  void checkLink();
+  window.addEventListener("hashchange", () => void checkLink());
 }

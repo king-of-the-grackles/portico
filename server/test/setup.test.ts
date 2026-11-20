@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setupCommand } from "../src/commands/setup";
-import { localSetupLink } from "../src/commands/serve";
+import { localBeforeSetup, localSetupLink, SETUP_LINK_HINT } from "../src/commands/serve";
 import type { CliIo } from "../src/commands/io";
 import { hostUrl, platformUrl } from "../src/config";
 import type { Topic } from "../src/core/changes";
@@ -13,6 +13,12 @@ import { s256 } from "../src/oauth/store";
 import { createPortico } from "../src/portico";
 import {
   addAppAgent,
+  answerConsent,
+  askToJoin,
+  finishJoin,
+  joinCodeOn,
+  submitJoinCode,
+  pollJoin,
   addComputer,
   addMember,
   addOwner,
@@ -27,6 +33,7 @@ import {
   PUBLIC_URL,
   signIn,
   sseReader,
+  together,
   testConfig,
   visibleCopy,
 } from "./helpers";
@@ -123,20 +130,9 @@ describe("owner recovery", () => {
     });
   }
 
-  async function joinLine(p: P, cookie: string, kind: string): Promise<string> {
-    return (await json<{ joinLine: { line: string } }>(callPerson(p, cookie, "POST", "/api/join-lines", { kind }))).joinLine.line;
-  }
-
-  async function askToJoin(p: P, cookie: string, name: string) {
-    const token = await joinLine(p, cookie, "other");
-    return await json<{ id: string; poll_secret: string }>(post(p, "/api/sign-in-requests", { token, name }));
-  }
-
-  function poll(p: P, asked: { id: string; poll_secret: string }) {
-    return json<{ status: string; agent?: { name: string }; token?: string }>(
-      p.app.request(`/api/sign-in-requests/${asked.id}`, { headers: { authorization: `Bearer ${asked.poll_secret}` } }),
-    );
-  }
+  const askAgent = (p: P, name: string) => askToJoin(p, { kind: "agent", name });
+  const allow = async (p: P, cookie: string, asked: { id: string }) => expect((await answerConsent(p, cookie, asked.id, { decision: "approve" })).status).toBe(200);
+  const poll = (p: P, asked: { id: string; poll_secret: string }) => pollJoin(p, asked);
 
   /** A connector's consent, given with the cookie: a new connector agent and a code for it, not yet exchanged. */
   async function consent(p: P, cookie: string, clientId: string, name: string) {
@@ -177,20 +173,25 @@ describe("owner recovery", () => {
     expect((await postSetup(p, { token, password: "a-new-owner-password" })).status).toBe(200);
   }
 
-  test("nothing the owner's session made before the recovery works after it: computer, app and OAuth tokens, codes, lines, sign-ins", async () => {
+  test("nothing the owner's session made before the recovery works after it: computer, app and OAuth tokens, codes, joins", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     const maya = await addMember(p);
     const stolen = signIn(p, chris);
-    const computerLine = await joinLine(p, stolen, "claude-code");
-    const joined = await json<{ token: string }>(post(p, "/api/computer/join", { token: computerLine, computer: "chris-macbook" }));
-    const unusedLine = await joinLine(p, stolen, "claude-code");
-    const issued = await askToJoin(p, stolen, "helper");
-    await callPerson(p, stolen, "POST", `/api/approvals/sign-ins/${issued.id}`, { decision: "approve" });
-    const appToken = (await poll(p, issued)).token!;
-    const approved = await askToJoin(p, stolen, "helper-two");
-    await callPerson(p, stolen, "POST", `/api/approvals/sign-ins/${approved.id}`, { decision: "approve" });
-    const pending = await askToJoin(p, stolen, "helper-three");
+    const computerAsked = await askToJoin(p, { kind: "computer", name: "chris-macbook" });
+    const joined = (await finishJoin(p, stolen, computerAsked)) as { token: string };
+    // A computer the stolen session allowed, whose code nobody handed in yet: the thief read the code on the page.
+    const unfetched = await askToJoin(p, { kind: "computer", name: "second" });
+    await allow(p, stolen, unfetched);
+    const unfetchedCode = (await joinCodeOn(p, stolen, unfetched.id))!;
+    const issued = await askAgent(p, "helper");
+    const appToken = (await finishJoin(p, stolen, issued)).token as string;
+    const approved = await askAgent(p, "helper-two");
+    await allow(p, stolen, approved);
+    const approvedCode = (await joinCodeOn(p, stolen, approved.id))!;
+    // What an agent of the owner's asked, still waiting on the consent page.
+    const shared = p.workspaces.create(chris.id, "Launch");
+    const waiting = p.consents.ask(p.agents.byAddress("helper")!, "share", shared.id);
     const { client_id: clientId } = await json<{ client_id: string }>(
       post(p, "/oauth/register", { client_name: "Claude Duet", redirect_uris: [REDIRECT], token_endpoint_auth_method: "none" }),
     );
@@ -215,20 +216,22 @@ describe("owner recovery", () => {
       error: "invalid_grant",
     });
     expect(await json(exchange(unexchanged))).toMatchObject({ error: "invalid_grant" });
-    const lateJoin = await post(p, "/api/computer/join", { token: unusedLine, computer: "chris-macbook" });
-    expect(lateJoin.status).toBe(404);
+    // A join allowed before the recovery never joins, even with the code the thief read; what the owner's agents asked stops waiting.
+    expect((await submitJoinCode(p, unfetched, unfetchedCode)).status).toBe(409);
+    expect((await submitJoinCode(p, approved, approvedCode)).status).toBe(409);
+    expect(await poll(p, unfetched)).toEqual({ status: "expired" });
+    expect(await poll(p, approved)).toEqual({ status: "expired" });
     expect(p.computers.list(chris.id).map((c) => c.name)).toEqual(["chris-macbook"]);
-    // An approval made before the recovery never hands over its token; a request still waiting expires.
-    expect(await poll(p, approved)).toEqual({ status: "approved", agent: { name: "helper-two" } });
-    expect(await poll(p, pending)).toEqual({ status: "expired" });
-    expect(p.computers.pendingSignIns(chris.id)).toEqual([]);
+    expect(p.agents.ownedBy(chris.id).some((a) => a.name === "helper-two")).toBe(false);
+    expect(p.consents.get(waiting.id)?.status).toBe("expired");
+    expect(p.consents.waitingFor(chris.id)).toEqual([]);
     // The member's credentials still work.
     expect((await callAs(p, { token: mayaComputer.token }, "PUT", FOLDER, { joins: true })).status).toBe(200);
     expect((await callAs(p, { token: mayaBot.token }, "GET", "/api/agent/agents")).status).toBe(200);
   });
 
-  test("the owner's open streams, waiting check_inbox calls and pages close, so a pop-up can't decide as the owner", async () => {
-    const p = makePortico({ newNonce: () => "nonce-1" });
+  test("the owner's open streams, waiting check_inbox calls and pages close, and the owner's computer token stops working", async () => {
+    const p = makePortico();
     const chris = await addOwner(p);
     const maya = await addMember(p);
     const stolen = signIn(p, chris);
@@ -236,14 +239,14 @@ describe("owner recovery", () => {
     const notes = addAppAgent(p, chris, "notes", { approvalRequired: true });
     const mayaBot = addAppAgent(p, maya, "maya-bot");
     const mayaComputer = addComputer(p, maya, "maya-linux");
-    const popup = await openSessionStream(p, pc, { key: "attacker-run-0001", repo: "api", popup: true });
+    const stream = await openSessionStream(p, pc, { key: "attacker-run-0001", repo: "api" });
+    together(p, mayaBot.agent, notes.agent);
     const mayaSession = await openSessionStream(p, mayaComputer.token, { key: "maya-run-0001", repo: "web" });
     const page = sseReader(await callPerson(p, stolen, "GET", "/api/events"));
     expect((await page.next()).event).toBe("hello");
     const sent = await json<{ message: { id: string } }>(
-      callAs(p, { token: mayaBot.token }, "POST", "/api/agent/messages", { to: "notes", subject: "Held subject", text: "Held text." }),
+      callAs(p, { token: mayaBot.token }, "POST", "/api/agent/messages", { to: "chris/notes", subject: "Held subject", text: "Held text." }),
     );
-    expect(await popup.events.next()).toMatchObject({ event: "approval_request", data: { messageId: sent.message.id, nonce: "nonce-1" } });
     const waiting = callAs(p, { token: notes.token }, "GET", "/api/agent/inbox?wait=5");
     await flush();
     const topics: Topic[][] = [];
@@ -251,28 +254,23 @@ describe("owner recovery", () => {
 
     await recover(p);
 
-    await expect(popup.events.next(500)).rejects.toThrow("stream ended");
+    await expect(stream.events.next(500)).rejects.toThrow("stream ended");
     await expect(besidesChanges(page)).rejects.toThrow("stream ended");
     const woken = await Promise.race([waiting, Bun.sleep(1000).then(() => null)]);
     expect(woken?.status).toBe(401);
-    const answer = await callAs(p, { token: pc, key: "attacker-run-0001" }, "POST", `/api/agent/approvals/${sent.message.id}`, {
-      nonce: "nonce-1",
-      decision: "always_allow",
-    });
-    expect(answer.status).toBe(401);
-    expect(p.messages.get(sent.message.id)?.status).toBe("held");
+    expect((await callAs(p, { token: pc, key: "attacker-run-0001" }, "GET", "/api/agent/inbox")).status).toBe(401);
+    expect(p.messages.get({ person: chris.id }, sent.message.id)?.status).toBe("held");
     expect(p.approvals.allowListFor(chris.id, notes.agent.id)).toEqual([]);
     const reopened = await p.app.request("/api/agent/stream?repo=api", {
       headers: {
         authorization: `Bearer ${pc}`,
         "x-portico-session": "attacker-run-0002",
         "x-portico-folder": "a".repeat(64),
-        "x-portico-popup": "1",
       },
     });
     expect(reopened.status).toBe(401);
     await flush();
-    expect(topics.flat()).toEqual(expect.arrayContaining(["agents", "computers", "join-lines", "approvals"]));
+    expect(topics.flat()).toEqual(expect.arrayContaining(["agents", "computers", "approvals"]));
     // The member's session stays open.
     await callAs(p, { token: mayaBot.token }, "POST", "/api/agent/messages", { to: "web-claude", subject: "s", text: "t" });
     expect((await mayaSession.events.next()).event).toBe("nudge");
@@ -307,7 +305,7 @@ describe("/setup", () => {
     const page = await res.text();
     for (const copy of [
       "<h1>Set up Portico</h1>",
-      "Create the owner account. The owner adds agents, invites people and approves sign in requests.",
+      "Create the owner account.",
       "Shown to invited people.",
       "12 characters or more.",
       "Create owner account",
@@ -341,7 +339,7 @@ describe("/setup", () => {
     await addOwner(p);
     const page = await (await p.app.request("/setup")).text();
     expect(page).toContain("<h1>Reset the owner password</h1>");
-    expect(page).toContain("the owner's computers and agents have to join again.");
+    expect(page).toContain("the owner's computers and agents join again.");
     expect(page).toContain('data-api="POST /api/setup"');
     expect(page).not.toContain('name="publicUrl"');
     expect(page).not.toContain('name="name"');
@@ -365,7 +363,7 @@ describe("portico setup", () => {
     const dir = dataDir();
     const dbPath = join(dir, "portico.db");
     openDb(dbPath).close();
-    const { io, out, err } = testIo({ PORTICO_DB_PATH: dbPath, PORTICO_PUBLIC_URL: PUBLIC_URL, PORT: "8802" });
+    const { io, out, err } = testIo({ PORTICO_DATA_DIR: dir, PORTICO_PUBLIC_URL: PUBLIC_URL, PORT: "8802" });
     expect(await setupCommand([], io)).toBe(0);
     expect(err).toEqual([]);
     expect(out[0]).toBe("Open this link in a browser to set up Portico. The link works once and expires in 1 hour.");
@@ -382,7 +380,7 @@ describe("portico setup", () => {
     expect(res.status).toBe(200);
     p.db.close();
 
-    const after = testIo({ PORTICO_DB_PATH: dbPath, PORTICO_PUBLIC_URL: PUBLIC_URL });
+    const after = testIo({ PORTICO_DATA_DIR: dir, PORTICO_PUBLIC_URL: PUBLIC_URL });
     expect(await setupCommand([], after.io)).toBe(1);
     expect(after.err.join("\n")).toBe("Portico is already set up. To set a new owner password, run portico setup --reset.");
     expect(after.out).toEqual([]);
@@ -392,7 +390,7 @@ describe("portico setup", () => {
     const dir = dataDir();
     const dbPath = join(dir, "portico.db");
     openDb(dbPath).close();
-    const env = { PORTICO_DB_PATH: dbPath, PORTICO_PUBLIC_URL: PUBLIC_URL };
+    const env = { PORTICO_DATA_DIR: dir, PORTICO_PUBLIC_URL: PUBLIC_URL };
     const first = testIo(env);
     await setupCommand([], first.io);
     const second = testIo(env);
@@ -421,13 +419,13 @@ describe("portico setup", () => {
   test("refuses without a database, and with an unknown option", async () => {
     const dir = dataDir();
     const dbPath = join(dir, "portico.db");
-    const missing = testIo({ PORTICO_DB_PATH: dbPath });
+    const missing = testIo({ PORTICO_DATA_DIR: dir });
     expect(await setupCommand([], missing.io)).toBe(1);
     expect(missing.err.join("\n")).toBe(
-      `No Portico database at ${dbPath}. Start Portico with portico serve first, or set PORTICO_DB_PATH to the database Portico uses.`,
+      `No Portico database at ${dbPath}. Start Portico with portico serve first, or set PORTICO_DATA_DIR to the data folder Portico uses.`,
     );
     expect(existsSync(dbPath)).toBe(false);
-    const unknown = testIo({ PORTICO_DB_PATH: dbPath });
+    const unknown = testIo({ PORTICO_DATA_DIR: dir });
     expect(await setupCommand(["--force"], unknown.io)).toBe(1);
     expect(unknown.err.join("\n")).toBe("Unknown option: --force. Usage: portico setup [--reset]");
     expect(copyProblems([...missing.err, ...unknown.err].join("\n"))).toEqual([]);
@@ -437,13 +435,13 @@ describe("portico setup", () => {
     const dir = dataDir();
     const dbPath = join(dir, "portico.db");
     openDb(dbPath).close();
-    const local = testIo({ PORTICO_DB_PATH: dbPath, PORT: "8802" });
+    const local = testIo({ PORTICO_DATA_DIR: dir, PORT: "8802" });
     expect(await setupCommand([], local.io)).toBe(0);
     expect(local.out.find((l) => l.includes("/setup#"))).toMatch(/^ {2}http:\/\/localhost:8802\/setup#/);
     expect(local.out.at(-1)).toBe("If a browser reaches Portico at another address, use that address in place of http://localhost:8802.");
     expect(copyProblems(local.out.filter((l) => !l.includes("/setup#")).join("\n"))).toEqual([]);
 
-    const render = testIo({ PORTICO_DB_PATH: dbPath, RENDER_EXTERNAL_URL: "https://portico-x1.onrender.com" });
+    const render = testIo({ PORTICO_DATA_DIR: dir, RENDER_EXTERNAL_URL: "https://portico-x1.onrender.com" });
     await setupCommand([], render.io);
     expect(render.out.find((l) => l.includes("/setup#"))).toContain("https://portico-x1.onrender.com/setup#");
     expect(render.out.join("\n")).not.toContain("in place of");
@@ -465,7 +463,7 @@ describe("portico setup", () => {
 describe("portico serve", () => {
   test("running locally before setup, the first start makes a setup link", async () => {
     const p = makePortico({ setup: false, config: { publicUrl: null, port: 8802 } });
-    const link = localSetupLink(p, {});
+    const link = localSetupLink(p, {}, true);
     expect(link).toMatch(/^http:\/\/localhost:8802\/setup#[A-Za-z0-9_-]{22}$/);
     const res = await p.app.request("http://localhost:8802/api/setup", {
       method: "POST",
@@ -473,13 +471,32 @@ describe("portico serve", () => {
       body: JSON.stringify({ token: link!.split("#")[1], name: "Chris", password: PASSWORD, publicUrl: "http://localhost:8802" }),
     });
     expect(res.status).toBe(200);
-    expect(localSetupLink(p, {})).toBeNull();
+    expect(localSetupLink(p, {}, true)).toBeNull();
+  });
+
+  test("a start whose output isn't a terminal makes no link, and each link a start prints ends the ones before", async () => {
+    const p = makePortico({ setup: false, config: { publicUrl: null, port: 8802 } });
+    // A container's log, a pipe: nothing is made, so nothing can be read out of a log.
+    expect(localSetupLink(p, {}, false)).toBeNull();
+    expect((p.db.query("SELECT COUNT(*) AS n FROM setup_links").get() as { n: number }).n).toBe(0);
+    expect(localBeforeSetup(p, {})).toBe(true);
+    expect(copyProblems(SETUP_LINK_HINT)).toEqual([]);
+    const first = localSetupLink(p, {}, true)!;
+    const second = localSetupLink(p, {}, true)!;
+    const setUp = (link: string) =>
+      p.app.request("http://localhost:8802/api/setup", {
+        method: "POST",
+        headers: { origin: "http://localhost:8802", host: "localhost:8802", "content-type": "application/json" },
+        body: JSON.stringify({ token: link.split("#")[1], name: "Chris", password: PASSWORD, publicUrl: "http://localhost:8802" }),
+      });
+    expect((await setUp(first)).status).toBe(404);
+    expect((await setUp(second)).status).toBe(200);
   });
 
   test("a public URL elsewhere, or a cloud platform, prints no link", () => {
-    expect(localSetupLink(makePortico({ setup: false }), {})).toBeNull();
-    expect(localSetupLink(makePortico({ setup: false, config: { publicUrl: null } }), { RENDER_EXTERNAL_URL: "https://a.onrender.com" })).toBeNull();
-    expect(localSetupLink(makePortico({ setup: false, config: { publicUrl: "http://127.0.0.1:8802" } }), {})).toContain(
+    expect(localSetupLink(makePortico({ setup: false }), {}, true)).toBeNull();
+    expect(localSetupLink(makePortico({ setup: false, config: { publicUrl: null } }), { RENDER_EXTERNAL_URL: "https://a.onrender.com" }, true)).toBeNull();
+    expect(localSetupLink(makePortico({ setup: false, config: { publicUrl: "http://127.0.0.1:8802" } }), {}, true)).toContain(
       "http://127.0.0.1:8802/setup#",
     );
   });

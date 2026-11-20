@@ -1,15 +1,18 @@
 import type { ActivityEntry, ActivityKind } from "../core/activity";
 import type { Agents, Run } from "../core/agents";
+import type { Core } from "../core/core";
 import type { Approvals } from "../core/approvals";
 import type { Files } from "../core/files";
 import type { Messages } from "../core/messages";
 import type { People } from "../core/people";
-import type { Task, TaskOutcome, TaskReason, TaskStepKind } from "../core/tasks";
+import { neverSent, type Task, type TaskOutcome, type TaskReason, type TaskStepKind } from "../core/tasks";
+import type { Workspaces } from "../core/workspaces";
 import type {
   Agent,
   AgentKind,
   AgentType,
   Decision,
+  HeldFor,
   LiveStatus,
   Message,
   MessageStatus,
@@ -17,6 +20,7 @@ import type {
   PersonStatus,
   Role,
   Thread,
+  Workspace,
 } from "../core/types";
 
 // The person API's shapes, camelCase. Home, Settings and any later client render from these and nothing else.
@@ -24,6 +28,8 @@ import type {
 export interface PersonRef {
   id: string;
   name: string;
+  /** What goes in front of the person's agents' names for everyone else. */
+  handle?: string | null;
 }
 
 export interface PersonView extends PersonRef {
@@ -31,6 +37,8 @@ export interface PersonView extends PersonRef {
   status: PersonStatus;
   isMe: boolean;
   agentCount: number;
+  /** The signed-in person's own verified address, where sign-in is by account. Never anyone else's. */
+  email?: string | null;
 }
 
 export interface AgentRef {
@@ -65,6 +73,10 @@ export interface AgentView {
   lastSeen: string | null;
   checkInMinutes: number | null;
   approvalRequired: boolean;
+  /** "Ask me before this agent sends to other people's agents." Only said to the agent's own person. */
+  outboundHold: boolean;
+  /** When the agent's person revoked it, or null. */
+  revokedAt: string | null;
   createdAt: string;
   /** Sessions: how many terminals or Codex conversations are open in the folder now. */
   liveRuns: number;
@@ -105,7 +117,7 @@ export interface MessageView {
 
 /** A held message as its approval card shows it, with the facts Portico checks itself (managedBy: the sender's manager). */
 export interface HeldCard extends MessageView {
-  facts: { managedBy: PersonRef; replyToRecipient: boolean; earlier: { decision: Decision; at: string }[] };
+  facts: { managedBy: PersonRef; heldFor: HeldFor; newSender: boolean; replyToRecipient: boolean; earlier: { decision: Decision; at: string }[] };
 }
 
 /** One side of a thread, with who manages the agent: the panel names managers when two people's agents talk. */
@@ -113,7 +125,35 @@ export interface ThreadAgent extends AgentRef {
   owner: PersonRef;
 }
 
-export interface ThreadView {
+/**
+ * Where a conversation runs. A pair of agents can have conversations in more than one Portico: when the Portico that
+ * joined the two stops doing so, the conversation there is read-only and the next one starts in another the two share.
+ * The pages show those under one heading, each part with this.
+ */
+export interface Place {
+  workspaceId: string;
+  /** The Portico's name as the signed-in person reads it: "Personal Portico", "Launch". Empty once the Portico's row is gone. */
+  portico: string;
+  /** The Portico no longer joins the two agents: nothing new goes in this conversation. */
+  readOnly: boolean;
+}
+
+/**
+ * A Portico's name as its heading: a person's own is "Personal Portico" to that person, and the shared one the person
+ * started with is "Shared Portico".
+ */
+export function porticoTitle(w: Pick<Workspace, "kind" | "ownerId" | "name" | "starter">, me: Pick<Person, "id">): string {
+  if (w.ownerId !== me.id) return w.name;
+  return w.kind === "personal" ? "Personal Portico" : w.starter ? "Shared Portico" : w.name;
+}
+
+/** The same Portico inside a sentence: "your Personal Portico", "the Launch Portico". */
+export function porticoPhrase(w: Pick<Workspace, "kind" | "ownerId" | "phrase" | "starter">, me: Pick<Person, "id">): string {
+  if (w.ownerId !== me.id) return w.phrase;
+  return w.kind === "personal" ? "your Personal Portico" : w.starter ? "your Shared Portico" : w.phrase;
+}
+
+export interface ThreadView extends Place {
   id: string;
   a: ThreadAgent;
   b: ThreadAgent;
@@ -125,7 +165,7 @@ export interface ThreadView {
 }
 
 /** One task: a conversation between two agents, with where it stands. */
-export interface TaskView {
+export interface TaskView extends Place {
   id: string;
   subject: string;
   from: AgentRef;
@@ -173,22 +213,13 @@ export interface ActivityView {
 
 // Shapes other tracks build. Kept here so every client agrees on them.
 
-/** An app agent's request to join, shown under Needs approval with its 4-digit code. */
-export interface SignInView {
-  id: string;
-  kind: AgentKind;
-  name: string;
-  code: string;
-  status: "pending" | "approved" | "denied" | "expired";
-  createdAt: string;
-  expiresAt: string;
-}
-
 export interface ComputerView {
   id: string;
   name: string;
   lastSeen: string | null;
   sessions: AgentView[];
+  /** The person chose Always allow for this computer: sessions here aren't asked about for being new. */
+  alwaysAllowed: boolean;
 }
 
 export interface InviteView {
@@ -216,6 +247,7 @@ export interface PasskeyView {
 }
 
 export interface ViewDeps {
+  workspaces: Workspaces;
   agents: Agents;
   people: People;
   messages: Messages;
@@ -233,12 +265,21 @@ function clipText(text: string, max = QUOTE_MAX): string {
 
 /** View builders for one signed-in person. */
 export function personViews(deps: ViewDeps, me: Person) {
-  const { agents, people, messages, approvals, files } = deps;
+  const { agents, people, messages, approvals, files, workspaces } = deps;
+  const titles = new Map<string, string>();
+  /** Where a conversation between the two runs, and whether anything new can still go there. */
+  const place = (workspaceId: string, aId: string, bId: string): Place => {
+    if (!titles.has(workspaceId)) {
+      const w = workspaces.known(workspaceId);
+      titles.set(workspaceId, w ? porticoTitle(w, me) : "");
+    }
+    return { workspaceId, portico: titles.get(workspaceId)!, readOnly: !workspaces.joins(workspaceId, aId, bId) };
+  };
   const peopleById = new Map<string, Person | null>();
   const personRef = (id: string): PersonRef => {
     if (!peopleById.has(id)) peopleById.set(id, people.get(id));
     const person = peopleById.get(id);
-    return { id, name: person?.name ?? "" };
+    return { id, name: person?.name ?? "", ...(person?.handle ? { handle: person.handle } : {}) };
   };
   const refs = new Map<string, AgentRef>();
   const agentRef = (id: string): AgentRef => {
@@ -246,14 +287,14 @@ export function personViews(deps: ViewDeps, me: Person) {
     if (known) return known;
     const agent = agents.get(id);
     const ref: AgentRef = agent
-      ? { id, display: agents.display(agent), label: agents.label(agent), kind: agent.kind }
+      ? { id, display: agents.nameFor(agent, me.id), label: agents.label(agent), kind: agent.kind }
       : { id, display: id, label: id, kind: "other" };
     refs.set(id, ref);
     return ref;
   };
 
   const agent = (a: Agent): AgentView => {
-    const entry = agents.entry(a);
+    const entry = agents.entryFor(a, me.id);
     return {
       id: a.id,
       name: a.name,
@@ -275,13 +316,15 @@ export function personViews(deps: ViewDeps, me: Person) {
       lastSeen: entry.lastSeen,
       checkInMinutes: entry.checkInMinutes,
       approvalRequired: a.approvalRequired,
+      outboundHold: a.ownerId === me.id && a.outboundHold,
+      revokedAt: a.revokedAt,
       createdAt: a.createdAt,
       liveRuns: agents.liveRuns(a.id),
     };
   };
 
   const message = (m: Message): MessageView => {
-    const original = m.replyTo ? messages.get(m.replyTo) : null;
+    const original = messages.original(m);
     return {
       id: m.id,
       threadId: m.threadId,
@@ -305,7 +348,7 @@ export function personViews(deps: ViewDeps, me: Person) {
       decision: m.decision,
       decidedAt: m.decidedAt,
       decidedBy: m.decidedBy ? personRef(m.decidedBy) : null,
-      files: files.of(m.id).map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.size })),
+      files: files.of(m).map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.size })),
     };
   };
 
@@ -325,21 +368,26 @@ export function personViews(deps: ViewDeps, me: Person) {
             createdAt: previous.createdAt,
           }
         : view.replyTo,
-      facts: { managedBy: personRef(facts.managedBy.id), replyToRecipient: facts.replyToRecipient, earlier: facts.earlier },
+      facts: { managedBy: personRef(facts.managedBy.id), heldFor: facts.heldFor, newSender: facts.newSender, replyToRecipient: facts.replyToRecipient, earlier: facts.earlier },
     };
   };
 
   const threadAgent = (id: string): ThreadAgent => {
     const agent = agents.get(id);
     return agent
-      ? { id, display: agents.display(agent), label: agents.label(agent), kind: agent.kind, owner: personRef(agent.ownerId) }
+      ? { id, display: agents.nameFor(agent, me.id), label: agents.label(agent), kind: agent.kind, owner: personRef(agent.ownerId) }
       : { id, display: id, label: id, kind: "other", owner: personRef("") };
   };
 
+  /** A message held on its way out is its sender's person's to see first: the other side reads it once it is let go. */
+  const notYetSent = (m: Pick<Message, "status" | "heldFor" | "fromId">): boolean => neverSent(m) && agents.get(m.fromId)?.ownerId !== me.id;
+
   const thread = (t: Thread): ThreadView => {
-    const summary = messages.threadSummary(t.id);
+    // What never left someone else's side is neither the newest message nor counted, wherever in the thread it is.
+    const summary = messages.threadSummary(t, agents.ownedBy(me.id).map((a) => a.id));
     return {
       id: t.id,
+      ...place(t.workspaceId, t.aId, t.bId),
       a: threadAgent(t.aId),
       b: threadAgent(t.bId),
       startedBy: t.startedBy,
@@ -357,13 +405,19 @@ export function personViews(deps: ViewDeps, me: Person) {
     };
   };
 
+  let seenAgents: Set<string> | null = null;
+  const seen = () => (seenAgents ??= workspaces.visibleAgents(me.id));
   const person = (p: Person): PersonView => ({
     id: p.id,
     name: p.name,
     role: p.role,
     status: p.status,
     isMe: p.id === me.id,
-    agentCount: agents.ownedBy(p.id).length,
+    // Someone else's agents count only as far as the signed-in person reaches them: an agent kept out of every shared
+    // Portico stays unknown, even as a number. A Portico server's owner, who removes people, sees the whole count.
+    agentCount: p.id === me.id || me.role === "owner" ? agents.ownedBy(p.id).length : agents.ownedBy(p.id).filter((a) => seen().has(a.id)).length,
+    ...(p.handle ? { handle: p.handle } : {}),
+    ...(p.id === me.id && p.email ? { email: p.email } : {}),
   });
 
   const allowEntry = (entry: { senderId: string; addedBy: string; addedAt: string }): AllowEntry => ({
@@ -377,8 +431,9 @@ export function personViews(deps: ViewDeps, me: Person) {
     t: Thread,
     range: { before?: string; limit?: number } = {},
   ): { thread: ThreadView; messages: MessageView[]; more: boolean } => {
-    const page = messages.inThread(t.id, range);
-    return { thread: thread(t), messages: page.messages.map(message), more: page.more };
+    const page = messages.inThread(t, range);
+    const shown = page.messages.filter((m) => !notYetSent(m));
+    return { thread: thread(t), messages: shown.map(message), more: page.more };
   };
 
   const projectOf = (id: string): string | null => {
@@ -388,6 +443,7 @@ export function personViews(deps: ViewDeps, me: Person) {
 
   const task = (t: Task): TaskView => ({
     id: t.id,
+    ...place(t.workspaceId, t.fromId, t.toId),
     subject: t.subject,
     from: agentRef(t.fromId),
     to: agentRef(t.toId),
@@ -430,21 +486,24 @@ export function personViews(deps: ViewDeps, me: Person) {
     detail: e.detail,
   });
 
-  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef, task, run, activity };
+  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef, task, run, activity, place, notYetSent };
 }
 
 export type PersonViews = ReturnType<typeof personViews>;
 
-/** The owner sees every thread. A member sees only threads with at least one of the member's own agents. */
-export function canSeeThread(agents: Agents, me: Person, thread: Thread): boolean {
-  if (me.role === "owner") return true;
+/** A person reads a thread only when one of the person's own agents is in it. That holds for everyone, a server's owner too. */
+export function canSeeThread(core: Pick<Core, "agents">, me: Person, thread: Thread): boolean {
+  const { agents } = core;
   const mine = new Set(agents.ownedBy(me.id).map((a) => a.id));
   return mine.has(thread.aId) || mine.has(thread.bId);
 }
 
-/** Every agent, the signed-in person's first, then by owner, then as the agent list orders them. */
+/**
+ * Every agent the person sees, the signed-in person's first, then by owner, then as the agent list orders them. Only
+ * the person's own agents and those in a workspace the person is in.
+ */
 export function agentsInOrder(agents: Agents, me: Person): Agent[] {
-  const entries = agents.entries();
+  const entries = agents.entriesForPerson(me.id);
   return [
     ...entries.filter((e) => e.agent.ownerId === me.id),
     ...entries.filter((e) => e.agent.ownerId !== me.id),

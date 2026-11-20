@@ -221,34 +221,52 @@ describe("registration", () => {
     expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.13")).status).toBe(201);
   });
 
-  test("at most 500 an hour from all addresses together", async () => {
+  test("registrations from many addresses never close registration for everyone else", async () => {
     const p = makePortico();
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 520; i++) {
       expect((await register(p, { redirect_uris: [REDIRECT] }, `10.0.${i >> 8}.${i & 255}`)).status).toBe(201);
     }
-    expect((await register(p, { redirect_uris: [REDIRECT] }, "10.9.9.9")).status).toBe(429);
-    p.clock.advance(HOUR + MINUTE);
     expect((await register(p, { redirect_uris: [REDIRECT] }, "10.9.9.9")).status).toBe(201);
   });
 
-  test("no new registrations while 1000 clients are unused; clients holding a code or token don't count", async () => {
+  test("clients no proxy reported an address for aren't counted as one address", async () => {
+    const p = makePortico();
+    for (let i = 0; i < 25; i++) expect((await register(p, { redirect_uris: [REDIRECT] })).status).toBe(201);
+  });
+
+  test("past 1000 unused clients, a new registration takes the oldest one's place; clients holding a code or token stay", async () => {
     const { p, clientId, code, verifier } = await authorized();
     await exchange(p, clientId, code, verifier);
     // As after a restart: unused clients already stored, the in-memory limits empty.
     const insert = p.db.query(
       "INSERT INTO oauth_clients (id, client_id, name, redirect_uris, created_at) VALUES ($id, $id, 'Flood', '[]', $at)",
     );
-    for (let i = 0; i < 999; i++) insert.run({ id: `flood-${i}`, at: p.now().toISOString() });
+    for (let i = 0; i < 1000; i++) {
+      insert.run({ id: `flood-${i}`, at: p.now().toISOString() });
+      p.clock.advance(1);
+    }
+    // An older unused client goes first: one made in the last minutes is spared while any older one remains.
+    insert.run({ id: "old-one", at: new Date(p.now().getTime() - 11 * MINUTE).toISOString() });
     expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.1")).status).toBe(201);
-    const refused = await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.2");
-    expect(refused.status).toBe(429);
-    expect(await refused.json()).toMatchObject({ error: "temporarily_unavailable" });
+    const there = (id: string) => p.db.query("SELECT 1 FROM oauth_clients WHERE client_id = $id").get({ id }) !== null;
+    expect(there("old-one")).toBe(false);
+    expect(there("flood-0")).toBe(false); // 1001 unused before the call: one more had to go, the oldest young one
+    expect(there("flood-1")).toBe(true);
+    // With only young ones left, registration still never closes: the oldest of them makes room.
+    const res = await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.1");
+    expect(res.status).toBe(201);
+    const fresh = (await json<{ client_id: string }>(res)).client_id;
+    const has = (id: string) => p.db.query("SELECT 1 FROM oauth_clients WHERE client_id = $id").get({ id }) !== null;
+    // 1000 unused are kept, and the one with a token besides.
     expect(clientCount(p)).toBe(1001);
-    // An hour on, the minute sweep clears the unused ones and registration opens again.
+    expect(has("flood-1")).toBe(false);
+    expect(has("flood-2")).toBe(true);
+    expect(has(fresh)).toBe(true);
+    expect(has(clientId)).toBe(true);
+    // An hour on, the minute sweep clears the unused ones.
     p.clock.advance(HOUR + MINUTE);
     p.sweepMinute();
     expect(clientCount(p)).toBe(1);
-    expect((await register(p, { redirect_uris: [REDIRECT] }, "192.0.2.2")).status).toBe(201);
   });
 
   test("redirect URIs are bounded by the bytes stored, so escaped control characters can't pad a client", async () => {
@@ -287,22 +305,26 @@ describe("the consent page", () => {
     expect(Object.fromEntries(back.searchParams)).toEqual(Object.fromEntries(new URLSearchParams(query)));
   });
 
-  test("a signed-in person sees D2: the client asks, a Name and a kind, then Cancel and Add agent", async () => {
+  test("a signed-in person sees the consent page: the app as a quote, a name and a kind, then Don't allow and Allow", async () => {
     const p = makePortico();
     const cookie = signIn(p, await addOwner(p));
     const clientId = await client(p);
     const res = await getAuthorize(p, authorizeQuery(clientId, pkce().challenge), cookie);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("Claude Duet wants to add an agent to Portico");
-    expect(html).toContain("Requested at");
-    // The client picks its own name; where approval sends access is what can be trusted.
-    expect(html).toContain("Approving sends access to <strong>localhost:4567</strong>.");
+    // The name is the app's own claim: never the heading, always a quote.
+    expect(html).toContain("<h1>Allow this app to join?</h1>");
+    expect(html).toContain("The app gave the name “Claude Duet”. Started <time");
+    // The client picks its own name; where approval sends access is what can be trusted, shown as a quote above the buttons.
+    expect(html).toContain("Access goes to <strong>“localhost:4567”</strong>. Any app can use that name: only allow if you just added Portico in your own app and that address belongs to it.");
+    expect(html).not.toContain('name="mine"');
+    expect(html.indexOf("only allow if")).toBeLessThan(html.indexOf('type="submit"'));
     expect(html).toContain('value="claude-duet" aria-describedby="c-name-help"');
     expect(html).toMatch(/value="claude-duet" checked>Claude Duet/);
-    expect(html).toContain("Other agents use this name when sending messages.");
-    expect(html).toContain("Once approved, this agent can message every agent on Portico and get replies.");
-    expect(html.indexOf(">Cancel</a>")).toBeLessThan(html.indexOf(">Add agent</button>"));
+    expect(html).toContain("Lowercase letters, digits and hyphens.");
+    // No handle step for a person who has one.
+    expect(html).not.toContain('name="handle"');
+    expect(html.indexOf(">Don't allow</a>")).toBeLessThan(html.indexOf(">Allow</button>"));
     expect(html).toContain(`href="${REDIRECT}?error=access_denied&amp;state=state-123"`);
     expect(html).toContain("Chris</span></header>");
     expect(res.headers.get("content-security-policy")).toContain("form-action 'self' http://localhost:4567;");
@@ -316,7 +338,7 @@ describe("the consent page", () => {
     const clientId = await client(p, "ChatGPT");
     const html = await (await getAuthorize(p, authorizeQuery(clientId, pkce().challenge), signIn(p, chris))).text();
     expect(html).toContain('value="dots-2" aria-describedby');
-    expect(html).toMatch(/value="dots" checked>Dots/);
+    expect(html).toMatch(/value="dots" checked>ChatGPT\/Dots/);
     expect(guessKind("Claude Duet")).toBe("claude-duet");
     expect(guessKind("Cursor")).toBe("other");
   });
@@ -461,9 +483,8 @@ describe("tokens", () => {
     const second = await json<Tokens>(token(p, { grant_type: "refresh_token", client_id: clientId, refresh_token: first.refresh_token }));
     expect(second.access_token).toStartWith("pt_");
     expect((await mcpTools(p, second.access_token)).status).toBe(200);
-    expect(await json(token(p, { grant_type: "refresh_token", client_id: clientId, refresh_token: first.refresh_token }))).toMatchObject({
-      error: "invalid_grant",
-    });
+    // The access token the client held before the swap stops with it.
+    expect((await mcpTools(p, first.access_token)).status).toBe(401);
     const other = await client(p, "Other");
     expect(await json(token(p, { grant_type: "refresh_token", client_id: other, refresh_token: second.refresh_token }))).toMatchObject({
       error: "invalid_grant",
@@ -472,6 +493,22 @@ describe("tokens", () => {
     const basic = `Basic ${Buffer.from(`${clientId}:ignored`).toString("base64")}`;
     const third = await token(p, { grant_type: "refresh_token", refresh_token: second.refresh_token }, { authorization: basic });
     expect(third.status).toBe(200);
+  });
+
+  test("a refresh token handed in a second time ends every token of that agent and client", async () => {
+    const { p, clientId, code, verifier } = await authorized();
+    const first = await json<Tokens>(exchange(p, clientId, code, verifier));
+    // Whoever copied the refresh token uses it first, and refreshes again.
+    const thief = await json<Tokens>(token(p, { grant_type: "refresh_token", refresh_token: first.refresh_token }));
+    const thiefNext = await json<Tokens>(token(p, { grant_type: "refresh_token", refresh_token: thief.refresh_token }));
+    expect((await mcpTools(p, thiefNext.access_token)).status).toBe(200);
+    // The app the person added then hands in the one it holds: the same answer as any bad token, and the line ends.
+    const replay = await token(p, { grant_type: "refresh_token", client_id: clientId, refresh_token: first.refresh_token });
+    expect(replay.status).toBe(400);
+    expect(await replay.json()).toMatchObject({ error: "invalid_grant" });
+    expect((await mcpTools(p, thiefNext.access_token)).status).toBe(401);
+    expect(await json(token(p, { grant_type: "refresh_token", refresh_token: thiefNext.refresh_token }))).toMatchObject({ error: "invalid_grant" });
+    expect((p.db.query("SELECT COUNT(*) AS n FROM agent_tokens").get() as { n: number }).n).toBe(0);
   });
 
   test("refresh tokens last 90 days", async () => {
@@ -498,7 +535,7 @@ describe("tokens", () => {
     await client(p, "Never used");
     await exchange(p, clientId, code, verifier);
     p.clock.advance(8 * DAY);
-    expect(p.computers.sweep()).toEqual({ joinLines: 0, oauthCodes: 1, tokens: 1 });
+    expect(p.computers.sweep()).toEqual({ oauthCodes: 1, tokens: 1 });
     expect(p.computers.sweepUnusedClients()).toBe(1);
     expect(clientCount(p)).toBe(1);
   });
@@ -603,7 +640,10 @@ describe("an MCP SDK client end to end", () => {
     const connected = new Client({ name: "portico-test", version: "1.0.0" });
     await connected.connect(transport);
     const { tools } = await connected.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "set_wake_url"]);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "set_wake_url",
+      "list_porticos", "create_portico", "add_to_portico", "remove_from_portico", "rename_portico", "delete_portico", "share_portico", "join_portico",
+    ]);
     const listed = await connected.callTool({ name: "list_agents", arguments: {} });
     expect(listed.isError).toBeFalsy();
     expect(p.agents.byAddress("duet")?.type).toBe("connector");

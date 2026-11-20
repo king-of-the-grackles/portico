@@ -21,9 +21,14 @@ export class Settings {
       .run({ key, value });
   }
 
-  /** PORTICO_PUBLIC_URL when set, else the address confirmed at setup, else this computer's own address. */
+  /** The one address Portico answers at: PORTICO_PUBLIC_URL when set, else the address confirmed at setup, else this computer's own. */
   publicUrl(): string {
     return this.config.publicUrl ?? this.get("public_url") ?? `http://localhost:${this.config.port}`;
+  }
+
+  /** The public URL someone set or confirmed: PORTICO_PUBLIC_URL, else the address confirmed at setup. Null before either. */
+  knownPublicUrl(): string | null {
+    return this.config.publicUrl ?? this.get("public_url");
   }
 
   /** Until setup is done, Portico and joining stay closed. */

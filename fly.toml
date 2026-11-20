@@ -1,6 +1,8 @@
 # Fly.io config for Portico. Nothing to fill in: pass the app's name with -a on each fly command.
-# Portico keeps the database and signing key on the volume at /data. After the first deploy, run
+# Portico keeps its data folder (databases, files and signing key) on the volume at /data. After the first deploy, run
 # `fly ssh console -a <app name> -C "portico setup"`.
+# One required secret, set before the first deploy: Portico doesn't start without it, and it never goes in a file.
+#   fly secrets set PORTICO_SECRETS_KEY="$(openssl rand -base64 32)" -a <app name>
 app = "portico"
 primary_region = "iad"
 
@@ -8,7 +10,7 @@ primary_region = "iad"
   dockerfile = "Dockerfile"
 
 [env]
-  PORTICO_DB_PATH = "/data/portico.db"
+  PORTICO_DATA_DIR = "/data"
   # Where /join tells computers to install the Claude Code plugin from.
   PORTICO_PLUGIN_SOURCE = "king-of-the-grackles/portico"
 

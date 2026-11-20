@@ -12,7 +12,7 @@ export function newToken(prefix: TokenPrefix): string {
   return prefix + randomBytes(32).toString("base64url");
 }
 
-/** A one-time secret for a link fragment (join lines, invites, setup links): 16 random bytes, base64url. */
+/** A one-time secret for a link fragment (share links, invites, setup links): 16 random bytes, base64url. */
 export function newLinkSecret(): string {
   return randomBytes(16).toString("base64url");
 }
@@ -23,6 +23,11 @@ export const LINK_SECRET = /^[A-Za-z0-9_-]{16,64}$/;
 /** SHA-256 hex. Every token, code and secret is stored only as this. */
 export function hashSecret(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+/** A session key as agent_runs stores it: Portico only ever checks one, so only its hash is kept. A raw key never holds a colon. */
+export function sessionKeyHash(key: string): string {
+  return `h:${hashSecret(key)}`;
 }
 
 /** Constant-time string comparison. */

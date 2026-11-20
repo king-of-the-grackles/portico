@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
+import { SECRETS_KEY_HELP, SECRETS_KEY_MISSING, secretsKeyBytes } from "./core/secrets";
 import { cleanPublicUrl } from "./core/settings";
-import type { BucketConfig, PorticoConfig } from "./core/types";
+import type { BucketConfig, MailConfig, PorticoConfig } from "./core/types";
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {
@@ -13,18 +14,29 @@ export class ConfigError extends Error {
 
 /** Not 8787 (Claude Code's fakechat channel demo) or 8788 (the Channels webhook example). */
 export const DEFAULT_PORT = 8790;
-export const DEFAULT_DB_PATH = "./portico.db";
+export const DEFAULT_DATA_DIR = "./data";
+const DB_FILE = "portico.db";
 const SIGNING_KEY_FILE = "signing.key";
 
 type Env = Record<string, string | undefined>;
 
+/** Settings from before Portico had one data folder, and what replaces each. */
+const RETIRED: Record<string, string> = {
+  PORTICO_DB_PATH: "PORTICO_DB_PATH is no longer read. Set PORTICO_DATA_DIR to the data folder: the database is portico.db inside it.",
+  PORTICO_HOSTED_DOMAIN:
+    "PORTICO_HOSTED_DOMAIN is no longer read. Set PORTICO_PUBLIC_URL to the address people open, and PORTICO_DATA_DIR to the data folder.",
+  PORTICO_HOSTED_DATA: "PORTICO_HOSTED_DATA is no longer read. Set PORTICO_DATA_DIR to the data folder.",
+};
+
 /**
- * Everything is optional: PORT, PORTICO_DB_PATH, PORTICO_PLUGIN_SOURCE, PORTICO_PUBLIC_URL,
- * PORTICO_WEBHOOKS_ALLOW_PRIVATE and the bucket for files. The signing key is passed in, so this stays free of file
- * access (see loadConfig).
+ * Everything is optional: PORT, PORTICO_DATA_DIR (default ./data), PORTICO_PUBLIC_URL, PORTICO_PLUGIN_SOURCE,
+ * PORTICO_WEBHOOKS_ALLOW_PRIVATE, PORTICO_SECRETS_KEY (optional here, required to serve: see loadConfig), the bucket for files, email through Resend, and PORTICO_DESCOPE_PROJECT_ID, which
+ * switches sign-in from this server's own passwords to Descope. The signing key is passed in, so this stays free of
+ * file access (see loadConfig).
  */
 export function parseEnv(env: Env, signingKey: string): PorticoConfig {
   const problems: string[] = [];
+  for (const [name, problem] of Object.entries(RETIRED)) if (env[name]?.trim()) problems.push(problem);
   const port = env.PORT?.trim() ? Number(env.PORT) : DEFAULT_PORT;
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push(`PORT "${env.PORT}" is not a valid port`);
   let publicUrl: string | null = null;
@@ -37,19 +49,53 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
       );
     }
   }
+  const descopeProjectId = env.PORTICO_DESCOPE_PROJECT_ID?.trim() || null;
+  if (descopeProjectId !== null && !/^[A-Za-z0-9]{8,64}$/.test(descopeProjectId)) {
+    problems.push("PORTICO_DESCOPE_PROJECT_ID must be a Descope project ID: letters and digits only");
+  }
+  const secretsKey = env.PORTICO_SECRETS_KEY?.trim() || null;
+  const secretsKeyOld = env.PORTICO_SECRETS_KEY_OLD?.trim() || null;
+  // Never the value itself in a message: a key that is nearly right is still most of a key.
+  for (const [name, value] of [["PORTICO_SECRETS_KEY", secretsKey], ["PORTICO_SECRETS_KEY_OLD", secretsKeyOld]] as const) {
+    if (value !== null && !secretsKeyBytes(value)) problems.push(`${name} must be 32 random bytes as base64. ${SECRETS_KEY_HELP}`);
+  }
+  if (secretsKey !== null && secretsKey === secretsKeyOld) {
+    problems.push("PORTICO_SECRETS_KEY_OLD is the same key as PORTICO_SECRETS_KEY. Set PORTICO_SECRETS_KEY to a new key, or remove PORTICO_SECRETS_KEY_OLD.");
+  }
   const files = bucketConfig(env, problems);
+  const mail = mailConfig(env, problems, publicUrl ? `Portico <invites@mail.${new URL(publicUrl).hostname}>` : null);
   if (problems.length > 0) throw new ConfigError(problems);
-  const dbPath = env.PORTICO_DB_PATH?.trim() || DEFAULT_DB_PATH;
+  const dataDir = env.PORTICO_DATA_DIR?.trim() || DEFAULT_DATA_DIR;
   return {
     port,
-    dbPath,
-    dataDir: dbPath === ":memory:" ? "." : dirname(resolve(dbPath)),
+    dbPath: join(dataDir, DB_FILE),
+    dataDir,
     pluginSource: env.PORTICO_PLUGIN_SOURCE?.trim() || null,
     publicUrl,
     signingKey,
+    secretsKey,
+    secretsKeyOld,
     webhooksAllowPrivate: env.PORTICO_WEBHOOKS_ALLOW_PRIVATE?.trim() === "1",
     files,
+    mail,
+    descopeProjectId,
   };
+}
+
+/**
+ * Email through Resend, only when PORTICO_RESEND_API_KEY is set. PORTICO_MAIL_FROM names the sender, on a domain
+ * verified with Resend; with a public URL it defaults to invites@mail.<the URL's host>. PORTICO_RESEND_WEBHOOK_SECRET is the signing
+ * secret of the Resend webhook that reports bounces and complaints to /api/mail/resend.
+ */
+function mailConfig(env: Env, problems: string[], defaultFrom: string | null): MailConfig | null {
+  const apiKey = env.PORTICO_RESEND_API_KEY?.trim();
+  if (!apiKey) return null;
+  const from = env.PORTICO_MAIL_FROM?.trim() || defaultFrom;
+  if (!from || !/^[^<>\r\n]*<?[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>?$/.test(from)) {
+    problems.push("PORTICO_MAIL_FROM must name the sender, such as Portico <invites@mail.portico.example>");
+    return null;
+  }
+  return { apiKey, from, webhookSecret: env.PORTICO_RESEND_WEBHOOK_SECRET?.trim() || null };
 }
 
 /**
@@ -75,51 +121,6 @@ function bucketConfig(env: Env, problems: string[]): BucketConfig | null {
     region: pick("PORTICO_FILES_REGION", "AWS_REGION"),
     accessKeyId,
     secretAccessKey,
-  };
-}
-
-/** Hosted Portico: many workspaces on one server, each at `<slug>.<domain>` with a data folder of its own. */
-export interface HostedConfig {
-  /** The base domain, with a port when there is one: `portico.example`, or `localhost:8790` on a developer's computer. */
-  domain: string;
-  /** The base domain's own address: sign-up and "your workspaces". */
-  baseUrl: string;
-  /** Holds control.db and one folder per workspace under `w`. */
-  dataDir: string;
-  port: number;
-  pluginSource: string | null;
-  webhooksAllowPrivate: boolean;
-  files: BucketConfig | null;
-  /** PORTICO_DESCOPE_PROJECT_ID: people sign in with Descope on the base domain. Null keeps each workspace's passwords. */
-  descopeProjectId: string | null;
-}
-
-/**
- * Hosted mode, switched on by PORTICO_HOSTED_DOMAIN. PORTICO_HOSTED_DATA names the data folder (default ./hosted).
- * Null without the domain: Portico then runs as one workspace, as ever. PORTICO_DB_PATH and PORTICO_PUBLIC_URL don't
- * apply in hosted mode: every workspace gets both from its slug.
- */
-export function hostedEnv(env: Env): HostedConfig | null {
-  const raw = env.PORTICO_HOSTED_DOMAIN?.trim().toLowerCase();
-  if (!raw) return null;
-  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/.test(raw)) {
-    throw new ConfigError([`PORTICO_HOSTED_DOMAIN "${raw}" must be a domain, such as portico.example, with no https:// and no path`]);
-  }
-  const base = parseEnv({ ...env, PORTICO_PUBLIC_URL: undefined }, "");
-  const local = raw.split(":")[0] === "localhost";
-  const descopeProjectId = env.PORTICO_DESCOPE_PROJECT_ID?.trim() || null;
-  if (descopeProjectId !== null && !/^[A-Za-z0-9]{8,64}$/.test(descopeProjectId)) {
-    throw new ConfigError(["PORTICO_DESCOPE_PROJECT_ID must be a Descope project ID: letters and digits only"]);
-  }
-  return {
-    domain: raw,
-    baseUrl: `${local ? "http" : "https"}://${raw}`,
-    dataDir: resolve(env.PORTICO_HOSTED_DATA?.trim() || "./hosted"),
-    port: base.port,
-    pluginSource: base.pluginSource,
-    webhooksAllowPrivate: base.webhooksAllowPrivate,
-    files: base.files,
-    descopeProjectId,
   };
 }
 
@@ -158,8 +159,12 @@ export function hostUrl(config: Pick<PorticoConfig, "publicUrl" | "port">, env: 
   return config.publicUrl ?? saved ?? platformUrl(env) ?? `http://localhost:${config.port}`;
 }
 
-/** The config from the environment, with the data folder's signing key, made if missing. */
+/**
+ * The config a server starts with, from the environment, with the data folder and its signing key, both made if
+ * missing. Refused without PORTICO_SECRETS_KEY, before anything is made.
+ */
 export function loadConfig(env: Env = process.env): PorticoConfig {
   const config = parseEnv(env, "");
+  if (config.secretsKey === null) throw new ConfigError([SECRETS_KEY_MISSING]);
   return { ...config, signingKey: ensureSigningKey(config.dataDir) };
 }

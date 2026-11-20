@@ -4,7 +4,7 @@
 # data folder at /data, so `portico setup` writes to the same database the server uses, and the server can read every file.
 set -e
 BIN=/usr/local/lib/portico/portico
-export PORTICO_DB_PATH="${PORTICO_DB_PATH:-/data/portico.db}"
+export PORTICO_DATA_DIR="${PORTICO_DATA_DIR:-/data}"
 
 # `docker run <image> portico setup` works the same as `docker run <image> setup`.
 if [ "$1" = "portico" ]; then

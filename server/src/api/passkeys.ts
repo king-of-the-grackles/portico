@@ -41,14 +41,14 @@ export function passkeyRoutes(core: Core): Hono<PersonEnv> {
       credential: body.credential,
       name: body.name,
     });
-    core.changes.emit("me");
+    core.changes.about({ people: [me.id] }, "me");
     return c.json({ passkey: passkeyView(passkey) }, 201);
   });
 
   route.delete("/:id", (c) => {
     const me = currentPerson(c);
     passkeys.remove(me.id, c.req.param("id"));
-    core.changes.emit("me");
+    core.changes.about({ people: [me.id] }, "me");
     return c.body(null, 204);
   });
 

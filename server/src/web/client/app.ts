@@ -4,11 +4,17 @@
 import { api, ApiError, firstData } from "./api.js";
 import { clock, kindInfo, midnight, plural } from "./render/common.js";
 import { homeState, renderHome } from "./render/home.js";
+import { porticoOpen } from "./render/nav.js";
 import { renderSettings, settingsState } from "./render/settings.js";
 import type {
   ActivityView,
   AddState,
   AgentKind,
+  ConsentCard,
+  ShareView,
+  WorkspaceForm,
+  WorkspacePageData,
+  WorkspaceView,
   AgentPageData,
   AgentView,
   ClaimView,
@@ -17,14 +23,12 @@ import type {
   HomeData,
   HomeState,
   InviteView,
-  NewJoinLine,
   PasskeyView,
   PersonRow,
   PersonView,
   Route,
   SettingsData,
   SettingsState,
-  SignInView,
   TaskDetail,
   TaskListData,
   TodayData,
@@ -223,31 +227,13 @@ function connectStream(handlers: { changed(topics: string[]): void; down(isDown:
 
 // ---- the Add agent sheet, on both pages ----
 
-interface JoinLineDetail {
-  id: string;
-  expiresAt: string;
-  usedAt: string | null;
-  agent: { id: string } | null;
-  signIn: SignInView | null;
-}
-
 function emptyAdd(): AddState {
-  return {
-    line: null,
-    lineError: "",
-    copied: false,
-    stage: "pick",
-    signIn: null,
-    reqName: "",
-    reqError: "",
-    joined: null,
-    busy: false,
-  };
+  return { copied: null, stage: "pick", joined: null, joinedComputer: null };
 }
 
 class AddFlow<S extends Shared> {
   private known = new Set<string>();
-  private creating = false;
+  private knownComputers: Set<string> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private checking = false;
 
@@ -258,8 +244,9 @@ class AddFlow<S extends Shared> {
 
   open(): void {
     this.known = new Set(this.page.state.agents.map((a) => a.id));
+    this.knownComputers = null;
     this.page.set({ add: emptyAdd(), acctOpen: false } as Partial<S>);
-    void this.ensureLine();
+    void this.check();
     this.timer ??= setInterval(() => void this.check(), 4000);
   }
 
@@ -273,48 +260,25 @@ class AddFlow<S extends Shared> {
     return this.page.state.add;
   }
 
-  /** One line for any agent, made when the sheet opens. */
-  async ensureLine(): Promise<void> {
+  async copy(row: string): Promise<void> {
     const add = this.add;
-    if (!add || add.line || this.creating) return;
-    this.creating = true;
-    try {
-      const { joinLine } = await api<{ joinLine: NewJoinLine }>("POST", "/api/join-lines", {});
-      const now = this.add;
-      if (now) {
-        now.line = joinLine;
-        now.lineError = "";
-      }
-    } catch (err) {
-      if (this.add) this.add.lineError = failure(err);
-    } finally {
-      this.creating = false;
-      this.page.schedule();
-    }
-  }
-
-  async copy(): Promise<void> {
-    const add = this.add;
-    if (!add?.line) return;
-    await copyText(add.line.line, "add-line");
-    add.copied = true;
+    if (!add) return;
+    const field = document.getElementById(`add-${row}`);
+    if (!(field instanceof HTMLInputElement)) return;
+    await copyText(field.value, `add-${row}`);
+    add.copied = row;
     this.page.schedule();
     void this.check();
-  }
-
-  /** A used line can't be pasted again: drop it and make a fresh one. */
-  private freshLine(add: AddState): void {
-    add.line = null;
-    void this.ensureLine();
   }
 
   another(): void {
     const add = this.add;
     if (!add) return;
     this.known = new Set(this.page.state.agents.map((a) => a.id));
-    Object.assign(add, { stage: "pick", copied: false, joined: null, signIn: null, reqError: "" });
-    this.freshLine(add);
+    this.knownComputers = null;
+    Object.assign(add, emptyAdd());
     this.page.schedule();
+    void this.check();
   }
 
   done(): void {
@@ -323,93 +287,33 @@ class AddFlow<S extends Shared> {
     this.onDone(joined);
   }
 
-  setName(value: string): void {
-    if (!this.add) return;
-    this.add.reqName = value;
-    this.add.reqError = "";
-    this.page.schedule();
-  }
-
-  async decide(decision: "approve" | "deny"): Promise<void> {
-    const add = this.add;
-    if (!add?.signIn || add.busy) return;
-    const name = add.reqName.trim();
-    if (decision === "approve") {
-      const problem = nameProblem(name);
-      if (problem) {
-        add.reqError = problem;
-        this.page.schedule();
-        return;
-      }
-    }
-    add.busy = true;
-    this.page.schedule();
-    try {
-      const answer = await api<{ agent?: { id: string } } | null>("POST", `/api/approvals/sign-ins/${encodeURIComponent(add.signIn.id)}`, {
-        decision,
-        ...(decision === "approve" ? { name } : {}),
-      });
-      if (decision === "deny") {
-        Object.assign(add, { stage: "pick", copied: false, signIn: null, busy: false });
-        this.freshLine(add);
-      } else {
-        await this.check(answer?.agent?.id);
-      }
-    } catch (err) {
-      add.busy = false;
-      add.reqError = err instanceof ApiError && err.status === 409 ? "Name already in use." : failure(err);
-    }
-    this.page.schedule();
-  }
-
-  /** Looks for the agent the line brought in, or a sign-in request waiting on it. */
-  async check(agentId?: string): Promise<void> {
+  /**
+   * Looks for what joined since the sheet opened: a new agent of this person's, or a new computer, which has no agent
+   * until a session starts there. The join itself is allowed on the consent page, in another tab.
+   */
+  async check(): Promise<void> {
     const add = this.add;
     if (!add || add.stage === "joined" || this.checking) return;
     this.checking = true;
     try {
-      let id = agentId ?? null;
-      let signIn: SignInView | null = null;
-      const line = add.line;
-      if (!id && line) {
-        const { joinLine } = await api<{ joinLine: JoinLineDetail }>("GET", `/api/join-lines/${encodeURIComponent(line.id)}`);
-        id = joinLine.agent?.id ?? null;
-        signIn = joinLine.signIn;
+      const { agents } = await api<{ agents: AgentView[] }>("GET", "/api/agents");
+      this.page.state.agents = agents;
+      const fresh = agents.find((a) => a.mine && !this.known.has(a.id));
+      if (fresh) {
+        Object.assign(add, { stage: "joined", joined: fresh });
+        return;
       }
-      if (id) {
-        let agent = this.page.state.agents.find((a) => a.id === id);
-        if (!agent) {
-          const { agents } = await api<{ agents: AgentView[] }>("GET", "/api/agents");
-          this.page.state.agents = agents;
-          agent = agents.find((a) => a.id === id);
-        }
-        if (agent) this.joined(agent);
-      } else if (signIn?.status === "pending" && add.stage === "pick") {
-        Object.assign(add, { stage: "request", signIn, reqName: signIn.name, reqError: "" });
-      } else if (signIn && signIn.status !== "pending" && signIn.status !== "approved" && add.stage === "request") {
-        Object.assign(add, { stage: "pick", copied: false, signIn: null, busy: false });
-        this.freshLine(add);
-      } else if (add.copied && add.stage === "pick") {
-        // The agent may have guided the person to add Portico's address in the app's settings instead (ChatGPT does):
-        // a connector signs in on Portico's consent page, with no join line, so look for a new one of this person's.
-        const { agents } = await api<{ agents: AgentView[] }>("GET", "/api/agents");
-        this.page.state.agents = agents;
-        const fresh = agents.find((a) => a.mine && a.type === "connector" && !this.known.has(a.id));
-        if (fresh) this.joined(fresh);
-      }
+      const { computers } = await api<{ computers: ComputerView[] }>("GET", "/api/computers");
+      if (this.knownComputers === null) this.knownComputers = new Set(computers.map((c) => c.id));
+      const computer = computers.find((c) => !this.knownComputers!.has(c.id));
+      if (computer) Object.assign(add, { stage: "joined", joinedComputer: computer.name });
     } catch (err) {
-      // The line may be gone (expired) or the endpoint busy; the next check tries again.
+      // The next check tries again.
       if (err instanceof ApiError && err.status === 401) failure(err);
     } finally {
       this.checking = false;
       this.page.schedule();
     }
-  }
-
-  private joined(agent: AgentView): void {
-    const add = this.add;
-    if (!add) return;
-    Object.assign(add, { stage: "joined", joined: agent, busy: false, signIn: null });
   }
 }
 
@@ -466,6 +370,7 @@ const ROUTES: [RegExp, (m: RegExpExecArray) => Route][] = [
   [/^\/$/, () => ({ page: "today" })],
   [/^\/activity\/?$/, () => ({ page: "activity" })],
   [/^\/a\/([^/]+)\/?$/, (m) => ({ page: "agent", id: decodeURIComponent(m[1]!) })],
+  [/^\/p\/([^/]+)\/?$/, (m) => ({ page: "workspace", id: decodeURIComponent(m[1]!) })],
 ];
 
 function routeOf(path: string): Route {
@@ -477,7 +382,16 @@ function routeOf(path: string): Route {
 }
 
 function pathOf(route: Route): string {
-  return route.page === "today" ? "/" : route.page === "activity" ? "/activity" : `/a/${encodeURIComponent(route.id)}`;
+  switch (route.page) {
+    case "today":
+      return "/";
+    case "activity":
+      return "/activity";
+    case "workspace":
+      return `/p/${encodeURIComponent(route.id)}`;
+    case "agent":
+      return `/a/${encodeURIComponent(route.id)}`;
+  }
 }
 
 function query(params: Record<string, string | null | undefined>): string {
@@ -487,8 +401,27 @@ function query(params: Record<string, string | null | undefined>): string {
   return text ? `?${text}` : "";
 }
 
+/** What the person opened or closed in the navigation, kept in this browser. Missing or unreadable: nothing chosen. */
+const NAV_FOLD_KEY = "portico.nav";
+function loadNavFold(): Record<string, boolean> {
+  try {
+    const value = JSON.parse(localStorage.getItem(NAV_FOLD_KEY) ?? "{}") as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([, v]) => typeof v === "boolean")) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+function saveNavFold(fold: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(NAV_FOLD_KEY, JSON.stringify(fold));
+  } catch {
+    // Storage is off in this browser: the navigation still opens and closes for this visit.
+  }
+}
+
 function startHome(root: HTMLElement, data: HomeData): void {
-  const page = new Page<HomeState>(root, homeState({ ...data, now: Date.now() }), renderHome);
+  const page = new Page<HomeState>(root, { ...homeState({ ...data, now: Date.now() }), navFold: loadNavFold() }, renderHome);
   const s = () => page.state;
   const add = new AddFlow(page, (agent) => {
     if (!agent) return;
@@ -505,8 +438,25 @@ function startHome(root: HTMLElement, data: HomeData): void {
   // -- fetching: each loader drops its answer if the page moved on meanwhile --
   const loadAgents = async () => page.set({ agents: (await api<{ agents: AgentView[] }>("GET", "/api/agents")).agents });
   const loadApprovals = async () => {
-    const r = await api<{ held: HeldCard[]; signIns: SignInView[] }>("GET", "/api/approvals");
-    page.set({ held: r.held, signIns: r.signIns });
+    const r = await api<{ held: HeldCard[]; consents?: ConsentCard[] }>("GET", "/api/approvals");
+    page.set({ held: r.held, consents: r.consents ?? [] });
+  };
+  const loadWorkspaces = async () => {
+    page.set({ workspaces: (await api<{ workspaces: WorkspaceView[] }>("GET", "/api/porticos")).workspaces });
+  };
+  const loadWorkspacePage = async () => {
+    const route = s().route;
+    if (route.page !== "workspace") return;
+    try {
+      const workspacePage = await api<WorkspacePageData>("GET", `/api/porticos/${encodeURIComponent(route.id)}`);
+      const now = s().route;
+      if (now.page === "workspace" && now.id === route.id) page.set({ workspacePage });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        go("/");
+        note("That Portico isn't there any more.");
+      } else throw err;
+    }
   };
   const loadMe = async () => page.set({ me: (await api<{ person: PersonView }>("GET", "/api/me")).person });
 
@@ -527,8 +477,9 @@ function startHome(root: HTMLElement, data: HomeData): void {
     const limit = !more && shown && shown.tasks.length > 50 ? String(shown.tasks.length) : null;
     const path = `/api/tasks${query({
       outcome: f.outcome,
-      agent: route.page === "agent" ? route.id : f.agent,
-      project: route.page === "agent" ? null : f.project,
+      agent: route.page === "agent" ? route.id : route.page === "workspace" ? null : f.agent,
+      project: route.page === "activity" ? f.project : null,
+      workspace: route.page === "workspace" ? route.id : null,
       before,
       limit,
     })}`;
@@ -539,7 +490,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
       const list = await api<TaskListData>("GET", path);
       if (ticket !== taskTickets) return;
       const now = s().route;
-      if (now.page !== route.page || (now.page === "agent" && route.page === "agent" && now.id !== route.id)) return;
+      if (pathOf(now) !== pathOf(route)) return;
       if (more) {
         const current = s().tasks;
         page.set({ tasks: { ...list, tasks: [...(current?.tasks ?? []), ...list.tasks] } });
@@ -591,6 +542,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     else jobs.push(loadTasks());
     if (route.page === "activity") jobs.push(loadEvents());
     if (route.page === "agent") jobs.push(loadAgentPage());
+    if (route.page === "workspace") jobs.push(loadWorkspacePage());
     for (const id of Object.keys(s().openTasks)) jobs.push(loadTask(id));
     return settle(jobs);
   };
@@ -605,13 +557,16 @@ function startHome(root: HTMLElement, data: HomeData): void {
     if (t.has("approvals")) jobs.push(loadApprovals());
     if (t.has("me")) jobs.push(loadMe());
     const route = s().route;
+    if (t.has("workspaces") || t.has("people") || t.has("approvals")) jobs.push(loadWorkspaces());
+    if (t.has("workspaces")) jobs.push(loadAgents());
+    if (route.page === "workspace" && (t.has("workspaces") || t.has("people"))) jobs.push(loadWorkspacePage());
     const tasksChanged = t.has("threads") || t.has("approvals");
     if (route.page === "today" && (tasksChanged || t.has("agents"))) jobs.push(loadToday());
     if (route.page !== "today" && tasksChanged) jobs.push(loadTasks());
     if (route.page === "activity" && (t.has("activity") || t.has("agents"))) jobs.push(loadEvents());
     if (route.page === "agent" && (tasksChanged || t.has("agents") || t.has("activity"))) jobs.push(loadAgentPage());
     if (tasksChanged) for (const id of Object.keys(s().openTasks)) jobs.push(loadTask(id));
-    if (s().add && (t.has("join-lines") || t.has("approvals") || t.has("agents"))) jobs.push(add.check());
+    if (s().add && (t.has("computers") || t.has("approvals") || t.has("agents"))) jobs.push(add.check());
     void settle(jobs);
   };
 
@@ -628,6 +583,11 @@ function startHome(root: HTMLElement, data: HomeData): void {
       wakeEdit: null,
       saved: false,
       confirmRemove: false,
+      confirmRevoke: false,
+      wsForm: same ? s().wsForm : null,
+      wsConfirm: null,
+      peopleOpen: same ? s().peopleOpen : false,
+      workspacePage: route.page === "workspace" && s().workspacePage?.workspace.id === route.id ? s().workspacePage : null,
       notice: same ? s().notice : null,
       ...(same
         ? {}
@@ -699,29 +659,174 @@ function startHome(root: HTMLElement, data: HomeData): void {
     }
   };
 
-  const decideSignIn = async (id: string, decision: "approve" | "deny") => {
-    const request = s().signIns.find((r) => r.id === id);
-    if (!request || s().busy) return;
-    page.set({ busy: `signin:${id}` });
+  // -- workspaces --
+  const pageWorkspace = (): WorkspaceView | null => {
+    const route = s().route;
+    if (route.page !== "workspace") return null;
+    return s().workspacePage?.workspace.id === route.id ? s().workspacePage!.workspace : (s().workspaces.find((w) => w.id === route.id) ?? null);
+  };
+  const formError = (err: unknown) => {
+    const form = s().wsForm;
+    if (form) page.set({ wsForm: { ...form, error: failure(err) } });
+  };
+  /** Runs one workspace change, then reloads what shows the workspaces. */
+  const wsRun = async (busy: string, job: () => Promise<void>, onError: (err: unknown) => void = fail) => {
+    if (s().busy) return;
+    page.set({ busy });
     try {
-      const answer = await api<{ agent?: { id: string } } | null>("POST", `/api/approvals/sign-ins/${encodeURIComponent(id)}`, {
-        decision,
-        ...(decision === "approve" ? { name: request.name } : {}),
-      });
-      page.set({ signIns: s().signIns.filter((r) => r.id !== id) });
-      if (decision === "deny") {
-        note(`${request.name} wasn't allowed to join.`);
-        return;
-      }
-      await loadAgents();
-      const agent =
-        s().agents.find((a) => a.id === answer?.agent?.id) ?? s().agents.find((a) => a.mine && a.name === request.name);
-      if (agent) go(`/a/${agent.id}`);
-      note(`${request.name} joined.`);
+      await job();
+      await settle([loadWorkspaces(), loadAgents(), loadWorkspacePage()]);
+    } catch (err) {
+      onError(err);
+    } finally {
+      page.set({ busy: null });
+    }
+  };
+
+  const openNewWorkspace = (thenShare: boolean) => {
+    const route = s().route;
+    // The form shows on a Portico's own page: from anywhere else, on the person's own. The name is optional.
+    const own = s().workspaces.find((w) => w.kind === "personal" && w.isOwner);
+    if (route.page !== "workspace" && own) go(`/p/${encodeURIComponent(own.id)}`);
+    page.set({ wsForm: { kind: "new", name: "", agentIds: [], thenShare, error: "" }, navOpen: false });
+  };
+
+  const createWorkspace = () => {
+    const form = s().wsForm;
+    if (form?.kind !== "new") return;
+    void wsRun(
+      "ws-form",
+      async () => {
+        const { workspace } = await api<{ workspace: WorkspaceView }>("POST", "/api/porticos", { name: form.name, agentIds: form.agentIds });
+        page.set({ wsForm: null });
+        await loadWorkspaces();
+        go(`/p/${workspace.id}`);
+        if (form.thenShare) page.set({ wsForm: { kind: "share", email: "", agents: "self", allow: true, error: "" } });
+        else note(`Made ${workspace.phrase}.`, true);
+      },
+      formError,
+    );
+  };
+
+  const createShare = () => {
+    const form = s().wsForm;
+    const w = pageWorkspace();
+    if (form?.kind !== "share" || !w) return;
+    void wsRun(
+      "ws-form",
+      async () => {
+        const { share } = await api<{ share: ShareView }>("POST", `/api/porticos/${encodeURIComponent(w.id)}/shares`, { email: form.email.trim() || undefined, agents: form.agents, allow: form.allow });
+        page.set({ wsForm: null, wsMail: share.mail ? { ...s().wsMail, [share.id]: share.mail } : s().wsMail });
+        note(share.email && share.mail === "sent" ? `Share link emailed to ${share.email}.` : "Share link made. Copy the link below and send it.", true);
+      },
+      formError,
+    );
+  };
+
+  const renameWorkspace = () => {
+    const form = s().wsForm;
+    const w = pageWorkspace();
+    if (form?.kind !== "rename" || !w) return;
+    void wsRun(
+      "ws-form",
+      async () => {
+        await api("PATCH", `/api/porticos/${encodeURIComponent(w.id)}`, { name: form.name });
+        page.set({ wsForm: null });
+      },
+      formError,
+    );
+  };
+
+  const addWorkspaceAgents = () => {
+    const form = s().wsForm;
+    const w = pageWorkspace();
+    if (form?.kind !== "agents" || !w) return;
+    void wsRun(
+      "ws-form",
+      async () => {
+        for (const id of form.agentIds) await putWorkspaceAgent(w.id, id);
+        page.set({ wsForm: null });
+      },
+      formError,
+    );
+  };
+
+  /** The owner of some Porticos asked to allow each agent a person adds: the answer then says the request waits. */
+  const putWorkspaceAgent = async (workspaceId: string, agentId: string) => {
+    const answer = await api<{ waiting?: boolean } | null>("PUT", `/api/porticos/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`);
+    if (answer?.waiting) note("Asked the owner of the Portico: the agent comes in once the owner allows the request.", true);
+  };
+
+  const setWorkspaceAgent = (workspaceId: string, agentId: string, on: boolean, busy: string) =>
+    wsRun(busy, async () => {
+      if (on) await putWorkspaceAgent(workspaceId, agentId);
+      else await api("DELETE", `/api/porticos/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}`);
+    });
+
+  const pauseWorkspace = (on: boolean) => {
+    const w = pageWorkspace();
+    if (!w) return;
+    void wsRun("ws-pause", async () => {
+      await api(on ? "PUT" : "DELETE", `/api/porticos/${encodeURIComponent(w.id)}/pause`);
+      note(on ? `Paused ${w.phrase}: nothing moves through.` : `Resumed ${w.phrase}.`, true);
+    });
+  };
+
+  const removeWorkspacePerson = (personId: string) => {
+    const w = pageWorkspace();
+    if (!w) return;
+    const leaving = personId === s().me.id;
+    const person = w.people.find((p) => p.id === personId);
+    void wsRun("ws-confirm", async () => {
+      await api("DELETE", `/api/porticos/${encodeURIComponent(w.id)}/people/${encodeURIComponent(personId)}`);
+      page.set({ wsConfirm: null });
+      if (leaving) {
+        await loadWorkspaces();
+        go("/");
+        note(`Left ${w.phrase}.`);
+      } else note(`${person?.name ?? "The person"} removed from ${w.phrase}.`);
+    });
+  };
+
+  const deleteWorkspace = () => {
+    const w = pageWorkspace();
+    if (!w) return;
+    void wsRun("ws-confirm", async () => {
+      await api("DELETE", `/api/porticos/${encodeURIComponent(w.id)}`);
+      page.set({ wsConfirm: null });
+      await loadWorkspaces();
+      go("/");
+      note(`Deleted ${w.phrase}.`);
+    });
+  };
+
+  const endShare = (id: string) =>
+    wsRun("ws-confirm", async () => {
+      await api("DELETE", `/api/shares/${encodeURIComponent(id)}`);
+      page.set({ wsConfirm: null });
+      note("Share link ended.");
+    });
+
+  const mailShare = async (id: string) => {
+    if (s().busy) return;
+    page.set({ busy: `ws-mail:${id}` });
+    try {
+      const { share } = await api<{ share: ShareView }>("POST", `/api/shares/${encodeURIComponent(id)}/mail`);
+      if (share.mail) page.set({ wsMail: { ...s().wsMail, [id]: share.mail } });
+      await settle([loadWorkspacePage()]);
     } catch (err) {
       fail(err);
     } finally {
       page.set({ busy: null });
+    }
+  };
+
+  const copyShare = async (id: string) => {
+    const link = s().workspacePage?.shares.find((share) => share.id === id)?.link;
+    if (!link) return;
+    if (await copyText(link, `share-${id}`)) {
+      page.set({ wsCopied: { ...s().wsCopied, [id]: true } });
+      setTimeout(() => page.set({ wsCopied: { ...s().wsCopied, [id]: false } }), 2000);
     }
   };
 
@@ -833,6 +938,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
       else if (s().navOpen) page.set({ navOpen: false });
       else if (s().edit) page.set({ edit: null });
       else if (s().wakeEdit) page.set({ wakeEdit: null });
+      else if (s().wsForm) page.set({ wsForm: null });
+      else if (s().wsConfirm) page.set({ wsConfirm: null });
     },
     input(name, value) {
       const edit = s().edit;
@@ -840,18 +947,111 @@ function startHome(root: HTMLElement, data: HomeData): void {
       else if (name === "edit-desc" && edit) page.set({ edit: { ...edit, description: value.slice(0, 500) } });
       else if (name === "wake-url" && s().wakeEdit) page.set({ wakeEdit: { ...s().wakeEdit!, url: value, error: "" } });
       else if (name === "wake-key" && s().wakeEdit) page.set({ wakeEdit: { ...s().wakeEdit!, key: value, error: "" } });
-      else if (name === "add-req-name") add.setName(value);
+      else if (name === "ws-name" && (s().wsForm?.kind === "new" || s().wsForm?.kind === "rename")) page.set({ wsForm: { ...s().wsForm!, name: value, error: "" } as WorkspaceForm });
+      else if (name === "ws-email" && s().wsForm?.kind === "share") page.set({ wsForm: { ...s().wsForm!, email: value, error: "" } as WorkspaceForm });
       else if (name === "filter-agent") setFilter({ agent: value || null });
       else if (name === "filter-project") setFilter({ project: value || null });
     },
     form(name) {
       if (name === "agent-save") void saveEdit();
       else if (name === "wake-save") void saveWake();
-      else if (name === "add-approve") void add.decide("approve");
+      else if (name === "ws-create") createWorkspace();
+      else if (name === "ws-share") createShare();
+      else if (name === "ws-rename") renameWorkspace();
+      else if (name === "ws-agents") addWorkspaceAgents();
     },
     action(name, el, event) {
       const id = el.dataset.id ?? "";
       switch (name) {
+        case "ws-new-open":
+          return openNewWorkspace(false);
+        case "ws-form-cancel":
+          return page.set({ wsForm: null });
+        case "ws-tick": {
+          const form = s().wsForm;
+          if (form?.kind !== "new" && form?.kind !== "agents") return;
+          const agentIds = form.agentIds.includes(id) ? form.agentIds.filter((x) => x !== id) : [...form.agentIds, id];
+          return page.set({ wsForm: { ...form, agentIds, error: "" } });
+        }
+        case "ws-share-open": {
+          const w = pageWorkspace();
+          if (!w) return;
+          // The person's own Portico can't be shared: sharing from there starts a new Portico first.
+          if (w.kind === "personal") return openNewWorkspace(true);
+          return page.set({ wsForm: { kind: "share", email: "", agents: "self", allow: true, error: "" } });
+        }
+        case "ws-policy": {
+          const form = s().wsForm;
+          if (form?.kind === "share") page.set({ wsForm: { ...form, agents: id === "ask" ? "ask" : "self" } });
+          return;
+        }
+        case "ws-pause":
+          return pauseWorkspace(true);
+        case "ws-resume":
+          return pauseWorkspace(false);
+        case "ws-person-policy": {
+          const w = pageWorkspace();
+          if (w) void wsRun(`ws-policy:${id}`, async () => void (await api("PATCH", `/api/porticos/${encodeURIComponent(w.id)}/people/${encodeURIComponent(id)}`, { agents: el.dataset.policy })));
+          return;
+        }
+        case "ws-contact-remove":
+          return void wsRun(`ws-contact:${id}`, async () => void (await api("DELETE", `/api/contacts/${encodeURIComponent(id)}`)));
+        case "ws-people-toggle":
+          return page.set({ peopleOpen: !s().peopleOpen });
+        case "ws-agents-open":
+          return page.set({ wsForm: { kind: "agents", agentIds: [], error: "" } });
+        case "ws-rename-open":
+          return page.set({ wsForm: { kind: "rename", name: pageWorkspace()?.named ? pageWorkspace()!.name : "", error: "" } });
+        case "ws-agent-add": {
+          // Back into the person's own Portico, from its page.
+          const w = pageWorkspace();
+          if (w) void setWorkspaceAgent(w.id, id, true, `ws-agent:${id}`);
+          return;
+        }
+        case "ws-agent-remove": {
+          const w = pageWorkspace();
+          if (w) void setWorkspaceAgent(w.id, id, false, `ws-agent:${id}`);
+          return;
+        }
+        case "ws-share-allow": {
+          const form = s().wsForm;
+          if (form?.kind !== "share") return;
+          return page.set({ wsForm: { ...form, allow: !form.allow } });
+        }
+        case "nav-fold": {
+          const w = s().workspaces.find((x) => x.id === id);
+          if (!w) return;
+          const navFold = { ...s().navFold, [id]: !porticoOpen(s(), w) };
+          saveNavFold(navFold);
+          return page.set({ navFold });
+        }
+        case "nav-all":
+          return page.set({ navAll: { ...s().navAll, [id]: true } });
+        case "ws-add-agent": {
+          // The person's agents that aren't in the Portico yet come first; with none, a new agent joins.
+          const w = s().workspaces.find((x) => x.id === id);
+          if (!w) return;
+          const route = s().route;
+          if (route.page !== "workspace" || route.id !== id) go(`/p/${encodeURIComponent(id)}`);
+          const outside = s().agents.some((a) => a.mine && !w.agentIds.includes(a.id));
+          page.set({ navOpen: false });
+          if (outside) return page.set({ wsForm: { kind: "agents", agentIds: [], error: "" } });
+          return add.open();
+        }
+        case "ws-confirm":
+          return page.set({ wsConfirm: id });
+        case "ws-confirm-cancel":
+          return page.set({ wsConfirm: null });
+        case "ws-person-remove":
+          return removeWorkspacePerson(id);
+        case "ws-delete":
+          return deleteWorkspace();
+        case "ws-share-end":
+          return void endShare(id);
+        case "ws-share-mail":
+          return void mailShare(id);
+        case "ws-share-copy":
+          return void copyShare(id);
         case "go": {
           // A modified click opens a new tab, as any link does.
           const mouse = event as MouseEvent;
@@ -869,17 +1069,13 @@ function startHome(root: HTMLElement, data: HomeData): void {
           return page.set({ navOpen: true, acctOpen: false });
         case "nav-close":
           return page.set({ navOpen: false });
-        case "quiet-toggle":
-          return page.set({ quietOpen: !s().quietOpen });
         case "add-open":
           page.set({ navOpen: false });
           return add.open();
         case "add-close":
           return add.close();
         case "add-copy":
-          return void add.copy();
-        case "add-deny":
-          return void add.decide("deny");
+          return void add.copy(id);
         case "add-another":
           return add.another();
         case "add-done":
@@ -903,13 +1099,9 @@ function startHome(root: HTMLElement, data: HomeData): void {
         case "details-toggle":
           return page.set({ detailsOpen: !s().detailsOpen });
         case "settings-toggle":
-          return page.set({ settingsOpen: !s().settingsOpen, confirmRemove: false });
+          return page.set({ settingsOpen: !s().settingsOpen, confirmRemove: false, confirmRevoke: false });
         case "decide":
           return void decide(id, el.dataset.decision as "allow_once" | "always_allow" | "deny");
-        case "signin-approve":
-          return void decideSignIn(id, "approve");
-        case "signin-deny":
-          return void decideSignIn(id, "deny");
         case "edit-start": {
           const agent = pageAgent();
           if (agent) page.set({ edit: { name: agent.name, description: agent.description, error: "" }, saved: false, settingsOpen: true });
@@ -920,6 +1112,29 @@ function startHome(root: HTMLElement, data: HomeData): void {
         case "toggle-approval": {
           const agent = pageAgent();
           if (agent) void patchAgent("approval", { approvalRequired: !agent.approvalRequired });
+          return;
+        }
+        case "toggle-outbound": {
+          const agent = pageAgent();
+          if (agent) void patchAgent("outbound", { outboundHold: !agent.outboundHold });
+          return;
+        }
+        case "revoke-start":
+          return page.set({ confirmRevoke: true });
+        case "revoke-cancel":
+          return page.set({ confirmRevoke: false });
+        case "revoke-confirm": {
+          const agent = pageAgent();
+          if (!agent || s().busy) return;
+          page.set({ busy: `revoke:${agent.id}` });
+          api<{ agent: AgentView }>("POST", `/api/agents/${encodeURIComponent(agent.id)}/revoke`)
+            .then((r) => {
+              updateAgent(r.agent);
+              note(`${agent.label} revoked: signed out and out of every Portico.`);
+              return settle([loadAgentPage(), loadWorkspaces()]);
+            })
+            .catch(fail)
+            .finally(() => page.set({ busy: null, confirmRevoke: false }));
           return;
         }
         case "toggle-folder": {
@@ -956,7 +1171,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     changed: refresh,
     down: (isDown) => page.set({ reconnecting: isDown }),
     back: () => {
-      refresh(["agents", "approvals", "me", "join-lines"]);
+      refresh(["agents", "approvals", "me"]);
       void loadPage();
     },
   });
@@ -1038,7 +1253,7 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
       void loadMe();
       void loadPasskeys();
     }
-    if (s().add && (t.has("join-lines") || t.has("approvals") || t.has("agents"))) void add.check();
+    if (s().add && (t.has("computers") || t.has("approvals") || t.has("agents"))) void add.check();
   };
 
   const run = async (busy: string, job: () => Promise<void>, onError: (message: string, err: unknown) => void) => {
@@ -1088,6 +1303,21 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
       },
       (message, err) =>
         page.set({ nameForm: { ...form, error: err instanceof ApiError && err.status === 409 ? "Name already in use." : message } }),
+    );
+  };
+
+  const saveHandle = () => {
+    const form = s().handleForm;
+    if (!form) return;
+    const handle = form.handle.trim().toLowerCase();
+    if (!handle) return page.set({ handleForm: { ...form, error: "Enter a handle." } });
+    void run(
+      "handle",
+      async () => {
+        const r = await api<{ person?: PersonView } | null>("PATCH", "/api/me", { handle });
+        page.set({ handleForm: null, me: r?.person ?? { ...s().me, handle } });
+      },
+      (message) => page.set({ handleForm: { ...form, error: message } }),
     );
   };
 
@@ -1146,18 +1376,18 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
     input(name, value) {
       if (name === "invite-name" && s().invite) page.set({ invite: { name: value, error: "" } });
       else if (name === "name-field" && s().nameForm) page.set({ nameForm: { name: value, error: "" } });
+      else if (name === "handle-field" && s().handleForm) page.set({ handleForm: { handle: value, error: "" } });
       else if (name === "pw-current" && s().passwordForm) page.set({ passwordForm: { ...s().passwordForm!, current: value, error: "" } });
       else if (name === "pw-next" && s().passwordForm) page.set({ passwordForm: { ...s().passwordForm!, next: value, error: "" } });
       else if (name === "pk-name" && s().passkeyForm) page.set({ passkeyForm: { ...s().passkeyForm!, name: value, error: "" } });
       else if (name === "pk-current" && s().passkeyForm) page.set({ passkeyForm: { ...s().passkeyForm!, current: value, error: "" } });
-      else if (name === "add-req-name") add.setName(value);
     },
     form(name) {
       if (name === "invite-create") createInvite();
       else if (name === "name-save") saveName();
+      else if (name === "handle-save") saveHandle();
       else if (name === "password-save") savePassword();
       else if (name === "passkey-add") addPasskey();
-      else if (name === "add-approve") void add.decide("approve");
     },
     action(name, el) {
       const id = el.dataset.id ?? "";
@@ -1171,9 +1401,7 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
         case "add-close":
           return add.close();
         case "add-copy":
-          return void add.copy();
-        case "add-deny":
-          return void add.decide("deny");
+          return void add.copy(id);
         case "add-another":
           return add.another();
         case "add-done":
@@ -1262,10 +1490,55 @@ function startSettings(root: HTMLElement, data: SettingsData): void {
             (message) => page.set({ compNotice: message }),
           );
         }
+        case "computer-allow":
+          return void run(
+            `unallow:${id}`,
+            async () => {
+              const { computer } = await api<{ computer: ComputerView }>("PUT", `/api/computers/${encodeURIComponent(id)}/always-allow`);
+              page.set({
+                computers: (s().computers ?? []).map((c) => (c.id === id ? computer : c)),
+                compNotice: `Sessions on ${computer.name} are always allowed, now and later.`,
+              });
+            },
+            (message) => page.set({ compNotice: message }),
+          );
+        case "sagent-remove":
+          return page.set({ confirmAgent: id });
+        case "sagent-cancel":
+          return page.set({ confirmAgent: null });
+        case "sagent-confirm": {
+          const agent = s().agents.find((a) => a.id === id);
+          if (!agent) return;
+          return void run(
+            `sagent:${id}`,
+            async () => {
+              await api("DELETE", `/api/agents/${encodeURIComponent(id)}`);
+              page.set({ agents: s().agents.filter((a) => a.id !== id), confirmAgent: null, compNotice: `${agent.label} removed and signed out.` });
+              void loadComputers();
+            },
+            (message) => page.set({ compNotice: message }),
+          );
+        }
+        case "computer-unallow":
+          return void run(
+            `unallow:${id}`,
+            async () => {
+              const { computer } = await api<{ computer: ComputerView }>("DELETE", `/api/computers/${encodeURIComponent(id)}/always-allow`);
+              page.set({
+                computers: (s().computers ?? []).map((c) => (c.id === id ? computer : c)),
+                compNotice: `New sessions on ${computer.name} are asked about again.`,
+              });
+            },
+            (message) => page.set({ compNotice: message }),
+          );
         case "name-open":
           return page.set({ nameForm: { name: s().me.name, error: "" } });
         case "name-cancel":
           return page.set({ nameForm: null });
+        case "handle-open":
+          return page.set({ handleForm: { handle: s().me.handle ?? "", error: "" } });
+        case "handle-cancel":
+          return page.set({ handleForm: null });
         case "password-open":
           return page.set({ passwordForm: { current: "", next: "", error: "" }, passwordChanged: false });
         case "password-cancel":

@@ -22,7 +22,7 @@ function fetchFrom(p: ReturnType<typeof makePortico>, asked: string[] = []) {
   };
 }
 
-const env = { PORTICO_PUBLIC_URL: PUBLIC_URL, PORTICO_DB_PATH: "/nowhere/portico.db" };
+const env = { PORTICO_PUBLIC_URL: PUBLIC_URL, PORTICO_DATA_DIR: "/nowhere" };
 
 describe("portico doctor", () => {
   test("all good: Portico answers at the public URL and setup is done", async () => {
@@ -73,11 +73,11 @@ describe("portico doctor", () => {
     db.query("INSERT INTO settings (key, value) VALUES ('public_url', 'https://portico.example.org')").run();
     db.close();
     const asked: string[] = [];
-    const { io } = testIo({ PORTICO_DB_PATH: dbPath });
+    const { io } = testIo({ PORTICO_DATA_DIR: dir });
     await doctorCommand([], io, { fetch: fetchFrom(makePortico(), asked) });
     expect(asked[0]).toBe("https://portico.example.org/healthz");
     const local: string[] = [];
-    await doctorCommand([], testIo({ PORTICO_DB_PATH: join(dir, "missing.db"), PORT: "8802" }).io, { fetch: fetchFrom(makePortico(), local) });
+    await doctorCommand([], testIo({ PORTICO_DATA_DIR: join(dir, "missing"), PORT: "8802" }).io, { fetch: fetchFrom(makePortico(), local) });
     expect(local[0]).toBe("http://localhost:8802/healthz");
   });
 

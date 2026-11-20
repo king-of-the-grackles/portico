@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import type { Core } from "../core/core";
 import { readJson } from "../agent-api/rest";
 import { PorticoError } from "../core/errors";
@@ -8,14 +8,18 @@ import { type PersonEnv, currentPerson } from "./context";
 import type { TaskOutcome } from "../core/tasks";
 import { visibleAgents } from "./tasks";
 import type { Person } from "../core/types";
-import { type AgentRef, type AgentView, type AllowEntry, agentsInOrder, personViews, type RunView } from "./views";
+import { type AgentRef, type AgentView, type AllowEntry, agentsInOrder, personViews, type Place, type RunView } from "./views";
 
 /** What GET /api/agents/:id answers: the agent page's data. */
 export interface AgentPageData {
   agent: AgentView;
   allowList: AllowEntry[] | null;
   taskCounts: Record<TaskOutcome, number>;
-  worksWith: { agent: AgentRef; tasks: number; lastAt: string }[];
+  /**
+   * Who the agent works with, one entry for each other agent. `parts` is one for each Portico the two have talked
+   * through, the latest first: a conversation that continued in another Portico shows under the one heading.
+   */
+  worksWith: { agent: AgentRef; tasks: number; lastAt: string; parts: (Place & { tasks: number; lastAt: string })[] }[];
   runs: RunView[];
   runCount: number;
   /** Whether Portico wakes the agent when a message arrives: a wake URL or event subscription whose last try didn't fail. */
@@ -32,32 +36,45 @@ export interface AgentPageData {
 export function agentPageData(core: Core, me: Person, id: string): AgentPageData {
   const { agents, approvals } = core;
   const agent = agents.require(id);
+  // An agent in no workspace of the person's answers the same as one that doesn't exist.
+  if (!core.workspaces.visibleAgents(me.id).has(agent.id)) throw new PorticoError("not_found", "No such agent.");
   const views = personViews(core, me);
   const mine = agent.ownerId === me.id;
   const allowList = mine ? approvals.allowListFor(me.id, agent.id).map(views.allowEntry) : null;
   const wake = core.wakeUrls.view(agent.id);
   const events = core.events.view(agent.id);
   const visible = visibleAgents(core, me);
-  const tasks = core.tasks.all({ visible, agentId: agent.id });
+  const tasks = core.tasks.all({ person: me.id }, { visible, agentId: agent.id });
   const counts: Record<TaskOutcome, number> = { needs_approval: 0, in_progress: 0, done: 0, failed: 0 };
-  const partners = new Map<string, { tasks: number; lastAt: string }>();
+  type Count = { tasks: number; lastAt: string };
+  const partners = new Map<string, Count & { parts: Map<string, Count> }>();
+  const add = (seen: Count | undefined, at: string): Count => ({ tasks: (seen?.tasks ?? 0) + 1, lastAt: seen && seen.lastAt > at ? seen.lastAt : at });
   for (const task of tasks) {
     counts[task.outcome]++;
     const other = task.fromId === agent.id ? task.toId : task.fromId;
     const seen = partners.get(other);
-    partners.set(other, { tasks: (seen?.tasks ?? 0) + 1, lastAt: seen && seen.lastAt > task.updatedAt ? seen.lastAt : task.updatedAt });
+    const parts = seen?.parts ?? new Map<string, Count>();
+    parts.set(task.workspaceId, add(parts.get(task.workspaceId), task.updatedAt));
+    partners.set(other, { ...add(seen, task.updatedAt), parts });
   }
   const worksWith = [...partners]
     .sort(([, a], [, b]) => b.tasks - a.tasks || b.lastAt.localeCompare(a.lastAt))
-    .map(([partner, p]) => ({ agent: views.agentRef(partner), tasks: p.tasks, lastAt: p.lastAt }));
+    .map(([partner, p]) => ({
+      agent: views.agentRef(partner),
+      tasks: p.tasks,
+      lastAt: p.lastAt,
+      parts: [...p.parts]
+        .sort(([, a], [, b]) => b.lastAt.localeCompare(a.lastAt))
+        .map(([workspaceId, part]) => ({ ...views.place(workspaceId, agent.id, partner), tasks: part.tasks, lastAt: part.lastAt })),
+    }));
   return {
     agent: views.agent(agent),
     allowList,
     taskCounts: counts,
     worksWith,
     // Sessions, like tasks and activity, only for the person's own agents (everyone's for the owner).
-    runs: visible === null || visible.includes(agent.id) ? agents.runs(agent.id, 10).map(views.run) : [],
-    runCount: visible === null || visible.includes(agent.id) ? agents.runCount(agent.id) : 0,
+    runs: visible.includes(agent.id) ? agents.runs(agent.id, 10).map(views.run) : [],
+    runCount: visible.includes(agent.id) ? agents.runCount(agent.id) : 0,
     woken: [wake, events].some((v) => v !== null && (v.lastStatus === null || v.lastStatus === "ok")),
     wake: mine ? wake : null,
     events: mine ? events : null,
@@ -71,12 +88,22 @@ export function agentPageData(core: Core, me: Person, id: string): AgentPageData
 export function agentRoutes(core: Core): Hono<PersonEnv> {
   const { agents, approvals } = core;
   const route = new Hono<PersonEnv>();
+  const unseen: MiddlewareHandler<PersonEnv> = async (c, next) => {
+    const me = c.get("person");
+    const id = c.req.param("id");
+    if (me && id && !core.workspaces.visibleAgents(me.id).has(id)) return c.json({ error: "not_found", message: "No such agent." }, 404);
+    await next();
+  };
 
   route.get("/", (c) => {
     const me = currentPerson(c);
     const views = personViews(core, me);
     return c.json({ agents: agentsInOrder(agents, me).map(views.agent) });
   });
+
+  // An agent in none of the person's workspaces answers like one that isn't there, on every route.
+  route.use("/:id/*", unseen);
+  route.use("/:id", unseen);
 
   route.get("/:id", (c) => c.json(agentPageData(core, currentPerson(c), c.req.param("id"))));
 
@@ -90,6 +117,7 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
       name: body.name,
       description: body.description,
       approvalRequired: body.approvalRequired,
+      outboundHold: body.outboundHold,
       joinFromFolder: body.joinFromFolder,
     });
     return c.json({ agent: personViews(core, me).agent(agent) });
@@ -101,6 +129,21 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
     return c.body(null, 204);
   });
 
+  // "Yes, always allow": the person vouches for an agent of their own that joined lately, from the page that says the
+  // agent joined. A person's page only: an agent has no way to call this for itself or for another.
+  route.post("/:id/always-allow", (c) => {
+    const me = currentPerson(c);
+    core.approvals.vouch(me.id, c.req.param("id"));
+    return c.json({ agent: personViews(core, me).agent(agents.get(c.req.param("id"))!) });
+  });
+
+  // The one-step stop for an agent: its tokens die, it leaves every Portico, and what it had on its way is withdrawn.
+  route.post("/:id/revoke", (c) => {
+    const me = currentPerson(c);
+    const agent = agents.revoke(me.id, c.req.param("id"));
+    return c.json({ agent: personViews(core, me).agent(agent) });
+  });
+
   // The key goes in once and never comes back out: the answer shows only the host and how the last wake went.
   route.put("/:id/wake", async (c) => {
     const me = currentPerson(c);
@@ -109,7 +152,7 @@ export function agentRoutes(core: Core): Hono<PersonEnv> {
       throw new PorticoError("bad_request", "The body must be a JSON object.");
     }
     const agent = agents.requireManaged(me.id, c.req.param("id"));
-    return c.json({ wake: core.wakeUrls.set(agent, me.id, { url: body.url, key: body.key }) });
+    return c.json({ wake: await core.wakeUrls.set(agent, me.id, { url: body.url, key: body.key }) });
   });
 
   route.delete("/:id/wake", (c) => {

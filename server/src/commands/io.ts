@@ -4,5 +4,7 @@ export interface CliIo {
   /** The folder that relative paths resolve against, and where init writes files. */
   cwd: string;
   out: (line: string) => void;
+  /** Whether `out` is a terminal someone is looking at, not a pipe or a log a container keeps. */
+  tty?: boolean;
   err: (line: string) => void;
 }

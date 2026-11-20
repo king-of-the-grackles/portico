@@ -12,6 +12,12 @@ export const ACCESS_TOKEN_MS = HOUR_MS;
 export const REFRESH_TOKEN_MS = 90 * DAY_MS;
 export const CODE_MS = 10 * MINUTE_MS;
 
+/**
+ * A refresh token that was swapped for a new one keeps its row until it would have expired, with this in front of its
+ * client ID: handing it in again means two parties hold tokens of one line, so every token of the line is deleted.
+ */
+const ROTATED = "rotated:";
+
 const MAX_REDIRECT_URIS = 10;
 const MAX_URI_CHARS = 2000;
 /** The most bytes a client's redirect URIs take as stored: the UTF-8 JSON, where a control character escapes to 6 bytes. */
@@ -156,6 +162,26 @@ export class OAuthStore {
     return row.n;
   }
 
+  /**
+   * Keeps at most `keep` unused clients, the newest: the oldest beyond that are deleted, but never one made in the last
+   * `spareMs`, which a person may be about to allow. Returns how many went.
+   */
+  evictUnused(keep: number, spareMs: number): number {
+    const over = this.unusedClients() - keep;
+    if (over <= 0) return 0;
+    const before = new Date(this.deps.now().getTime() - spareMs).toISOString();
+    return this.deps.db
+      .query(
+        `DELETE FROM oauth_clients WHERE id IN (
+           SELECT id FROM oauth_clients
+           WHERE client_id NOT IN (SELECT client_id FROM agent_tokens WHERE client_id IS NOT NULL)
+             AND client_id NOT IN (SELECT client_id FROM oauth_codes)
+             AND created_at < $before
+           ORDER BY created_at, rowid LIMIT $over)`,
+      )
+      .run({ over, before }).changes;
+  }
+
   client(clientId: unknown): OAuthClient | null {
     if (typeof clientId !== "string" || clientId === "") return null;
     const row = this.deps.db.query("SELECT * FROM oauth_clients WHERE client_id = $clientId").get({ clientId }) as ClientRow | null;
@@ -232,29 +258,44 @@ export class OAuthStore {
     return outcome;
   }
 
-  /** Swaps a refresh token for a new access token and a new refresh token. The old refresh token stops working. */
+  /**
+   * Swaps a refresh token for a new access token and a new refresh token. The old refresh token stops working, and so
+   * do the access tokens the client held. A refresh token handed in a second time was copied by someone: the agent's
+   * tokens for that client are all deleted (RFC 9700 §4.14.2), and the app signs in again.
+   */
   refresh(input: { refreshToken: unknown; clientId: unknown }): TokenSet {
     const { db } = this.deps;
     if (typeof input.refreshToken !== "string" || input.refreshToken === "") {
       throw new OAuthProblem("invalid_request", "refresh_token is required.");
     }
     const refreshToken = input.refreshToken;
-    return db.transaction(() => {
+    const hash = hashSecret(refreshToken);
+    const outcome = db.transaction((): TokenSet | OAuthProblem => {
       const row = db
         .query("SELECT agent_id, client_id, expires_at FROM agent_tokens WHERE token_hash = $hash AND kind = 'refresh'")
-        .get({ hash: hashSecret(refreshToken) }) as { agent_id: string; client_id: string | null; expires_at: string | null } | null;
+        .get({ hash }) as { agent_id: string; client_id: string | null; expires_at: string | null } | null;
       if (!row || (row.expires_at !== null && Date.parse(row.expires_at) <= this.deps.now().getTime())) {
         throw new OAuthProblem("invalid_grant", "The refresh token isn't valid.");
+      }
+      if (row.client_id?.startsWith(ROTATED)) {
+        // Returned, not thrown, so the revocation commits.
+        const clientId = row.client_id.slice(ROTATED.length);
+        this.revokeClientTokens(row.agent_id, clientId);
+        log("warn", "oauth_refresh_reused", { agent_id: row.agent_id, client_id: clientId });
+        return new OAuthProblem("invalid_grant", "The refresh token isn't valid.");
       }
       if (input.clientId !== undefined && input.clientId !== row.client_id) {
         throw new OAuthProblem("invalid_grant", "The refresh token belongs to another client.");
       }
       const agent = this.deps.agents.get(row.agent_id);
-      if (!agent || !row.client_id) throw new OAuthProblem("invalid_grant", "The refresh token isn't valid.");
-      this.deps.agents.revokeToken(refreshToken);
+      if (!agent || agent.revokedAt !== null || !row.client_id) throw new OAuthProblem("invalid_grant", "The refresh token isn't valid.");
+      db.query("UPDATE agent_tokens SET client_id = $rotated WHERE token_hash = $hash").run({ hash, rotated: ROTATED + row.client_id });
+      db.query("DELETE FROM agent_tokens WHERE agent_id = $agentId AND client_id = $clientId AND kind = 'access'").run({ agentId: agent.id, clientId: row.client_id });
       log("info", "oauth_tokens_issued", { agent_id: agent.id, client_id: row.client_id, grant: "refresh_token" });
       return this.tokensFor(agent, row.client_id);
     })();
+    if (outcome instanceof OAuthProblem) throw outcome;
+    return outcome;
   }
 
   private tokensFor(agent: Agent, clientId: string): TokenSet {
@@ -271,7 +312,9 @@ export class OAuthStore {
   }
 
   private revokeClientTokens(agentId: string, clientId: string): void {
-    this.deps.db.query("DELETE FROM agent_tokens WHERE agent_id = $agentId AND client_id = $clientId").run({ agentId, clientId });
+    this.deps.db
+      .query("DELETE FROM agent_tokens WHERE agent_id = $agentId AND client_id IN ($clientId, $rotated)")
+      .run({ agentId, clientId, rotated: ROTATED + clientId });
   }
 
   private iso(): string {

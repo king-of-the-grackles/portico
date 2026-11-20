@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Changes } from "./changes";
 import { DAY_MS, HOUR_MS, MINUTE_MS } from "./limits";
+import { SECRET_UNREADABLE, type SecretPlace, type Secrets } from "./secrets";
 import type { Agent } from "./types";
 import { cleanWebhookUrl, laterTimer, postWithRetry, signWebhook, webhookKey, type WebhookPost, type WebhookResult } from "./webhooks";
 
@@ -16,6 +17,11 @@ const ROTATION_MS = 10 * MINUTE_MS;
 /** A callback verified this recently for the same agent isn't challenged again. */
 const VERIFIED_FOR_MS = DAY_MS;
 const MAX_SUBSCRIPTIONS_PER_AGENT = 10;
+/**
+ * A verification makes Portico post to an address the agent names, so an agent gets this many an hour, one at a time:
+ * subscribing can't be used to make Portico post to other people's servers over and over.
+ */
+const VERIFICATIONS_PER_HOUR = 10;
 
 /** The definition events/list returns. */
 export function eventDefinitions() {
@@ -45,7 +51,7 @@ export function eventDefinitions() {
 /** Why a subscribe failed, as the events extension names the reasons. mcp.ts picks the JSON-RPC code. */
 export class EventsError extends Error {
   constructor(
-    readonly kind: "invalid_params" | "callback",
+    readonly kind: "invalid_params" | "callback" | "limited",
     message: string,
     readonly reason?: string,
   ) {
@@ -96,6 +102,8 @@ function callbackReason(result: WebhookResult): string {
 export interface EventSubscriptionsDeps {
   db: Database;
   post: WebhookPost;
+  /** Encrypts each subscription's secret before it is stored. */
+  secrets: Secrets;
   changes: Changes;
   /** Accepts http:// and private addresses: local development only. */
   allowPrivate?: boolean;
@@ -113,22 +121,46 @@ export interface EventSubscriptionsDeps {
 export class EventSubscriptions {
   private readonly db: Database;
   private readonly post: WebhookPost;
+  private readonly secrets: Secrets;
   private readonly changes: Changes;
   private readonly allowPrivate: boolean;
   private readonly now: () => Date;
   private readonly schedule: (fn: () => void, ms: number) => void;
   private readonly newNonce: () => string;
   private readonly log: (msg: string, fields: Record<string, unknown>) => void;
+  /** Agents with a verification on its way, and each agent's recent verification times, in memory. */
+  private readonly verifying = new Set<string>();
+  private readonly verified = new Map<string, number[]>();
 
   constructor(deps: EventSubscriptionsDeps) {
     this.db = deps.db;
     this.post = deps.post;
+    this.secrets = deps.secrets;
     this.changes = deps.changes;
     this.allowPrivate = deps.allowPrivate ?? false;
     this.now = deps.now ?? (() => new Date());
     this.schedule = deps.schedule ?? laterTimer;
     this.newNonce = deps.newNonce ?? (() => randomBytes(24).toString("base64url"));
     this.log = deps.log ?? (() => {});
+  }
+
+  /** Where a subscription's secret, or the one before a rotation, is stored: what its encrypted form is bound to. */
+  static place(subscriptionId: string, column: "secret" | "previous_secret" = "secret"): SecretPlace {
+    return { table: "event_subscriptions", column, row: subscriptionId };
+  }
+
+  /**
+   * The stored secret can't be read (another secrets key, or not what Portico stored): nothing is delivered until the
+   * agent subscribes again. Returns whether this is news, so the caller tells the agent once.
+   */
+  unreadable(subscriptionId: string, reason: string): boolean {
+    const changed = this.db
+      .query("UPDATE event_subscriptions SET last_at = $at, last_status = $status WHERE id = $id AND last_status IS NOT $status")
+      .run({ id: subscriptionId, at: this.now().toISOString(), status: SECRET_UNREADABLE }).changes;
+    if (changed === 0) return false;
+    this.log("event_secret_unreadable", { subscription_id: subscriptionId, reason });
+    this.changes.emit("agents");
+    return true;
   }
 
   private active(agentId: string): SubscriptionRow[] {
@@ -210,18 +242,32 @@ export class EventSubscriptions {
     const verified = this.db
       .query("SELECT 1 FROM event_subscriptions WHERE agent_id = $agentId AND url = $url AND verified_at > $since LIMIT 1")
       .get({ agentId: agent.id, url, since: verifiedSince });
-    if (!verified) await this.verify(id, url, secret);
+    if (!verified) {
+      this.startVerification(agent.id);
+      try {
+        await this.verify(id, url, secret);
+      } finally {
+        this.verifying.delete(agent.id);
+      }
+    }
 
     const refreshBefore = new Date(now.getTime() + this.grantMs(params.ttlMs)).toISOString();
-    const rotating = existing && existing.secret !== secret;
+    // The secret held until now signs alongside the new one for a while. One Portico can't read any more is dropped:
+    // subscribing again is how a subscription gets a secret Portico can use.
+    const held = existing ? await this.secrets.open(EventSubscriptions.place(id), existing.secret) : null;
+    const rotating = held !== null && held.ok && held.value !== secret;
+    const lost = held !== null && !held.ok;
+    const previous = rotating && held.ok ? await this.secrets.seal(EventSubscriptions.place(id, "previous_secret"), held.value) : null;
+    const sealed = await this.secrets.seal(EventSubscriptions.place(id), secret);
     this.db
       .query(
         `INSERT INTO event_subscriptions (id, agent_id, name, arguments, url, secret, refresh_before, verified_at, created_at)
          VALUES ($id, $agentId, $name, $args, $url, $secret, $refreshBefore, $at, $at)
          ON CONFLICT (id) DO UPDATE SET
            secret = $secret,
-           previous_secret = CASE WHEN $rotating THEN event_subscriptions.secret ELSE event_subscriptions.previous_secret END,
-           previous_until = CASE WHEN $rotating THEN $previousUntil ELSE event_subscriptions.previous_until END,
+           previous_secret = CASE WHEN $rotating THEN $previous WHEN $lost THEN NULL ELSE event_subscriptions.previous_secret END,
+           previous_until = CASE WHEN $rotating THEN $previousUntil WHEN $lost THEN NULL ELSE event_subscriptions.previous_until END,
+           last_status = CASE WHEN $lost THEN NULL ELSE event_subscriptions.last_status END,
            refresh_before = $refreshBefore,
            verified_at = CASE WHEN $verifiedNow THEN $at ELSE event_subscriptions.verified_at END`,
       )
@@ -231,7 +277,9 @@ export class EventSubscriptions {
         name,
         args,
         url,
-        secret,
+        secret: sealed,
+        previous,
+        lost: lost ? 1 : 0,
         refreshBefore,
         at,
         rotating: rotating ? 1 : 0,
@@ -239,7 +287,7 @@ export class EventSubscriptions {
         verifiedNow: verified ? 0 : 1,
       });
     this.log("event_subscribed", { agent_id: agent.id, subscription_id: id, refresh: Boolean(existing) });
-    this.changes.emit("agents");
+    this.changes.about({ agents: [agent.id] }, "agents");
     const result: Record<string, unknown> = { id, refreshBefore, cursor: null, truncated: false };
     if (existing) {
       result.deliveryStatus = {
@@ -249,6 +297,20 @@ export class EventSubscriptions {
       };
     }
     return result;
+  }
+
+  /** Counts a verification for the agent, or throws EventsError("limited"): one at a time, VERIFICATIONS_PER_HOUR an hour. */
+  private startVerification(agentId: string): void {
+    const now = this.now().getTime();
+    const recent = (this.verified.get(agentId) ?? []).filter((at) => now - at < HOUR_MS);
+    if (this.verifying.has(agentId)) {
+      throw new EventsError("limited", "Portico is still checking another callback URL for this agent. Try again once that check is done.");
+    }
+    if (recent.length >= VERIFICATIONS_PER_HOUR) {
+      throw new EventsError("limited", `Portico checks at most ${VERIFICATIONS_PER_HOUR} callback URLs an hour for one agent. Try again later.`);
+    }
+    this.verified.set(agentId, [...recent, now]);
+    this.verifying.add(agentId);
   }
 
   /** Posts a signed challenge and requires it echoed back; throws EventsError("callback") otherwise. */
@@ -282,7 +344,7 @@ export class EventSubscriptions {
     const id = this.subscriptionId(agent.id, url, name, args);
     if (this.db.query("DELETE FROM event_subscriptions WHERE id = $id").run({ id }).changes > 0) {
       this.log("event_unsubscribed", { agent_id: agent.id, subscription_id: id });
-      this.changes.emit("agents");
+      this.changes.about({ agents: [agent.id] }, "agents");
     }
   }
 
@@ -306,12 +368,21 @@ export class EventSubscriptions {
         now: this.now,
         // Read again on every try: the subscription may have ended, or its secret rotated. ChatGPT asks for webhook-id
         // to be the event's ID; the timestamp and signature are new on every try.
-        request: () => {
+        request: async () => {
           const current = this.get(id);
           const now = this.now().toISOString();
           if (!current || current.refresh_before <= now) return null;
-          const secrets = [current.secret];
-          if (current.previous_secret && current.previous_until && current.previous_until > now) secrets.push(current.previous_secret);
+          const secret = await this.secrets.open(EventSubscriptions.place(id), current.secret);
+          if (!secret.ok) {
+            this.unreadable(id, secret.reason);
+            return null;
+          }
+          const secrets = [secret.value];
+          if (current.previous_secret && current.previous_until && current.previous_until > now) {
+            // The secret before a rotation only signs alongside: one that can't be read is left out.
+            const before = await this.secrets.open(EventSubscriptions.place(id, "previous_secret"), current.previous_secret);
+            if (before.ok) secrets.push(before.value);
+          }
           return this.signed(current.url, secrets, eventId, id, body);
         },
         onResult: (status, sentAt, tries) => {
@@ -352,6 +423,8 @@ export class EventSubscriptions {
 
   /** Drops subscriptions past their refreshBefore. Returns how many. */
   sweep(): number {
+    const now = this.now().getTime();
+    for (const [agentId, times] of this.verified) if (times.every((at) => now - at >= HOUR_MS)) this.verified.delete(agentId);
     const removed = this.db.query("DELETE FROM event_subscriptions WHERE refresh_before <= $now").run({ now: this.now().toISOString() }).changes;
     if (removed > 0) this.changes.emit("agents");
     return removed;

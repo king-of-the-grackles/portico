@@ -27,10 +27,12 @@ describe("GET /codex/portico-codex.js", () => {
 });
 
 describe("/join for Codex", () => {
-  test("downloads the bridge from this Portico, joins with the line, and approves the hook", async () => {
+  test("downloads the bridge from this Portico, asks to join, and approves the hook", async () => {
     const html = await (await makePortico().app.request("/join")).text();
     expect(html).toContain(`curl -fsS ${PUBLIC_URL}/codex/portico-codex.js -o ~/.portico/portico-codex.js`);
-    expect(html).toContain(`bun ~/.portico/portico-codex.js join 'Join Portico: ${PUBLIC_URL}/join#&lt;secret&gt;'`);
+    expect(html).toContain(`bun ~/.portico/portico-codex.js join ${PUBLIC_URL}`);
+    expect(html).toContain("The command prints a link.");
+    expect(html).toContain("bun ~/.portico/portico-codex.js join --code &lt;the 4 digits&gt;");
     expect(html).toContain("open <code>/hooks</code> and approve the Portico Stop hook");
     expect(html).toContain("<h2>Muse, Grok Bot, Claude Duet and other app agents</h2>");
   });

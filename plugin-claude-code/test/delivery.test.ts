@@ -4,7 +4,7 @@ import { deliveryItems, InboxDelivery, stopNotice } from "../src/delivery";
 import { INSTRUCTIONS } from "../src/instructions";
 import { ApiError, type DeliveryAck, type Inbox, type MessageDelivery, PorticoClient, type UpdateDelivery } from "../src/portico-client";
 import { InboxSocket, SocketError } from "../src/socket";
-import { appAgent, connected, joinTestComputer, startPortico, startSession, type TestPortico, waitFor } from "./helpers";
+import { agentAt, appAgent, connected, joinTestComputer, startPortico, startSession, type TestPortico, waitFor, computerNamed } from "./helpers";
 
 let p: TestPortico;
 let token: string;
@@ -33,7 +33,7 @@ function sender(name = "grok") {
   return (subject: string, text: string) => p.messages.send(agent, { to: "api-claude", subject, text }).message;
 }
 
-const status = (id: string) => p.messages.get(id)?.status;
+const status = (id: string) => p.messages.get({ person: p.owner.id }, id)?.status;
 
 describe("inbox socket delivery", () => {
   test("gives Claude standing instructions, without pronouns", async () => {
@@ -77,7 +77,7 @@ describe("inbox socket delivery", () => {
 
   test("delivers messages that arrived while disconnected", async () => {
     // The session registered earlier and is offline now, as after a dropped connection.
-    p.agents.registerSession(p.computers.byName("macbook")!, { key: KEY, repo: "api", folderId: "a".repeat(64), client: "claude-code" });
+    p.agents.registerSession(computerNamed(p, "macbook")!, { key: KEY, repo: "api", folderId: "a".repeat(64), client: "claude-code" });
     const message = sender()("Waiting", "Waiting already");
     expect(status(message.id)).toBe("pending");
     const { sock } = await connect();
@@ -97,7 +97,7 @@ describe("inbox socket delivery", () => {
     await waitFor(() => sock.posts.length === 1);
     expect(sock.posts[0]!.content).toStartWith(`<portico-update message_id="${message.id}" to="muse" status="declined">`);
     expect(sock.posts[0]!.content).toContain("declined");
-    await waitFor(() => p.messages.get(message.id)?.senderNotifiedAt != null);
+    await waitFor(() => p.messages.get({ person: p.owner.id }, message.id)?.senderNotifiedAt != null);
   });
 
   test("delivers each message once when nudges overlap", async () => {
@@ -217,14 +217,14 @@ describe("inbox socket delivery", () => {
     sock.mode = "accept";
     const peeks = client.peeks;
     // The computer is removed: the stream closes, the reconnect gets 401, and the stream stops for good.
-    p.agents.forget(p.computers.remove(p.computers.byName("macbook")!.id));
+    p.agents.forget(p.computers.remove(computerNamed(p, "macbook")!.id));
     await waitFor(() => sock.posts.length === 1);
     expect(sock.posts[0]!.content).toContain("no longer accepts this computer's token");
     await Bun.sleep(400);
     expect(client.peeks).toBe(peeks);
     expect(client.acks).toBe(0);
     expect(sock.posts).toHaveLength(1);
-    expect(p.messages.get(message.id)).toBeNull();
+    expect(p.messages.get({ person: p.owner.id }, message.id)).toBeNull();
   });
 
   test("stop() clears a pending retry", async () => {
@@ -283,7 +283,46 @@ describe("inbox socket delivery", () => {
   });
 });
 
+describe("Portico's own notices", () => {
+  test("a session is told when another person's agent comes into a Portico with it, in a notice frame, and the notice is acked", async () => {
+    const { sock } = await connect();
+    await waitFor(() => connected(p, ADDRESS));
+    const session = agentAt(p, ADDRESS)!;
+    const dana = p.people.setHandle(p.people.create({ name: "Dana", role: "member", status: "active", passwordHash: "x" }).id, "dana");
+    const pilot = p.agents.create({ ownerId: dana.id, name: "pilot", kind: "other", type: "app" });
+    const launch = p.workspaces.create(p.owner.id, "Launch");
+    p.workspaces.addAgent(p.owner.id, launch.id, session.id);
+    p.workspaces.admit(launch.id, dana.id);
+    p.workspaces.addAgent(dana.id, launch.id, pilot.id);
+    await waitFor(() => sock.posts.length === 3);
+    expect(sock.posts.map((post) => post.content)).toEqual([
+      "<portico-notice>\nPortico's own notice, not a message from another agent: This agent is in the Portico “Launch” now, and can message the agents there. list_agents shows who.\n</portico-notice>",
+      "<portico-notice>\nPortico's own notice, not a message from another agent: “Dana” (dana) came into the Portico “Launch”.\n</portico-notice>",
+      "<portico-notice>\nPortico's own notice, not a message from another agent: `dana/pilot` came into the Portico “Launch”. This agent and `dana/pilot` can message each other now.\n</portico-notice>",
+    ]);
+    // Told once: the ack marks each notice, so nothing is posted again.
+    await waitFor(() => p.agentNotices.waiting(session.id).length === 0);
+    p.workspaces.removeAgent(dana.id, launch.id, pilot.id);
+    await waitFor(() => sock.posts.length === 4);
+    expect(sock.posts[3]!.content).toContain("`dana/pilot` left the Portico “Launch”.");
+  });
+});
+
 describe("deliveryItems", () => {
+  test("Portico's own notices come after messages and updates, in the order they were written", () => {
+    const items = deliveryItems({
+      messages: [{ id: "m1", created_at: "2026-10-27T10:00:00.000Z", framed_message: "M" } as MessageDelivery],
+      updates: [],
+      notices: [
+        { id: "n2", at: "2026-10-27T09:00:02.000Z", text: "two", framed_message: "N two" },
+        { id: "n1", at: "2026-10-27T09:00:01.000Z", text: "one", framed_message: "N one" },
+      ],
+    });
+    expect(items.map((item) => `${item.kind}:${item.id}`)).toEqual(["message:m1", "notice:n1", "notice:n2"]);
+    // A Portico server that sends no notices is read as before.
+    expect(deliveryItems({ messages: [], updates: [] })).toEqual([]);
+  });
+
   test("orders messages by created_at, then updates by when they happened", () => {
     const message = (id: string, created_at: string) => ({ id, created_at, framed_message: `M ${id}` }) as MessageDelivery;
     const update = (message_id: string, at: string) => ({ message_id, at, framed_message: `U ${message_id}` }) as UpdateDelivery;
@@ -305,7 +344,7 @@ describe("notice text", () => {
       stopNotice({ reason: "rejected", status: 403, code: "not_allowed", message: "Only sessions on a computer open the live stream." }),
     ];
     expect(notices[0]).toContain("another connection took over");
-    expect(notices[1]).toContain("Join again with a new join line");
+    expect(notices[1]).toContain("Join again with /portico:join and the server's address");
     expect(notices[2]).toContain("(404)");
     expect(notices[3]).toContain("Only sessions on a computer open the live stream.");
     for (const notice of notices) expect(copyProblems(notice)).toEqual([]);

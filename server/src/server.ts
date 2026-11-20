@@ -1,7 +1,7 @@
-import type { HostedConfig } from "./config";
 import type { PorticoConfig } from "./core/types";
-import { Hosted } from "./hosted/router";
 import { LIMITS, MAX_BODY_BYTES } from "./core/limits";
+import { ConfigError } from "./config";
+import { SECRETS_KEY_MISSING } from "./core/secrets";
 import { openDb } from "./db";
 import { log } from "./log";
 import { createPortico, type Portico } from "./portico";
@@ -15,7 +15,10 @@ export interface RunningServer {
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
+/** The one way Portico runs: the directory database and each workspace's content in the data folder, one address. */
 export function startServer(config: PorticoConfig, opts: { port?: number } = {}): RunningServer {
+  // Before the database is opened or made: nothing starts without the key that encrypts what Portico stores.
+  if (config.secretsKey === null) throw new ConfigError([SECRETS_KEY_MISSING]);
   const db = openDb(config.dbPath, (msg, fields) => log("info", msg, fields));
   const portico = createPortico(config, { db });
   let server: ReturnType<typeof Bun.serve>;
@@ -30,13 +33,16 @@ export function startServer(config: PorticoConfig, opts: { port?: number } = {})
       idleTimeout: 60,
     });
   } catch (err) {
-    // E.g. the port is in use: release the database before the error reaches the CLI.
+    // E.g. the port is in use: release the databases before the error reaches the CLI.
+    portico.close();
     db.close();
     throw err;
   }
 
   portico.sweepMinute();
   portico.sweepDaily();
+  // Old rows come under the secrets key while the server already answers; what the pass found is in the log.
+  void portico.secretsReady;
   const minuteTimer = setInterval(() => portico.sweepMinute(), MINUTE_MS);
   const dailyTimer = setInterval(() => portico.sweepDaily(), DAY_MS);
 
@@ -50,50 +56,8 @@ export function startServer(config: PorticoConfig, opts: { port?: number } = {})
       clearInterval(minuteTimer);
       clearInterval(dailyTimer);
       server.stop(true);
+      portico.close();
       db.close();
-    },
-  };
-}
-
-export interface RunningHosted {
-  port: number;
-  hosted: Hosted;
-  stop(): void;
-}
-
-/** How often closed workspaces are opened for their expiries. */
-const CLOSED_SWEEP_MS = 15 * MINUTE_MS;
-
-/** Hosted Portico: one server routing each request to its workspace by host. */
-export function startHosted(config: HostedConfig, opts: { port?: number } = {}): RunningHosted {
-  const hosted = new Hosted(config);
-  let server: ReturnType<typeof Bun.serve>;
-  try {
-    server = Bun.serve({
-      port: opts.port ?? config.port,
-      fetch: hosted.fetch,
-      maxRequestBodySize: hosted.takesUploads ? LIMITS.maxFileMb * 1024 * 1024 + MAX_BODY_BYTES : MAX_BODY_BYTES * 2,
-      idleTimeout: 60,
-    });
-  } catch (err) {
-    hosted.stop();
-    throw err;
-  }
-  void hosted.sweepAll(true);
-  const minuteTimer = setInterval(() => hosted.sweepMinute(), MINUTE_MS);
-  const closedTimer = setInterval(() => void hosted.sweepAll(), CLOSED_SWEEP_MS);
-  const dailyTimer = setInterval(() => void hosted.sweepAll(true), DAY_MS);
-  const port = server.port as number;
-  log("info", "portico_hosted_started", { port, domain: config.domain, workspaces: hosted.control.all().length });
-  return {
-    port,
-    hosted,
-    stop() {
-      clearInterval(minuteTimer);
-      clearInterval(closedTimer);
-      clearInterval(dailyTimer);
-      server.stop(true);
-      hosted.stop();
     },
   };
 }

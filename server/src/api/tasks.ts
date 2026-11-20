@@ -4,20 +4,22 @@ import { PorticoError } from "../core/errors";
 import { type Task, TASK_OUTCOMES, type TaskOutcome } from "../core/tasks";
 import type { Person } from "../core/types";
 import { type PersonEnv, currentPerson } from "./context";
-import { pendingSignIns } from "./sign-ins";
+import { type ConsentCard, consentCards } from "./consents";
 import {
   type ActivityView,
   type AgentView,
   agentsInOrder,
   type HeldCard,
   personViews,
-  type SignInView,
   type TaskView,
 } from "./views";
 
-/** The agents whose tasks and activity the person sees: everyone's for the owner (null), a member's own otherwise. */
-export function visibleAgents(core: Core, me: Person): string[] | null {
-  return me.role === "owner" ? null : core.agents.ownedBy(me.id).map((a) => a.id);
+/**
+ * The agents whose tasks and activity the person sees: the person's own, whatever the person's role. A conversation is
+ * read by the people whose agents are in it, and by nobody else.
+ */
+export function visibleAgents(core: Core, me: Person): string[] {
+  return core.agents.ownedBy(me.id).map((a) => a.id);
 }
 
 function sees(visible: string[] | null, task: Task): boolean {
@@ -44,7 +46,7 @@ function projects(core: Core, visible: string[] | null): string[] {
 export interface TodayData {
   since: string;
   counts: { decide: number; inProgress: number; done: number; failed: number };
-  decisions: { held: HeldCard[]; signIns: SignInView[]; waiting: AgentView[] };
+  decisions: { held: HeldCard[]; consents: ConsentCard[]; waiting: AgentView[] };
   inProgress: TaskView[];
   done: TaskView[];
   failed: TaskView[];
@@ -60,9 +62,9 @@ export function serverMidnight(now: Date): string {
 /** Today: what needs the person's decision, what's in progress, and what ended since `since`. */
 export function todayData(core: Core, me: Person, since: string): TodayData {
   const views = personViews(core, me);
-  const tasks = core.tasks.all({ visible: visibleAgents(core, me) });
+  const tasks = core.tasks.all({ person: me.id }, { visible: visibleAgents(core, me) });
   const held = core.approvals.heldFor(me.id).map(views.held);
-  const signIns = pendingSignIns(core, me);
+  const consents = consentCards(core, me);
   const waiting = agentsInOrder(core.agents, me)
     .filter((a) => a.ownerId === me.id && core.agents.entry(a).status === "waiting")
     .map(views.agent);
@@ -72,8 +74,8 @@ export function todayData(core: Core, me: Person, since: string): TodayData {
   const failed = ended("failed");
   return {
     since,
-    counts: { decide: held.length + signIns.length + waiting.length, inProgress: inProgress.length, done: done.length, failed: failed.length },
-    decisions: { held, signIns, waiting },
+    counts: { decide: held.length + consents.length + waiting.length, inProgress: inProgress.length, done: done.length, failed: failed.length },
+    decisions: { held, consents, waiting },
     inProgress: inProgress.slice(0, 20).map(views.task),
     done: done.slice(0, 20).map(views.task),
     failed: failed.slice(0, 20).map(views.task),
@@ -94,6 +96,8 @@ export interface TaskQuery {
   outcome?: string | null;
   before?: string | null;
   limit?: number;
+  /** Only conversations that run through this workspace. */
+  workspace?: string | null;
 }
 
 /** A page of tasks for the person, filtered by agent, project and outcome, with every outcome's count. */
@@ -109,10 +113,11 @@ export function taskListData(core: Core, me: Person, query: TaskQuery): TaskList
         .filter((a) => a.type === "session" && a.folder === query.project)
         .map((a) => a.id)
     : undefined;
-  const page = core.tasks.list({
+  const page = core.tasks.list({ person: me.id }, {
     visible,
     agentId: query.agent || undefined,
     anyOf,
+    workspaceId: query.workspace || undefined,
     outcome: (query.outcome as TaskOutcome | null) || undefined,
     before: timeParam(query.before ?? undefined) ?? undefined,
     limit: query.limit !== undefined && Number.isFinite(query.limit) ? query.limit : 50,
@@ -141,6 +146,7 @@ export function taskRoutes(core: Core): Hono<PersonEnv> {
       taskListData(core, me, {
         agent: c.req.query("agent"),
         project: c.req.query("project"),
+        workspace: c.req.query("workspace"),
         outcome: c.req.query("outcome"),
         before: c.req.query("before"),
         limit,
@@ -151,17 +157,20 @@ export function taskRoutes(core: Core): Hono<PersonEnv> {
   route.get("/tasks/:id", (c) => {
     const me = currentPerson(c);
     const views = personViews(core, me);
-    const found = core.tasks.get(c.req.param("id"));
+    const found = core.tasks.get({ person: me.id }, c.req.param("id"), visibleAgents(core, me));
     if (!found || !sees(visibleAgents(core, me), found.task)) throw new PorticoError("not_found", "No such task.");
-    const messages = found.messageIds.map((id) => core.messages.get(id)).filter((m) => m !== null);
+    const within = { person: me.id, workspace: found.task.workspaceId };
+    // A task or a reply still held on its way out is the sender's side's alone.
+    if (found.task.outboundHeld && !visibleAgents(core, me).includes(found.task.fromId)) throw new PorticoError("not_found", "No such task.");
+    const messages = found.messageIds.map((id) => core.messages.get(within, id)).filter((m) => m !== null).filter((m) => !views.notYetSent(m));
     return c.json({ task: views.task(found.task), messages: messages.map(views.message) });
   });
 
   // A file on a message the person can see: sends the browser on to a short-lived download.
   route.get("/files/:id", async (c) => {
     const me = currentPerson(c);
-    const file = core.files.get(c.req.param("id"));
-    if (!file || !core.files.personMayDownload(me, file)) throw new PorticoError("not_found", "No such file.");
+    const file = core.files.forPerson(me, c.req.param("id"));
+    if (!file) throw new PorticoError("not_found", "No such file.");
     const link = await core.files.link(file);
     return c.redirect(link.url, 302);
   });
@@ -176,7 +185,7 @@ export function taskRoutes(core: Core): Hono<PersonEnv> {
     const before = timeParam(c.req.query("before")) ?? undefined;
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 100) || 100, 1), 300);
     const record = core.activity
-      .list({ agentIds: agentIds ?? undefined, withUnattached: !agent && visible === null, before, limit })
+      .list({ forPerson: me.id, agentIds: agentIds ?? undefined, withUnattached: !agent && visible === null, ownUnattached: !agent, before, limit })
       .map(views.activity);
     const sessions: ActivityView[] = core.agents.recentRuns(agentIds, { before, limit }).flatMap((run) => {
       const view = views.run(run);

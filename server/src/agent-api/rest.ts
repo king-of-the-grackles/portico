@@ -10,12 +10,14 @@ import { inboxWaitMs } from "../core/inbox-waits";
 import { DELIVERY_BATCH_MAX, type Messages } from "../core/messages";
 import type { Tasks } from "../core/tasks";
 import type { WakeUrls } from "../core/wake-urls";
+import type { AgentNotices } from "../core/notices";
 import { parseStatusReport, type Presence } from "../core/presence";
 import { errorName, log } from "../log";
 import { type AgentEnv, requireAgent, requireSession, type Resolver, unauthorized } from "./auth";
 import { jsonBodyLimit } from "./limits";
 import { getAgentTask, listAgentTasks } from "./tasks";
 import { type AgentViews, UNTRUSTED_PROFILES } from "./views";
+import { runPorticoTool, PORTICO_TOOL_NAMES, type PorticoToolDeps, porticoFilter } from "./portico-tools";
 
 const SendBody = z.object({
   to: z.string().optional(),
@@ -36,7 +38,7 @@ const UploadBody = z.object({
 const ProfileBody = z.object({ description: z.string().nullish(), doing: z.string().nullish() });
 const WakeBody = z.object({ url: z.string(), key: z.string() });
 const AckIds = z.array(z.string()).max(DELIVERY_BATCH_MAX).default([]);
-const AckBody = z.object({ messages: AckIds, updates: AckIds });
+const AckBody = z.object({ messages: AckIds, updates: AckIds, notices: AckIds });
 
 export async function readJson(c: Context): Promise<unknown> {
   try {
@@ -70,6 +72,9 @@ export interface AgentRestDeps {
   resolver: Resolver;
   changes: Changes;
   now: () => Date;
+  porticoTools: PorticoToolDeps;
+  /** Portico's own notices to agents, delivered beside messages and outcomes. */
+  notices: AgentNotices;
 }
 
 /**
@@ -86,14 +91,25 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
   api.get("/agents", (c) => {
     const agent = c.get("agent");
     agents.checkedIn(agent);
-    return c.json({ agents: agents.entries(agent.id).map(views.entry), note: UNTRUSTED_PROFILES });
+    return c.json(views.list(agent, porticoFilter(deps.porticoTools.workspaces, agent, c.req.query("portico"))));
+  });
+
+  // The Portico tools, one route for all: the body is the tool's arguments, as on /mcp.
+  api.post("/portico-tools/:name", async (c) => {
+    const agent = c.get("agent");
+    const name = c.req.param("name");
+    if (!PORTICO_TOOL_NAMES.includes(name)) throw new PorticoError("not_found", "No such tool.");
+    const body = c.req.header("content-length") === "0" ? {} : await readJson(c).catch(() => ({}));
+    const args = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+    agents.checkedIn(agent);
+    return c.json(runPorticoTool(deps.porticoTools, agent, name, args));
   });
 
   api.post("/messages", async (c) => {
     const body = SendBody.parse(await readJson(c));
     const agent = c.get("agent");
     await deps.files.settle(agent, body.attachments);
-    const { message, delivery, note } = messages.send(agent, {
+    const { message, delivery, note, workspace } = messages.send(agent, {
       to: body.to,
       subject: body.subject,
       text: body.text,
@@ -104,7 +120,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       attachments: body.attachments,
     });
     agents.checkedIn(agent);
-    return c.json({ message: views.message(message), delivery, ...(note ? { note } : {}) }, 201);
+    return c.json({ ...views.sent(message, delivery, workspace, agent), ...(note ? { note } : {}) }, 201);
   });
 
   // Starts a file to attach. Small text comes in the call; anything else gets an address to PUT the bytes to.
@@ -119,8 +135,8 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
   // A file's own address: checks the caller may have the file, then sends the caller on to a short-lived download.
   api.get("/files/:id", async (c) => {
     const agent = c.get("agent");
-    const file = deps.files.get(c.req.param("id"));
-    if (!file || !deps.files.agentMayDownload(agent, file)) throw new PorticoError("not_found", "No such file among this agent's files.");
+    const file = deps.files.forAgent(agent, c.req.param("id"));
+    if (!file) throw new PorticoError("not_found", "No such file among this agent's files.");
     const link = await deps.files.link(file);
     return c.redirect(link.url, 302);
   });
@@ -148,7 +164,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
   api.put("/wake", async (c) => {
     const body = WakeBody.parse(await readJson(c));
     const agent = c.get("agent");
-    const wake = deps.wakeUrls.set(agent, null, body);
+    const wake = await deps.wakeUrls.set(agent, null, body);
     agents.checkedIn(agent);
     return c.json({ wake: { host: wake.host } });
   });
@@ -176,7 +192,12 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       if (outcome === "gone") return unauthorized(c, deps.resolver);
     }
     const { messages: picked, updates } = messages.inbox(agent);
-    return c.json({ messages: picked.map(views.delivery), updates: updates.map(views.update) });
+    return c.json({
+      messages: picked.map((m) => views.delivery(m, agent)),
+      updates: updates.map((m) => views.update(m, agent)),
+      notices: deps.notices.take(agent.id).map(views.notice),
+      ...views.heldForPerson(agent),
+    });
   });
 
   // Peek and ack, for sessions' plugins: a GET changes nothing, and only the ack marks what was delivered.
@@ -184,14 +205,18 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
     const agent = c.get("agent");
     requireSession(agent, "use deliveries; apps and connectors call check_inbox");
     const pending = messages.pending(agent);
-    return c.json({ messages: pending.messages.map(views.delivery), updates: pending.updates.map(views.update) });
+    return c.json({
+      messages: pending.messages.map((m) => views.delivery(m, agent)),
+      updates: pending.updates.map((m) => views.update(m, agent)),
+      notices: deps.notices.waiting(agent.id, DELIVERY_BATCH_MAX).map(views.notice),
+    });
   });
 
   api.post("/deliveries/ack", async (c) => {
     const agent = c.get("agent");
     requireSession(agent, "use deliveries");
     const body = AckBody.parse(await readJson(c));
-    return c.json({ acked: messages.ack(agent, body) });
+    return c.json({ acked: { ...messages.ack(agent, body), notices: deps.notices.ack(agent.id, body.notices) } });
   });
 
   // Sessions' live status, kept in memory. The text is cleaned here; nothing about it is logged.
@@ -213,7 +238,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       before.doing !== after.doing ||
       before.repo !== after.repo ||
       before.branch !== after.branch;
-    if (changed) deps.changes.emit("agents");
+    if (changed) deps.changes.about({ agents: [agent.id] }, "agents");
     return c.json({ ok: true });
   });
 

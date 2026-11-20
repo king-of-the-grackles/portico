@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addAppAgent, addMember, addOwner, errorCode, makePortico } from "./helpers";
+import { addAppAgent, addMember, addOwner, errorCode, makePortico, together } from "./helpers";
 
 async function setup() {
   const p = makePortico();
@@ -14,7 +14,15 @@ describe("decisions", () => {
   test("only the recipient's manager decides, once, with a known decision", async () => {
     const { p, chris, maya, grok } = await setup();
     const held = p.messages.send(grok, { to: "muse", subject: "s", text: "t" }).message;
-    expect(errorCode(() => p.approvals.decide(maya.id, held.id, "allow_once"))).toBe("not_allowed");
+    // A message between other people's agents is looked for only in the decider's own workspaces: none of Maya's
+    // agents is in this conversation, so the message answers the same as one that doesn't exist.
+    expect(errorCode(() => p.approvals.decide(maya.id, held.id, "allow_once"))).toBe("not_found");
+    // The sender's manager can't decide it either, and gets the same answer.
+    const scout = addAppAgent(p, maya, "scout").agent;
+    together(p, scout, p.agents.require(held.toId));
+    const fromMaya = p.messages.send(scout, { to: "chris/muse", subject: "s", text: "t" }).message;
+    expect(fromMaya.status).toBe("held");
+    expect(errorCode(() => p.approvals.decide(maya.id, fromMaya.id, "allow_once"))).toBe("not_found");
     expect(errorCode(() => p.approvals.decide(chris.id, held.id, "maybe"))).toBe("bad_request");
     const allowed = p.approvals.decide(chris.id, held.id, "allow_once");
     expect(allowed).toMatchObject({ status: "pending", decision: "allow_once", decidedBy: chris.id });
@@ -26,7 +34,7 @@ describe("decisions", () => {
     const one = p.messages.send(grok, { to: "muse", subject: "One", text: "1" }).message;
     const two = p.messages.send(grok, { to: "muse", subject: "Two", text: "2" }).message;
     p.approvals.decide(chris.id, two.id, "always_allow");
-    expect(p.messages.get(one.id)!.status).toBe("pending");
+    expect(p.messages.get({ person: chris.id }, one.id)!.status).toBe("pending");
     expect(p.approvals.allowListFor(chris.id, muse.id).map((e) => e.senderId)).toEqual([grok.id]);
     expect(p.approvals.heldFor(chris.id)).toEqual([]);
   });
@@ -47,9 +55,10 @@ describe("decisions", () => {
 
 describe("card facts", () => {
   test("Managed by names the person who manages the sender", async () => {
-    const { p, maya } = await setup();
+    const { p, maya, muse } = await setup();
     const mayaDot = addAppAgent(p, maya, "maya-dot", { kind: "dots" }).agent;
-    const held = p.messages.send(mayaDot, { to: "muse", subject: "Churn numbers", text: "Last quarter?" }).message;
+    together(p, mayaDot, muse);
+    const held = p.messages.send(mayaDot, { to: "chris/muse", subject: "Churn numbers", text: "Last quarter?" }).message;
     expect(p.approvals.facts(held).managedBy.name).toBe("Maya");
   });
 

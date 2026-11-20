@@ -11,6 +11,7 @@ import {
   PUBLIC_URL,
   signIn,
   sseReader,
+  together,
 } from "./helpers";
 
 async function setup() {
@@ -22,6 +23,8 @@ async function setup() {
   const grok = addAppAgent(p, chris, "grok", { kind: "grok-bot" }).agent;
   const muse = addAppAgent(p, chris, "muse", { approvalRequired: true }).agent;
   const mayaDot = addAppAgent(p, maya, "maya-dot", { kind: "dots" }).agent;
+  // grok and maya-dot share a workspace; muse stays in Chris's own.
+  together(p, grok, mayaDot);
   return { p, chris, maya, owner, member, grok, muse, mayaDot };
 }
 
@@ -46,6 +49,41 @@ describe("conventions", () => {
     expect(res.status).toBe(403);
   });
 
+  test("an X-Forwarded-Host a client sends doesn't make another site's request Portico's own", async () => {
+    const { p, owner } = await setup();
+    const from = (headers: Record<string, string>) =>
+      p.app.request(`${PUBLIC_URL}/api/agents/x`, { method: "DELETE", headers: { cookie: owner, ...headers } });
+    expect((await from({ origin: "https://evil.example", host: "portico.example.com", "x-forwarded-host": "evil.example" })).status).toBe(403);
+    // Nor does the request's own Host, once a public URL is known.
+    expect((await from({ origin: "https://evil.example", host: "evil.example" })).status).toBe(403);
+    // Behind a proxy that passes its own Host along, the public URL still decides.
+    expect((await from({ origin: PUBLIC_URL, host: "10.0.0.5:8790" })).status).toBe(404);
+  });
+
+  test("a public URL on this computer takes each loopback name, with the same scheme and port, and nothing else", async () => {
+    const p = makePortico({ config: { publicUrl: "http://localhost:8790" } });
+    const cookie = signIn(p, await addOwner(p));
+    const from = (origin: string) => p.app.request("http://localhost:8790/api/agents/x", { method: "DELETE", headers: { cookie, origin } });
+    for (const origin of ["http://localhost:8790", "http://127.0.0.1:8790", "http://[::1]:8790"]) expect((await from(origin)).status).toBe(404);
+    for (const origin of ["http://127.0.0.1:3000", "https://127.0.0.1:8790", "http://127.0.0.2:8790", "http://evil.example:8790", "http://localhost.evil.example:8790"]) {
+      expect((await from(origin)).status).toBe(403);
+    }
+    // A public URL elsewhere stays exact.
+    const hosted = makePortico();
+    const owner = signIn(hosted, await addOwner(hosted));
+    const res = await hosted.app.request(`${PUBLIC_URL}/api/agents/x`, { method: "DELETE", headers: { cookie: owner, origin: "http://127.0.0.1" } });
+    expect(res.status).toBe(403);
+  });
+
+  test("before a public URL is known, the request's own Host decides", async () => {
+    const p = makePortico({ setup: false, config: { publicUrl: null } });
+    const post = (headers: Record<string, string>) =>
+      p.app.request("http://localhost:8790/api/setup", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: "{}" });
+    expect((await post({ origin: "http://192.168.1.5:8790", host: "192.168.1.5:8790" })).status).toBe(404);
+    expect((await post({ origin: "https://evil.example", host: "192.168.1.5:8790" })).status).toBe(403);
+    expect((await post({ origin: "https://evil.example", host: "192.168.1.5:8790", "x-forwarded-host": "evil.example" })).status).toBe(403);
+  });
+
   test("a claim waiting for approval reads only /api/me", async () => {
     const p = makePortico();
     await addOwner(p);
@@ -64,7 +102,7 @@ describe("conventions", () => {
 });
 
 describe("agents", () => {
-  test("everyone sees every agent, the signed-in person's first, with what each may change", async () => {
+  test("a person sees the person's own agents first, then those sharing a workspace, and no others", async () => {
     const { p, member } = await setup();
     const { agents } = await json<{ agents: { name: string; mine: boolean; owner: { name: string } }[] }>(
       callPerson(p, member, "GET", "/api/agents"),
@@ -72,17 +110,19 @@ describe("agents", () => {
     expect(agents.map((a) => [a.name, a.mine, a.owner.name])).toEqual([
       ["maya-dot", true, "Maya"],
       ["grok", false, "Chris"],
-      ["muse", false, "Chris"],
     ]);
   });
 
   test("edits go live; a name in use is 409; another person's agent is 403 and has no allow list", async () => {
-    const { p, owner, member, muse, mayaDot } = await setup();
+    const { p, owner, member, grok, muse, mayaDot } = await setup();
     const res = await callPerson(p, owner, "PATCH", `/api/agents/${muse.id}`, { name: "muse-work", description: "Calendar" });
     expect(await res.json()).toMatchObject({ agent: { name: "muse-work", description: "Calendar" } });
     expect((await callPerson(p, owner, "PATCH", `/api/agents/${muse.id}`, { name: "grok" })).status).toBe(409);
     expect((await callPerson(p, owner, "PATCH", `/api/agents/${mayaDot.id}`, { approvalRequired: true })).status).toBe(403);
-    expect(await json(callPerson(p, member, "GET", `/api/agents/${muse.id}`))).toMatchObject({ allowList: null });
+    expect(await json(callPerson(p, member, "GET", `/api/agents/${grok.id}`))).toMatchObject({ allowList: null });
+    // An agent in none of the person's workspaces answers as one that isn't there.
+    expect((await callPerson(p, member, "GET", `/api/agents/${muse.id}`)).status).toBe(404);
+    expect((await callPerson(p, member, "PATCH", `/api/agents/${muse.id}`, { approvalRequired: false })).status).toBe(404);
   });
 
   test("a session's folder switch is part of the agent", async () => {
@@ -108,14 +148,15 @@ describe("approvals", () => {
   test("held cards carry the facts, and a decision delivers", async () => {
     const { p, owner, member, grok } = await setup();
     const held = p.messages.send(grok, { to: "muse", subject: "Add the doc link", text: "docs/billing-v2.md" }).message;
-    const list = await json<{ held: { id: string; subject: string; from: { display: string }; facts: { managedBy: { name: string } } }[]; signIns: unknown[] }>(
+    const list = await json<{ held: { id: string; subject: string; from: { display: string }; facts: { managedBy: { name: string } } }[]; consents: unknown[] }>(
       callPerson(p, owner, "GET", "/api/approvals"),
     );
     expect(list.held).toHaveLength(1);
     expect(list.held[0]).toMatchObject({ subject: "Add the doc link", from: { display: "grok" }, facts: { managedBy: { name: "Chris" } } });
-    expect(list.signIns).toEqual([]);
+    expect(list.consents).toEqual([]);
     expect(await json(callPerson(p, member, "GET", "/api/approvals"))).toMatchObject({ held: [] });
-    expect((await callPerson(p, member, "POST", `/api/approvals/held/${held.id}`, { decision: "allow_once" })).status).toBe(403);
+    // None of the member's agents is in the conversation, so the message answers the same as one that doesn't exist.
+    expect((await callPerson(p, member, "POST", `/api/approvals/held/${held.id}`, { decision: "allow_once" })).status).toBe(404);
     const decided = await callPerson(p, owner, "POST", `/api/approvals/held/${held.id}`, { decision: "allow_once" });
     expect(await decided.json()).toMatchObject({ message: { status: "pending", decision: "allow_once", decidedBy: { name: "Chris" } } });
   });
@@ -134,14 +175,19 @@ describe("held card quote", () => {
 });
 
 describe("threads", () => {
-  test("the owner sees every thread; a member sees threads with the member's agents; others are 404", async () => {
-    const { p, owner, member, grok, mayaDot } = await setup();
-    const ours = p.messages.send(grok, { to: "maya-dot", subject: "Churn", text: "Last quarter?" }).message;
+  test("a person sees threads with the person's own agents, the server's owner too; others are 404", async () => {
+    const { p, maya, owner, member, grok, mayaDot } = await setup();
+    const ours = p.messages.send(grok, { to: "maya/maya-dot", subject: "Churn", text: "Last quarter?" }).message;
     const private_ = p.messages.send(grok, { to: "muse", subject: "Flights", text: "Denver" }).message;
-    const all = await json<{ threads: { id: string }[] }>(callPerson(p, owner, "GET", "/api/threads"));
-    expect(all.threads).toHaveLength(2);
+    addAppAgent(p, maya, "maya-notes");
+    const theirs = p.messages.send(mayaDot, { to: "maya-notes", subject: "Diary", text: "Between Maya's own agents." }).message;
+    const all = await json<{ threads: { id: string; last: { subject: string } }[] }>(callPerson(p, owner, "GET", "/api/threads"));
+    expect(all.threads.map((t) => t.last.subject).sort()).toEqual(["Churn", "Flights"]);
+    // The owner runs the server and still reads no conversation between other people's agents.
+    expect((await callPerson(p, owner, "GET", `/api/threads/${theirs.threadId}`)).status).toBe(404);
+    expect((await callPerson(p, owner, "GET", `/api/tasks/${theirs.id}`)).status).toBe(404);
     const mine = await json<{ threads: { id: string; last: { subject: string } }[] }>(callPerson(p, member, "GET", "/api/threads"));
-    expect(mine.threads.map((t) => t.last.subject)).toEqual(["Churn"]);
+    expect(mine.threads.map((t) => t.last.subject).sort()).toEqual(["Churn", "Diary"]);
     expect((await callPerson(p, member, "GET", `/api/threads/${private_.threadId}`)).status).toBe(404);
     const thread = await json<{ messages: { subject: string; text: string }[] }>(callPerson(p, member, "GET", `/api/threads/${ours.threadId}`));
     expect(thread.messages.map((m) => m.text)).toEqual(["Last quarter?"]);
@@ -168,7 +214,7 @@ describe("threads", () => {
 
   test("filter by agent", async () => {
     const { p, owner, grok, muse } = await setup();
-    p.messages.send(grok, { to: "maya-dot", subject: "s", text: "t" });
+    p.messages.send(grok, { to: "maya/maya-dot", subject: "s", text: "t" });
     const { threads } = await json<{ threads: unknown[] }>(callPerson(p, owner, "GET", `/api/threads?agent=${muse.id}`));
     expect(threads).toEqual([]);
   });
@@ -183,7 +229,8 @@ describe("live updates", () => {
     expect((await events.next()).event).toBe("hello");
     p.messages.send(grok, { to: "muse", subject: "s", text: "t" });
     await flush();
-    expect(await events.next()).toEqual({ event: "changed", data: { topics: ["approvals", "threads"] } });
+    // The hold is in the record too, so the activity topic comes along.
+    expect(await events.next()).toEqual({ event: "changed", data: { topics: ["approvals", "threads", "activity"] } });
     await events.cancel();
   });
 });

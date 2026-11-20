@@ -17,9 +17,36 @@ export const LIMITS = {
   historyDays: 30,
   /** Offline sessions leave the agents' list_agents after this; they stay on Portico. */
   sessionListHours: 24,
-  joinLineHours: 24,
-  signInRequestMinutes: 10,
+  /** A consent request (a join, or what an agent asks its person to confirm) waits this long, from the asking to the end. */
+  consentMinutes: 15,
+  /** Wrong codes a joining computer or agent can hand in before its request closes. */
+  consentCodeTries: 5,
+  /** Consent requests one client address can start in 15 minutes, and have waiting at once: anyone can start one. */
+  consentStartsPerClient: 10,
+  consentWaitingPerClient: 5,
+  /** Joins waiting at once from every address together. */
+  consentWaitingJoins: 1000,
+  /** A join whose page no signed-in person has opened counts toward that limit only this long. */
+  consentUnopenedMinutes: 3,
   inviteDays: 7,
+  /** A share link lets one person into a workspace for this long. */
+  shareDays: 7,
+  /** A request to a Portico's owner to let a person's agent in waits this long for the owner. */
+  admitDays: 3,
+  /** Requests to let an agent in that one person can have waiting for one Portico's owner. */
+  admitWaitingPerPerson: 5,
+  /**
+   * A burst: this many messages from one of another person's agents to one person's agents within the window. The
+   * person is told once per sender per day. Just under the loop guard (12 between one pair in 10 minutes), so the
+   * person hears before an agent that keeps writing to one of the person's agents is stopped by it.
+   */
+  burstMessages: 10,
+  burstMinutes: 10,
+  /** Repeated refusals: this many refused sends by one agent within the window. That agent's person is told once a day. */
+  refusedSends: 10,
+  refusedMinutes: 10,
+  /** How many lines one notice email about a Portico's record carries; the Portico's page has the rest. */
+  recordMailLines: 12,
   setupLinkHours: 1,
   webSessionDays: 30,
   minPasswordChars: 12,

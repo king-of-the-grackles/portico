@@ -1,5 +1,5 @@
 // Settings: People, Computers and Account. Pure: state in, HTML out.
-import { ago, clock, date, dayLabel, esc, ICON, monogram, personColor, plural, renderAddSheet, renderHeader, when } from "./common.js";
+import { ago, clock, date, dayLabel, esc, ICON, kindInfo, logo, monogram, personColor, plural, renderAddSheet, renderHeader, when } from "./common.js";
 import type { AgentView, ClaimView, ComputerView, InviteView, PasskeyView, PersonRow, SettingsState } from "./types.js";
 
 function notice(text: string, key: string): string {
@@ -50,6 +50,7 @@ function inviteRow(s: SettingsState, i: InviteView): string {
   const field = `invite-${esc(i.id)}`;
   return `<li class="srow srow-stack enter" data-key="i-${esc(i.id)}">
     <div class="srow-line"><span class="av av-round av-invite">${monogram(i.name)}</span><span class="row-text"><strong>Invite for ${esc(i.name)}</strong><span class="row-help tnum">Unclaimed. Single use, expires ${date(i.expiresAt, s.now)}.</span></span><span class="actions"><button type="button" class="btn btn-text" data-action="invite-revoke" data-id="${esc(i.id)}"${when(s.busy === `revoke:${i.id}`, " disabled")}>Revoke</button></span></div>
+    ${when(!link, `<p class="row-help">This link can't be shown again. To hand one over, revoke it and make a new one.</p>`)}
     ${when(
       link,
       `<div class="link-line"><label for="${field}" class="sr">Invite link for ${esc(i.name)}</label><input id="${field}" class="line-field link-field" readonly value="${esc(link)}"><button type="button" class="btn btn-primary" data-action="invite-copy" data-id="${esc(i.id)}">${ICON.copy()}${s.copied[i.id] ? "Copied" : "Copy link"}</button></div>`,
@@ -59,7 +60,7 @@ function inviteRow(s: SettingsState, i: InviteView): string {
 
 function renderInviteForm(s: SettingsState): string {
   const f = s.invite!;
-  return `<form class="sform enter" data-form="invite-create" data-key="invite-form" novalidate>
+  return `<form class="sform enter" method="dialog" data-form="invite-create" data-key="invite-form" novalidate>
     <label for="invite-name" class="lbl">Name</label>
     <input id="invite-name" class="field field-narrow${when(f.error, " is-invalid")}" value="${esc(f.name)}" data-input="invite-name" aria-describedby="invite-help" aria-invalid="${Boolean(f.error)}" autocomplete="off" data-autofocus>
     <span id="invite-help" class="help">One link per person. Single use, expires in 7 days.</span>
@@ -68,7 +69,21 @@ function renderInviteForm(s: SettingsState): string {
   </form>`;
 }
 
+/** The people who share a Portico with the signed-in person. Coming and going happens on each Portico's page. */
+function renderSharedPeople(s: SettingsState): string {
+  const people = s.people ?? [];
+  const row = (p: PersonRow) =>
+    `<li class="srow" data-key="p-${esc(p.id)}">${avatar(p)}<span class="row-text"><strong>${esc(p.name)}${when(p.isMe, " (signed in)")}</strong><span class="row-help">${p.handle ? `<code>${esc(p.handle)}</code> ` : ""}${agentsLine(p.agentCount)}</span></span></li>`;
+  return `<section id="people" aria-labelledby="people-h" class="ssection">
+    <div class="sec-head"><h2 id="people-h" class="h-settings">People</h2></div>
+    <p class="sec-help">Everyone you share a Portico with.</p>
+    <ul class="rows card-list">${people.map(row).join("")}</ul>
+  </section>`;
+}
+
 export function renderPeople(s: SettingsState): string {
+  // A server with its own sign-in has invites, which its owner manages with claims and removing a person.
+  if (!s.canInvite) return renderSharedPeople(s);
   const owner = s.me.role === "owner";
   const people = s.people ?? [];
   const sorted = [...people.filter((p) => p.role === "owner"), ...people.filter((p) => p.role !== "owner")];
@@ -97,29 +112,60 @@ function computerSub(c: ComputerView, now: number): string {
   return `${sessions}.${when2}`;
 }
 
+/** One of the person's agents in Settings: its page, where it runs, and Remove with its confirmation. */
+function agentLine(s: SettingsState, a: AgentView): string {
+  const href = `/a/${encodeURIComponent(a.id)}`;
+  const where = a.type === "session" ? `Folder ${a.repo ?? a.folder ?? "unknown"}. ` : "";
+  const seen = a.status && a.status !== "offline" ? "Online." : a.lastSeen ? `Last seen ${ago(a.lastSeen, s.now)}.` : "Not seen yet.";
+  return `<li class="sagent" data-key="sa-${esc(a.id)}">${logo(a.kind, "logo-sm", kindInfo(a.kind).label)}<span class="row-text"><a class="row-link" href="${href}"><strong>${esc(a.label)}</strong></a><span class="row-help tnum">${esc(where)}${esc(seen)}</span></span>${confirmPair(
+    s.confirmAgent === a.id,
+    a.label,
+    "sagent-remove",
+    "sagent-cancel",
+    "sagent-confirm",
+    a.id,
+    s.busy === `sagent:${a.id}`,
+  )}</li>`;
+}
+
 function computerRow(s: SettingsState, c: ComputerView): string {
   const owner = c.sessions[0] && !c.sessions[0].mine ? c.sessions[0].owner.name : null;
-  return `<li class="srow" data-key="m-${esc(c.id)}"><span class="av av-device">${ICON.laptop()}</span><span class="row-text"><span class="comp-name"><strong>${esc(c.name)}</strong>${when(owner, `<span class="owner-chip">${esc(owner)}</span>`)}</span><span class="row-help tnum">${computerSub(c, s.now)}</span></span>${confirmPair(
-    s.confirmComputer === c.id,
-    c.name,
-    "computer-remove",
-    "computer-cancel",
-    "computer-confirm",
-    c.id,
-    s.busy === `computer:${c.id}`,
-  )}</li>`;
+  const busy = s.busy === `unallow:${c.id}`;
+  const remove = s.confirmComputer === c.id
+    ? `<span class="actions"><button type="button" class="btn btn-link" data-action="computer-cancel">Cancel</button><button type="button" class="btn btn-danger" data-action="computer-confirm" data-id="${esc(c.id)}" data-autofocus${when(s.busy === `computer:${c.id}`, " disabled")}>Confirm: remove <span class="btn-name">${esc(c.name)}</span></button></span>`
+    : `<span class="actions"><button type="button" class="btn btn-text" data-action="computer-remove" data-id="${esc(c.id)}">Remove computer</button></span>`;
+  return `<li class="srow srow-stack" data-key="m-${esc(c.id)}">
+    <div class="srow-line"><span class="av av-device">${ICON.laptop()}</span><span class="row-text"><span class="comp-name"><strong>${esc(c.name)}</strong>${when(owner, `<span class="owner-chip">${esc(owner)}</span>`)}</span><span class="row-help tnum">${computerSub(c, s.now)}</span></span>${remove}</div>
+    <div class="srow-line comp-allow"><span class="row-text"><span class="row-title">Always allow</span><span class="row-help">${
+      c.alwaysAllowed ? "On. Messages from new sessions here go through without asking." : "Off. The first message from each new session here waits for a decision."
+    }</span></span><span class="actions">${
+      c.alwaysAllowed
+        ? `<button type="button" class="btn btn-secondary" data-action="computer-unallow" data-id="${esc(c.id)}"${when(busy, " disabled")}>Stop</button>`
+        : `<button type="button" class="btn btn-primary" data-action="computer-allow" data-id="${esc(c.id)}"${when(busy, " disabled")}>Always allow</button>`
+    }</span></div>
+    ${when(c.sessions.length > 0, `<ul class="sagents" aria-label="Agents on ${esc(c.name)}">${c.sessions.map((a) => agentLine(s, a)).join("")}</ul>`)}
+  </li>`;
 }
 
 export function renderComputers(s: SettingsState): string {
   const list = s.computers ?? [];
+  // Agents on no computer: apps and connectors such as Muse, ChatGPT or Grok Bot.
+  const onComputers = new Set(list.flatMap((c) => c.sessions.map((a) => a.id)));
+  const others = s.agents.filter((a) => a.mine && !onComputers.has(a.id) && a.computer === null);
   return `<section id="computers" aria-labelledby="computers-h" class="ssection">
     <h2 id="computers-h" class="h-settings">Computers</h2>
-    <p class="sec-help">Claude Code and Codex sessions join Portico from these computers. Removing a computer signs out every session on that computer.</p>
+    <p class="sec-help">Each computer, the agents on it, and what the computer is allowed. Removing a computer signs out every session on it.</p>
     ${notice(s.compNotice, "comp-notice")}
     <ul class="rows card-list">${list.map((c) => computerRow(s, c)).join("")}${when(
       s.computers !== null && list.length === 0,
       `<li class="srow"><span class="row-help">No computers yet.</span></li>`,
     )}</ul>
+    ${when(
+      others.length > 0,
+      `<h3 id="other-agents-h" class="h-sub other-agents-h">Other agents</h3>
+    <p class="sec-help">Apps and connectors, which run on no computer.</p>
+    <ul class="rows card-list"><li class="srow srow-stack"><ul class="sagents" aria-labelledby="other-agents-h">${others.map((a) => agentLine(s, a)).join("")}</ul></li></ul>`,
+    )}
   </section>`;
 }
 
@@ -132,21 +178,31 @@ function passkeyRow(s: SettingsState, k: PasskeyView): string {
 
 export function renderAccount(s: SettingsState): string {
   const nameRow = s.nameForm
-    ? `<li class="srow srow-stack" data-key="acct-name"><form class="sform-inline" data-form="name-save" novalidate>
+    ? `<li class="srow srow-stack" data-key="acct-name"><form class="sform-inline" method="dialog" data-form="name-save" novalidate>
         <label for="acct-name" class="lbl">Name</label>
         <input id="acct-name" class="field field-narrow${when(s.nameForm.error, " is-invalid")}" value="${esc(s.nameForm.name)}" data-input="name-field" aria-invalid="${Boolean(s.nameForm.error)}" autocomplete="name" data-autofocus>
         ${when(s.nameForm.error, `<span role="alert" class="field-error">${esc(s.nameForm.error)}</span>`)}
         <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="name-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "name", " disabled")}>Save</button></span>
       </form></li>`
     : `<li class="srow" data-key="acct-name"><span class="row-text"><strong>Name</strong><span class="row-help">${esc(s.me.name)}</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="name-open">Change name</button></span></li>`;
+  const handleRow = s.handleForm
+      ? `<li class="srow srow-stack" data-key="acct-handle"><form class="sform-inline" method="dialog" data-form="handle-save" novalidate>
+        <label for="acct-handle" class="lbl">Handle</label>
+        <input id="acct-handle" class="field field-narrow${when(s.handleForm.error, " is-invalid")}" value="${esc(s.handleForm.handle)}" data-input="handle-field" aria-describedby="acct-handle-help" aria-invalid="${Boolean(s.handleForm.error)}" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="20" data-autofocus>
+        <span id="acct-handle-help" class="help">3 to 20 lowercase letters, digits and hyphens. Other people's agents must use the new handle.</span>
+        ${when(s.handleForm.error, `<span role="alert" class="field-error">${esc(s.handleForm.error)}</span>`)}
+        <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="handle-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "handle", " disabled")}>Save handle</button></span>
+      </form></li>`
+    : `<li class="srow" data-key="acct-handle"><span class="row-text"><strong>Handle</strong><span class="row-help"><code>${esc(s.me.handle ?? "")}</code> Other people see your agents as <code>${esc(s.me.handle ?? "")}/muse</code>.</span></span><span class="actions"><button type="button" class="btn btn-link" data-action="handle-open">Change handle</button></span></li>`;
+  const emailRow = s.me.email ? `<li class="srow" data-key="acct-email"><span class="row-text"><strong>Email</strong><span class="row-help">${esc(s.me.email)}</span></span></li>` : "";
   const pw = s.passwordForm;
   const passwordRow = pw
-    ? `<li class="srow srow-stack" data-key="acct-password"><form class="sform-inline" data-form="password-save" novalidate>
+    ? `<li class="srow srow-stack" data-key="acct-password"><form class="sform-inline" method="dialog" data-form="password-save" novalidate>
         <label for="pw-current" class="lbl">Current password</label>
         <input id="pw-current" type="password" class="field field-narrow" value="${esc(pw.current)}" data-input="pw-current" autocomplete="current-password" data-autofocus>
         <label for="pw-next" class="lbl mt8">New password</label>
         <input id="pw-next" type="password" class="field field-narrow${when(pw.error, " is-invalid")}" value="${esc(pw.next)}" data-input="pw-next" autocomplete="new-password" aria-describedby="pw-help" aria-invalid="${Boolean(pw.error)}">
-        <span id="pw-help" class="help">At least 12 characters. Passkeys are removed and every other browser signs out.</span>
+        <span id="pw-help" class="help">At least 12 characters. Signs out every other browser and removes passkeys.</span>
         ${when(pw.error, `<span role="alert" class="field-error">${esc(pw.error)}</span>`)}
         <span class="actions actions-narrow"><button type="button" class="btn btn-link" data-action="password-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === "password", " disabled")}>Change password</button></span>
       </form></li>`
@@ -164,7 +220,7 @@ export function renderAccount(s: SettingsState): string {
       )}</div>
       ${
         pk
-          ? `<form class="sform-inline inner-form" data-form="passkey-add" novalidate>
+          ? `<form class="sform-inline inner-form" method="dialog" data-form="passkey-add" novalidate>
         <label for="pk-name" class="lbl">Passkey name</label>
         <input id="pk-name" class="field field-narrow${when(pk.error, " is-invalid")}" value="${esc(pk.name)}" data-input="pk-name" aria-describedby="pk-help" autocomplete="off" data-autofocus>
         <span id="pk-help" class="help">Shown in this list, such as MacBook Touch ID.</span>
@@ -183,6 +239,8 @@ export function renderAccount(s: SettingsState): string {
     ${when(s.accountError, `<p role="alert" class="field-error mb12">${esc(s.accountError)}</p>`)}
     <ul class="rows card-list">
       ${nameRow}
+      ${handleRow}
+      ${emailRow}
       ${when(s.passwords, passwordRow)}
       ${passkeys}
       <li class="srow" data-key="acct-signout"><span class="row-text"><strong>Sign out</strong><span class="row-help">Ends the Portico session in this browser.</span></span><span class="actions"><button type="button" class="btn btn-text" data-action="sign-out">${ICON.signOut()}Sign out</button></span></li>
@@ -224,6 +282,7 @@ export function settingsState(data: {
   computers: ComputerView[] | null;
   passkeys: PasskeyView[] | null;
   passwords?: boolean;
+  canInvite?: boolean;
   now: number;
 }): SettingsState {
   return {
@@ -237,6 +296,8 @@ export function settingsState(data: {
     computers: data.computers,
     passkeys: data.passkeys,
     passwords: data.passwords ?? true,
+    canInvite: data.canInvite ?? false,
+    handleForm: null,
     acctOpen: false,
     add: null,
     reconnecting: false,
@@ -247,6 +308,7 @@ export function settingsState(data: {
     compNotice: "",
     confirmMember: null,
     confirmComputer: null,
+    confirmAgent: null,
     nameForm: null,
     passwordForm: null,
     passwordChanged: false,

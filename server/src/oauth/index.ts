@@ -18,12 +18,15 @@ import { type AuthorizeRequest, badRequestPage, CONNECTOR_CHOICES, consentPage, 
 import { OAuthProblem, type OAuthClient, OAuthStore, validChallenge } from "./store";
 
 /**
- * Registrations are open to anyone, so they're capped: this many an hour per address, this many an hour from all
- * addresses together, and no new ones while this many clients are still unused (no code and no token yet).
+ * Registrations are open to anyone, so they're capped: this many an hour per address, and at most this many clients
+ * kept unused (no code and no token yet). A registration past that takes the place of the oldest unused client rather
+ * than being refused, so registering in bulk can't close registration for everyone else. "local" (no proxy reported
+ * an address) is every client at once and gets no cap of its own.
  */
 const REGISTRATIONS_PER_HOUR = 20;
-const ALL_REGISTRATIONS_PER_HOUR = 500;
 const MAX_UNUSED_CLIENTS = 1000;
+/** How long a new, unused client is safe from making room for others: time for its person to reach Allow. */
+const SPARE_NEW_CLIENT_MS = 10 * 60_000;
 const MAX_STATE = 1000;
 
 type Fields = Record<string, unknown>;
@@ -72,7 +75,6 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
   const route = new Hono<PersonEnv>();
   const store = opts.store ?? new OAuthStore({ db: core.db, agents: core.agents, now: core.now, newId: core.newId });
   const registrations = new WindowLimiter(core.now, REGISTRATIONS_PER_HOUR, HOUR_MS);
-  const allRegistrations = new WindowLimiter(core.now, ALL_REGISTRATIONS_PER_HOUR, HOUR_MS);
   const base = () => core.settings.publicUrl();
 
   // Discovery, registration and tokens carry no cookies, so browser-based MCP clients may call them from anywhere.
@@ -127,12 +129,16 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     if (typeof body !== "object" || body === null) throw new OAuthProblem("invalid_client_metadata", "The registration must be a JSON object.");
     const address = clientIp(c);
     // Nothing awaits from the checks to the counts (bun:sqlite is synchronous), so a burst can't all pass the checks first.
-    if (registrations.blocked(address) || allRegistrations.blocked("all") || store.unusedClients() >= MAX_UNUSED_CLIENTS) {
+    const counted = address !== "local";
+    if (counted && registrations.blocked(address)) {
       throw new OAuthProblem("temporarily_unavailable", "Too many client registrations. Try again later.", 429);
     }
+    // Room is made from the oldest unused clients, sparing one made in the last few minutes: its person may be on the
+    // consent page. Only when those alone fill the table does the oldest of them go, so registration never closes.
+    store.evictUnused(MAX_UNUSED_CLIENTS - 1, SPARE_NEW_CLIENT_MS);
+    if (store.unusedClients() >= MAX_UNUSED_CLIENTS) store.evictUnused(MAX_UNUSED_CLIENTS - 1, 0);
     const client = store.register(body as Fields);
-    registrations.record(address);
-    allRegistrations.record("all");
+    if (counted) registrations.record(address);
     return c.json(
       {
         client_id: client.clientId,
@@ -180,7 +186,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     return { request: { state, challenge, resource } };
   };
 
-  route.get("/oauth/authorize", loadPerson(core.accounts), async (c) => {
+  route.get("/oauth/authorize", loadPerson(core), async (c) => {
     if (!core.settings.setupDone()) return notSetUpPage(c);
     const fields = c.req.query() as Fields;
     if (fields.response_type === undefined) fields.response_type = "code";
@@ -191,6 +197,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     const rest = checkRequest(fields);
     if ("problem" in rest) return badRequestPage(c, rest.problem);
     const person = c.get("person");
+    // After signing in the browser comes back to this same page, which asks a new person for the handle itself.
     if (!person) return c.redirect(`/sign-in?next=${encodeURIComponent(authorizeReturnPath(c.req.url))}`, 303);
     if (person.status !== "active") return waitingPage(c);
     const kind = guessKind(client.name);
@@ -202,13 +209,14 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
       kind,
       requestedAt: core.now(),
       cancelUrl: redirectWith(redirectUri, { error: "access_denied", state }),
+      suggestedHandle: person.handle === null ? core.people.suggestHandle(person.name === "New person" ? (person.email?.split("@")[0] ?? "") : person.name, person.id) : null,
     });
   });
 
   // The consent form: from the page's own script as JSON (answered with `next`), or as a plain form post (redirected).
-  route.post("/oauth/authorize", loadPerson(core.accounts), jsonBodyLimit(), async (c) => {
+  route.post("/oauth/authorize", loadPerson(core), jsonBodyLimit(), async (c) => {
     if (!core.settings.setupDone()) throw setupRequired();
-    if (!sameOrigin(c, base())) throw new PorticoError("not_allowed", "Requests from other sites aren't accepted.");
+    if (!sameOrigin(c, core.settings.knownPublicUrl())) throw new PorticoError("not_allowed", "Requests from other sites aren't accepted.");
     const person = currentPerson(c);
     const json = (c.req.header("content-type") ?? "").includes("application/json");
     const fields = (json ? await readJson(c) : await c.req.parseBody()) as Fields | null;
@@ -220,8 +228,20 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     const kind = CONNECTOR_CHOICES.find((choice) => choice.kind === fields.kind)?.kind;
     if (!kind) throw new PorticoError("bad_request", "Pick Dots, Claude Duet or Other.");
     const { client, redirectUri } = checked;
+    const handle = typeof fields.handle === "string" ? fields.handle.trim().toLowerCase() : "";
+    if (person.handle === null && handle === "") throw new PorticoError("bad_request", "Pick a handle first.");
     const { agent, code } = core.db.transaction(() => {
-      const agent = core.agents.create({ ownerId: person.id, name: fields.name, kind, type: "connector" });
+      if (person.handle === null) {
+        core.people.setHandle(person.id, handle);
+        core.workspaces.personal(person.id);
+      }
+      const made = core.agents.create({ ownerId: person.id, name: fields.name, kind, type: "connector" });
+      // Without the page's tick ("started this myself") the connector starts unproven, like any agent that just joined:
+      // its first messages wait for the person, and it asks before changing a Portico. A plain form post sends "on".
+      const mine = (fields as Record<string, unknown>).mine;
+      if (mine !== true && mine !== "on" && mine !== "true") core.agents.markUnproven({ agentId: made.id });
+      const agent = core.agents.require(made.id);
+      core.agents.onJoined?.(agent);
       const code = store.issueCode({ clientId: client.clientId, agentId: agent.id, redirectUri, challenge: rest.request.challenge });
       return { agent, code };
     })();

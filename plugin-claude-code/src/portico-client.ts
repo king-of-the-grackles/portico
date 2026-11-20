@@ -16,6 +16,14 @@ export interface AgentEntry {
   doing: string | null;
   last_seen: string | null;
   approval_required: boolean;
+  /** The Porticos this agent and the caller are both in. */
+  porticos?: PorticoRef[];
+}
+
+/** A Portico, the place: a named list of people and agents. Two agents message each other only while both are in one. */
+export interface PorticoRef {
+  id: string;
+  name: string;
 }
 
 export type MessageStatus = "held" | "pending" | "delivered" | "declined" | "expired";
@@ -33,7 +41,12 @@ export interface MessageView {
   id: string;
   thread_id: string;
   from: string;
+  /** The name of the person who manages the sender, and whether that person also manages this agent. */
+  from_owner?: string;
+  from_own_person?: boolean;
   to: string;
+  /** The Portico the message went through. */
+  portico?: PorticoRef;
   subject: string;
   text: string;
   reply_to: string | null;
@@ -56,6 +69,15 @@ export interface UpdateDelivery {
   status: MessageStatus;
   at: string;
   /** The outcome wrapped in Portico's `<portico-update>` frame. */
+  framed_message: string;
+}
+
+/** Portico's own notice: who came into or left a Portico this agent is in. Never from another agent. */
+export interface NoticeDelivery {
+  id: string;
+  at: string;
+  text: string;
+  /** The notice wrapped in Portico's `<portico-notice>` frame. */
   framed_message: string;
 }
 
@@ -107,12 +129,19 @@ export const MAX_INBOX_WAIT_SECONDS = 40;
 export interface Inbox {
   messages: MessageDelivery[];
   updates: UpdateDelivery[];
+  /** Portico's own notices. Absent from a Portico server that sends none. */
+  notices?: NoticeDelivery[];
+  /** How many messages wait for a decision by the person who manages this agent, and the sentence to pass on. */
+  held_for_person?: number;
+  held_note?: string;
 }
 
 /** The IDs this session delivered, for `POST /api/agent/deliveries/ack`. Updates go by their message's ID. */
 export interface DeliveryAck {
   messages: string[];
   updates: string[];
+  /** Portico's own notices this session was told. */
+  notices?: string[];
 }
 
 /** What a session's stream open registers. Only a basename and an HMAC leave the computer. */
@@ -132,9 +161,6 @@ export interface StatusReport {
   repo: string | null;
   branch: string | null;
 }
-
-/** A desktop pop-up's answer to a held message. */
-export type Decision = "allow_once" | "always_allow" | "deny";
 
 /** A failed call to Portico. `status` 0 means Portico couldn't be reached. */
 export class ApiError extends Error {
@@ -169,8 +195,9 @@ export class PorticoClient {
     this.timeoutMs = opts.timeoutMs ?? 15_000;
   }
 
-  listAgents(): Promise<{ agents: AgentEntry[] }> {
-    return this.call("GET", "/api/agent/agents");
+  /** The agents this one reaches. With `portico` (an ID or name), only those in that one Portico. Sent as given: Portico checks it. */
+  listAgents(portico?: string): Promise<{ agents: AgentEntry[]; portico?: PorticoRef; note?: string }> {
+    return this.call("GET", `/api/agent/agents${portico ? `?portico=${encodeURIComponent(portico)}` : ""}`);
   }
 
   sendMessage(body: {
@@ -184,7 +211,7 @@ export class PorticoClient {
     key?: string;
     /** File IDs. Sent as given: Portico checks the value. */
     attachments?: unknown;
-  }): Promise<{ message: MessageView; delivery: DeliveryTier; note?: string }> {
+  }): Promise<{ message: MessageView; delivery: DeliveryTier; portico?: PorticoRef; note?: string }> {
     return this.call("POST", "/api/agent/messages", body);
   }
 
@@ -216,6 +243,11 @@ export class PorticoClient {
     return this.call("PATCH", "/api/agent/profile", body);
   }
 
+  /** Runs one of the Portico tools (list_porticos and the rest): the arguments go as given, and Portico checks them. */
+  porticoTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+    return this.call("POST", `/api/agent/portico-tools/${encodeURIComponent(name)}`, args);
+  }
+
   /**
    * Picks up new messages and outcomes, marking them delivered and reported. With `wait` (seconds), Portico answers as
    * soon as something arrives, or after the wait (capped by Portico) with nothing; Portico checks the value.
@@ -235,7 +267,7 @@ export class PorticoClient {
   }
 
   /** Marks the posted messages delivered and the posted updates reported. */
-  ackDeliveries(ack: DeliveryAck, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<{ acked: { messages: number; updates: number } }> {
+  ackDeliveries(ack: DeliveryAck, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<{ acked: { messages: number; updates: number; notices?: number } }> {
     return this.call("POST", "/api/agent/deliveries/ack", ack, opts);
   }
 
@@ -243,17 +275,12 @@ export class PorticoClient {
     return this.call("POST", "/api/agent/status", report);
   }
 
-  /** A pop-up's answer to a held message, with the nonce the request came with. */
-  answerApproval(messageId: string, body: { nonce: string; decision: Decision }): Promise<{ message: MessageView }> {
-    return this.call("POST", `/api/agent/approvals/${encodeURIComponent(messageId)}`, body);
-  }
-
   /**
    * Opens `GET /api/agent/stream`, registering the session with the registration, and declaring that this session can
-   * show pop-ups when `popup` is set, and start a turn when a message arrives when `wake` is set. Doesn't throw for
-   * HTTP errors: the caller checks `status`, reads the body, and aborts with `signal`.
+   * start a turn when a message arrives when `wake` is set. Doesn't throw for HTTP errors: the caller checks `status`,
+   * reads the body, and aborts with `signal`.
    */
-  openStream(signal: AbortSignal, registration?: StreamRegistration, opts: { popup?: boolean; wake?: boolean } = {}): Promise<Response> {
+  openStream(signal: AbortSignal, registration?: StreamRegistration, opts: { wake?: boolean } = {}): Promise<Response> {
     const headers = this.headers("text/event-stream");
     let path = "/api/agent/stream";
     if (registration) {
@@ -261,9 +288,9 @@ export class PorticoClient {
       headers["x-portico-folder"] = registration.folderId;
       if (registration.client) headers["x-portico-client"] = registration.client;
     }
-    if (opts.popup) headers["x-portico-popup"] = "1";
     if (opts.wake) headers["x-portico-wake"] = "1";
-    return this.doFetch(`${this.opts.url}${path}`, { headers, signal });
+    // A redirect is an error, never followed: this session talks only to the Portico named in computer.json.
+    return this.doFetch(`${this.opts.url}${path}`, { headers, signal, redirect: "error" });
   }
 
   private headers(accept: string): Record<string, string> {
@@ -288,6 +315,8 @@ export class PorticoClient {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        // Never followed: a message's text and this session's key go only to the Portico named in computer.json.
+        redirect: "error",
         signal: opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout,
       });
     } catch (err) {

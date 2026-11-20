@@ -85,7 +85,7 @@ describe("GET /api/agent/inbox?wait", () => {
   test("answers empty when nothing arrives during the wait", async () => {
     const { p, codex } = await setup();
     const { res, ms } = await timed(callAs(p, { token: codex.token }, "GET", "/api/agent/inbox?wait=0.1"));
-    expect(await res.json()).toEqual({ messages: [], updates: [] });
+    expect(await res.json()).toEqual({ messages: [], updates: [], notices: [], held_for_person: 0 });
     expect(ms).toBeGreaterThanOrEqual(90);
   });
 

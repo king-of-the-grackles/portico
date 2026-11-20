@@ -37,7 +37,7 @@ async function launch(entry = MAIN) {
   const { token, computer } = joinTestComputer(p, "macbook");
   const home = tempFolder("portico-home-");
   const project = tempFolder("portico-proj-");
-  const env = { PATH: process.env.PATH ?? "", HOME: home, PORTICO_COMPUTER_CONFIG: join(home, ".portico", "computer.json"), PORTICO_POPUP: "off" };
+  const env = { PATH: process.env.PATH ?? "", HOME: home, PORTICO_COMPUTER_CONFIG: join(home, ".portico", "computer.json") };
   writeComputerFile(env.PORTICO_COMPUTER_CONFIG, { url: p.url, computer, token, off: [] });
   const transport = new StdioClientTransport({ command: "bun", args: [entry], env, cwd: project, stderr: "pipe" });
   const stderr: string[] = [];
@@ -52,7 +52,7 @@ describe("the Codex bridge over stdio", () => {
   test("each conversation joins as <repo>-codex@<computer>, checks its inbox, and says how to wait for replies", async () => {
     const { p, codex, token, project, name, address, stderr } = await launch();
     try {
-      expect((await codex.listTools()).tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile"]);
+      expect((await codex.listTools()).tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "list_porticos", "create_portico", "add_to_portico", "remove_from_portico", "rename_portico", "delete_portico", "share_portico", "join_portico"]);
       expect(codex.getInstructions()).toBe(CODEX_INSTRUCTIONS);
       await waitFor(() => connected(p, address), 5000);
       expect(agentAt(p, address)).toMatchObject({ kind: "codex", type: "session", folder: basename(project) });

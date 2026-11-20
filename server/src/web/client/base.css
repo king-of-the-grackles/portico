@@ -50,8 +50,18 @@ a.homemark:hover { background: #e3e8e1; }
 .logo-lg { width: 48px; height: 48px; border-radius: 12px; }
 
 /* Action rows end on the right: the primary action far right, Cancel or Deny to its left. */
-.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+/* A row of buttons stays on one line: no label wraps, and a name inside a label (a computer, a person) is cut short first. */
+.btn { white-space: nowrap; }
+.actions { display: flex; flex-wrap: nowrap; justify-content: flex-end; align-items: center; gap: 8px; min-width: 0; }
 .actions .start { margin-right: auto; }
+.actions .btn { flex: 0 0 auto; }
+.actions .btn:has(.btn-name) { flex: 0 1 auto; min-width: 0; gap: 0.3em; }
+/* The box is wider where three buttons share a row, so a computer's name fits in its button. */
+.narrow:has(.actions-fit) { max-width: 536px; }
+.btn-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Three buttons in a narrow box: a little tighter, so the row fits. */
+.actions-fit .btn { padding: 8px 12px; font-size: 15px; }
+@media (max-width: 480px) { .actions-fit { gap: 6px; } .actions-fit .btn { padding: 8px; font-size: 14px; } .actions-fit .btn-name { display: none; } }
 
 /* Standalone pages: setup, sign in, invites, join, consent. */
 .top { max-width: 1440px; margin: 0 auto; padding: 16px 32px 0; display: flex; align-items: center; gap: 8px; }

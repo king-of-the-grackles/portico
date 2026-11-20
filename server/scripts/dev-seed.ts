@@ -3,6 +3,7 @@
 // Usage: bun server/scripts/dev-seed.ts <database path> [--port 8790]
 // Creates an owner if missing, marks setup done, and prints a sign-in cookie for each person, so the setup page can be
 // skipped. Run it before starting the server on the same database.
+import { dirname } from "node:path";
 import { hashPassword } from "../src/core/accounts";
 import { openDb } from "../src/db";
 import { captureLogs } from "../src/log";
@@ -19,9 +20,16 @@ const port = portIndex >= 0 ? Number(args[portIndex + 1]) : 8790;
 const publicUrl = `http://localhost:${port}`;
 const PASSWORD = "portico-dev-password";
 captureLogs(() => {});
+// The same key the server on this database will start with.
+const secretsKey = process.env.PORTICO_SECRETS_KEY?.trim() || null;
+if (!secretsKey) {
+  console.error('Set PORTICO_SECRETS_KEY first, the same one the server starts with: export PORTICO_SECRETS_KEY="$(bun server/src/cli.ts key)"');
+  process.exit(1);
+}
 
 const p = createPortico(
-  { port, dbPath, dataDir: ".", pluginSource: null, publicUrl, signingKey: "0".repeat(64), webhooksAllowPrivate: false },
+  // The data folder is the database's own folder: each workspace's content goes in `porticos` beside the database.
+  { port, dbPath, dataDir: dirname(dbPath), pluginSource: null, publicUrl, signingKey: "0".repeat(64), secretsKey, secretsKeyOld: null, webhooksAllowPrivate: false, files: null, mail: null, descopeProjectId: null },
   { db: openDb(dbPath) },
 );
 p.settings.set("public_url", publicUrl);
@@ -36,4 +44,5 @@ for (const person of p.people.list()) {
 console.log(`Password for everyone: ${PASSWORD}`);
 // Notices run in a microtask; let them finish before closing the database.
 await Bun.sleep(10);
+p.close();
 p.db.close();

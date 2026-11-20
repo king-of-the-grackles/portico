@@ -1,10 +1,14 @@
 import type { Database } from "bun:sqlite";
 import type { Changes } from "./changes";
+import type { Content } from "./content";
 import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS } from "./limits";
-import { namesOwnedBy, releaseNames } from "./released-names";
-import { hashSecret, LINK_SECRET, newLinkSecret, seal, unseal } from "./tokens";
+import type { SecretPlace, Secrets } from "./secrets";
+import { hashSecret, LINK_SECRET, newLinkSecret } from "./tokens";
 import type { Person, PersonStatus, Role } from "./types";
+import { nameKey } from "./names";
+import { archiveWorkspaces } from "./workspaces";
+import { slugify } from "./words";
 
 export type InviteStatus = "open" | "claimed" | "revoked" | "expired";
 
@@ -54,6 +58,8 @@ interface PersonRow {
   invite_id: string | null;
   created_at: string;
   approved_at: string | null;
+  handle: string | null;
+  email: string | null;
 }
 
 function toPerson(row: PersonRow): Person {
@@ -65,7 +71,53 @@ function toPerson(row: PersonRow): Person {
     inviteId: row.invite_id,
     createdAt: row.created_at,
     approvedAt: row.approved_at,
+    handle: row.handle,
+    email: row.email,
   };
+}
+
+export const HANDLE_MIN = 3;
+export const HANDLE_MAX = 20;
+const HANDLE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** Words a handle can't be: they read as Portico itself, a role, or a part of an address. */
+const RESERVED_HANDLES = [
+  "about", "account", "admin", "agent", "agents", "all", "anyone", "api", "app", "billing", "blog", "docs", "everyone",
+  "help", "home", "invite", "invites", "join", "mail", "me", "member", "members", "new", "none", "null", "owner",
+  "personal", "portico", "root", "security", "self", "settings", "share", "shared", "sign-in", "status", "support",
+  "system", "team", "undefined", "workspace", "workspaces", "www",
+];
+
+/**
+ * A handle with look-alikes folded together: hyphens dropped, 0 read as o, 1 and i as l, rn as m, vv as w. Two handles
+ * with one key read the same at a glance, so only one of them can exist.
+ */
+export function handleKey(handle: string): string {
+  return nameKey(handle);
+}
+
+const RESERVED_KEYS = new Set(RESERVED_HANDLES.map(handleKey));
+
+/** A handle as typed: lowercase letters, digits and single hyphens, 3 to 20 characters, and not a reserved word. */
+export function checkHandle(value: unknown): string {
+  const handle = typeof value === "string" ? value.trim() : "";
+  if (!HANDLE.test(handle) || handle.length < HANDLE_MIN || handle.length > HANDLE_MAX) {
+    throw new PorticoError(
+      "bad_request",
+      `A handle uses lowercase letters, digits and single hyphens, ${HANDLE_MIN} to ${HANDLE_MAX} characters.`,
+    );
+  }
+  if (RESERVED_KEYS.has(handleKey(handle))) throw new PorticoError("conflict", `The handle ${handle} is reserved.`);
+  return handle;
+}
+
+/** An email address as given: trimmed and lowercased. Portico stores what the sign-in service verified. */
+export function cleanEmail(value: unknown): string {
+  const email = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    throw new PorticoError("bad_request", "Enter an email address.");
+  }
+  return email;
 }
 
 export const MAX_PERSON_NAME = 60;
@@ -84,13 +136,25 @@ export function cleanPersonName(value: unknown): string {
 export interface PeopleDeps {
   db: Database;
   changes: Changes;
-  /** Seals open invites' secrets, so their links can be copied again. */
-  signingKey: string;
+  /**
+   * Each workspace's own database: a removed person's agents' threads are deleted there. Left out only where nobody is
+   * removed (the setup command).
+   */
+  content?: Content;
+  /** Encrypts open invites' secrets, so their links can be copied again. Without one, a link shows only when made. */
+  secrets?: Secrets | null;
+  /**
+   * Whether people sign in here by name and password (a self-hosted server). Then a name belongs to one person, and
+   * each new person gets a handle made from the name. False with an outside sign-in: two people can have one name,
+   * and the welcome page asks each for a handle.
+   */
+  signInByName?: boolean;
   now?: () => Date;
   newId?: () => string;
 }
 
-const INVITE_SEAL = "invite";
+/** What invites' secrets were sealed as, with the signing key, before the secrets key: read only by the start's pass over old rows. */
+export const INVITE_SEAL = "invite";
 
 /**
  * The people who use Portico: one owner, and members who joined by invite. Only the owner invites, by name. An invite
@@ -99,35 +163,42 @@ const INVITE_SEAL = "invite";
 export class People {
   private readonly db: Database;
   private readonly changes: Changes;
+  private readonly content: Content | null;
   private readonly now: () => Date;
   private readonly newId: () => string;
 
-  private readonly signingKey: string;
+  private readonly secrets: Secrets | null;
+  private readonly signInByName: boolean;
 
   constructor(deps: PeopleDeps) {
     this.db = deps.db;
     this.changes = deps.changes;
-    this.signingKey = deps.signingKey;
+    this.content = deps.content ?? null;
+    this.secrets = deps.secrets ?? null;
+    this.signInByName = deps.signInByName ?? true;
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? (() => crypto.randomUUID());
   }
 
-  /** Throws `conflict` when the name is taken by anyone, in any letter case. */
+  /**
+   * Makes a person. Where people sign in by name, throws `conflict` when the name is taken by anyone, in any letter
+   * case, and gives the person a handle made from the name (`maya`, then `maya-2`), which the person can change later.
+   */
   create(input: {
     name: string;
     role: Role;
     status: PersonStatus;
     passwordHash: string;
     inviteId?: string | null;
-    /** Hosted Portico: the person's account with the sign-in service. */
+    /** The person's account with the outside sign-in service, where there is one. */
     externalId?: string | null;
   }): Person {
     const name = cleanPersonName(input.name);
-    if (this.byName(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
+    if (this.signInByName && this.byName(name)) throw new PorticoError("conflict", `The name ${name} is already in use.`);
     if (input.role === "owner" && this.owner()) throw new PorticoError("conflict", "Portico already has an owner.");
     const externalId = input.externalId ?? null;
     if (externalId !== null && this.byExternalId(externalId)) {
-      throw new PorticoError("conflict", "This account already has a place on this Portico.");
+      throw new PorticoError("conflict", "This account already has a place on this Portico server.");
     }
     const at = this.iso();
     const person: Person = {
@@ -138,15 +209,28 @@ export class People {
       inviteId: input.inviteId ?? null,
       createdAt: at,
       approvedAt: input.status === "active" ? at : null,
+      handle: null,
+      email: null,
     };
     this.db
       .query(
         `INSERT INTO people (id, name, role, status, password_hash, invite_id, created_at, approved_at, external_id)
          VALUES ($id, $name, $role, $status, $passwordHash, $inviteId, $createdAt, $approvedAt, $externalId)`,
       )
-      .run({ ...person, passwordHash: input.passwordHash, externalId });
+      .run({
+        id: person.id,
+        name: person.name,
+        role: person.role,
+        status: person.status,
+        inviteId: person.inviteId,
+        createdAt: person.createdAt,
+        approvedAt: person.approvedAt,
+        passwordHash: input.passwordHash,
+        externalId,
+      });
     this.changes.emit("people");
-    return person;
+    // Everyone needs a handle: other people's agents address this person's agents by it.
+    return this.signInByName ? this.setHandle(person.id, this.suggestHandle(name)) : person;
   }
 
   get(id: string): Person | null {
@@ -188,16 +272,89 @@ export class People {
   rename(id: string, raw: string): Person {
     const name = cleanPersonName(raw);
     const taken = this.byName(name);
-    if (taken && taken.id !== id) throw new PorticoError("conflict", `The name ${name} is already in use.`);
+    if (this.signInByName && taken && taken.id !== id) throw new PorticoError("conflict", `The name ${name} is already in use.`);
     this.db.query("UPDATE people SET name = $name WHERE id = $id").run({ id, name });
     this.changes.emit("people", "agents", "me");
     return this.require(id);
   }
 
-  /** Ties the person to an account with an outside sign-in service, which then signs the person in. */
-  setExternalId(id: string, externalId: string): void {
-    this.db.query("UPDATE people SET external_id = $externalId WHERE id = $id").run({ id, externalId });
-    this.changes.emit("people");
+  // ---- handles ----
+
+  byHandle(handle: string): Person | null {
+    const row = this.db.query("SELECT * FROM people WHERE handle = $handle").get({ handle }) as PersonRow | null;
+    return row ? toPerson(row) : null;
+  }
+
+  /**
+   * Whether the person can take the handle: well formed, not reserved, and reading unlike every handle someone else has
+   * or let go. A handle let go stays held back for good, so an address that reached one person never reaches another.
+   */
+  handleFree(raw: unknown, personId: string | null = null): boolean {
+    try {
+      this.requireHandleFree(checkHandle(raw), personId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Sets the person's handle: the first, or a deliberate change. The old handle is held back, though the same person
+   * can take it up again.
+   */
+  setHandle(id: string, raw: unknown): Person {
+    const person = this.require(id);
+    const handle = checkHandle(raw);
+    if (handle === person.handle) return person;
+    this.requireHandleFree(handle, id);
+    const at = this.iso();
+    this.db.transaction(() => {
+      if (person.handle !== null) {
+        this.db
+          .query(
+            `INSERT INTO released_handles (handle_key, handle, person_id, released_at) VALUES ($key, $handle, $id, $at)
+             ON CONFLICT (handle_key) DO UPDATE SET handle = $handle, released_at = $at`,
+          )
+          .run({ key: handleKey(person.handle), handle: person.handle, id, at });
+      }
+      this.db.query("DELETE FROM released_handles WHERE handle_key = $key AND person_id = $id").run({ key: handleKey(handle), id });
+      this.db.query("UPDATE people SET handle = $handle, handle_key = $key WHERE id = $id").run({ id, handle, key: handleKey(handle) });
+    })();
+    this.changes.emit("people", "agents", "me");
+    return this.require(id);
+  }
+
+  /** A free handle near the seed (a name, or the part of an email before the @): `robert`, then `robert-2`, `robert-3`. */
+  suggestHandle(seed: string, personId: string | null = null): string {
+    let base = slugify(seed, "person").slice(0, HANDLE_MAX - 4).replace(/-+$/, "");
+    if (base.length < HANDLE_MIN) base = `${base}-person`;
+    if (this.handleFree(base, personId)) return base;
+    for (let n = 2; n < 1000; n++) {
+      if (this.handleFree(`${base}-${n}`, personId)) return `${base}-${n}`;
+    }
+    throw new PorticoError("conflict", "No free handle near that name. Type one.");
+  }
+
+  /** Stores the email the sign-in service verified for the person. */
+  setEmail(id: string, raw: unknown): Person {
+    this.db.query("UPDATE people SET email = $email WHERE id = $id").run({ id, email: cleanEmail(raw) });
+    this.changes.emit("people", "me");
+    return this.require(id);
+  }
+
+  clearEmail(id: string): Person {
+    this.db.query("UPDATE people SET email = NULL WHERE id = $id").run({ id });
+    this.changes.emit("people", "me");
+    return this.require(id);
+  }
+
+  private requireHandleFree(handle: string, personId: string | null): void {
+    const key = handleKey(handle);
+    const other = personId ?? "";
+    const taken =
+      this.db.query("SELECT 1 FROM people WHERE handle_key = $key AND id != $other").get({ key, other }) !== null ||
+      this.db.query("SELECT 1 FROM released_handles WHERE handle_key = $key AND person_id != $other").get({ key, other }) !== null;
+    if (taken) throw new PorticoError("conflict", `The handle ${handle} is taken, or reads too much like one that is.`);
   }
 
   setPasswordHash(id: string, passwordHash: string): void {
@@ -211,16 +368,51 @@ export class People {
   }
 
   /**
-   * Deletes the person and, by cascade, their sign-ins, computers and agents. The names of those agents and computers
-   * are released.
+   * Deletes the person and, by cascade, their sign-ins, computers and agents. The workspaces the person owns are
+   * archived, as when a workspace is deleted: nobody reaches through one any more, and what other people's agents said
+   * there stays readable until the history window empties it. Once the directory rows are gone, the threads and
+   * messages of the person's agents are deleted in each workspace those agents were in.
    */
   remove(id: string): void {
+    // While the person and the person's agents still exist: the Porticos of other people hear that the person left.
+    this.onRemoving?.(id);
+    const handle = this.get(id)?.handle ?? null;
+    const agentIds = (this.db.query("SELECT id FROM agents WHERE owner_id = $id").all({ id }) as { id: string }[]).map((row) => row.id);
+    const clearContent = this.content?.gather(agentIds);
+    // The workspaces that go with the person, and the other people's agents in each, who are told and whose waiting
+    // messages there are withdrawn, as when a workspace is deleted.
+    const gone = (this.db.query("SELECT id FROM workspaces WHERE owner_id = $id AND archived_at IS NULL").all({ id }) as { id: string }[]).map((row) => ({
+      workspaceId: row.id,
+      agentIds: (
+        this.db
+          .query("SELECT wa.agent_id AS id FROM workspace_agents wa JOIN agents a ON a.id = wa.agent_id WHERE wa.workspace_id = $workspaceId AND wa.left_at IS NULL AND a.owner_id != $id")
+          .all({ workspaceId: row.id, id }) as { id: string }[]
+      ).map((agent) => agent.id),
+    }));
     this.db.transaction(() => {
-      releaseNames(this.db, id, namesOwnedBy(this.db, id), this.now());
+      archiveWorkspaces(this.db, "owner_id = $id", { id }, this.iso());
+      // The handle named this person's agents to everyone else (handle/agent): nobody takes it up afterwards, or old
+      // addresses, allow lists and records would point at a stranger.
+      if (handle !== null) {
+        this.db
+          .query(
+            `INSERT INTO released_handles (handle_key, handle, person_id, released_at) VALUES ($key, $handle, $id, $at)
+             ON CONFLICT (handle_key) DO UPDATE SET handle = $handle, person_id = $id, released_at = $at`,
+          )
+          .run({ key: handleKey(handle), handle, id, at: this.iso() });
+      }
       this.db.query("DELETE FROM people WHERE id = $id").run({ id });
     })();
+    clearContent?.();
+    this.onWorkspacesGone?.(gone);
     this.changes.emit("people", "agents", "threads", "approvals", "computers");
   }
+
+  /** Set by portico.ts: called before a person is removed, while the person's rows are still there. */
+  onRemoving: ((personId: string) => void) | null = null;
+
+  /** Set by portico.ts: the workspaces a removed person owned are gone, with the other people's agents that were in each. */
+  onWorkspacesGone: ((gone: { workspaceId: string; agentIds: string[] }[]) => void) | null = null;
 
   require(id: string): Person {
     const person = this.get(id);
@@ -254,7 +446,7 @@ export class People {
         id: row.id,
         name,
         hash: hashSecret(secret),
-        box: seal(this.signingKey, INVITE_SEAL, secret),
+        box: this.secrets?.sealSync(People.invitePlace(row.id), secret) ?? null,
         createdBy: byId,
         createdAt: row.created_at,
         expiresAt: row.expires_at,
@@ -268,14 +460,24 @@ export class People {
     return row ? this.toInvite(row) : null;
   }
 
-  /** An open invite's secret, for copying its link again. Null once it's claimed, revoked or expired. */
+  /** Where an invite's secret is stored: what its encrypted form is bound to. */
+  static invitePlace(inviteId: string): SecretPlace {
+    return { table: "invites", column: "secret_box", row: inviteId };
+  }
+
+  /**
+   * An open invite's secret, for copying its link again. Null once it's claimed, revoked or expired, and for one
+   * Portico can't read any more (another secrets key): that link can't be shown again, only replaced.
+   */
   inviteSecret(id: string): string | null {
     const row = this.db
       .query(
         "SELECT secret_box FROM invites WHERE id = $id AND claimed_at IS NULL AND revoked_at IS NULL AND expires_at > $now",
       )
       .get({ id, now: this.iso() }) as { secret_box: string | null } | null;
-    return row?.secret_box ? unseal(this.signingKey, INVITE_SEAL, row.secret_box) : null;
+    if (!row?.secret_box || !this.secrets) return null;
+    const opened = this.secrets.openSync(People.invitePlace(id), row.secret_box);
+    return opened.ok ? opened.value : null;
   }
 
   /** Invites still waiting to be claimed, newest first. */
@@ -337,7 +539,7 @@ export class People {
    * Claims an open invite: creates a pending member with the chosen name and password, and uses the link up. Both
    * happen together or not at all, so a name in use leaves the link open for another try.
    */
-  claim(input: { secret: unknown; name: unknown; passwordHash: string; externalId?: string | null }): Person {
+  claim(input: { secret: unknown; name: unknown; passwordHash: string }): Person {
     return this.db.transaction(() => {
       const invite = this.openInvite(input.secret);
       const person = this.create({
@@ -346,7 +548,6 @@ export class People {
         status: "pending",
         passwordHash: input.passwordHash,
         inviteId: invite.id,
-        externalId: input.externalId ?? null,
       });
       this.db.query("UPDATE invites SET claimed_at = $at WHERE id = $id").run({ id: invite.id, at: person.createdAt });
       return person;

@@ -25,7 +25,7 @@ RUN apt-get update \
 COPY --from=build /out/portico /usr/local/lib/portico/portico
 COPY docker/entrypoint.sh /usr/local/bin/portico
 RUN chmod 755 /usr/local/bin/portico /usr/local/lib/portico/portico
-ENV PORT=8790 PORTICO_DB_PATH=/data/portico.db
+ENV PORT=8790 PORTICO_DATA_DIR=/data
 WORKDIR /data
 EXPOSE 8790
 VOLUME ["/data"]

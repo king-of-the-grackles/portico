@@ -156,8 +156,8 @@ describe("sign in", () => {
 /** Every key the sign-in limiters hold. They're private, so this reads them the way a heap dump would. */
 function limiterKeys(p: ReturnType<typeof makePortico>): string[] {
   type Limiter = { failures: Map<string, number[]> } | undefined;
-  const limiters = p.accounts as unknown as Record<"addressAttempts" | "signInFailures" | "nameFailures", Limiter>;
-  return [limiters.addressAttempts, limiters.signInFailures, limiters.nameFailures].flatMap((limiter) => [...(limiter?.failures.keys() ?? [])]);
+  const limiters = p.accounts as unknown as Record<"addressAttempts" | "signInFailures", Limiter>;
+  return [limiters.addressAttempts, limiters.signInFailures].flatMap((limiter) => [...(limiter?.failures.keys() ?? [])]);
 }
 
 describe("sign in limits that don't depend on the name", () => {
@@ -202,7 +202,7 @@ describe("sign in limits that don't depend on the name", () => {
     expect((p.accounts as unknown as { decoyHash: unknown }).decoyHash).toBeNull();
     // 60 characters is still a name.
     expect(await rejects(p.accounts.signIn({ name: "x".repeat(60), password: "wrong-password", ip: "1.2.3.4" }))).toEqual(usual);
-    expect(limiterKeys(p)).toHaveLength(3);
+    expect(limiterKeys(p)).toHaveLength(2);
   });
 
   test("2 password checks run and 8 wait; while they do, more attempts get 429 at once and aren't counted", async () => {
@@ -244,7 +244,7 @@ describe("sign in limits that don't depend on the name", () => {
     await rejects(p.accounts.signIn({ name: "Somebody", password: "wrong-password", ip: "5.6.7.8" }));
     p.clock.advance(2 * MINUTE);
     p.sweepMinute();
-    expect(limiterKeys(p).sort()).toEqual(["sign-in-address\n5.6.7.8", "sign-in\n5.6.7.8\nsomebody", "sign-in\nsomebody"].sort());
+    expect(limiterKeys(p).sort()).toEqual(["sign-in-address\n5.6.7.8", "sign-in\n5.6.7.8\nsomebody"].sort());
   });
 });
 
@@ -276,5 +276,21 @@ describe("passwords", () => {
     const chris = await addOwner(p);
     for (let i = 0; i < 10; i++) await rejects(p.accounts.changePassword(chris.id, { current: "guess-guess-guess", next: NEW_PASSWORD }));
     expect((await rejects(p.accounts.changePassword(chris.id, { current: PASSWORD, next: NEW_PASSWORD }))).code).toBe("rate_limited");
+  });
+});
+
+describe("password hashes", () => {
+  test("a server hashes at argon2id's full cost; only the test suites turn it down", async () => {
+    const { hashPassword, setPasswordCostForTests, verifyPassword } = await import("../src/core/accounts");
+    setPasswordCostForTests(null);
+    try {
+      const hash = await hashPassword("correct-horse-battery");
+      expect(hash).toStartWith("$argon2id$");
+      expect(hash).toContain("m=65536");
+      expect(await verifyPassword("correct-horse-battery", hash)).toBe(true);
+      expect(await verifyPassword("wrong", hash)).toBe(false);
+    } finally {
+      setPasswordCostForTests({ memoryCost: 8, timeCost: 1 });
+    }
   });
 });

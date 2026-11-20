@@ -6,10 +6,10 @@ import { callPortico, CommandError, type PorticoAnswer, refusal } from "./comput
 
 /** Portico answered 401 to the computer token: the computer is gone there. */
 export const TOKEN_GONE =
-  "Portico no longer accepts this computer's token (the computer may have been removed in Settings). Join again with a new join line.";
+  "Portico no longer accepts this computer's token (the computer may have been removed in Settings). Join again with the join command and the server's address.";
 
 export function notJoined(path: string): string {
-  return `This computer hasn't joined Portico: ${path} doesn't exist. Run join with a join line first.`;
+  return `This computer hasn't joined Portico: ${path} doesn't exist. Run join with the Portico server's address first.`;
 }
 
 export interface FolderSwitch {

@@ -14,14 +14,17 @@ import type {
   InviteView,
   MessageView,
   PasskeyView,
+  PersonRef,
   PersonView,
   RunView,
-  SignInView,
   TaskView,
 } from "../../../api/views";
+import type { ConsentCard } from "../../../api/consents";
+import type { ShareView, WorkspacePageData, WorkspaceView } from "../../../api/workspaces";
 import type { TaskOutcome } from "../../../core/tasks";
 import type { AgentKind } from "../../../core/types";
 
+export type { ConsentCard, ShareView, WorkspacePageData, WorkspaceView };
 export type {
   ActivityView,
   AgentKind,
@@ -36,9 +39,9 @@ export type {
   InviteView,
   MessageView,
   PasskeyView,
+  PersonRef,
   PersonView,
   RunView,
-  SignInView,
   TaskListData,
   TaskOutcome,
   TaskView,
@@ -46,7 +49,12 @@ export type {
 };
 
 /** Which page of the control plane is showing: Today (/), Activity (/activity) or an agent's page (/a/:id). */
-export type Route = { page: "today" } | { page: "activity" } | { page: "agent"; id: string };
+export type Route =
+  | { page: "today" }
+  | { page: "activity" }
+  | { page: "agent"; id: string }
+  /** One Portico's page (/p/:id). */
+  | { page: "workspace"; id: string };
 
 /** What GET /api/tasks/:id answers: one task's steps and every message in it, oldest first. */
 export interface TaskDetail {
@@ -67,7 +75,10 @@ export interface HomeData {
   me: PersonView;
   publicUrl: string;
   agents: AgentView[];
-  approvals: { held: HeldCard[]; signIns: SignInView[] };
+  approvals: { held: HeldCard[]; consents: ConsentCard[] };
+  /** The person's Porticos, the person's own first. */
+  workspaces: WorkspaceView[];
+  workspacePage: WorkspacePageData | null;
   route: Route;
   today: TodayData | null;
   tasks: TaskListData | null;
@@ -86,30 +97,20 @@ export interface SettingsData {
   people: { people: PersonRow[]; invites: InviteView[]; claims: ClaimView[] } | null;
   computers: ComputerView[] | null;
   passkeys: PasskeyView[] | null;
-  /** False on hosted Portico, where sign-in happens on the base domain: no password to change. */
+  /** False where people sign in with an outside account: no password to change. */
   passwords?: boolean;
+  /** True where this server signs people in itself: its owner invites people and approves each claim. */
+  canInvite?: boolean;
 }
 
-/** A join line just made by POST /api/join-lines. The line carries the secret, so it lives only in the page's memory. */
-export interface NewJoinLine {
-  id: string;
-  line: string;
-  expiresAt: string;
-}
-
-/** The Add agent sheet. */
+/** The Add agent sheet: what to tell each kind of agent, then the agent or computer that joined. */
 export interface AddState {
-  /** The join line made when the sheet opened: one line works for every kind of agent. */
-  line: NewJoinLine | null;
-  lineError: string;
-  copied: boolean;
-  stage: "pick" | "request" | "joined";
-  /** The app agent's sign-in request that arrived on the line. */
-  signIn: SignInView | null;
-  reqName: string;
-  reqError: string;
+  /** The row whose text was copied last: `claude-code`, `codex`, `app` or `connector`. */
+  copied: string | null;
+  stage: "pick" | "joined";
   joined: AgentView | null;
-  busy: boolean;
+  /** A computer that joined, before any session there has started. */
+  joinedComputer: string | null;
 }
 
 export interface Notice {
@@ -133,14 +134,39 @@ export interface WakeEditState {
   error: string;
 }
 
+/** The form open on a Portico's page. */
+export type WorkspaceForm =
+  /** A new Portico. `thenShare` opens Share on it afterwards: sharing from the person's own Portico starts here. */
+  | { kind: "new"; name: string; agentIds: string[]; thenShare: boolean; error: string }
+  | { kind: "rename"; name: string; error: string }
+  | { kind: "share"; email: string; agents: "self" | "ask"; allow: boolean; error: string }
+  /** My agents not in the Portico yet, ticked to put in. */
+  | { kind: "agents"; agentIds: string[]; error: string };
+
 /** What Today, Activity and the agent pages render. */
 export interface HomeState {
   now: number;
   me: PersonView;
+  /** The Porticos opened or closed by hand in the navigation, by ID. One not listed is open while it is being looked at. */
+  navFold: Record<string, boolean>;
+  /** The Porticos whose whole list of agents shows in the navigation, past the first few. */
+  navAll: Record<string, boolean>;
   publicUrl: string;
   agents: AgentView[];
   held: HeldCard[];
-  signIns: SignInView[];
+  /** What the person's agents asked that waits on the consent page. */
+  consents: ConsentCard[];
+  workspaces: WorkspaceView[];
+  workspacePage: WorkspacePageData | null;
+  wsForm: WorkspaceForm | null;
+  /** The People list on a Portico's page. */
+  peopleOpen: boolean;
+  /** What waits for a second press: `delete`, `leave`, `person:<id>` or `share:<id>`. */
+  wsConfirm: string | null;
+  /** Share links copied in this page, by share ID. */
+  wsCopied: Record<string, boolean>;
+  /** How the last share's email went, by share ID. */
+  wsMail: Record<string, string>;
   route: Route;
   today: TodayData | null;
   /** Activity's tasks, or an agent page's, for the current filters. */
@@ -157,7 +183,6 @@ export interface HomeState {
   /** The agent page's folds. */
   detailsOpen: boolean;
   settingsOpen: boolean;
-  quietOpen: boolean;
   acctOpen: boolean;
   /** Phone: the navigation open over the page. */
   navOpen: boolean;
@@ -168,6 +193,8 @@ export interface HomeState {
   wakeEdit: WakeEditState | null;
   saved: boolean;
   confirmRemove: boolean;
+  /** The second press that revokes an agent. */
+  confirmRevoke: boolean;
   loadingMore: boolean;
   /** The action in flight, so its button can't be pressed twice. */
   busy: string | null;
@@ -186,6 +213,9 @@ export interface SettingsState {
   passkeys: PasskeyView[] | null;
   /** Whether this Portico has passwords to change. */
   passwords: boolean;
+  /** Whether this server has invites: see SettingsData. */
+  canInvite: boolean;
+  handleForm: { handle: string; error: string } | null;
   acctOpen: boolean;
   add: AddState | null;
   reconnecting: boolean;
@@ -197,6 +227,8 @@ export interface SettingsState {
   compNotice: string;
   confirmMember: string | null;
   confirmComputer: string | null;
+  /** The agent whose Remove waits for its confirmation. */
+  confirmAgent: string | null;
   nameForm: { name: string; error: string } | null;
   passwordForm: { current: string; next: string; error: string } | null;
   passwordChanged: boolean;

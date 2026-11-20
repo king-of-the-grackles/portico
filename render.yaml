@@ -1,4 +1,4 @@
-# Render Blueprint for Portico. Nothing to fill in: Portico keeps the database and signing key
+# Render Blueprint for Portico. Nothing to fill in: Portico keeps its data folder (databases, files and signing key)
 # on the disk at /data. After the first deploy, open the service's Shell and run `portico setup`.
 # A persistent disk needs a paid instance type (Starter or above).
 services:
@@ -11,6 +11,10 @@ services:
     # Deploys only when someone chooses to, not on every push to this repo.
     autoDeployTrigger: "off"
     envVars:
+      # Required secret: encrypts stored wake URL keys and event secrets. Render makes the value (256 random bits,
+      # base64) once and keeps it in the service's environment, not on the disk.
+      - key: PORTICO_SECRETS_KEY
+        generateValue: true
       # Where /join tells computers to install the Claude Code plugin from.
       - key: PORTICO_PLUGIN_SOURCE
         value: king-of-the-grackles/portico

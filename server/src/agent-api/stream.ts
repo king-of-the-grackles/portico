@@ -3,12 +3,11 @@ import { streamSSE } from "hono/streaming";
 import { type Agents, parseRegistration } from "../core/agents";
 import type { Messages } from "../core/messages";
 import type { Agent } from "../core/types";
-import type { StreamChange } from "../desk";
 import { errorName, log } from "../log";
 import { type Resolver, unauthorized } from "./auth";
 import { handleError } from "./rest";
 
-export type AgentStreamEvent = "hello" | "nudge" | "replaced" | "renamed" | "approval_request" | "approval_closed";
+export type AgentStreamEvent = "hello" | "nudge" | "replaced" | "renamed";
 
 /** "notify" tells the old stream it was `replaced`; "quiet" just closes it (a session's own reconnect). */
 export type ReplaceMode = "notify" | "quiet";
@@ -28,14 +27,8 @@ export interface StreamConnection {
   close(): void;
 }
 
-/**
- * What Portico knows about a stream: the session's computer and owner, whether its plugin can show pop-ups, and whether
- * it can start a turn when a message arrives (a Codex conversation its bridge can wake).
- */
+/** What Portico knows about a stream: whether it can start a turn when a message arrives (a Codex conversation its bridge can wake). */
 export interface StreamInfo {
-  computerId: string | null;
-  ownerId: string | null;
-  popup: boolean;
   wake: boolean;
 }
 
@@ -46,7 +39,7 @@ interface OpenStream extends StreamInfo {
   order: number;
 }
 
-const NO_INFO: StreamInfo = { computerId: null, ownerId: null, popup: false, wake: false };
+const NO_INFO: StreamInfo = { wake: false };
 
 /**
  * The live streams, one per run: each process of a session agent (a terminal, a Codex conversation) has its own. A
@@ -56,7 +49,6 @@ const NO_INFO: StreamInfo = { computerId: null, ownerId: null, popup: false, wak
 export class AgentStreams {
   private readonly open = new Map<string, OpenStream>();
   private readonly byAgent = new Map<string, Set<string>>();
-  private readonly listeners: ((change: StreamChange) => void)[] = [];
   private connections = 0;
 
   /** Registers the run's stream, closing any older one of the same run. Returns a function to call when this stream ends. */
@@ -83,7 +75,6 @@ export class AgentStreams {
       }
       old.conn.close();
     }
-    this.emit({ kind: "opened", agentId, runId, ...info });
     return () => {
       if (this.open.get(runId) !== entry) return;
       this.drop(runId, entry);
@@ -109,20 +100,17 @@ export class AgentStreams {
     return this.byAgent.get(agentId)?.size ?? 0;
   }
 
-  /** Closes and forgets every stream of the named agents, then reports each closed: no listener sees one still open. */
+  /** Closes and forgets every stream of the named agents. */
   closeAll(agentIds: string[]): void {
-    const removed: [string, OpenStream][] = [];
     for (const agentId of agentIds) {
       for (const runId of this.byAgent.get(agentId) ?? []) {
         const entry = this.open.get(runId);
         if (!entry) continue;
         this.open.delete(runId);
         entry.conn.close();
-        removed.push([runId, entry]);
       }
       this.byAgent.delete(agentId);
     }
-    for (const [runId, entry] of removed) this.emitClosed(runId, entry);
   }
 
   /** Whether one of the agent's open runs can start a turn when a message arrives. */
@@ -169,28 +157,6 @@ export class AgentStreams {
     }
   }
 
-  /** The computer's pop-up runs, oldest connection first. */
-  popupSessions(computerId: string): string[] {
-    return [...this.open]
-      .filter(([, entry]) => entry.popup && entry.computerId === computerId)
-      .sort(([, a], [, b]) => a.order - b.order)
-      .map(([runId]) => runId);
-  }
-
-  /** The person's computers with at least one pop-up run, sorted. */
-  popupComputers(ownerId: string): string[] {
-    const computers = new Set<string>();
-    for (const entry of this.open.values()) {
-      if (entry.popup && entry.computerId !== null && entry.ownerId === ownerId) computers.add(entry.computerId);
-    }
-    return [...computers].sort();
-  }
-
-  /** Listeners run in order, synchronously. One that throws is logged and never breaks the others. */
-  onChange(listener: (change: StreamChange) => void): void {
-    this.listeners.push(listener);
-  }
-
   private newestFirst(agentId: string): string[] {
     return [...(this.byAgent.get(agentId) ?? [])]
       .map((runId) => [runId, this.open.get(runId)!.order] as const)
@@ -203,21 +169,6 @@ export class AgentStreams {
     const runs = this.byAgent.get(entry.agentId);
     runs?.delete(runId);
     if (runs?.size === 0) this.byAgent.delete(entry.agentId);
-    this.emitClosed(runId, entry);
-  }
-
-  private emitClosed(runId: string, entry: OpenStream): void {
-    this.emit({ kind: "closed", agentId: entry.agentId, runId, computerId: entry.computerId, ownerId: entry.ownerId, popup: entry.popup });
-  }
-
-  private emit(change: StreamChange): void {
-    for (const listener of this.listeners) {
-      try {
-        listener(change);
-      } catch (err) {
-        log("error", "stream_listener_failed", { error: errorName(err) });
-      }
-    }
   }
 }
 
@@ -260,13 +211,8 @@ export function streamRoutes(deps: StreamRouteDeps): Hono {
       c.req.header("x-portico-client"),
     );
     const { agent, runId } = agents.registerSession(computer, reg);
-    // Only a session can answer a pop-up, so only its stream may declare pop-ups, or that it can be woken.
-    const info: StreamInfo = {
-      computerId: computer.id,
-      ownerId: computer.ownerId,
-      popup: c.req.header("x-portico-popup") === "1",
-      wake: c.req.header("x-portico-wake") === "1",
-    };
+    // Only a session's stream may declare that it can be woken.
+    const info: StreamInfo = { wake: c.req.header("x-portico-wake") === "1" };
     return streamSSE(c, async (stream) => {
       let open = true;
       let end!: () => void;

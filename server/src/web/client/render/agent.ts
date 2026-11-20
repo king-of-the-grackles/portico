@@ -11,7 +11,7 @@ function switchButton(on: boolean, action: string, label: string, help: string, 
 function renderEditForm(s: HomeState, a: AgentView): string {
   const e = s.edit!;
   const count = Array.from(e.description).length;
-  return `<form class="edit-form enter" data-form="agent-save" data-key="edit-form" novalidate>
+  return `<form class="edit-form enter" method="dialog" data-form="agent-save" data-key="edit-form" novalidate>
     <label for="ag-name" class="lbl">Name on Portico</label>
     <input id="ag-name" class="field${when(e.error, " is-invalid")}" name="name" value="${esc(e.name)}" data-input="edit-name" aria-describedby="ag-name-help" aria-invalid="${Boolean(e.error)}" autocomplete="off" spellcheck="false" data-autofocus>
     <span id="ag-name-help" class="help">Other agents use this name when sending messages.</span>
@@ -35,19 +35,21 @@ export function wakeOutcome(label: string, lastAt: string | null, lastStatus: st
       ? "no answer within 10 seconds"
       : lastStatus === "blocked_address"
         ? "the address points to a private network"
-        : "the address couldn't be reached";
+        : lastStatus === "secret_unreadable"
+          ? "Portico can no longer read the stored key, so set the wake URL again"
+          : "the address couldn't be reached";
   return `Last wake failed ${at}: ${why}.`;
 }
 
 function renderWakeForm(s: HomeState, a: AgentView): string {
   const w = s.wakeEdit!;
-  return `<form class="edit-form enter" data-form="wake-save" data-key="wake-form" novalidate>
+  return `<form class="edit-form enter" method="dialog" data-form="wake-save" data-key="wake-form" novalidate>
     <label for="wk-url" class="lbl">Wake URL</label>
     <input id="wk-url" class="field${when(w.error, " is-invalid")}" value="${esc(w.url)}" data-input="wake-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="wk-url-help" aria-invalid="${Boolean(w.error)}" data-autofocus>
-    <span id="wk-url-help" class="help">Where the app's webhook trigger listens. For a Grok Bot routine, the POST to field.</span>
+    <span id="wk-url-help" class="help">The app's webhook address.</span>
     <label for="wk-key" class="lbl mt8">Key</label>
     <input id="wk-key" type="password" class="field" value="${esc(w.key)}" data-input="wake-key" autocomplete="off" spellcheck="false" aria-describedby="wk-key-help">
-    <span id="wk-key-help" class="help">Sent as a bearer token with each wake. Portico doesn't show the key again.</span>
+    <span id="wk-key-help" class="help">Sent with each wake. Shown once.</span>
     ${when(w.error, `<span role="alert" class="field-error">${esc(w.error)}</span>`)}
     <span class="actions mt8"><button type="button" class="btn btn-link" data-action="wake-cancel">Cancel</button><button type="submit" class="btn btn-primary"${when(s.busy === `wake:${a.id}`, " disabled")}>Save</button></span>
   </form>`;
@@ -153,11 +155,31 @@ function renderSettingsFold(s: HomeState, data: AgentPageData): string {
                 (w) => `<li class="allow-row" data-key="w-${esc(w.sender.id)}">${logo(w.sender.kind, "logo-sm")}<span class="allow-name">${esc(w.sender.label)}</span><span class="tnum allow-since">since ${sinceDay(w.addedAt, s.now)}</span><span class="actions"><button type="button" class="btn btn-text" data-action="allow-remove" data-id="${esc(w.sender.id)}">Remove</button></span></li>`,
               )
               .join("")}</ul>`
-          : `<p class="row-help">None yet. Choosing Always allow on a decision adds the sender here.</p>`
+          : `<p class="row-help">None yet.</p>`
       }
     </div>`);
   }
+  parts.push(`<div class="switch-row">
+    <div class="grow"><span id="out-label" class="row-title">Ask before ${esc(a.label)} sends to other people's agents</span><span id="out-help" class="row-help">${
+      a.outboundHold
+        ? `On. Each message from ${esc(a.label)} to another person's agent waits for a decision on Today first, then goes on.`
+        : `Off. ${esc(a.label)} sends to other people's agents without asking.`
+    }</span></div>
+    ${switchButton(a.outboundHold, "toggle-outbound", "out-label", "out-help", s.busy === `outbound:${a.id}`)}
+  </div>`);
   if (a.type !== "session") parts.push(renderWakeRow(s, data));
+  if (a.revokedAt === null) {
+    parts.push(`<div class="srow-line">
+      <span class="row-text"><span class="row-title">Revoke ${esc(a.label)}</span><span class="row-help">Signs the agent out everywhere. Conversations stay readable. This can't be undone.</span></span>
+      <span class="actions">${
+        s.confirmRevoke
+          ? `<button type="button" class="btn btn-link" data-action="revoke-cancel">Cancel</button><button type="button" class="btn btn-danger" data-action="revoke-confirm" data-id="${esc(a.id)}" data-autofocus${when(s.busy === `revoke:${a.id}`, " disabled")}>Confirm: revoke ${esc(a.label)}</button>`
+          : `<button type="button" class="btn btn-danger" data-action="revoke-start">Revoke</button>`
+      }</span>
+    </div>`);
+  } else {
+    parts.push(`<div class="srow-line"><span class="row-text"><span class="row-title">Revoked</span><span class="row-help">${esc(a.label)} is signed out. Removing it deletes its conversations too.</span></span></div>`);
+  }
   if (a.type === "session") {
     const on = a.joinFromFolder !== false;
     const repo = esc(a.repo ?? a.folder ?? "");
@@ -197,6 +219,24 @@ function jobLine(s: HomeState, a: AgentView): string {
     return `<p class="job job-empty">No job description yet. <button type="button" class="inline-link" data-action="edit-start">Add a job description</button> so other agents know what ${esc(a.label)} handles.</p>`;
   }
   return "";
+}
+
+/**
+ * Where one pair's conversations ran, under the pair's one heading: each Portico the two talked through, the latest
+ * first, with the ones that take nothing new marked read-only. One part that still joins the two needs no list.
+ */
+export function renderParts(s: HomeState, parts: AgentPageData["worksWith"][number]["parts"]): string {
+  if (parts.length === 0 || (parts.length === 1 && !parts[0]!.readOnly)) return "";
+  return `<ul class="with-parts">${parts
+    .map((p) => {
+      const href = `/p/${encodeURIComponent(p.workspaceId)}`;
+      const name = p.portico ? esc(p.portico) : "A deleted Portico";
+      // A Portico that is gone, or that the person is no longer in, has no page to open.
+      const open = s.workspaces.some((w) => w.id === p.workspaceId);
+      const where = open ? `<a class="row-link" href="${href}" data-action="go" data-href="${href}">${name}</a>` : `<span>${name}</span>`;
+      return `<li class="with-part tnum" data-key="wwp-${esc(p.workspaceId)}">${where}${when(p.readOnly, ` <span class="pill pill-quiet">Read-only</span>`)} <span class="with-n">${plural(p.tasks, "task")}, last ${atWhen(p.lastAt, s.now)}</span></li>`;
+    })
+    .join("")}</ul>`;
 }
 
 export function renderAgent(s: HomeState, id: string): string {
@@ -251,7 +291,7 @@ export function renderAgent(s: HomeState, id: string): string {
       <h2 id="g-with" class="h-section">Works with</h2>
       <ul class="with">${data!.worksWith
         .map(
-          (w) => `<li data-key="ww-${esc(w.agent.id)}"><a class="with-link" href="/a/${encodeURIComponent(w.agent.id)}" data-action="go" data-href="/a/${encodeURIComponent(w.agent.id)}">${logo(w.agent.kind, "logo-sm")}<span>${esc(w.agent.label)}</span><span class="tnum with-n">${plural(w.tasks, "task")}, last ${atWhen(w.lastAt, s.now)}</span></a></li>`,
+          (w) => `<li data-key="ww-${esc(w.agent.id)}"><a class="with-link" href="/a/${encodeURIComponent(w.agent.id)}" data-action="go" data-href="/a/${encodeURIComponent(w.agent.id)}">${logo(w.agent.kind, "logo-sm")}<span>${esc(w.agent.label)}</span><span class="tnum with-n">${plural(w.tasks, "task")}, last ${atWhen(w.lastAt, s.now)}</span></a>${renderParts(s, w.parts)}</li>`,
         )
         .join("")}</ul>
     </section>`,

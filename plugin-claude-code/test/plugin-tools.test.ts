@@ -23,6 +23,7 @@ import {
   startSession,
   type TestPortico,
   waitFor,
+  computerNamed,
 } from "./helpers";
 
 let p: TestPortico;
@@ -94,10 +95,10 @@ describe("the plugin's MCP server", () => {
     }
   });
 
-  test("lists the seven Portico tools", async () => {
+  test("lists the agent tools and the Portico tools", async () => {
     const { host } = await session();
     const { tools } = await host.listTools();
-    expect(tools.map((t) => t.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile"]);
+    expect(tools.map((t) => t.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "list_porticos", "create_portico", "add_to_portico", "remove_from_portico", "rename_portico", "delete_portico", "share_portico", "join_portico"]);
   });
 
   test("list_agents shows the other agents", async () => {
@@ -127,7 +128,7 @@ describe("the plugin's MCP server", () => {
     const { message, delivery } = JSON.parse(text(sent)) as { message: { id: string; to: string; subject: string }; delivery: string };
     expect(message).toMatchObject({ to: "grok", subject: "Release date" });
     expect(delivery).toBe("queued");
-    expect(p.messages.get(message.id)?.text).toBe("Ready when you are");
+    expect(p.messages.get({ person: p.owner.id }, message.id)?.text).toBe("Ready when you are");
 
     // A reply needs only reply_to, a subject and the text.
     const question = p.messages.send(grok.agent, { to: "api-claude", subject: "Which branch?", text: "Which branch?" });
@@ -139,7 +140,7 @@ describe("the plugin's MCP server", () => {
 
     // The question went to this plugin's own live session: let that delivery finish before teardown.
     await waitFor(() => sock.posts.length === 1);
-    await waitFor(() => p.messages.get(question.message.id)?.status === "delivered");
+    await waitFor(() => p.messages.get({ person: p.owner.id }, question.message.id)?.status === "delivered");
   });
 
   test("a message to an agent that requires approval comes back held, with the note as a second line", async () => {
@@ -186,7 +187,7 @@ describe("the plugin's MCP server", () => {
     const grok = appAgent(p, "grok", { kind: "grok-bot" });
     const { host, sock } = await registered();
     const ask = p.messages.send(grok.agent, { to: "api-claude", subject: "Fix the export", text: "Please fix." }).message;
-    await waitFor(() => p.messages.get(ask.id)?.status === "delivered");
+    await waitFor(() => p.messages.get({ person: p.owner.id }, ask.id)?.status === "delivered");
     const update = await host.callTool({
       name: "send_message",
       arguments: { reply_to: ask.id, subject: "On it", text: "Looking", done: false, key: "fix-export-1" },
@@ -241,7 +242,7 @@ describe("the plugin's MCP server", () => {
 describe("a folder that is off Portico", () => {
   test("Portico's folder_off refusal makes the session quiet: no tools, a note, no notice, one log line, no retry", async () => {
     const folderId = "c".repeat(64);
-    p.computers.setFolder(p.computers.byName("macbook")!.id, folderId, "api", false);
+    p.computers.setFolder(computerNamed(p, "macbook")!.id, folderId, "api", false);
     const recorded: boolean[] = [];
     let opens = 0;
     const client = new PorticoClient({ url: p.url, token, sessionKey: "key-quiet-0001" });
@@ -284,7 +285,7 @@ describe("a folder that is off Portico", () => {
     await waitFor(() => recorded.length === 1);
     expect(recorded).toEqual([false]);
     await waitFor(() => s.toolListChanges() === 1);
-    expect((await s.host.listTools()).tools).toHaveLength(7);
+    expect((await s.host.listTools()).tools).toHaveLength(15);
   });
 
   test("while quiet, a tool call gets the note", async () => {
@@ -349,7 +350,7 @@ describe("a computer that hasn't joined", () => {
     plugin.start(); // the handshake happened before the takeover, so the session starts the stream itself
     await waitFor(() => connected(p, ADDRESS));
     await waitFor(() => host.toolListChanges() === 1);
-    expect((await host.host.listTools()).tools).toHaveLength(7);
+    expect((await host.host.listTools()).tools).toHaveLength(15);
     await waitFor(() => sock.posts.length === 1);
     expect(sock.posts[0]!.content).toBe(`<portico-notice>\n${joinedNotice("api-claude")}\n</portico-notice>`);
     expect(copyProblems(joinedNotice("api-claude"))).toEqual([]);

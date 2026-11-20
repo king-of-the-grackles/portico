@@ -1,17 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { frameUpdate } from "../src/core/framing";
-import { addAppAgent, addComputer, addMember, addOwner, addSession, callAs, callPerson, flush, makePortico, signIn } from "./helpers";
+import { addAppAgent, addComputer, addMember, addOwner, addSession, callAs, callPerson, flush, makePortico, signIn, together } from "./helpers";
 
 describe("fixes from the code review", () => {
   test("agents see a person's new name at once, not the name from when the server started", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
     const maya = await addMember(p);
-    addAppAgent(p, maya, "maya-dot", { kind: "dots" });
-    const { token } = addAppAgent(p, chris, "grok", { kind: "grok-bot" });
+    const dot = addAppAgent(p, maya, "maya-dot", { kind: "dots" });
+    const { agent, token } = addAppAgent(p, chris, "grok", { kind: "grok-bot" });
+    together(p, agent, dot.agent);
     const owners = async () =>
       ((await (await callAs(p, { token }, "GET", "/api/agent/agents")).json()) as { agents: { name: string; owner: string }[] }).agents
-        .find((a) => a.name === "maya-dot")!.owner;
+        .find((a) => a.name === "maya/maya-dot")!.owner;
     expect(await owners()).toBe("Maya");
     p.people.rename(maya.id, "Maya Chen");
     expect(await owners()).toBe("Maya Chen");
@@ -23,15 +24,16 @@ describe("fixes from the code review", () => {
     const maya = await addMember(p);
     const mayaDot = addAppAgent(p, maya, "maya-dot", { kind: "dots" }).agent;
     const grok = addAppAgent(p, chris, "grok", { kind: "grok-bot" }).agent;
-    p.messages.send(grok, { to: "maya-dot", subject: "Old", text: "t" });
+    together(p, grok, mayaDot);
+    p.messages.send(grok, { to: "maya/maya-dot", subject: "Old", text: "t" });
     const others = Array.from({ length: 6 }, (_, i) => addAppAgent(p, chris, `agent-${i}`).agent);
     for (const other of others) {
       p.clock.advance(60_000);
       p.messages.send(grok, { to: other.name, subject: "Newer", text: "t" });
     }
-    expect(p.messages.threads({ involving: [mayaDot.id], limit: 3 })).toHaveLength(1);
-    expect(p.messages.threads({ agentId: mayaDot.id, limit: 3 })).toHaveLength(1);
-    expect(p.messages.threads({ involving: [], limit: 3 })).toEqual([]);
+    expect(p.messages.threads({ person: maya.id }, { involving: [mayaDot.id], limit: 3 })).toHaveLength(1);
+    expect(p.messages.threads({ person: maya.id }, { agentId: mayaDot.id, limit: 3 })).toHaveLength(1);
+    expect(p.messages.threads({ person: maya.id }, { involving: [], limit: 3 })).toEqual([]);
   });
 
   test("the 401's pointer to the OAuth metadata uses the public URL, not the request's own address", async () => {
