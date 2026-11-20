@@ -161,6 +161,11 @@ describe("an agent-started join, where signing in creates the account", () => {
     const done = await page(p, `/c/${asked.id}`, cookie);
     expect(done.html).toContain("<h1>Joined</h1>");
     expect(done.html).toContain("dana-macbook joined. Sessions started there show up as your agents.");
+    // The page's one question is a form the page's script sends: without the script the button does nothing.
+    expect(done.html).toContain('<form class="vouch" method="dialog" data-api="PUT /api/computers/');
+    expect(done.html).toContain("Yes, always allow dana-macbook");
+    expect(done.html).toContain("/assets/forms.js");
+    expect(done.html).toContain("/assets/onboarding.css");
     expect(done.html).not.toContain(code);
     expect(copyProblems(visibleCopy(done.html))).toEqual([]);
     const who = await callAs(p, { token: first.token }, "GET", "/api/computer");

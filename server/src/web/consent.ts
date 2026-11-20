@@ -193,6 +193,9 @@ ${signedInAs(me, `/c/${request.id}`)}`,
     return narrowPage(c, {
       title: joined ? "Joined" : "Allowed",
       referrer: "no-referrer",
+      // The vouch box is a form the page's script sends, with its own styles.
+      scripts: ["forms.js"],
+      styles: ["onboarding.css"],
       main: html`<div><h1>${joined ? "Joined" : "Allowed"}</h1><p class="lead">${done}</p></div>
 ${more}
 <p class="help"><a href="/">Go to Portico</a></p>`,
