@@ -72,8 +72,11 @@ export function noticeEmail(o: {
 export function mailName(name: string): string | null {
   const text = name.normalize("NFKC").replace(/\s+/g, " ").trim();
   if (text === "" || Array.from(text).length > 40) return null;
-  if (!/^[\p{L}\p{M}\p{N} '’&,()-]+$/u.test(text)) return null;
-  if ((text.match(/\p{N}/gu) ?? []).length > 6) return null;
+  // Letters, but not modifier letters (some read as a dot or a colon), and no mark that strikes through a letter to
+  // read as a slash.
+  if (!/^[\p{Lu}\p{Ll}\p{Lt}\p{Lo}\p{M}\p{Nd} '’&,()-]+$/u.test(text)) return null;
+  if (/[\u0334-\u0338\u20d0-\u20ff]/u.test(text)) return null;
+  if ((text.match(/\p{Nd}/gu) ?? []).length > 6) return null;
   return text;
 }
 
