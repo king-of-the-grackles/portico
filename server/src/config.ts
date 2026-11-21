@@ -49,6 +49,17 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
       );
     }
   }
+  const retiredHosts = (env.PORTICO_RETIRED_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => h !== "");
+  for (const host of retiredHosts) {
+    if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) {
+      problems.push(`PORTICO_RETIRED_HOSTS lists host names separated by commas, such as old.portico.example: "${host}" is not one`);
+    } else if (publicUrl !== null && new URL(publicUrl).hostname === host) {
+      problems.push(`PORTICO_RETIRED_HOSTS can't list ${host}: PORTICO_PUBLIC_URL says this server answers there`);
+    }
+  }
   const descopeProjectId = env.PORTICO_DESCOPE_PROJECT_ID?.trim() || null;
   if (descopeProjectId !== null && !/^[A-Za-z0-9]{8,64}$/.test(descopeProjectId)) {
     problems.push("PORTICO_DESCOPE_PROJECT_ID must be a Descope project ID: letters and digits only");
@@ -76,6 +87,7 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     secretsKey,
     secretsKeyOld,
     webhooksAllowPrivate: env.PORTICO_WEBHOOKS_ALLOW_PRIVATE?.trim() === "1",
+    retiredHosts,
     files,
     mail,
     descopeProjectId,

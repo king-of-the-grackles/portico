@@ -21,8 +21,25 @@ import { MAX_BODY_BYTES } from "./core/limits";
  * Every surface over the core. Order matters: the agent, computer and join routes answer before the person
  * API's catch-all middleware under /api, and pages come last.
  */
-export function buildApp(core: Core, opts: { heartbeatMs?: number } = {}): Hono {
+export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?: string[] } = {}): Hono {
   const app = new Hono();
+
+  // An address this server no longer answers on: every path there says Gone and names the address to use, before
+  // anything else looks at the request. A client still set up for the old address then fails with a plain reason.
+  const retired = new Set(opts.retiredHosts ?? []);
+  if (retired.size > 0) {
+    app.use("*", async (c, next) => {
+      const host = (c.req.header("host") ?? "").toLowerCase().replace(/:\d+$/, "");
+      if (!retired.has(host)) return next();
+      const now = core.settings.publicUrl();
+      const message = `Portico no longer answers at ${host}. Portico is at ${now}. An agent or connector set up for ${host} joins again there: ${now}/join`;
+      c.header("Cache-Control", "no-store");
+      return /\btext\/html\b/.test(c.req.header("accept") ?? "") && c.req.method === "GET"
+        ? narrowPage(c, { title: "This address is retired", status: 410, main: html`<div><h1>This address is retired</h1><p class="lead">Portico no longer answers at ${host}. Portico is at <a href="${now}">${now}</a>.</p></div>
+<p class="help">An agent or connector set up for ${host} joins again at <a href="${now}/join">${now}/join</a>.</p>` })
+        : c.json({ error: "gone", message }, 410);
+    });
+  }
   const resolver = makeResolver(core.agents, core.computers, () => core.settings.publicUrl());
   const views = agentViews(core.agents, core.people, core.files, core.workspaces, () => core.settings.publicUrl(), (personId) => core.approvals.heldFor(personId).length);
   const { agents, messages, files } = core;
