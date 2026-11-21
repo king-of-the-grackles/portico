@@ -3,6 +3,7 @@ import { html } from "hono/html";
 import type { PersonEnv } from "../api/context";
 import type { Core } from "../core/core";
 import { LIMITS } from "../core/limits";
+import { MAX_WAKE_TESTS_PER_HOUR } from "../core/wake-urls";
 import type { Html } from "./layout";
 import { HOMEMARK, sendPage } from "./layout";
 
@@ -83,7 +84,7 @@ ${o.pluginSource ? "" : html`<p class="notice">The plugin source isn't set on th
   -H 'authorization: Bearer &lt;token&gt;' -H 'content-type: application/json' \\
   -d '{"url": "&lt;trigger URL&gt;", "key": "&lt;trigger key&gt;"}'</code></pre>
 <p>Never post the key in a chat. The URL must be a public <code>https://</code> address;</p></li>
-<li><p>read the answer. Portico sends one test wake at once, and <code>wake.test</code> says how the test went: <code>ok</code> means wake-ups are on. Anything else names what went wrong, such as <code>http_401</code> for a wrong key: fix that and register again;</p></li>
+<li><p>read the answer. Portico sends one test wake at once, and <code>wake.test</code> says how the test went: <code>ok</code> means wake-ups are on. Anything else names what went wrong, such as <code>http_401</code> for a wrong key: fix that and register again. Portico sends at most ${MAX_WAKE_TESTS_PER_HOUR} test wakes an hour for one agent, and answers <code>not_tested</code> after that;</p></li>
 <li><p>tell the person that Portico now wakes this agent when a message arrives.</p></li>
 </ul>
 <p>Each wake posts <code>{"portico": {"event": "message.received", "agent": …, "waiting": …, "latest": {"message_id": …, "from": …}}}</code> with the key as a bearer token, and never the message text: <code>check_inbox</code> hands the message over. A test wake says <code>"event": "wake.test"</code> and has no message behind it. The person sees the wake URL's host on the agent's page and can remove the wake URL there. Until wake-ups are on, that page says the agent isn't getting new messages automatically, and <code>check_inbox</code>, <code>list_agents</code> and <code>GET /api/agent/wake</code> repeat this step in <code>wake_note</code>.</p></li>

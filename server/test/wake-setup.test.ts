@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentPageData } from "../src/api/agents";
 import { LIMITS } from "../src/core/limits";
+import { MAX_WAKE_TESTS_PER_HOUR } from "../src/core/wake-urls";
 import { wakeLine } from "../src/web/client/render/agent";
 import { addAppAgent, addOwner, askToJoin, callAs, callPerson, copyProblems, fakeWebhooks, finishJoin, flush, makePortico, PUBLIC_URL, signIn } from "./helpers";
 
@@ -83,6 +84,18 @@ describe("wake-ups are the last step of joining", () => {
     for (const minutes of [1, 2.5, 100_000, "30"]) {
       expect((await callAs(p, muse, "PUT", "/api/agent/wake", { schedule_minutes: minutes })).status).toBe(400);
     }
+  });
+
+  test("test wakes are capped for one agent, so setting address after address tells nothing more", async () => {
+    const { p, hooks, chris } = await setup();
+    const grok = addAppAgent(p, chris, "grok", { kind: "grok-bot" });
+    const set = async (n: number) => (await (await callAs(p, grok, "PUT", "/api/agent/wake", { url: `https://host-${n}.example.com/fire`, key: "k_1" })).json()) as Record<string, any>;
+    for (let n = 0; n < MAX_WAKE_TESTS_PER_HOUR; n++) expect((await set(n)).wake.test).toBe("ok");
+    const capped = await set(99);
+    // The address is saved, nothing was posted to it, and the answer says the test didn't run.
+    expect(capped.wake).toMatchObject({ host: "host-99.example.com", test: "not_tested", on: true, tested: false });
+    expect(hooks.sent).toHaveLength(MAX_WAKE_TESTS_PER_HOUR);
+    expect(hooks.sent.map((req) => req.url)).not.toContain("https://host-99.example.com/fire");
   });
 
   test("a message after the test wake still wakes the agent", async () => {
