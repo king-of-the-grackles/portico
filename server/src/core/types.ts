@@ -274,6 +274,11 @@ export interface PorticoConfig {
    * development only; otherwise Portico posts only to public https:// addresses.
    */
   webhooksAllowPrivate: boolean;
+  /**
+   * PORTICO_RETIRED_HOSTS: host names this server used to answer on and no longer does, such as an address from before
+   * a move. A request to one gets 410 Gone and the address to use now, whatever the path.
+   */
+  retiredHosts: string[];
   /** Where files' bytes live: a bucket when one is configured, otherwise the data folder. */
   files: BucketConfig | null;
   /** Emails share links when set. Null: Share gives the link only. */

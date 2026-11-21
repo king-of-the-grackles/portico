@@ -24,6 +24,8 @@ primary_region = "iad"
   # People sign in with Descope. A project ID is public: the sign-in page shows the same value.
   PORTICO_DESCOPE_PROJECT_ID = "P3MD7hNBI7xhF3svzdJQHDkFRcYe"
   PORTICO_MAIL_FROM = "Portico <no-reply@mail.portico.chat>"
+  # The address from before the move to app.portico.chat: every request there answers 410 Gone with the new address.
+  PORTICO_RETIRED_HOSTS = "super.portico.chat"
   PORTICO_PLUGIN_SOURCE = "king-of-the-grackles/portico"
 
 # SQLite lives on one volume, so hosted Portico runs on one machine: deploy with --ha=false.

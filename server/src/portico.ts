@@ -730,7 +730,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     now,
     newId,
   };
-  const app = buildApp(core, { heartbeatMs: opts.heartbeatMs });
+  const app = buildApp(core, { heartbeatMs: opts.heartbeatMs, retiredHosts: config.retiredHosts });
 
   const sweep = (name: string, fn: () => unknown) => {
     try {

@@ -47,6 +47,7 @@ export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfi
     secretsKey: TEST_SECRETS_KEY,
     secretsKeyOld: null,
     webhooksAllowPrivate: false,
+    retiredHosts: [],
     mail: null,
     files: null,
     descopeProjectId: null,
