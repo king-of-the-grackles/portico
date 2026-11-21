@@ -102,7 +102,9 @@ function renderDetails(s: HomeState, data: AgentPageData): string {
       "Checks for messages",
       data.woken
         ? "When a message arrives"
-        : a.checkInMinutes !== null
+        : data.checkMinutes !== null
+          ? `Every ${data.checkMinutes} min, on a schedule`
+          : a.checkInMinutes !== null
           ? `About every ${a.checkInMinutes} min`
           : `When ${esc(a.label)} runs a task`,
     ]);
@@ -211,6 +213,21 @@ function renderSettingsFold(s: HomeState, data: AgentPageData): string {
   return parts.join("");
 }
 
+/**
+ * For the person's own app or connector that Portico doesn't wake: said at the top of the agent's page until wake-ups
+ * are on, with the one line that fixes it. An app that can't be woken at all states its schedule, and the line says so.
+ */
+export function wakeLine(data: AgentPageData, origin: string): string {
+  const a = data.agent;
+  if (!a.mine || a.type === "session" || a.revokedAt !== null || data.woken) return "";
+  const name = esc(a.label);
+  const body =
+    data.checkMinutes !== null
+      ? `${name} checks for messages every ${data.checkMinutes} minutes, because the app can't be woken. A message can wait that long.`
+      : `To fix: tell ${name} <q>Finish joining Portico: set up wake-ups, as ${esc(origin)}/join#wake says.</q>`;
+  return `<p class="notice wake-line" role="status" data-key="wake-line"><strong>Not getting new messages automatically.</strong> ${body}</p>`;
+}
+
 function jobLine(s: HomeState, a: AgentView): string {
   // A session reports what it's doing while busy; any agent can also say so itself with update_profile.
   if (a.doing) return `<p class="job">${esc(a.doing)}</p>`;
@@ -264,6 +281,7 @@ export function renderAgent(s: HomeState, id: string): string {
         ${when(s.saved, `<span class="saved enter" data-key="saved">Saved.</span>`)}
       </div>
     </header>
+    ${when(data, () => wakeLine(data!, typeof location === "undefined" ? "" : location.origin))}
     ${when(
       held.length > 0 || waiting,
       () => `<section aria-labelledby="g-decide" class="block">

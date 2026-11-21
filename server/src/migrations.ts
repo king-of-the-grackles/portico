@@ -35,6 +35,10 @@ export const DIRECTORY_MIGRATIONS: readonly Migration[] = [
   (db) => {
     db.run("ALTER TABLE shares ADD COLUMN allow_back INTEGER NOT NULL DEFAULT 0");
   },
+  // 203: an app agent Portico can't wake states the minutes between its scheduled inbox checks.
+  (db) => {
+    db.run("ALTER TABLE agents ADD COLUMN check_minutes INTEGER");
+  },
 ];
 
 /**

@@ -5,7 +5,7 @@ import { PorticoError } from "./errors";
 import { HOUR_MS, MINUTE_MS } from "./limits";
 import { SECRET_UNREADABLE, type SecretPlace, type Secrets } from "./secrets";
 import type { Agent } from "./types";
-import { cleanWebhookUrl, laterTimer, postWithRetry, type WebhookPost } from "./webhooks";
+import { cleanWebhookUrl, laterTimer, postWithRetry, statusOf, type WebhookPost, type WebhookResult } from "./webhooks";
 
 /** After a wake that went through, the next waits for the agent to check in, or this long. */
 export const REWAKE_MS = 10 * MINUTE_MS;
@@ -144,6 +144,41 @@ export class WakeUrls {
     this.activity.record("wake_set", { agentId: agent.id, personId, detail: { host: new URL(url).host, by_agent: personId === null } });
     this.changes.about({ agents: [agent.id] }, "agents");
     return this.view(agent.id)!;
+  }
+
+  /**
+   * One test wake, sent right after an agent or its manager set the wake URL, so joining ends with wake-ups known to
+   * work. Says "wake.test" and no message. Returns how the wake went ("ok", "http_401", "timeout"), which the agent's
+   * page shows like any other wake's outcome, or null when there is no wake URL.
+   */
+  async test(agent: Agent, agentName: string): Promise<string | null> {
+    const row = this.row(agent.id);
+    if (!row) return null;
+    const generation = this.generation.get(agent.id) ?? 0;
+    const key = await this.secrets.open(WakeUrls.place(agent.id), row.key);
+    if (!key.ok) {
+      this.unreadable(agent.id, key.reason);
+      return SECRET_UNREADABLE;
+    }
+    const sentAt = this.now();
+    let result: WebhookResult;
+    try {
+      result = await this.post({
+        url: row.url,
+        headers: { authorization: `Bearer ${key.value}` },
+        body: JSON.stringify({ portico: { event: "wake.test", agent: agentName, waiting: 0 } }),
+      });
+    } catch {
+      result = { status: null, error: "unreachable" };
+    }
+    const status = statusOf(result);
+    this.log("wake_test", { agent_id: agent.id, status });
+    // A wake URL set again while the test was on its way keeps its own outcome.
+    if ((this.generation.get(agent.id) ?? 0) === generation) {
+      this.db.query("UPDATE wake_urls SET last_at = $at, last_status = $status WHERE agent_id = $agentId").run({ agentId: agent.id, at: sentAt.toISOString(), status });
+      this.changes.about({ agents: [agent.id] }, "agents");
+    }
+    return status;
   }
 
   /** Returns whether there was one to remove. `personId` is null when the agent removed its own. */

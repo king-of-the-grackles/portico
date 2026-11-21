@@ -55,9 +55,10 @@ describe("the two kinds of database", () => {
     for (const table of ["threads", "messages", "message_files", "files", "released_names"]) expect(tables).not.toContain(table);
     expect(versionOf(db)).toBe(SCHEMA_VERSION);
     expect(kindOf(db)).toBe(DIRECTORY.applicationId);
-    // Two migrations since the baseline: the shared Portico every person starts with, and a share link's allow choice.
-    expect(DIRECTORY_MIGRATIONS).toHaveLength(2);
-    expect(SCHEMA_VERSION).toBe(202);
+    // Three migrations since the baseline: the shared Portico every person starts with, a share link's allow choice,
+    // and the minutes between an app agent's scheduled inbox checks.
+    expect(DIRECTORY_MIGRATIONS).toHaveLength(3);
+    expect(SCHEMA_VERSION).toBe(203);
   });
 
   test("a new content database holds threads, messages and files, at its own version, and nothing of the directory", () => {

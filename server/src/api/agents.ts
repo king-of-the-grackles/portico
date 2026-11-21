@@ -3,6 +3,7 @@ import type { Core } from "../core/core";
 import { readJson } from "../agent-api/rest";
 import { PorticoError } from "../core/errors";
 import type { EventsView } from "../core/events";
+import { wakeState } from "../core/wake-setup";
 import type { WakeUrlView } from "../core/wake-urls";
 import { type PersonEnv, currentPerson } from "./context";
 import type { TaskOutcome } from "../core/tasks";
@@ -24,6 +25,8 @@ export interface AgentPageData {
   runCount: number;
   /** Whether Portico wakes the agent when a message arrives: a wake URL or event subscription whose last try didn't fail. */
   woken: boolean;
+  /** The minutes between scheduled inbox checks, as an app Portico can't wake stated them. */
+  checkMinutes: number | null;
   /** The wake URL and event subscriptions, for the agent's manager only. */
   wake: WakeUrlView | null;
   events: EventsView | null;
@@ -75,7 +78,8 @@ export function agentPageData(core: Core, me: Person, id: string): AgentPageData
     // Sessions, like tasks and activity, only for the person's own agents (everyone's for the owner).
     runs: visible.includes(agent.id) ? agents.runs(agent.id, 10).map(views.run) : [],
     runCount: visible.includes(agent.id) ? agents.runCount(agent.id) : 0,
-    woken: [wake, events].some((v) => v !== null && (v.lastStatus === null || v.lastStatus === "ok")),
+    woken: wakeState(agent, wake, events).on,
+    checkMinutes: agent.type === "session" ? null : agent.checkMinutes,
     wake: mine ? wake : null,
     events: mine ? events : null,
   };
