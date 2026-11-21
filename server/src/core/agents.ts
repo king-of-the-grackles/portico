@@ -11,6 +11,7 @@ import { DAY_MS, HOUR_MS, LIMITS, NAME } from "./limits";
 import { nameKey, requireUnreservedName } from "./names";
 import type { Presence } from "./presence";
 import { hashSecret, newToken, sessionKeyHash } from "./tokens";
+import { SCHEDULE_MINUTES } from "./wake-setup";
 import { AGENT_KINDS } from "./types";
 import type { Agent, AgentKind, AgentType, Computer, DeliveryTier, DirectoryEntry, LiveStatus } from "./types";
 import { slugify } from "./words";
@@ -35,6 +36,7 @@ interface AgentRow {
   last_seen_at: string | null;
   doing: string | null;
   doing_at: string | null;
+  check_minutes: number | null;
 }
 
 function toAgent(row: AgentRow): Agent {
@@ -57,6 +59,7 @@ function toAgent(row: AgentRow): Agent {
     lastSeenAt: row.last_seen_at,
     doing: row.doing,
     doingAt: row.doing_at,
+    checkMinutes: row.check_minutes ?? null,
   };
 }
 
@@ -890,6 +893,20 @@ export class Agents {
    * An agent's own edits, from update_profile: its description, which the person who manages it can still change, and a
    * one-line doing ("" clears it). Both get the cleaning status text gets, and other agents are told they're untrusted.
    */
+  /**
+   * The agent's own word that its app can't be woken and checks the inbox every so many minutes. Null takes the
+   * statement back. Sessions get messages pushed and state nothing.
+   */
+  setCheckMinutes(agent: Agent, minutes: unknown): Agent {
+    if (agent.type === "session") throw new PorticoError("not_allowed", "Sessions get messages pushed and keep no inbox schedule.");
+    if (minutes !== null && (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes < SCHEDULE_MINUTES.min || minutes > SCHEDULE_MINUTES.max)) {
+      throw new PorticoError("bad_request", `The minutes between checks must be a whole number from ${SCHEDULE_MINUTES.min} to ${SCHEDULE_MINUTES.max}.`);
+    }
+    this.db.query("UPDATE agents SET check_minutes = $minutes WHERE id = $id").run({ id: agent.id, minutes });
+    this.changes.about({ agents: [agent.id] }, "agents");
+    return this.require(agent.id);
+  }
+
   updateOwn(agent: Agent, changes: { description?: unknown; doing?: unknown }): Agent {
     const sets: string[] = [];
     const bindings: Bindings = { id: agent.id };
@@ -1006,7 +1023,7 @@ export class Agents {
     );
   }
 
-  private insert(a: Omit<Agent, "computer" | "approvalRequired" | "outboundHold" | "unproven" | "revokedAt" | "doing" | "doingAt">): void {
+  private insert(a: Omit<Agent, "computer" | "approvalRequired" | "outboundHold" | "unproven" | "revokedAt" | "doing" | "doingAt" | "checkMinutes">): void {
     this.db
       .query(
         `INSERT INTO agents (id, owner_id, name, kind, type, description, computer_id, folder, folder_id,

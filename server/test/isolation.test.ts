@@ -317,6 +317,7 @@ describe("isolation sweep: tools", () => {
       delete_portico: { portico: w.own.portico },
       share_portico: { portico: w.own.portico },
       set_wake_url: { url: "https://hook.example.com/wake", key: "k" },
+      set_inbox_schedule: { minutes: 30 },
     };
     const args = { ...(filled[name] ?? {}) };
     delete args[swept];
@@ -327,7 +328,7 @@ describe("isolation sweep: tools", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual(
       [
         "add_to_portico", "check_inbox", "create_portico", "create_upload", "delete_portico", "get_task", "join_portico", "list_agents", "list_porticos",
-        "list_tasks", "remove_from_portico", "rename_portico", "send_message", "set_wake_url", "share_portico", "update_profile",
+        "list_tasks", "remove_from_portico", "rename_portico", "send_message", "set_inbox_schedule", "set_wake_url", "share_portico", "update_profile",
       ].sort(),
     );
   });

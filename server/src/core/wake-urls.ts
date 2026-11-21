@@ -5,12 +5,19 @@ import { PorticoError } from "./errors";
 import { HOUR_MS, MINUTE_MS } from "./limits";
 import { SECRET_UNREADABLE, type SecretPlace, type Secrets } from "./secrets";
 import type { Agent } from "./types";
-import { cleanWebhookUrl, laterTimer, postWithRetry, type WebhookPost } from "./webhooks";
+import { cleanWebhookUrl, laterTimer, postWithRetry, statusOf, type WebhookPost, type WebhookResult } from "./webhooks";
 
 /** After a wake that went through, the next waits for the agent to check in, or this long. */
 export const REWAKE_MS = 10 * MINUTE_MS;
 /** The most wakes Portico sends one agent in an hour: well under Grok Bot's 200 runs an hour per routine. */
 export const MAX_WAKES_PER_HOUR = 30;
+/**
+ * The most test wakes one agent gets in an hour. A test posts at once to an address the agent chose, so without a cap
+ * an agent could set one address after another and learn how each answers.
+ */
+export const MAX_WAKE_TESTS_PER_HOUR = 5;
+/** What a test answers once the cap is reached: the wake URL is saved, and the first message is its test. */
+export const TEST_SKIPPED = "not_tested";
 const MAX_KEY_CHARS = 512;
 
 /** What the agent page shows. The key never leaves Portico once saved. */
@@ -79,6 +86,8 @@ export class WakeUrls {
   private readonly sending = new Set<string>();
   /** Recent wake times by agent, for the hourly cap. */
   private readonly recent = new Map<string, number[]>();
+  /** Recent test wakes by agent. Never cleared by a new wake URL: setting another address is what the cap is for. */
+  private readonly tests = new Map<string, number[]>();
   /** Bumped when the manager sets or removes the wake URL, so a chain of retries for the old one stops. */
   private readonly generation = new Map<string, number>();
 
@@ -144,6 +153,49 @@ export class WakeUrls {
     this.activity.record("wake_set", { agentId: agent.id, personId, detail: { host: new URL(url).host, by_agent: personId === null } });
     this.changes.about({ agents: [agent.id] }, "agents");
     return this.view(agent.id)!;
+  }
+
+  /**
+   * One test wake, sent right after an agent or its manager set the wake URL, so joining ends with wake-ups known to
+   * work. Says "wake.test" and no message. Returns how the wake went ("ok", "http_401", "timeout"), which the agent's
+   * page shows like any other wake's outcome, or null when there is no wake URL. At most MAX_WAKE_TESTS_PER_HOUR an
+   * hour for one agent: after that nothing is posted and the answer is "not_tested".
+   */
+  async test(agent: Agent, agentName: string): Promise<string | null> {
+    const row = this.row(agent.id);
+    if (!row) return null;
+    const at = this.now().getTime();
+    const tests = (this.tests.get(agent.id) ?? []).filter((t) => at - t < HOUR_MS);
+    if (tests.length >= MAX_WAKE_TESTS_PER_HOUR) {
+      this.log("wake_test_capped", { agent_id: agent.id });
+      return TEST_SKIPPED;
+    }
+    this.tests.set(agent.id, [...tests, at]);
+    const generation = this.generation.get(agent.id) ?? 0;
+    const key = await this.secrets.open(WakeUrls.place(agent.id), row.key);
+    if (!key.ok) {
+      this.unreadable(agent.id, key.reason);
+      return SECRET_UNREADABLE;
+    }
+    const sentAt = this.now();
+    let result: WebhookResult;
+    try {
+      result = await this.post({
+        url: row.url,
+        headers: { authorization: `Bearer ${key.value}` },
+        body: JSON.stringify({ portico: { event: "wake.test", agent: agentName, waiting: 0 } }),
+      });
+    } catch {
+      result = { status: null, error: "unreachable" };
+    }
+    const status = statusOf(result);
+    this.log("wake_test", { agent_id: agent.id, status });
+    // A wake URL set again while the test was on its way keeps its own outcome.
+    if ((this.generation.get(agent.id) ?? 0) === generation) {
+      this.db.query("UPDATE wake_urls SET last_at = $at, last_status = $status WHERE agent_id = $agentId").run({ agentId: agent.id, at: sentAt.toISOString(), status });
+      this.changes.about({ agents: [agent.id] }, "agents");
+    }
+    return status;
   }
 
   /** Returns whether there was one to remove. `personId` is null when the agent removed its own. */

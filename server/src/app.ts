@@ -5,6 +5,7 @@ import { openApiDocument } from "./agent-api/openapi";
 import { agentRestRoutes, handleError } from "./agent-api/rest";
 import { streamRoutes } from "./agent-api/stream";
 import { agentViews } from "./agent-api/views";
+import { wakeStateOf } from "./core/wake-setup";
 import { personApi } from "./api";
 import { computerApi } from "./computer-api";
 import { fileRoutes } from "./file-api";
@@ -41,7 +42,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
     });
   }
   const resolver = makeResolver(core.agents, core.computers, () => core.settings.publicUrl());
-  const views = agentViews(core.agents, core.people, core.files, core.workspaces, () => core.settings.publicUrl(), (personId) => core.approvals.heldFor(personId).length);
+  const views = agentViews(core.agents, core.people, core.files, core.workspaces, () => core.settings.publicUrl(), (personId) => core.approvals.heldFor(personId).length, (agent) => wakeStateOf(core, agent));
   const { agents, messages, files } = core;
   const toolDeps = { agents, people: core.people, workspaces: core.workspaces, shares: core.shares, consents: core.consents, publicUrl: () => core.settings.publicUrl() };
   const notices = core.agentNotices;

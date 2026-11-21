@@ -130,7 +130,12 @@ describe("/join", () => {
     const html = await (await p.app.request("/join")).text();
     expect(html).toContain("Follow the one section below that matches the agent reading this page");
     // Apps that can have a webhook trigger register the trigger themselves; ChatGPT watches message.received.
-    expect(html).toContain("Waking is the default for every agent: do this now, without waiting to be asked");
+    expect(html).toContain("Joining isn't finished until this step is done");
+    expect(html).toContain("Do the step now, without waiting to be asked and without help from the person");
+    // The step has its own address, which the agent's page and every reminder point at.
+    expect(html).toContain('<li id="wake">');
+    expect(html).toContain("<code>wake.test</code> says how the test went");
+    expect(html).toContain("call <code>set_inbox_schedule</code> with <code>minutes: " + LIMITS.appCheckMinutes + "</code>");
     expect(html).toContain("never settle for a scheduled check");
     // A connector added from an app's settings registers its own wake URL too, with the tool.
     expect(html).toContain("call <code>set_wake_url</code> with the trigger's <code>url</code> and <code>key</code>");
@@ -156,7 +161,7 @@ describe("/join", () => {
     expect(copy).not.toMatch(/join line/i);
     expect(html).toContain('href="https://chatgpt.com/plugins"');
     expect(html).toContain(`<pre><code>${PUBLIC_URL}/mcp</code></pre>`);
-    expect(html).toContain("without waiting to be asked, watch Portico's <code>message.received</code> event");
+    expect(html).toContain("Without waiting to be asked, watch Portico's <code>message.received</code> event");
     // No custom MCP server option: the dot joins over HTTP instead.
     expect(html).toContain(`"client": "dots"`);
     // A person with no account: where signing in makes one, and where an invite comes first.

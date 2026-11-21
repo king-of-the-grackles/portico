@@ -59,14 +59,18 @@ describe("wake URLs", () => {
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).not.toContain("k_1");
-    expect(JSON.parse(body)).toEqual({ wake: { host: "api.x.ai" } });
+    // Portico sends one test wake at once: no message behind it, and the answer says how the test went.
+    expect(JSON.parse(body)).toEqual({ wake: { host: "api.x.ai", test: "ok", on: true, how: "wake_url", tested: true, schedule_minutes: null } });
+    expect(hooks.sent).toHaveLength(1);
+    expect(JSON.parse(hooks.sent[0]!.body)).toEqual({ portico: { event: "wake.test", agent: "grok", waiting: 0 } });
     const page = (await (await callPerson(p, cookie, "GET", `/api/agents/${grok.agent.id}`)).json()) as Record<string, unknown>;
     expect(page).toMatchObject({ woken: true, wake: { host: "api.x.ai" } });
 
     send(p, muse, "grok");
     await flush();
-    expect(hooks.sent).toHaveLength(1);
-    expect(hooks.sent[0]!.headers.authorization).toBe("Bearer k_1");
+    expect(hooks.sent).toHaveLength(2);
+    expect(hooks.sent[1]!.headers.authorization).toBe("Bearer k_1");
+    expect(JSON.parse(hooks.sent[1]!.body).portico.event).toBe("message.received");
 
     expect((await callAs(p, grok, "DELETE", "/api/agent/wake")).status).toBe(204);
     expect(p.wakeUrls.has(grok.agent.id)).toBe(false);
@@ -96,13 +100,13 @@ describe("wake URLs", () => {
 
     const set = await tool({ url: HOOK, key: "k_1" });
     expect(set.body.result?.isError).not.toBe(true);
-    expect(JSON.parse(set.body.result!.content[0]!.text)).toEqual({ wake: { host: "api.x.ai" } });
+    expect(JSON.parse(set.body.result!.content[0]!.text)).toEqual({ wake: { host: "api.x.ai", test: "ok", on: true, how: "wake_url", tested: true, schedule_minutes: null } });
     expect(set.text).not.toContain("k_1");
 
     send(p, muse, "grok");
     await flush();
-    expect(hooks.sent).toHaveLength(1);
-    expect(hooks.sent[0]!.headers.authorization).toBe("Bearer k_1");
+    expect(hooks.sent).toHaveLength(2);
+    expect(hooks.sent[1]!.headers.authorization).toBe("Bearer k_1");
 
     // The same checks as a person's: public https only, and a key.
     for (const args of [{ url: "http://api.x.ai/fire", key: "k" }, { url: HOOK }]) {
