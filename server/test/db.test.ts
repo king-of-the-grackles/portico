@@ -292,3 +292,28 @@ describe("what the directory removes by itself", () => {
     expect((db.query("SELECT COUNT(*) AS n FROM agents").get() as { n: number }).n).toBe(0);
   });
 });
+
+describe("what a delete reports", () => {
+  // The sweeps report `changes` as how many threads or messages went, and purging a workspace checks `changes === 1`.
+  // Both rely on Bun counting only the rows a statement deletes itself. Bun 1.4.3 and earlier also counted the rows an
+  // ON DELETE CASCADE took (oven-sh/bun#43306, fixed in 1.4.4), so on those the history sweep reported a thread with its
+  // messages as several threads, and a purged workspace with people in it as not purged.
+  test("a delete counts the rows it deletes, not the rows its cascade takes with them", () => {
+    const content = openContentDb(":memory:");
+    content.run("INSERT INTO threads (id, a_id, b_id, started_by, created_at, last_message_at) VALUES ('t1', 'a1', 'a2', 'a1', 't', 't')");
+    const message = content.query(
+      `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, root_id, status, created_at, expires_at)
+       VALUES ($id, 't1', 'a1', 'a2', 's', 'x', 'm1', 'delivered', 't', 't')`,
+    );
+    for (const id of ["m1", "m2", "m3"]) message.run({ id });
+    expect(content.query("DELETE FROM threads WHERE id = 't1'").run().changes).toBe(1);
+    expect((content.query("SELECT COUNT(*) AS n FROM messages").get() as { n: number }).n).toBe(0);
+
+    const directory = openDb(":memory:");
+    directory.run("INSERT INTO people (id, name, role, status, password_hash, created_at) VALUES ('p1', 'Maya', 'owner', 'active', 'h', 't'), ('p2', 'Sam', 'member', 'active', 'h', 't')");
+    directory.run("INSERT INTO workspaces (id, name, kind, owner_id, created_at, archived_at) VALUES ('w1', 'Old', 'shared', 'p1', 't', 't')");
+    directory.run("INSERT INTO workspace_people (workspace_id, person_id, added_at) VALUES ('w1', 'p1', 't'), ('w1', 'p2', 't')");
+    expect(directory.query("DELETE FROM workspaces WHERE id = 'w1' AND archived_at IS NOT NULL").run().changes).toBe(1);
+    expect((directory.query("SELECT COUNT(*) AS n FROM workspace_people").get() as { n: number }).n).toBe(0);
+  });
+});

@@ -26,7 +26,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           # The same Bun the Dockerfile builds with; bump both together.
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - uses: actions/cache@v6
         with:
@@ -36,4 +36,4 @@ jobs:
 
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test
+      - run: bun run test
