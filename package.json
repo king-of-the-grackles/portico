@@ -4,7 +4,7 @@
   "private": true,
   "workspaces": ["server", "plugin-claude-code"],
   "scripts": {
-    "test": "bun test",
+    "test": "bun test server plugin-claude-code",
     "build": "bun scripts/build.ts",
     "typecheck": "bun run --cwd server typecheck && tsc --noEmit -p plugin-claude-code"
   },
