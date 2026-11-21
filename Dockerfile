@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Builds Portico as a single executable, then copies the executable into a small Debian image. Everything Portico keeps (the
 # database and signing.key) lives in /data, so the image needs no config mount and no secrets.
-FROM oven/bun:1.4.2 AS build
+FROM oven/bun:1.4.4 AS build
 WORKDIR /src
 COPY package.json bun.lock ./
 COPY server/package.json server/package.json
