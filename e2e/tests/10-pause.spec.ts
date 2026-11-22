@@ -18,7 +18,8 @@ test("a paused Portico moves nothing until its owner resumes it", async ({ world
   await page.goto(`/p/${shared.id}`);
   try {
     await page.getByRole("button", { name: "Pause now" }).click();
-    await expect(page.getByRole("status").filter({ hasText: "Paused" })).toBeVisible();
+    // Two things say it: the passing notice and the page's lasting "Paused" line. Either will do.
+    await expect(page.getByRole("status").filter({ hasText: "Paused" }).first()).toBeVisible();
 
     // A send is refused and says why; the one on the way is withdrawn and never arrives.
     const refused = await scout.raw("POST", "/messages", { to, subject: unique("During the pause"), text: "Refused." });

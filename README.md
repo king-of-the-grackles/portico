@@ -431,6 +431,8 @@ PORTICO_DATA_DIR=./dev bun server/src/cli.ts serve
 
 The seed script prints a sign-in cookie for the owner and the password.
 
+`e2e/local.sh` runs the browser suite against a server started from the current checkout, on a free port with a throwaway data folder: how a branch is tested before it is merged (see `e2e/README.md`).
+
 ### Build
 
 - `bun run build` writes single-file executables for macOS arm64, Linux x64 and Linux arm64 to `dist/` (`bun run build host` for this computer only).
