@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const PRODUCTION_HOSTS = new Set(["portico.chat", "www.portico.chat"]);
+const PRODUCTION_HOSTS = new Set(["portico.chat", "www.portico.chat", "app.portico.chat"]);
 
 export const BASE_URL = (process.env.E2E_BASE_URL || "https://dev.portico.chat").replace(/\/+$/, "");
 

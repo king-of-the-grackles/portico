@@ -175,7 +175,7 @@ Ask which one to use, unless the request already says.
 7. **Volume.** `fly volumes create portico_data --size 1 --region iad -a <app> --yes`. For a different region, change `primary_region` in `fly.toml` to match.
 8. **Secrets key.** `fly secrets set PORTICO_SECRETS_KEY="$(openssl rand -base64 32)" -a <app>`. Portico doesn't start without it. Don't print the key or write it into a file; see [the secrets key](#the-secrets-key).
 9. **Deploy.** `fly deploy -a <app> --ha=false`. Fly builds the image remotely, so you don't need Docker. Portico keeps its database on one volume, so it runs on one machine.
-10. **Check.** `curl -fsS https://<app>.fly.dev/healthz` should answer `{"ok":true}`.
+10. **Check.** `curl -fsS https://<app>.fly.dev/healthz` should answer `{"ok":true,"commit":"..."}`.
 11. **Setup link.** `fly ssh console -a <app> -C "portico setup"`. Then go to [step 3](#3-finish-up-together).
 
 ### 2b. Render
@@ -189,7 +189,7 @@ Ask which one to use, unless the request already says.
      - Codex: `codex mcp add render --url https://mcp.render.com/mcp --oauth-client-id codex`.
      - Then pick where on Render the service goes, with a prompt like `Set my Render workspace to <name>`.
    - **Render CLI.** `brew update && brew install render`, or `curl -fsSL https://raw.githubusercontent.com/render-oss/cli/refs/heads/main/bin/install.sh | sh`. Then `render login` (a browser opens for the person) and `render workspace set`. In scripts, set `RENDER_API_KEY` and add `-o json --confirm`.
-4. **Wait until it's live.** With MCP, list the services and the `portico` service's deploys. With the CLI, use `render services` and `render deploys list <service id>`. Then `curl -fsS https://<service>.onrender.com/healthz` should answer `{"ok":true}`.
+4. **Wait until it's live.** With MCP, list the services and the `portico` service's deploys. With the CLI, use `render services` and `render deploys list <service id>`. Then `curl -fsS https://<service>.onrender.com/healthz` should answer `{"ok":true,"commit":"..."}`.
 5. **Setup link.** Ask the person to open the service's **Shell** tab in the Render dashboard and run `portico setup`. If their Render account has an SSH key, you can run `render ssh <service> --output text -- portico setup` from the terminal instead.
 
 ### 3. Finish up together
@@ -360,6 +360,7 @@ One setting is required: `PORTICO_SECRETS_KEY`. Every other one is optional, and
 | `PORTICO_RETIRED_HOSTS` | none | Host names this server used to answer on, separated by commas, such as the address from before a move. Every request to one gets `410 Gone` and the address to use now. |
 | `PORTICO_FILES_BUCKET` | none | An S3-compatible bucket for files. Set with `PORTICO_FILES_ENDPOINT`, `PORTICO_FILES_REGION`, `PORTICO_FILES_ACCESS_KEY_ID` and `PORTICO_FILES_SECRET_ACCESS_KEY`. The last four fall back to `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, so on Fly, `fly storage create -a <app name>` sets those and prints the bucket's name, and `fly secrets set PORTICO_FILES_BUCKET=<bucket name> -a <app name>` switches the bucket on. Without a bucket, files live in the data folder. |
 | `PORTICO_DESCOPE_PROJECT_ID` | none | Set to a Descope project ID to sign people in with Descope: signing in creates the account, and there is no setup link, password, passkey or invite. Without it, Portico signs people in itself: a setup link makes the owner's account, and the owner invites others. |
+| `PORTICO_COMMIT` | `unknown` | The git commit this build was made from. `GET /healthz` answers it as `commit`, without sign-in. The image sets it from the build argument of the same name: `docker build --build-arg PORTICO_COMMIT=$(git rev-parse HEAD) -t portico .` |
 | `PORTICO_PLUGIN_SOURCE` | none | Where `/join` tells computers to get the Claude Code plugin: a GitHub `owner/repo` or a path. `render.yaml` and `fly.toml` set `king-of-the-grackles/portico`. Without it, `/join` says to ask whoever runs Portico. |
 
 **The data folder** holds everything a Portico server keeps. Back up the whole folder. In the Docker image it's `/data`.
@@ -434,6 +435,27 @@ The seed script prints a sign-in cookie for the owner and the password.
 
 - `bun run build` writes single-file executables for macOS arm64, Linux x64 and Linux arm64 to `dist/` (`bun run build host` for this computer only).
 - `docker build -t portico .` builds the image. It keeps all data in `/data` and needs no config mount.
+
+### Deploys
+
+This is how the hosted app (`app.portico.chat`) and its dev copy (`dev.portico.chat`) are deployed. Your own Portico doesn't need any of it.
+
+`.github/workflows/deploy.yml` runs after CI passes for a push to `main`, or when started by hand on `main`. It deploys the exact commit CI tested, one deploy at a time:
+
+1. **Dev.** Deploys to `portico-dev` and waits until `dev.portico.chat/healthz` answers with that commit.
+2. **Browser suite.** Runs `e2e/` against dev. A failed run is tried once more, 15 minutes later.
+3. **Plan.** Reads the commit live on `app.portico.chat/healthz`. The deploy counts as a migration when that commit is unknown, isn't an ancestor of the new one, or the changes since touch `server/src/migrations.ts` or `server/src/db.ts`.
+4. **Production.** Without a migration, deploys in the `production` environment. With one, deploys in `production-migration`, which waits for a reviewer, and snapshots the volume first. Then it checks, with GETs only, that `/healthz` answers with the commit and that the sign-in page and `/api/agent/openapi.json` answer 200.
+5. **If that check fails.** Without a migration, the previous image is deployed again and the run fails. With one, nothing is rolled back, because the old code would run on a changed database: the run fails and its summary names the snapshot, for a person to decide.
+
+Nothing runs unless the repository variable `DEPLOY_ENABLED` is `true`; unset it to stop deploys. Each run's summary page says what was deployed and how it went.
+
+| Where in GitHub's settings | What to create |
+| --- | --- |
+| Repository variable | `DEPLOY_ENABLED` = `true` |
+| Environment `dev` | Secrets `FLY_API_TOKEN` (a deploy token for `portico-dev`: `fly tokens create deploy -a portico-dev`), `DESCOPE_PROJECT_ID` and `DESCOPE_MANAGEMENT_KEY` (the dev-only Descope project) |
+| Environment `production` | Secret `FLY_API_TOKEN` (a deploy token for `portico-chat`) |
+| Environment `production-migration` | Its own secret `FLY_API_TOKEN` for `portico-chat`, and a required reviewer |
 
 ## License
 
