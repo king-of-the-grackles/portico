@@ -1,10 +1,42 @@
 # Portico end-to-end suite
 
-A small browser and API suite that runs against a **deployed** Portico by URL. It signs real test people in, joins
-real agents through the consent page, and sends real messages and files. Today it targets the dev deployment,
-`https://dev.portico.chat` (hosted Portico with Descope sign-in), whose data is disposable.
+A small browser and API suite that runs against a Portico by URL. It signs real test people in, joins real agents
+through the consent page, and sends real messages and files. It runs in two places:
 
-## Run
+- **On this computer, against the current checkout** (`./local.sh`): how a branch is tested before it is merged.
+- **Against the dev deployment**, `https://dev.portico.chat` (`./run.sh`): what the Deploy workflow does after it has
+  deployed `main` there. Dev is deployed only by that workflow; a branch is never deployed to it.
+
+## Run a branch locally
+
+```sh
+cd e2e
+bunx playwright install chromium   # once
+./local.sh                    # everything, against a server started from this checkout
+./local.sh tests/05-*         # one scenario; any Playwright arguments pass through
+```
+
+`local.sh` installs the dependencies if they are missing, starts `bun server/src/cli.ts serve` from the checkout it
+is in, waits for `/healthz`, runs the suite, and then stops the server and removes its data, also when the run fails
+or is interrupted. Each run gets:
+
+- a free port (from `free-port` when that command exists), with `PORTICO_PUBLIC_URL=http://localhost:<port>`. The
+  session cookie is `Secure` only on https, so sign-in works on localhost;
+- a new empty data folder in the temp directory and a secrets key made for the run;
+- the dev-only Descope project for sign-in, the same one `run.sh` uses. The test users the run makes there are the
+  only thing it touches outside this computer, and it deletes them at the end;
+- no Resend key, so no email is sent, and no bucket, so files live in the data folder;
+- an otherwise empty environment: none of the shell's `PORTICO_*`, `AWS_*` or platform variables reach the server.
+
+All 13 scenarios run locally and none is skipped. One check inside `06-files` is left out: with a bucket each
+Portico's copy of a file has its own download address, and without one Portico serves every file at `/files/<id>`.
+The join limit and the loop guard below start from zero on every run, because the server is new each time, so local
+runs can follow each other straight away. `E2E_KEEP` does nothing here: the server the people lived on is gone.
+
+A failed run leaves the server's log in `test-results/server.log`, beside the traces. If a run is killed outright
+before its cleanup, `./run.sh --cleanup` deletes the Descope test users it left.
+
+## Run against dev
 
 ```sh
 cd e2e
@@ -32,13 +64,13 @@ Everything comes from the environment:
 
 When the two Descope variables are unset, `run.sh` reads them with `jq` from `~/.descope/projects.json`, entry
 `portico-dev` (`E2E_DESCOPE_ENTRY` names another entry). The key is never printed and never written into the repo.
-`e2e/.state/` (git-ignored) holds the run's session cookies and agent tokens for the dev deployment until the teardown.
+`e2e/.state/` (git-ignored) holds the run's session cookies and agent tokens until the teardown.
 
 ## The production guard
 
 The suite makes people, agents, Porticos and messages, so it never runs against production. `run.sh` and
 `playwright.config.ts` both refuse to start when the host of `E2E_BASE_URL` is `portico.chat`, `www.portico.chat` or
-`app.portico.chat` (the live app). `dev.portico.chat` is allowed.
+`app.portico.chat` (the live app). `dev.portico.chat` and localhost are allowed.
 Keep it that way: point it only at a deployment whose data may be thrown away, with that deployment's own Descope project.
 
 ## How it works
@@ -61,6 +93,8 @@ Keep it that way: point it only at a deployment whose data may be thrown away, w
   Porticos they made. The people's rows stay in the dev deployment's database: Portico has no way to delete a person.
 
 ## Two server limits the suite lives with
+
+Both matter against dev. A local run starts a new server, so it never meets a limit an earlier run used up.
 
 - **Joins: 10 starts per address per 15 minutes.** A fresh run starts 7 (the four cast agents, plus three scenarios
   that are about joining). So: one worker, no agent joined twice, and about one fresh run per 15 minutes from one

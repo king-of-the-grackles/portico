@@ -1,5 +1,6 @@
 // A file goes from one person's agent to another's, is downloaded, and is passed on into another Portico.
 import { randomBytes } from "node:crypto";
+import { BASE_URL } from "../lib/env";
 import { expect, test, unique } from "../lib/fixtures";
 
 test("a file is sent, downloaded by the receiver, and passed on into another Portico", async ({ world }) => {
@@ -45,6 +46,10 @@ test("a file is sent, downloaded by the receiver, and passed on into another Por
     copy = await helper.download(got.id, reportId);
   }).toPass({ timeout: 30_000 });
   expect(copy.bytes.equals(bytes)).toBe(true);
-  // Each Portico keeps its own copy: the two download addresses differ beyond their signatures.
-  expect(new URL(copy.url).pathname).not.toBe(new URL(report.url).pathname);
+  // With a bucket, each Portico keeps its own copy: the two download addresses differ beyond their signatures.
+  // Without one (./local.sh: files in the data folder) Portico serves every file itself at /files/<id>, so this one
+  // check is left out there.
+  if (new URL(copy.url).origin !== new URL(BASE_URL).origin) {
+    expect(new URL(copy.url).pathname).not.toBe(new URL(report.url).pathname);
+  }
 });

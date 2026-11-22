@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Runs the suite against a deployed Portico. Credentials come from the environment; when they are unset, the Descope
-# ones are read from ~/.descope/projects.json (entry portico-dev). The management key is never printed.
+# Runs the suite against a deployed Portico (./local.sh runs it against this checkout instead). Credentials come from
+# the environment; when they are unset, the Descope ones are read from ~/.descope/projects.json (entry portico-dev).
+# The management key is never printed.
 #
 #   ./run.sh                    the whole suite
 #   ./run.sh tests/05-*         one scenario (any Playwright arguments pass through)
@@ -16,21 +17,7 @@ if [ "$host" = "portico.chat" ] || [ "$host" = "www.portico.chat" ] || [ "$host"
   exit 2
 fi
 
-if [ -z "${DESCOPE_PROJECT_ID:-}" ] || [ -z "${DESCOPE_MANAGEMENT_KEY:-}" ]; then
-  projects="$HOME/.descope/projects.json"
-  entry="${E2E_DESCOPE_ENTRY:-portico-dev}"
-  if [ ! -r "$projects" ] || ! command -v jq >/dev/null; then
-    echo "Set DESCOPE_PROJECT_ID and DESCOPE_MANAGEMENT_KEY (or have jq and $projects with a $entry entry)." >&2
-    exit 2
-  fi
-  DESCOPE_PROJECT_ID="$(jq -r --arg e "$entry" '.projects[$e].id // empty' "$projects")"
-  DESCOPE_MANAGEMENT_KEY="$(jq -r --arg e "$entry" '.projects[$e].management_key // empty' "$projects")"
-  if [ -z "$DESCOPE_PROJECT_ID" ] || [ -z "$DESCOPE_MANAGEMENT_KEY" ]; then
-    echo "No $entry entry with id and management_key in $projects." >&2
-    exit 2
-  fi
-  export DESCOPE_PROJECT_ID DESCOPE_MANAGEMENT_KEY
-fi
+. lib/descope-env.sh
 
 if [ "${1:-}" = "--cleanup" ]; then
   exec bun lib/teardown.ts

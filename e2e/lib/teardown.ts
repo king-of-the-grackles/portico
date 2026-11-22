@@ -56,8 +56,10 @@ export default async function globalTeardown(): Promise<void> {
   await cleanRun(runId());
 }
 
+// `bun lib/teardown.ts` cleans every run that left a state file; `bun lib/teardown.ts <run id>` only that run.
 if (require.main === module) {
-  cleanAll().catch((err) => {
+  const only = process.argv[2];
+  (only ? Promise.resolve(refuseProduction()).then(() => cleanRun(only)) : cleanAll()).catch((err) => {
     console.error(err.message);
     process.exit(1);
   });
