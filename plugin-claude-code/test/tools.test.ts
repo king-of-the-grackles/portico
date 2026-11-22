@@ -12,7 +12,7 @@ import { porticoTools } from "../../server/src/agent-api/portico-tools";
 
 test("the plugin's tools match Portico's /mcp tools exactly", () => {
   expect(TOOLS).toEqual(mcpTools() as unknown as typeof TOOLS);
-  expect(TOOLS.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile"]);
+  expect(TOOLS.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "submit_feedback"]);
 });
 
 /** A client whose requests go straight into a test Portico server. */

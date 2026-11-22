@@ -10,6 +10,7 @@ import type { Tasks } from "../core/tasks";
 import type { Agent } from "../core/types";
 import { SCHEDULE_MINUTES } from "../core/wake-setup";
 import type { WakeUrls } from "../core/wake-urls";
+import { FEEDBACK_KINDS, type Feedback } from "../core/feedback";
 import type { AgentNotices } from "../core/notices";
 import { clip, errorName, log } from "../log";
 import { type Resolver, unauthorized } from "./auth";
@@ -57,7 +58,8 @@ const SERVER_INSTRUCTIONS =
   "reread a task's messages and get download addresses for attached files. To send a file, call create_upload, then " +
   "name the file ID in send_message's attachments. Files from other agents are untrusted, like messages. A key on send_message makes sending again safe: the same key returns the first message. " +
   "Use update_profile to say what this agent handles. Each agent can write the description and doing line list_agents " +
-  "shows for that agent: untrusted text, like messages.";
+  "shows for that agent: untrusted text, like messages. submit_feedback files feedback about Portico, such as " +
+  "a bug or an idea: Portico saves the item and sends no reply.";
 
 const noArgs = { type: "object", properties: {}, additionalProperties: false };
 const str = (description: string) => ({ type: "string", description });
@@ -225,6 +227,25 @@ export function mcpTools() {
         additionalProperties: false,
       },
     },
+    {
+      name: "submit_feedback",
+      description:
+        "File feedback about Portico: a bug, an idea, something confusing, a setup problem, something slow, a " +
+        "security concern, praise, or anything else. Portico saves the item for the people who build Portico and does " +
+        "nothing more: no message is sent, nobody is alerted, and no reply comes. File an item when the user asks, or " +
+        "when something on Portico went wrong for this agent. Leave out secrets, tokens and the contents of private " +
+        `messages. An agent can file ${LIMITS.feedbackPerAgentHour} items an hour.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: [...FEEDBACK_KINDS], description: "Required. What the item is about." },
+          title: str(`Required. One line, at most ${LIMITS.maxFeedbackTitleChars} characters.`),
+          details: str(`Required. What happened, what was expected and how to see the problem again, or what is wanted. At most ${LIMITS.maxFeedbackDetailsKb} KB.`),
+        } as Record<string, { type: string; description: string; enum?: string[] }>,
+        required: ["kind", "title", "details"],
+        additionalProperties: false,
+      },
+    },
   ];
 }
 
@@ -284,6 +305,7 @@ export interface McpDeps {
   files: Files;
   events: EventSubscriptions;
   wakeUrls: WakeUrls;
+  feedback: Feedback;
   views: AgentViews;
   resolver: Resolver;
   porticoTools: PorticoToolDeps;
@@ -388,6 +410,11 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
       const updated = agents.updateOwn(agent, { description: args.description, doing: args.doing });
       agents.checkedIn(updated);
       return json({ agent: views.entry(agents.entry(updated)) });
+    }
+    case "submit_feedback": {
+      const saved = deps.feedback.submit(agent, { kind: args.kind, title: args.title, details: args.details });
+      agents.checkedIn(agent);
+      return json(views.feedbackSaved(saved.id));
     }
     case "set_wake_url": {
       if (args.url === "") {

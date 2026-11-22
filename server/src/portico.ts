@@ -31,6 +31,7 @@ import { Shares } from "./core/shares";
 import { neverSent, Tasks } from "./core/tasks";
 import type { AccountSignIn, Agent, Message, Notice, Person, PorticoConfig, Workspace } from "./core/types";
 import { WakeUrls } from "./core/wake-urls";
+import { Feedback } from "./core/feedback";
 import { type WorkspaceEvent, Workspaces } from "./core/workspaces";
 import { safePost, type WebhookPost } from "./core/webhooks";
 import { ConfigError } from "./config";
@@ -177,6 +178,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const webhookPost = opts.webhookPost ?? safePost({ allowPrivate: config.webhooksAllowPrivate });
   const hooks = { db, post: webhookPost, secrets, changes, allowPrivate: config.webhooksAllowPrivate, now, schedule: opts.schedule, log: logInfo };
   const wakeUrls = new WakeUrls({ ...hooks, activity });
+  const feedback = new Feedback({ db, handleOf: (id) => people.get(id)?.handle ?? null, reviewToken: config.feedbackReviewToken, now, newId });
   const events = new EventSubscriptions(hooks);
 
   // Notices are raised as writes commit; their effects (nudges, wake URLs) run in a microtask and never throw.
@@ -725,6 +727,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     agentStreams,
     personStreams,
     wakeUrls,
+    feedback,
     events,
     accountSignIn,
     now,

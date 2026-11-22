@@ -39,6 +39,25 @@ export const DIRECTORY_MIGRATIONS: readonly Migration[] = [
   (db) => {
     db.run("ALTER TABLE agents ADD COLUMN check_minutes INTEGER");
   },
+  // 204: feedback agents file with submit_feedback. No foreign keys: an item outlives its agent, and names the agent
+  // and the person as they were when the item was sent.
+  (db) => {
+    db.run(`CREATE TABLE feedback (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('bug', 'idea', 'confusing', 'setup', 'performance', 'security', 'praise', 'other')),
+      title TEXT NOT NULL,
+      details TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'new',
+      agent_id TEXT NOT NULL,
+      agent_name TEXT NOT NULL,
+      person_id TEXT NOT NULL,
+      person_handle TEXT,
+      created_at TEXT NOT NULL
+    )`);
+    db.run("CREATE INDEX feedback_created ON feedback (created_at)");
+    db.run("CREATE INDEX feedback_agent ON feedback (agent_id, created_at)");
+    db.run("CREATE INDEX feedback_person ON feedback (person_id, created_at)");
+  },
 ];
 
 /**

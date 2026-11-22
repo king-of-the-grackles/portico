@@ -243,6 +243,11 @@ export class PorticoClient {
     return this.call("PATCH", "/api/agent/profile", body);
   }
 
+  /** Files feedback about Portico. Values go as given: Portico checks them. */
+  submitFeedback(body: { kind?: unknown; title?: unknown; details?: unknown }): Promise<{ feedback: { id: string; status: string }; note: string }> {
+    return this.call("POST", "/api/agent/feedback", body);
+  }
+
   /** Runs one of the Portico tools (list_porticos and the rest): the arguments go as given, and Portico checks them. */
   porticoTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     return this.call("POST", `/api/agent/portico-tools/${encodeURIComponent(name)}`, args);

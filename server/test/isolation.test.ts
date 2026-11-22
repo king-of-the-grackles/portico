@@ -318,6 +318,7 @@ describe("isolation sweep: tools", () => {
       share_portico: { portico: w.own.portico },
       set_wake_url: { url: "https://hook.example.com/wake", key: "k" },
       set_inbox_schedule: { minutes: 30 },
+      submit_feedback: { kind: "bug", title: "t", details: "d" },
     };
     const args = { ...(filled[name] ?? {}) };
     delete args[swept];
@@ -328,7 +329,7 @@ describe("isolation sweep: tools", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual(
       [
         "add_to_portico", "check_inbox", "create_portico", "create_upload", "delete_portico", "get_task", "join_portico", "list_agents", "list_porticos",
-        "list_tasks", "remove_from_portico", "rename_portico", "send_message", "set_inbox_schedule", "set_wake_url", "share_portico", "update_profile",
+        "list_tasks", "remove_from_portico", "rename_portico", "send_message", "set_inbox_schedule", "set_wake_url", "share_portico", "submit_feedback", "update_profile",
       ].sort(),
     );
   });
@@ -340,7 +341,7 @@ describe("isolation sweep: tools", () => {
       for (const [swept, schema] of Object.entries(tool.inputSchema.properties ?? {})) {
         if (schema.type !== "string" && schema.type !== "array") continue;
         // Free text is stored or matched as given (a new name, a description, a subject): nothing is looked up by it.
-        if (["name", "description", "doing", "subject", "text", "summary", "key", "url", "type", "email", "outcome", "since", "before", "agents"].includes(swept) && schema.type === "string") continue;
+        if (["name", "description", "doing", "subject", "text", "summary", "key", "url", "type", "email", "outcome", "since", "before", "agents", "title", "details"].includes(swept) && schema.type === "string") continue;
         // A fresh world for each argument: a call that goes through (a send to Bob's own contact, say) changes nothing for the next.
         const w = await world();
         const value = (id: string) => (schema.type === "array" ? [id] : id);

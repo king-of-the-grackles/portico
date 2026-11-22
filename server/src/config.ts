@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SECRETS_KEY_HELP, SECRETS_KEY_MISSING, secretsKeyBytes } from "./core/secrets";
+import { REVIEW_TOKEN_MIN_CHARS } from "./core/feedback";
 import { cleanPublicUrl } from "./core/settings";
 import type { BucketConfig, MailConfig, PorticoConfig } from "./core/types";
 
@@ -73,6 +74,10 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
   if (secretsKey !== null && secretsKey === secretsKeyOld) {
     problems.push("PORTICO_SECRETS_KEY_OLD is the same key as PORTICO_SECRETS_KEY. Set PORTICO_SECRETS_KEY to a new key, or remove PORTICO_SECRETS_KEY_OLD.");
   }
+  const feedbackReviewToken = env.PORTICO_FEEDBACK_REVIEW_TOKEN?.trim() || null;
+  if (feedbackReviewToken !== null && (feedbackReviewToken.length < REVIEW_TOKEN_MIN_CHARS || /\s/.test(feedbackReviewToken))) {
+    problems.push(`PORTICO_FEEDBACK_REVIEW_TOKEN must be a random value of at least ${REVIEW_TOKEN_MIN_CHARS} characters, without spaces`);
+  }
   const files = bucketConfig(env, problems);
   const mail = mailConfig(env, problems, publicUrl ? `Portico <invites@mail.${new URL(publicUrl).hostname}>` : null);
   if (problems.length > 0) throw new ConfigError(problems);
@@ -88,6 +93,7 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     secretsKeyOld,
     webhooksAllowPrivate: env.PORTICO_WEBHOOKS_ALLOW_PRIVATE?.trim() === "1",
     retiredHosts,
+    feedbackReviewToken,
     commit: env.PORTICO_COMMIT?.trim() || "unknown",
     files,
     mail,
