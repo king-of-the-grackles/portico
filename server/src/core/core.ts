@@ -22,6 +22,7 @@ import type { WakeUrls } from "./wake-urls";
 import type { ShareMail } from "./mail";
 import type { Shares } from "./shares";
 import type { Workspaces } from "./workspaces";
+import type { Feedback } from "./feedback";
 
 /**
  * Everything a surface can use: the core modules, the live streams and the clock. Routers take this whole object, so a
@@ -58,6 +59,8 @@ export interface Core {
   agentStreams: AgentStreams;
   personStreams: PersonStreams;
   wakeUrls: WakeUrls;
+  /** What agents file with submit_feedback: saved, and read back only for review. */
+  feedback: Feedback;
   events: EventSubscriptions;
   /** Set where people sign in with an outside account (hosted Portico). Null: this server's own passwords and passkeys. */
   accountSignIn: AccountSignIn | null;

@@ -12,6 +12,12 @@ const MAX_INLINE_FILE_KB = 100;
 const MAX_FILES_PER_MESSAGE = 5;
 const FILE_LINK_MINUTES = 15;
 const LOOSE_FILE_HOURS: number = 1;
+const MAX_FEEDBACK_TITLE_CHARS = 120;
+const MAX_FEEDBACK_DETAILS_KB = 16;
+const FEEDBACK_PER_AGENT_HOUR = 5;
+
+/** What a feedback item is about, as Portico's /mcp offers them. */
+const FEEDBACK_KINDS = ["bug", "idea", "confusing", "setup", "performance", "security", "praise", "other"];
 
 /** What list_tasks filters by, as Portico's /mcp offers them. */
 const TASK_FILTERS = ["open", "all", "needs_approval", "in_progress", "done", "failed"];
@@ -181,6 +187,25 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "submit_feedback",
+    description:
+      "File feedback about Portico: a bug, an idea, something confusing, a setup problem, something slow, a " +
+      "security concern, praise, or anything else. Portico saves the item for the people who build Portico and does " +
+      "nothing more: no message is sent, nobody is alerted, and no reply comes. File an item when the user asks, or " +
+      "when something on Portico went wrong for this agent. Leave out secrets, tokens and the contents of private " +
+      `messages. An agent can file ${FEEDBACK_PER_AGENT_HOUR} items an hour.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: [...FEEDBACK_KINDS], description: "Required. What the item is about." },
+        title: str(`Required. One line, at most ${MAX_FEEDBACK_TITLE_CHARS} characters.`),
+        details: str(`Required. What happened, what was expected and how to see the problem again, or what is wanted. At most ${MAX_FEEDBACK_DETAILS_KB} KB.`),
+      },
+      required: ["kind", "title", "details"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 type Args = Record<string, unknown>;
@@ -318,6 +343,9 @@ export async function runTool(
             ...(args.doing !== undefined && args.doing !== null ? { doing: args.doing } : {}),
           }),
         );
+      case "submit_feedback":
+        // The values go as given: Portico checks them.
+        return json(await client.submitFeedback({ kind: args.kind, title: args.title, details: args.details }));
       default:
         if (PORTICO_TOOL_NAMES.includes(name)) return json(await client.porticoTool(name, args));
         return failure(`bad_request: Unknown tool ${name}.`);

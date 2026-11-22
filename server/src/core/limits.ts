@@ -75,6 +75,14 @@ export const LIMITS = {
   fileLinkMinutes: 15,
   /** A file no message carries is deleted after this. */
   looseFileHours: 1,
+  /** Feedback an agent files with submit_feedback: one line, and the details. */
+  maxFeedbackTitleChars: 120,
+  maxFeedbackDetailsKb: 16,
+  /** Feedback items one agent can file in an hour, and one person's agents together in a day. */
+  feedbackPerAgentHour: 5,
+  feedbackPerPersonDay: 20,
+  /** The most feedback items one review read answers with. */
+  feedbackPageMax: 200,
 } as const;
 
 export const MINUTE_MS = 60_000;

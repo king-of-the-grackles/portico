@@ -17,6 +17,7 @@ describe("config", () => {
       secretsKeyOld: null,
       webhooksAllowPrivate: false,
       retiredHosts: [],
+      feedbackReviewToken: null,
       commit: "unknown",
       files: null,
       mail: null,

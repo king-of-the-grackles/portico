@@ -8,6 +8,7 @@ import { agentViews } from "./agent-api/views";
 import { wakeStateOf } from "./core/wake-setup";
 import { personApi } from "./api";
 import { computerApi } from "./computer-api";
+import { feedbackReviewRoutes } from "./feedback-api";
 import { fileRoutes } from "./file-api";
 import type { Core } from "./core/core";
 import { oauthRoutes } from "./oauth";
@@ -61,12 +62,13 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
   app.route("/api/agent/stream", streamRoutes({ agents, messages, streams: core.agentStreams, resolver, heartbeatMs: opts.heartbeatMs }));
   app.route(
     "/api/agent",
-    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, views, resolver, changes: core.changes, now: core.now, porticoTools: toolDeps, notices }),
+    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, changes: core.changes, now: core.now, porticoTools: toolDeps, notices }),
   );
+  app.route("/api/feedback", feedbackReviewRoutes(core.feedback));
   app.route("/files", fileRoutes(core));
   app.route("/api/computer", computerApi(core));
   app.route("/api/join", joinApi(core));
-  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, views, resolver, porticoTools: toolDeps, notices }));
+  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, porticoTools: toolDeps, notices }));
   // Resend reports bounces and complaints here. The signature is the only credential; the body is read as sent.
   app.post("/api/mail/resend", async (c) => {
     const ok = core.mail.webhook(

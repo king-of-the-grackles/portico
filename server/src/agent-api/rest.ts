@@ -10,6 +10,7 @@ import { inboxWaitMs } from "../core/inbox-waits";
 import { DELIVERY_BATCH_MAX, type Messages } from "../core/messages";
 import type { Tasks } from "../core/tasks";
 import type { WakeUrls } from "../core/wake-urls";
+import type { Feedback } from "../core/feedback";
 import type { AgentNotices } from "../core/notices";
 import { parseStatusReport, type Presence } from "../core/presence";
 import { errorName, log } from "../log";
@@ -35,6 +36,7 @@ const UploadBody = z.object({
   size: z.number().nullish(),
   text: z.string().nullish(),
 });
+const FeedbackBody = z.object({ kind: z.string(), title: z.string(), details: z.string() });
 const ProfileBody = z.object({ description: z.string().nullish(), doing: z.string().nullish() });
 const WakeBody = z.union([z.object({ url: z.string(), key: z.string() }), z.object({ schedule_minutes: z.number().nullable() })]);
 const AckIds = z.array(z.string()).max(DELIVERY_BATCH_MAX).default([]);
@@ -68,6 +70,7 @@ export interface AgentRestDeps {
   files: Files;
   presence: Presence;
   wakeUrls: WakeUrls;
+  feedback: Feedback;
   views: AgentViews;
   resolver: Resolver;
   changes: Changes;
@@ -223,6 +226,15 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       updates: pending.updates.map((m) => views.update(m, agent)),
       notices: deps.notices.waiting(agent.id, DELIVERY_BATCH_MAX).map(views.notice),
     });
+  });
+
+  // Feedback about Portico: saved, and nothing else happens.
+  api.post("/feedback", async (c) => {
+    const body = FeedbackBody.parse(await readJson(c));
+    const agent = c.get("agent");
+    const saved = deps.feedback.submit(agent, body);
+    agents.checkedIn(agent);
+    return c.json(views.feedbackSaved(saved.id), 201);
   });
 
   api.post("/deliveries/ack", async (c) => {

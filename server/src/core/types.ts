@@ -281,6 +281,11 @@ export interface PorticoConfig {
    * a move. A request to one gets 410 Gone and the address to use now, whatever the path.
    */
   retiredHosts: string[];
+  /**
+   * PORTICO_FEEDBACK_REVIEW_TOKEN: the token that reads feedback items at GET /api/feedback, for whoever reviews them.
+   * It reads and never writes. Null when unset: the address answers 404 and nothing can read the items over HTTP.
+   */
+  feedbackReviewToken: string | null;
   /** PORTICO_COMMIT: the git commit this build was made from, set by the image build. "unknown" when unset. */
   commit: string;
   /** Where files' bytes live: a bucket when one is configured, otherwise the data folder. */
