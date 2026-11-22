@@ -152,6 +152,8 @@ test("inboxText writes what Portico's check_inbox writes", async () => {
 test("after a wait with nothing, inboxText writes what Portico's check_inbox writes", async () => {
   const p = makePortico();
   const grok = addAppAgent(p, await addOwner(p), "grok", { kind: "grok-bot" });
+  // An app with no wake-ups yet is also told how to set them up, which a session never is: this one states a schedule.
+  p.agents.setCheckMinutes(grok.agent, 30);
   const mcp = await callAs(p, { token: grok.token }, "POST", "/mcp", {
     jsonrpc: "2.0",
     id: 1,

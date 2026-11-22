@@ -94,6 +94,8 @@ export interface Agent {
   /** What the agent said it's doing, with update_profile, and when. One line, defanged. */
   doing: string | null;
   doingAt: string | null;
+  /** Apps and connectors only: the minutes between inbox checks the agent stated, for an app Portico can't wake. */
+  checkMinutes: number | null;
 }
 
 /** What a session reports about itself: Claude Code's own status. */

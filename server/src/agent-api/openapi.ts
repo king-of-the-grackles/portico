@@ -1,5 +1,6 @@
 import { AGENT_KINDS } from "../core/types";
 import { LIMITS } from "../core/limits";
+import { SCHEDULE_MINUTES } from "../core/wake-setup";
 import { TASK_OUTCOMES } from "../core/tasks";
 import { porticoTools } from "./portico-tools";
 import { TASK_FILTERS } from "./tasks";
@@ -73,6 +74,26 @@ function porticoToolPaths(): Record<string, Record<string, unknown>> {
   }
   return paths;
 }
+
+/** Where an agent's wake-ups stand, as the wake routes, the inbox and the agent list answer. */
+const WAKE_STATUS = {
+  type: "object",
+  properties: {
+    wake: {
+      type: "object",
+      properties: {
+        on: { type: "boolean", description: "Whether Portico starts this agent the moment a message arrives." },
+        how: { type: "string", enum: ["wake_url", "events", "schedule", "none"] },
+        tested: { type: "boolean", description: "Whether a wake went through." },
+        schedule_minutes: { type: ["integer", "null"] },
+        problem: { type: "string", description: "How the last wake failed, such as http_401." },
+        host: { type: "string" },
+        test: { type: ["string", "null"], description: 'How the test wake went: "ok", or what went wrong.' },
+      },
+    },
+    wake_note: { type: "string", description: "What is left to do while wake-ups aren't on. Do the step right away." },
+  },
+};
 
 /**
  * The agent API for apps that connect through an OpenAPI description (Muse's custom connectors, for one). Sessions'
@@ -557,28 +578,38 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
         },
       },
       "/api/agent/wake": {
+        get: {
+          operationId: "getWakeStatus",
+          summary: "Where this agent's wake-ups stand, and what is left to do while wake-ups aren't on.",
+          description:
+            "Setting wake-ups up is the last step of joining. wake.on says whether Portico starts this agent when a " +
+            "message arrives. While that is false, wake_note holds the step in full: do the step right away, without help from the user.",
+          responses: { "200": jsonResponse("The wake-up status.", WAKE_STATUS), "401": errorResponse },
+        },
         put: {
           operationId: "setWakeUrl",
           summary: "Register this agent's webhook trigger, so Portico wakes this agent when a message arrives.",
           description:
-            "For an app whose automations can be started by a webhook, such as a Grok Bot routine. Portico posts " +
+            "The last step of joining, for an app whose automations can be started by a webhook, such as a Grok Bot routine. Portico posts " +
             '{"portico": {"event": "message.received", "agent", "waiting", "latest": {"message_id", "from"}}} to the URL ' +
             "with the key as a bearer token, never the message text; the app then calls GET /api/agent/inbox. The URL must " +
-            "be a public https:// address. Replaces any earlier wake URL. Portico never shows the key again.",
+            "be a public https:// address. Replaces any earlier wake URL. Portico never shows the key again. Portico sends " +
+            'one test wake at once ("event": "wake.test", no message), and wake.test in the answer says how the test went: ' +
+            '"ok" means wake-ups are on. Only an app with no webhook trigger at all sends schedule_minutes instead, after ' +
+            "creating a scheduled task that calls GET /api/agent/inbox that often, and tells the user that messages arrive late.",
           requestBody: jsonBody({
             type: "object",
-            required: ["url", "key"],
             properties: {
-              url: { type: "string", description: "Where the webhook trigger listens." },
+              url: { type: "string", description: "Where the webhook trigger listens. Send with key." },
               key: { type: "string", description: "The trigger's key: one word, no spaces." },
+              schedule_minutes: {
+                type: ["integer", "null"],
+                description: `Instead of url and key, for an app Portico can't wake: the minutes between scheduled inbox checks, ${SCHEDULE_MINUTES.min} to ${SCHEDULE_MINUTES.max}. null takes the statement back.`,
+              },
             },
           }),
           responses: {
-            "200": jsonResponse("The host Portico now wakes.", {
-              type: "object",
-              required: ["wake"],
-              properties: { wake: { type: "object", required: ["host"], properties: { host: { type: "string" } } } },
-            }),
+            "200": jsonResponse("The wake-up status; with a wake URL, also the host Portico now wakes and how the test wake went.", WAKE_STATUS),
             "400": errorResponse,
             "401": errorResponse,
             "403": errorResponse,

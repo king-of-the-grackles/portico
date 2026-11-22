@@ -641,7 +641,7 @@ describe("an MCP SDK client end to end", () => {
     await connected.connect(transport);
     const { tools } = await connected.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
-      "list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "set_wake_url",
+      "list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "set_wake_url", "set_inbox_schedule",
       "list_porticos", "create_portico", "add_to_portico", "remove_from_portico", "rename_portico", "delete_portico", "share_portico", "join_portico",
     ]);
     const listed = await connected.callTool({ name: "list_agents", arguments: {} });

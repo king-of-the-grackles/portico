@@ -85,7 +85,7 @@ describe("GET /api/agent/inbox?wait", () => {
   test("answers empty when nothing arrives during the wait", async () => {
     const { p, codex } = await setup();
     const { res, ms } = await timed(callAs(p, { token: codex.token }, "GET", "/api/agent/inbox?wait=0.1"));
-    expect(await res.json()).toEqual({ messages: [], updates: [], notices: [], held_for_person: 0 });
+    expect(await res.json()).toMatchObject({ messages: [], updates: [], notices: [], held_for_person: 0 });
     expect(ms).toBeGreaterThanOrEqual(90);
   });
 
@@ -205,11 +205,11 @@ describe("check_inbox with wait over MCP", () => {
   test("after a wait with nothing, says how to keep waiting", async () => {
     const { p, codex } = await setup();
     const body = (await (await checkInbox(p, codex.token, { wait: 0.05 })).json()) as ToolResult;
-    expect(body.result.content[0]!.text).toBe(
+    expect(body.result.content[0]!.text).toStartWith(
       "No new messages.\nNothing arrived during the wait. To keep waiting, call check_inbox with wait again.",
     );
     const plain = (await (await checkInbox(p, codex.token, {})).json()) as ToolResult;
-    expect(plain.result.content[0]!.text).toBe("No new messages.");
+    expect(plain.result.content[0]!.text).toStartWith("No new messages.");
   });
 
   test("notifications/cancelled ends the caller's waiting check_inbox, and the next message waits for the next check", async () => {

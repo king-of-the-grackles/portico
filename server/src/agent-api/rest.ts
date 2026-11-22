@@ -36,7 +36,7 @@ const UploadBody = z.object({
   text: z.string().nullish(),
 });
 const ProfileBody = z.object({ description: z.string().nullish(), doing: z.string().nullish() });
-const WakeBody = z.object({ url: z.string(), key: z.string() });
+const WakeBody = z.union([z.object({ url: z.string(), key: z.string() }), z.object({ schedule_minutes: z.number().nullable() })]);
 const AckIds = z.array(z.string()).max(DELIVERY_BATCH_MAX).default([]);
 const AckBody = z.object({ messages: AckIds, updates: AckIds, notices: AckIds });
 
@@ -161,13 +161,25 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
 
   // An app's own webhook trigger, registered while joining, so no person has to paste the address and key. The key
   // goes in once and never comes back out. The agent's page shows the host, and Activity records each change.
+  // Portico sends one test wake at once, and the answer says how the test went. An app that can't be woken states the
+  // minutes between its scheduled checks here instead.
   api.put("/wake", async (c) => {
     const body = WakeBody.parse(await readJson(c));
     const agent = c.get("agent");
+    if ("schedule_minutes" in body) {
+      const updated = agents.setCheckMinutes(agent, body.schedule_minutes);
+      agents.checkedIn(updated);
+      return c.json(views.wakeStatus(updated));
+    }
     const wake = await deps.wakeUrls.set(agent, null, body);
+    const test = await deps.wakeUrls.test(agent, agents.display(agent));
     agents.checkedIn(agent);
-    return c.json({ wake: { host: wake.host } });
+    const status = views.wakeStatus(agent);
+    return c.json({ ...status, wake: { host: wake.host, test, ...status.wake } });
   });
+
+  // Where this agent's wake-ups stand, and what is left to do while they aren't on.
+  api.get("/wake", (c) => c.json(views.wakeStatus(c.get("agent"))));
 
   api.delete("/wake", (c) => {
     const agent = c.get("agent");
@@ -197,6 +209,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       updates: updates.map((m) => views.update(m, agent)),
       notices: deps.notices.take(agent.id).map(views.notice),
       ...views.heldForPerson(agent),
+      ...views.wakeStatus(agent),
     });
   });
 

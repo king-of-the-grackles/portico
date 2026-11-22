@@ -9,6 +9,7 @@ import type { ConsentRequest } from "../core/consents";
 import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
 import { LIMITS, MINUTE_MS } from "../core/limits";
+import { wakeNote, wakeStateOf } from "../core/wake-setup";
 
 /** Where a person answers a request: the one consent page. */
 export function consentLink(publicUrl: string, request: Pick<ConsentRequest, "id">): string {
@@ -35,7 +36,8 @@ export function joinSentence(publicUrl: string, request: Pick<ConsentRequest, "i
  *   GET  /api/join/:id  (Authorization: Bearer <poll_secret>)
  *        → { status }: pending, allowed (a person holds the code), approved, denied or expired
  *   POST /api/join/:id/code { code }  (Authorization: Bearer <poll_secret>)
- *        → { status: "approved", computer | agent, token, … } with the token exactly once
+ *        → { status: "approved", computer | agent, token, … } with the token exactly once; for an agent, also
+ *          `wake` (where wake-ups stand) and `next` (the last step of joining: setting wake-ups up, in full)
  *
  * snake_case JSON, like the agent API.
  */
@@ -90,7 +92,18 @@ export function joinApi(core: Core): Hono {
     c.header("Cache-Control", "no-store");
     const publicUrl = core.settings.publicUrl();
     if (request.kind === "computer") return c.json({ status: request.status, computer: computer ? { id: computer.id, name: computer.name } : null, token });
-    return c.json({ status: request.status, agent: agent ? { name: agent.name } : null, token, mcp_url: `${publicUrl}/mcp`, openapi_url: `${publicUrl}/api/agent/openapi.json` });
+    // The token and the last step of joining arrive together: wake-ups, which the agent sets up itself, right away.
+    const state = agent ? wakeStateOf(core, agent) : null;
+    const note = agent && state && agent.type !== "session" ? wakeNote(state, { publicUrl, kind: agent.kind, type: agent.type }) : null;
+    return c.json({
+      status: request.status,
+      agent: agent ? { name: agent.name } : null,
+      token,
+      mcp_url: `${publicUrl}/mcp`,
+      openapi_url: `${publicUrl}/api/agent/openapi.json`,
+      ...(state ? { wake: { on: state.on, how: state.how, tested: state.tested, schedule_minutes: state.scheduleMinutes } } : {}),
+      ...(note ? { next: note } : {}),
+    });
   });
 
   route.onError(handleError);

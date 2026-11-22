@@ -414,6 +414,7 @@ describe("an agent's page", () => {
         runs: [],
         runCount: 0,
         woken: false,
+        checkMinutes: null,
         wake: null,
         events: null,
         ...o,
@@ -608,7 +609,7 @@ describe("rendering rules", () => {
       state({
         route: { page: "agent", id: bad.id },
         agents: [bad],
-        agentPage: { agent: bad, allowList: [], taskCounts: { needs_approval: 0, in_progress: 0, done: 1, failed: 0 }, worksWith: [], runs: [], runCount: 0, woken: false, wake: null, events: null },
+        agentPage: { agent: bad, allowList: [], taskCounts: { needs_approval: 0, in_progress: 0, done: 1, failed: 0 }, worksWith: [], runs: [], runCount: 0, woken: false, checkMinutes: null, wake: null, events: null },
         tasks: { ...TASKS, tasks: [evilTask] },
       }),
     ]) {
