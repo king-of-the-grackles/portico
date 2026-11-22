@@ -244,13 +244,13 @@ jobs:
           echo "volume=$volume" >>"$GITHUB_OUTPUT"
 
           # The new snapshot is the one that was not in the list before.
-          before="$(flyctl volumes snapshots list "$volume" --json | jq -c '[.[]?.id]')"
+          before="$(flyctl volumes snapshots list "$volume" -a "$PRODUCTION_APP" --json | jq -c '[.[]?.id]')"
           flyctl volumes snapshots create "$volume" -a "$PRODUCTION_APP"
 
           deadline=$((SECONDS + 900))
           while :; do
             # A list that fails once is tried again; the deadline below still ends the wait.
-            new="$(flyctl volumes snapshots list "$volume" --json \
+            new="$(flyctl volumes snapshots list "$volume" -a "$PRODUCTION_APP" --json \
               | jq -c --argjson before "$before" '[.[]? | select(.id as $id | $before | index($id) | not)]')" || new="[]"
             id="$(jq -r '[.[] | select(.status == "created")][0].id // empty' <<<"$new")"
             if [ -n "$id" ]; then
