@@ -44,8 +44,12 @@ test("a new agent nobody vouched for is held once, and revoking it stops it", as
   const revoke = page.getByRole("button", { name: "Revoke", exact: true });
   if (!(await revoke.isVisible())) await page.locator('[data-action="settings-toggle"]').click();
   await revoke.click();
+  // The "Revoke" button is already gone once the confirm step shows, so waiting for it proves nothing. Wait for the
+  // browser's own POST to finish, then for the page to show the agent as revoked.
+  const revoked = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === `/api/agents/${rookieId}/revoke`);
   await page.getByRole("button", { name: /^Confirm: revoke / }).click();
-  await expect(page.getByRole("button", { name: "Revoke", exact: true })).toHaveCount(0);
+  expect((await revoked).status()).toBe(200);
+  await expect(page.getByText(/is signed out\. Removing it deletes its conversations too\./)).toBeVisible();
 
   // Its token is dead on every route, and what it had on the way never arrives.
   expect((await rookie.raw("GET", "/agents")).status).toBe(401);
