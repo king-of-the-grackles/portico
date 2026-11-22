@@ -1,0 +1,347 @@
+name: Deploy
+
+# Dev first, the browser suite against dev, then production. See "Deploys" in the README.
+on:
+  # Runs after CI has passed for a push to main. Never for a pull request.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time. A run in progress is never cancelled; of the runs waiting behind it, GitHub keeps the newest.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+# bash with -e and pipefail, so a failed flyctl in front of a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The exact commit CI tested, not the tip of the branch. A manual run deploys the commit it was started on.
+  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  # The same flyctl the commands below were written against; bump on purpose.
+  FLYCTL_VERSION: 0.5.12
+  DEV_APP: portico-dev
+  DEV_URL: https://dev.portico.chat
+  PRODUCTION_APP: portico-chat
+  PRODUCTION_URL: https://app.portico.chat
+
+jobs:
+  deploy-dev:
+    name: Deploy to dev
+    # The kill switch: nothing runs unless the repository variable DEPLOY_ENABLED is 'true'. Every later job needs
+    # this one, so they are skipped with it.
+    if: >-
+      vars.DEPLOY_ENABLED == 'true' && (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_branch == 'main'
+          && github.event.workflow_run.head_repository.full_name == github.repository)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          persist-credentials: false
+
+      - uses: superfly/flyctl-actions/setup-flyctl@1.5
+        with:
+          version: ${{ env.FLYCTL_VERSION }}
+
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --build-arg "PORTICO_COMMIT=$DEPLOY_SHA"
+
+      - name: Wait until dev answers with this commit
+        run: scripts/deploy/wait-healthz.sh "$DEV_URL" "$DEPLOY_SHA" 300
+
+      - name: Summary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+        run: |
+          {
+            echo "### Dev deploy: $RESULT"
+            echo "- App: \`$DEV_APP\` ($DEV_URL)"
+            echo "- Commit: \`$DEPLOY_SHA\`"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  e2e-dev:
+    name: Browser suite against dev
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    # Two runs of the suite and the 15-minute wait between them have to fit.
+    timeout-minutes: 75
+    environment: dev
+    env:
+      E2E_BASE_URL: https://dev.portico.chat
+    defaults:
+      run:
+        shell: bash
+        working-directory: e2e
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # The same Bun as ci.yml and the Dockerfile; bump all three together.
+          bun-version: 1.4.4
+
+      - name: Install the suite and Chromium
+        id: install
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+
+      - name: Run the suite
+        id: first
+        continue-on-error: true
+        env:
+          DESCOPE_PROJECT_ID: ${{ secrets.DESCOPE_PROJECT_ID }}
+          DESCOPE_MANAGEMENT_KEY: ${{ secrets.DESCOPE_MANAGEMENT_KEY }}
+        run: ./run.sh
+
+      # One more run, never a third. Dev allows 10 agent joins per address per 15 minutes and a fresh run starts 7
+      # (e2e/README.md), so the second run waits out that window first. Playwright empties test-results/ when it
+      # starts, so the first run's traces are moved aside.
+      - name: Run the suite once more after a failure
+        if: steps.first.outcome == 'failure'
+        env:
+          DESCOPE_PROJECT_ID: ${{ secrets.DESCOPE_PROJECT_ID }}
+          DESCOPE_MANAGEMENT_KEY: ${{ secrets.DESCOPE_MANAGEMENT_KEY }}
+        run: |
+          if [ -d test-results ]; then mv test-results test-results-first-run; fi
+          ./run.sh --cleanup || echo "::warning::Cleanup after the first run failed; the last step tries again."
+          echo "The first run failed. Waiting 15 minutes for the join limit, then running once more."
+          sleep 930
+          ./run.sh
+
+      # Always, whatever happened above. Test people left behind in dev are clutter, so a failed cleanup warns
+      # instead of stopping a deploy whose suite passed.
+      - name: Clean up test people and agents
+        if: always() && steps.install.outcome == 'success'
+        env:
+          DESCOPE_PROJECT_ID: ${{ secrets.DESCOPE_PROJECT_ID }}
+          DESCOPE_MANAGEMENT_KEY: ${{ secrets.DESCOPE_MANAGEMENT_KEY }}
+        run: ./run.sh --cleanup || echo "::warning::The e2e cleanup failed. Run e2e/run.sh --cleanup by hand."
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-test-results
+          path: |
+            e2e/test-results/
+            e2e/test-results-first-run/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Summary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          FIRST: ${{ steps.first.outcome }}
+        run: |
+          {
+            echo "### Browser suite against dev: $RESULT"
+            echo "- Target: $E2E_BASE_URL at commit \`$DEPLOY_SHA\`"
+            echo "- First run: $FIRST"
+            if [ "$FIRST" = "failure" ]; then echo "- Second and last run: $RESULT"; fi
+            echo "- Traces and screenshots of failed tests are in the \`e2e-test-results\` artifact."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  plan-production:
+    name: Plan production
+    needs: e2e-dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      migration: ${{ steps.plan.outputs.migration }}
+      live_commit: ${{ steps.plan.outputs.live_commit }}
+      reason: ${{ steps.plan.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          # The whole history: the plan asks whether the live commit is an ancestor and what changed since.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compare with the commit live now
+        id: plan
+        run: scripts/deploy/plan-production.sh "$DEPLOY_SHA" "$PRODUCTION_URL"
+
+  deploy-production:
+    name: Deploy to production
+    needs: plan-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # 'production-migration' has a required reviewer (set in the repository's settings), so a deploy that may change
+    # the database waits for a person. Each environment holds its own copy of FLY_API_TOKEN.
+    environment: ${{ needs.plan-production.outputs.migration == 'true' && 'production-migration' || 'production' }}
+    env:
+      MIGRATION: ${{ needs.plan-production.outputs.migration }}
+      PLAN_REASON: ${{ needs.plan-production.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          persist-credentials: false
+
+      - uses: superfly/flyctl-actions/setup-flyctl@1.5
+        with:
+          version: ${{ env.FLYCTL_VERSION }}
+
+      - name: Record the image running now
+        id: previous
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          images="$(flyctl image show -a "$PRODUCTION_APP" --json)"
+          count="$(jq 'length' <<<"$images")"
+          if [ "$count" != "1" ]; then
+            echo "Expected one machine in $PRODUCTION_APP, found $count: not deploying." >&2
+            exit 1
+          fi
+          image="$(jq -r '.[0] | "\(.Registry)/\(.Repository):\(.Tag)"' <<<"$images")"
+          digest="$(jq -r '.[0].Digest' <<<"$images")"
+          case "$image" in
+            registry.fly.io/*:?*) ;;
+            *) echo "Could not read a redeployable image for $PRODUCTION_APP: not deploying." >&2; exit 1 ;;
+          esac
+          echo "Running now: $image ($digest)"
+          echo "image=$image" >>"$GITHUB_OUTPUT"
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Snapshot the volume before a migration
+        id: snapshot
+        if: env.MIGRATION == 'true'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          volumes="$(flyctl volumes list -a "$PRODUCTION_APP" --json)"
+          attached="$(jq '[.[] | select(.attached_machine_id != null and .attached_machine_id != "")]' <<<"$volumes")"
+          if [ "$(jq 'length' <<<"$attached")" != "1" ]; then
+            echo "Expected one attached volume in $PRODUCTION_APP, found $(jq 'length' <<<"$attached"): not deploying." >&2
+            exit 1
+          fi
+          volume="$(jq -r '.[0].id' <<<"$attached")"
+          echo "volume=$volume" >>"$GITHUB_OUTPUT"
+
+          # The new snapshot is the one that was not in the list before.
+          before="$(flyctl volumes snapshots list "$volume" --json | jq -c '[.[]?.id]')"
+          flyctl volumes snapshots create "$volume" -a "$PRODUCTION_APP"
+
+          deadline=$((SECONDS + 900))
+          while :; do
+            # A list that fails once is tried again; the deadline below still ends the wait.
+            new="$(flyctl volumes snapshots list "$volume" --json \
+              | jq -c --argjson before "$before" '[.[]? | select(.id as $id | $before | index($id) | not)]')" || new="[]"
+            id="$(jq -r '[.[] | select(.status == "created")][0].id // empty' <<<"$new")"
+            if [ -n "$id" ]; then
+              echo "Snapshot $id of volume $volume is created."
+              echo "id=$id" >>"$GITHUB_OUTPUT"
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "No finished snapshot of volume $volume after 15 minutes: not deploying. Seen: $new" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Deploy
+        id: deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy -c fly.hosted.toml -a "$PRODUCTION_APP" --ha=false --build-arg "PORTICO_COMMIT=$DEPLOY_SHA"
+
+      # Read-only: four GETs. Nothing here signs in or makes a person, an agent or a message.
+      - name: Smoke check
+        id: smoke
+        run: |
+          scripts/deploy/wait-healthz.sh "$PRODUCTION_URL" "$DEPLOY_SHA" 300
+          check() {
+            local code
+            code="$(curl -sS -o /dev/null --max-time 15 --retry 2 --retry-delay 5 -w '%{http_code}' "$@")" || code="none"
+            if [ "$code" != "200" ]; then
+              echo "${*: -1} answered $code, not 200." >&2
+              return 1
+            fi
+            echo "${*: -1} answers 200."
+          }
+          # The home page sends a signed-out visitor to the sign-in page; -L follows it there.
+          check -L "$PRODUCTION_URL/"
+          check "$PRODUCTION_URL/sign-in"
+          check "$PRODUCTION_URL/api/agent/openapi.json"
+
+      # Only without a migration: after one, the old code would run on a database the new code has changed.
+      - name: Roll back to the previous image
+        id: rollback
+        if: failure() && env.MIGRATION == 'false' && (steps.deploy.outcome == 'failure' || steps.smoke.outcome == 'failure')
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+          PREVIOUS_DIGEST: ${{ steps.previous.outputs.digest }}
+        run: |
+          # A deploy that failed before it replaced the machine (a failed build) leaves nothing to roll back.
+          now="$(flyctl image show -a "$PRODUCTION_APP" --json | jq -r '.[0].Digest // empty')" || now=""
+          if [ -n "$now" ] && [ "$now" = "$PREVIOUS_DIGEST" ]; then
+            echo "The previous image is still the one running: nothing to roll back."
+            echo "action=none" >>"$GITHUB_OUTPUT"
+          else
+            flyctl deploy -c fly.hosted.toml -a "$PRODUCTION_APP" --ha=false --image "$PREVIOUS_IMAGE"
+            echo "action=redeployed" >>"$GITHUB_OUTPUT"
+          fi
+          scripts/deploy/wait-healthz.sh "$PRODUCTION_URL" "" 300
+
+      - name: Summary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+          SNAPSHOT_ID: ${{ steps.snapshot.outputs.id }}
+          SNAPSHOT_VOLUME: ${{ steps.snapshot.outputs.volume }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+          ROLLBACK_ACTION: ${{ steps.rollback.outputs.action }}
+        run: |
+          {
+            echo "### Production deploy: $RESULT"
+            echo "- App: \`$PRODUCTION_APP\` ($PRODUCTION_URL)"
+            echo "- Commit: \`$DEPLOY_SHA\`"
+            echo "- migration=$MIGRATION: $PLAN_REASON"
+            echo "- Image running before: \`${PREVIOUS_IMAGE:-not recorded}\`"
+            if [ "$MIGRATION" = "true" ]; then
+              echo "- Volume snapshot taken first: \`${SNAPSHOT_ID:-none}\` of volume \`${SNAPSHOT_VOLUME:-unknown}\`"
+            fi
+            echo "- Deploy: $DEPLOY_OUTCOME. Smoke check: $SMOKE_OUTCOME."
+            if [ "$DEPLOY_OUTCOME" = "failure" ] || [ "$SMOKE_OUTCOME" = "failure" ]; then
+              echo
+              if [ "$MIGRATION" = "true" ]; then
+                echo "**Production may be broken and was NOT rolled back.** This deploy may have changed the database, and the previous image would run old code on it. A person must decide: fix forward, or restore snapshot \`${SNAPSHOT_ID:-none}\` (volume \`${SNAPSHOT_VOLUME:-unknown}\`) and redeploy \`${PREVIOUS_IMAGE:-the previous image}\`."
+              elif [ "$ROLLBACK_OUTCOME" = "success" ] && [ "$ROLLBACK_ACTION" = "none" ]; then
+                echo "**The deploy failed before it replaced the running image.** Production still runs \`$PREVIOUS_IMAGE\` and /healthz answers ok."
+              elif [ "$ROLLBACK_OUTCOME" = "success" ]; then
+                echo "**Rolled back.** Production runs the previous image \`$PREVIOUS_IMAGE\` again and /healthz answers ok. Commit \`$DEPLOY_SHA\` is not live."
+              else
+                echo "**The rollback to \`${PREVIOUS_IMAGE:-the previous image}\` did not succeed ($ROLLBACK_OUTCOME). Production needs a person now.**"
+              fi
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"

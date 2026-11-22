@@ -436,6 +436,27 @@ The seed script prints a sign-in cookie for the owner and the password.
 - `bun run build` writes single-file executables for macOS arm64, Linux x64 and Linux arm64 to `dist/` (`bun run build host` for this computer only).
 - `docker build -t portico .` builds the image. It keeps all data in `/data` and needs no config mount.
 
+### Deploys
+
+This is how the hosted app (`app.portico.chat`) and its dev copy (`dev.portico.chat`) are deployed. Your own Portico doesn't need any of it.
+
+`.github/workflows/deploy.yml` runs after CI passes for a push to `main`, or when started by hand on `main`. It deploys the exact commit CI tested, one deploy at a time:
+
+1. **Dev.** Deploys to `portico-dev` and waits until `dev.portico.chat/healthz` answers with that commit.
+2. **Browser suite.** Runs `e2e/` against dev. A failed run is tried once more, 15 minutes later.
+3. **Plan.** Reads the commit live on `app.portico.chat/healthz`. The deploy counts as a migration when that commit is unknown, isn't an ancestor of the new one, or the changes since touch `server/src/migrations.ts` or `server/src/db.ts`.
+4. **Production.** Without a migration, deploys in the `production` environment. With one, deploys in `production-migration`, which waits for a reviewer, and snapshots the volume first. Then it checks, with GETs only, that `/healthz` answers with the commit and that the sign-in page and `/api/agent/openapi.json` answer 200.
+5. **If that check fails.** Without a migration, the previous image is deployed again and the run fails. With one, nothing is rolled back, because the old code would run on a changed database: the run fails and its summary names the snapshot, for a person to decide.
+
+Nothing runs unless the repository variable `DEPLOY_ENABLED` is `true`; unset it to stop deploys. Each run's summary page says what was deployed and how it went.
+
+| Where in GitHub's settings | What to create |
+| --- | --- |
+| Repository variable | `DEPLOY_ENABLED` = `true` |
+| Environment `dev` | Secrets `FLY_API_TOKEN` (a deploy token for `portico-dev`: `fly tokens create deploy -a portico-dev`), `DESCOPE_PROJECT_ID` and `DESCOPE_MANAGEMENT_KEY` (the dev-only Descope project) |
+| Environment `production` | Secret `FLY_API_TOKEN` (a deploy token for `portico-chat`) |
+| Environment `production-migration` | Its own secret `FLY_API_TOKEN` for `portico-chat`, and a required reviewer |
+
 ## License
 
 Licensed under the [MIT License](LICENSE).
