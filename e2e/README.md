@@ -37,7 +37,8 @@ When the two Descope variables are unset, `run.sh` reads them with `jq` from `~/
 ## The production guard
 
 The suite makes people, agents, Porticos and messages, so it never runs against production. `run.sh` and
-`playwright.config.ts` both refuse to start when the host of `E2E_BASE_URL` is `portico.chat` or `www.portico.chat`.
+`playwright.config.ts` both refuse to start when the host of `E2E_BASE_URL` is `portico.chat`, `www.portico.chat` or
+`app.portico.chat` (the live app). `dev.portico.chat` is allowed.
 Keep it that way: point it only at a deployment whose data may be thrown away, with that deployment's own Descope project.
 
 ## How it works

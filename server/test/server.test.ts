@@ -11,7 +11,20 @@ describe("server", () => {
     const running = startServer(testConfig({ dbPath: join(dir, "portico.db"), dataDir: dir }), { port: 0 });
     try {
       const res = await fetch(`http://localhost:${running.port}/healthz`);
-      expect(await res.json()).toEqual({ ok: true });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, commit: "unknown" });
+    } finally {
+      running.stop();
+    }
+  });
+
+  test("the health check names the commit the build was made from, without sign-in", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "portico-server-"));
+    const running = startServer(testConfig({ dbPath: join(dir, "portico.db"), dataDir: dir, commit: "75fc629abc" }), { port: 0 });
+    try {
+      const res = await fetch(`http://localhost:${running.port}/healthz`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, commit: "75fc629abc" });
     } finally {
       running.stop();
     }

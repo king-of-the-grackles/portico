@@ -21,7 +21,7 @@ import { MAX_BODY_BYTES } from "./core/limits";
  * Every surface over the core. Order matters: the agent, computer and join routes answer before the person
  * API's catch-all middleware under /api, and pages come last.
  */
-export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?: string[] } = {}): Hono {
+export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?: string[]; commit?: string } = {}): Hono {
   const app = new Hono();
 
   // An address this server no longer answers on: every path there says Gone and names the address to use, before
@@ -54,7 +54,8 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
   });
   app.use("*", (c, next) => (c.req.path.startsWith("/files/") ? next() : backstop(c, next)));
 
-  app.get("/healthz", (c) => c.json({ ok: true }));
+  // No sign-in: the commit says which build answers, so a deploy can be checked from outside.
+  app.get("/healthz", (c) => c.json({ ok: true, commit: opts.commit ?? "unknown" }));
   app.get("/api/agent/openapi.json", (c) => c.json(openApiDocument(core.settings.publicUrl())));
   app.route("/api/agent/stream", streamRoutes({ agents, messages, streams: core.agentStreams, resolver, heartbeatMs: opts.heartbeatMs }));
   app.route(

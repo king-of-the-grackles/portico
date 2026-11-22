@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 
 export E2E_BASE_URL="${E2E_BASE_URL:-https://dev.portico.chat}"
 host="$(printf '%s' "$E2E_BASE_URL" | sed -E 's#^[a-zA-Z]+://##; s#[/:?].*$##' | tr '[:upper:]' '[:lower:]')"
-if [ "$host" = "portico.chat" ] || [ "$host" = "www.portico.chat" ]; then
+if [ "$host" = "portico.chat" ] || [ "$host" = "www.portico.chat" ] || [ "$host" = "app.portico.chat" ]; then
   echo "E2E_BASE_URL points at production ($host). This suite never runs there." >&2
   exit 2
 fi
