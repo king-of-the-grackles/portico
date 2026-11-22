@@ -59,23 +59,103 @@ jobs:
         with:
           version: ${{ env.FLYCTL_VERSION }}
 
+      # Read-only. Unlike production, dev deploys even when this fails, but then a failed deploy can't be rolled back.
+      - name: Record the image running now
+        id: previous
+        continue-on-error: true
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          no_rollback() {
+            echo "::warning title=No rollback possible::$1 Deploying anyway; if the deploy fails, nothing can be rolled back."
+            exit 0
+          }
+          images="$(flyctl image show -a "$DEV_APP" --json)" || no_rollback "Could not read the image running in $DEV_APP."
+          count="$(jq 'length' <<<"$images")" || no_rollback "flyctl image show did not answer with JSON."
+          if [ "$count" != "1" ]; then
+            no_rollback "Expected one machine in $DEV_APP, found $count."
+          fi
+          image="$(jq -r '.[0] | select(.Registry and .Repository and .Tag) | "\(.Registry)/\(.Repository):\(.Tag)"' <<<"$images")"
+          digest="$(jq -r '.[0].Digest // "unknown"' <<<"$images")"
+          case "$image" in
+            registry.fly.io/*:?*) ;;
+            *) no_rollback "Could not read a redeployable image for $DEV_APP (got '$image')." ;;
+          esac
+          echo "Running now: $image ($digest)"
+          echo "image=$image" >>"$GITHUB_OUTPUT"
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+
       - name: Deploy
+        id: deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --build-arg "PORTICO_COMMIT=$DEPLOY_SHA"
 
       - name: Wait until dev answers with this commit
+        id: healthz
         run: scripts/deploy/wait-healthz.sh "$DEV_URL" "$DEPLOY_SHA" 300
+
+      # Migration or not: dev's data is disposable, so the old code may run on whatever the new code left behind. The
+      # job still fails, so the later jobs are skipped.
+      - name: Roll back to the previous image
+        id: rollback
+        if: >-
+          failure() && steps.previous.outputs.image != '' &&
+          (steps.deploy.outcome == 'failure' || steps.healthz.outcome == 'failure')
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+          PREVIOUS_DIGEST: ${{ steps.previous.outputs.digest }}
+        run: |
+          # A deploy that failed before it replaced the machine (a failed build) leaves nothing to roll back.
+          now="$(flyctl image show -a "$DEV_APP" --json \
+            | jq -r 'if length == 1 then .[0] | "\(.Registry)/\(.Repository):\(.Tag)@\(.Digest // "unknown")" else empty end')" \
+            || now=""
+          if [ -n "$now" ] && [ "$now" = "$PREVIOUS_IMAGE@$PREVIOUS_DIGEST" ]; then
+            echo "The previous image is still the one running: nothing to roll back."
+            echo "action=none" >>"$GITHUB_OUTPUT"
+          else
+            echo "Running now: ${now:-unknown}. Deploying $PREVIOUS_IMAGE again."
+            flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --image "$PREVIOUS_IMAGE"
+            echo "action=redeployed" >>"$GITHUB_OUTPUT"
+          fi
+          scripts/deploy/wait-healthz.sh "$DEV_URL" "" 300
 
       - name: Summary
         if: always()
         env:
           RESULT: ${{ job.status }}
+          PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          HEALTHZ_OUTCOME: ${{ steps.healthz.outcome }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+          ROLLBACK_ACTION: ${{ steps.rollback.outputs.action }}
         run: |
           {
             echo "### Dev deploy: $RESULT"
             echo "- App: \`$DEV_APP\` ($DEV_URL)"
             echo "- Commit: \`$DEPLOY_SHA\`"
+            echo "- Image running before: \`${PREVIOUS_IMAGE:-not recorded}\`"
+            echo "- Deploy: ${DEPLOY_OUTCOME:-not run}. Wait for this commit on /healthz: ${HEALTHZ_OUTCOME:-not run}."
+            if [ "$DEPLOY_OUTCOME" != "failure" ] && [ "$HEALTHZ_OUTCOME" != "failure" ]; then
+              echo "- Rollback: none."
+            elif [ -z "$PREVIOUS_IMAGE" ]; then
+              echo "- Rollback: none was possible."
+              echo
+              echo "**Dev may be down and was NOT rolled back:** the image running before the deploy could not be recorded (see the step 'Record the image running now'). Dev needs a person."
+            elif [ "$ROLLBACK_OUTCOME" = "success" ] && [ "$ROLLBACK_ACTION" = "none" ]; then
+              echo "- Rollback: not needed, the deploy failed before it replaced the running image."
+              echo
+              echo "**Dev still runs \`$PREVIOUS_IMAGE\`** and /healthz answers ok. Commit \`$DEPLOY_SHA\` is not on dev."
+            elif [ "$ROLLBACK_OUTCOME" = "success" ]; then
+              echo "- Rollback: ran, and succeeded."
+              echo
+              echo "**Rolled back.** Dev runs the previous image \`$PREVIOUS_IMAGE\` again and /healthz answers ok. Commit \`$DEPLOY_SHA\` is not on dev."
+            else
+              echo "- Rollback: ${ROLLBACK_OUTCOME:-did not run}."
+              echo
+              echo "**The rollback to \`$PREVIOUS_IMAGE\` did not come back healthy. Dev is probably down and needs a person.** To try again by hand: \`flyctl deploy -c fly.dev.toml -a $DEV_APP --ha=false --image $PREVIOUS_IMAGE\`"
+            fi
           } >>"$GITHUB_STEP_SUMMARY"
 
   e2e-dev:
