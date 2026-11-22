@@ -88,6 +88,7 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     secretsKeyOld,
     webhooksAllowPrivate: env.PORTICO_WEBHOOKS_ALLOW_PRIVATE?.trim() === "1",
     retiredHosts,
+    commit: env.PORTICO_COMMIT?.trim() || "unknown",
     files,
     mail,
     descopeProjectId,

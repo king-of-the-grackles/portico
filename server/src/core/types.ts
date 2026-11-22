@@ -279,6 +279,8 @@ export interface PorticoConfig {
    * a move. A request to one gets 410 Gone and the address to use now, whatever the path.
    */
   retiredHosts: string[];
+  /** PORTICO_COMMIT: the git commit this build was made from, set by the image build. "unknown" when unset. */
+  commit: string;
   /** Where files' bytes live: a bucket when one is configured, otherwise the data folder. */
   files: BucketConfig | null;
   /** Emails share links when set. Null: Share gives the link only. */

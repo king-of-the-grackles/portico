@@ -25,7 +25,9 @@ RUN apt-get update \
 COPY --from=build /out/portico /usr/local/lib/portico/portico
 COPY docker/entrypoint.sh /usr/local/bin/portico
 RUN chmod 755 /usr/local/bin/portico /usr/local/lib/portico/portico
-ENV PORT=8790 PORTICO_DATA_DIR=/data
+# The git commit the image was built from, answered by GET /healthz: docker build --build-arg PORTICO_COMMIT=$(git rev-parse HEAD)
+ARG PORTICO_COMMIT=unknown
+ENV PORT=8790 PORTICO_DATA_DIR=/data PORTICO_COMMIT=$PORTICO_COMMIT
 WORKDIR /data
 EXPOSE 8790
 VOLUME ["/data"]

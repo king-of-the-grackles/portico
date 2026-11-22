@@ -17,10 +17,16 @@ describe("config", () => {
       secretsKeyOld: null,
       webhooksAllowPrivate: false,
       retiredHosts: [],
+      commit: "unknown",
       files: null,
       mail: null,
       descopeProjectId: null,
     });
+  });
+
+  test("PORTICO_COMMIT names the commit the build was made from, and is unknown when unset or blank", () => {
+    expect(parseEnv({ PORTICO_COMMIT: " 75fc629abc " }, "k").commit).toBe("75fc629abc");
+    expect(parseEnv({ PORTICO_COMMIT: "  " }, "k").commit).toBe("unknown");
   });
 
   test("PORTICO_DATA_DIR names the data folder, which holds the database", () => {
