@@ -24,7 +24,7 @@ const PAGE = `<!doctype html>
   --quiet: #4f4a45; --quiet-wash: #ecebe8;
 }
 :root[data-theme="dark"] {
-  --teal: #247a65; --teal-dark: #2a8a73; --accent: #7fd1b9; --teal-wash: #1d332d;
+  --teal: #247a65; --teal-dark: #1e6b58; --accent: #7fd1b9; --teal-wash: #1d332d;
   --ink: #e8efe9; --ink-soft: #c5d1cb; --muted: #9fb0a9; --line: #34443f;
   --card: #16211e; --surface: #0f1917;
   --ochre: #f0c078; --ochre-wash: #3a2c14; --danger: #f1a79d; --danger-wash: #3d1f1b;
@@ -32,7 +32,7 @@ const PAGE = `<!doctype html>
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --teal: #247a65; --teal-dark: #2a8a73; --accent: #7fd1b9; --teal-wash: #1d332d;
+    --teal: #247a65; --teal-dark: #1e6b58; --accent: #7fd1b9; --teal-wash: #1d332d;
     --ink: #e8efe9; --ink-soft: #c5d1cb; --muted: #9fb0a9; --line: #34443f;
     --card: #16211e; --surface: #0f1917;
     --ochre: #f0c078; --ochre-wash: #3a2c14; --danger: #f1a79d; --danger-wash: #3d1f1b;
@@ -60,14 +60,15 @@ li::before { flex: none; width: 16px; height: 16px; margin-top: 2px; border-radi
 li[data-tone="ok"]::before { content: "\\2713"; background: var(--teal-wash); color: var(--accent); }
 li[data-tone="warn"]::before { content: "!"; background: var(--ochre-wash); color: var(--ochre); }
 .actions { display: flex; margin-top: 4px; }
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 6px 14px; border-radius: 8px; font: inherit; font-size: 15px; line-height: 24px; font-weight: 600; cursor: pointer; white-space: nowrap; border: 1px solid var(--teal); background: var(--surface); color: var(--accent); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; max-width: 100%; min-height: 44px; padding: 8px 16px; border-radius: 8px; font: inherit; font-size: 15px; line-height: 24px; font-weight: 600; cursor: pointer; white-space: nowrap; border: 1px solid var(--teal); background: var(--surface); color: var(--accent); }
 .btn:hover { background: var(--teal-wash); }
 .btn[data-primary="true"] { background: var(--teal); color: #ffffff; }
 .btn[data-primary="true"]:hover { background: var(--teal-dark); }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn svg { width: 14px; height: 14px; flex: none; }
 .help { font-size: 12px; line-height: 16px; color: var(--muted); }
-.addr { font-size: 12px; line-height: 16px; color: var(--muted); user-select: all; -webkit-user-select: all; }
+/* Under the button, one quiet block: what a press does, then the address, close together. */
+.addr { margin-top: -8px; font-size: 12px; line-height: 16px; color: var(--muted); user-select: all; -webkit-user-select: all; }
 @media (prefers-reduced-motion: no-preference) { .btn { transition: background-color 200ms ease; } }
 </style>
 </head>
