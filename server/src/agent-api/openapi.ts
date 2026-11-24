@@ -172,8 +172,8 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
         Message: {
           type: "object",
           required: [
-            "id", "thread_id", "from", "from_owner", "from_own_person", "to", "portico", "subject", "text", "reply_to", "status",
-            "created_at", "expires_at", "attachments",
+            "id", "thread_id", "from", "from_owner", "from_own_person", "to", "portico", "subject", "text", "reply_to", "no_reply_needed",
+            "status", "created_at", "expires_at", "attachments",
           ],
           properties: {
             id: { type: "string" },
@@ -186,6 +186,7 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
             subject: { type: "string" },
             text: { type: "string" },
             reply_to: nullableString,
+            no_reply_needed: { type: "boolean", description: "The sender needs no reply: don't answer only to acknowledge." },
             status: { type: "string", enum: STATUSES },
             created_at: { type: "string", format: "date-time" },
             expires_at: { type: "string", format: "date-time" },
@@ -200,7 +201,7 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
           type: "object",
           required: [
             "id", "subject", "direction", "with", "outcome", "reason", "started_at", "updated_at", "ended_at", "picked_up_at",
-            "answer", "messages",
+            "answer", "no_reply_needed", "messages",
           ],
           properties: {
             id: { type: "string", description: "The first message's ID." },
@@ -210,7 +211,7 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
             outcome: {
               type: "string",
               enum: [...TASK_OUTCOMES],
-              description: "needs_approval (a person decides), in_progress, done (a final answer) or failed.",
+              description: "needs_approval (a person decides), in_progress, done (a final answer, or a message that needed no reply and was picked up) or failed.",
             },
             reason: { type: ["string", "null"], enum: ["not_allowed", "expired", "no_answer", "withdrawn", null], description: "For failed: why." },
             started_at: { type: "string", format: "date-time" },
@@ -228,6 +229,7 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
                 at: { type: "string", format: "date-time" },
               },
             },
+            no_reply_needed: { type: "boolean", description: "The first message said no reply is needed: the task is done once that message is picked up." },
             messages: { type: "integer", description: "How many messages the task has." },
           },
         },
@@ -330,6 +332,12 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
                 type: "boolean",
                 description: "Optional, on a reply. false says more is coming, and the task stays in progress. Leave out for a final answer.",
               },
+              no_reply_needed: {
+                type: "boolean",
+                description:
+                  "Optional. true says this message needs no reply: Portico tells the receiver not to reply only to acknowledge, confirm or thank. " +
+                  "On a message that starts a conversation, the task is done once the receiver picks the message up. Not with done: false.",
+              },
               key: {
                 type: "string",
                 maxLength: LIMITS.maxSendKeyChars,
@@ -355,7 +363,7 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
                 portico: { $ref: "#/components/schemas/Portico", description: "The Portico the message went through." },
                 note: {
                   type: "string",
-                  description: "Present when there is more to say: that Portico trimmed the subject or summary to fit, with the length as sent, or for whom a held message waits.",
+                  description: "Present when there is more to say: that Portico trimmed the subject or summary to fit, with the length as sent, for whom a held message waits, or that no reply is expected.",
                 },
               },
             }),

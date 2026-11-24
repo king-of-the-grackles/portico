@@ -27,6 +27,7 @@ const SendBody = z.object({
   reply_to: z.string().optional(),
   summary: z.string().optional(),
   done: z.boolean().nullish(),
+  no_reply_needed: z.boolean().nullish(),
   key: z.string().nullish(),
   attachments: z.array(z.string()).nullish(),
 });
@@ -119,6 +120,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       replyTo: body.reply_to,
       summary: body.summary,
       done: body.done,
+      noReplyNeeded: body.no_reply_needed,
       key: body.key,
       attachments: body.attachments,
     });

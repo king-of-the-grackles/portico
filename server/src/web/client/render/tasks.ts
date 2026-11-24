@@ -28,8 +28,10 @@ export function taskLine(t: TaskView): string {
     case "in_progress":
       if (t.answer) return `Update from ${t.to.label}: ${t.answer.summary ?? t.answer.subject}`;
       if (t.pickedUpAt) return `Picked up at ${clock(t.pickedUpAt)}, no answer yet.`;
-      return `Queued until ${t.to.label} checks for messages.`;
+      return `${when(t.noReplyNeeded, "No reply needed. ")}Queued until ${t.to.label} checks for messages.`;
     case "done":
+      // A message that needed no reply is done at pickup, with no answer to show.
+      if (!t.answer && t.noReplyNeeded && t.pickedUpAt) return `No reply needed. Picked up at ${clock(t.pickedUpAt)}.`;
       return t.answer?.summary ?? t.answer?.subject ?? "Answered.";
     case "failed":
       if (t.reason === "not_allowed") {
@@ -46,10 +48,10 @@ export function taskLine(t: TaskView): string {
   }
 }
 
-/** The When column: the start time, plus how long it took once done. */
+/** The When column: the start time, plus how long the answer took once done. A task done at pickup has no answer to time. */
 function taskWhen(t: TaskView): string {
   const at = clock(t.startedAt);
-  return t.outcome === "done" && t.endedAt ? `${at}, ${duration(t.startedAt, t.endedAt)}` : at;
+  return t.outcome === "done" && t.endedAt && t.answer ? `${at}, ${duration(t.startedAt, t.endedAt)}` : at;
 }
 
 /** "Grok Bot → Codex", or on an agent's own page, "To Codex" or "From Grok Bot". */
@@ -60,7 +62,8 @@ function who(t: TaskView, from: AgentRef, to: AgentRef, perspective: string | nu
 }
 
 const STEP_LABEL = {
-  asked: () => "Asked",
+  // A message that needs no reply asks for nothing.
+  asked: (t: TaskView) => (t.noReplyNeeded ? "Sent" : "Asked"),
   allowed: (_t: TaskView, by: string | null, always: boolean) => `${always ? "Always allowed" : "Allowed once"}${by ? ` by ${by}` : ""}`,
   denied: (_t: TaskView, by: string | null) => `Not allowed${by ? ` by ${by}` : ""}`,
   picked_up: (t: TaskView) => `Picked up by ${t.to.label}`,
@@ -109,7 +112,7 @@ function renderMessage(m: MessageView, s: HomeState): string {
   const long = Array.from(m.text).length > LONG_MESSAGE;
   const text = long && !shown ? `${Array.from(m.text).slice(0, LONG_MESSAGE).join("")}…` : m.text;
   return `<li class="tmsg" data-key="tm-${esc(m.id)}">
-    <div class="tmsg-head">${logo(m.from.kind, "logo-sm")}<strong>${esc(m.from.label)}</strong><span class="tnum tmsg-at">${clock(m.createdAt)}</span></div>
+    <div class="tmsg-head">${logo(m.from.kind, "logo-sm")}<strong>${esc(m.from.label)}</strong>${when(m.noReplyNeeded, `<span class="pill pill-event tmsg-tag">No reply needed</span>`)}<span class="tnum tmsg-at">${clock(m.createdAt)}</span></div>
     <p class="tmsg-subject">${esc(m.subject)}</p>
     <p class="tmsg-text">${esc(text)}</p>
     ${when(long, `<button type="button" class="morebtn" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Show less" : "Show all"}</button>`)}
@@ -196,6 +199,7 @@ export function renderHeldCard(s: HomeState, m: HeldCard): string {
     <div class="dcard-head">${logo(m.from.kind, "", kindInfo(m.from.kind).label)}<div class="grow">
       <h3 id="dc-${esc(m.id)}" class="dcard-title">${esc(m.from.label)} wants to ask ${esc(m.to.label)}: ${esc(m.subject)}</h3>
       <p class="dcard-why tnum">${esc(heldReason(s, m))}</p>
+      ${when(m.noReplyNeeded, `<p class="dcard-why">No reply needed.</p>`)}
     </div></div>
     ${when(shown, () => `<div class="msg-box enter" data-key="dm-${esc(m.id)}"><p class="msg-full">${esc(m.text)}</p></div>`)}
     ${renderFiles(m.files)}

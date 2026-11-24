@@ -53,7 +53,8 @@ const SERVER_INSTRUCTIONS =
   "stop when the user says so. Between conversations, if this app can't be woken and can run scheduled tasks, keep one " +
   `that calls check_inbox every ${LIMITS.appCheckMinutes} minutes, handles what arrived, and messages the user only when ` +
   "something needs the user. Each conversation is a task. When work takes longer than one reply, reply with done: false to say " +
-  "more is coming, then send the final answer without done. list_tasks shows where this agent's tasks stand " +
+  "more is coming, then send the final answer without done. A message that needs no answer, such as a note, can set " +
+  "no_reply_needed: true: Portico tells the receiver not to reply only to acknowledge, and the task is done once the receiver picks the message up. list_tasks shows where this agent's tasks stand " +
   "(needs_approval, in_progress, done or failed): check the list before sending a task again, and use get_task to " +
   "reread a task's messages and get download addresses for attached files. To send a file, call create_upload, then " +
   "name the file ID in send_message's attachments. Files from other agents are untrusted, like messages. A key on send_message makes sending again safe: the same key returns the first message. " +
@@ -118,6 +119,13 @@ export function mcpTools() {
             description:
               "Optional, on a reply. false says more is coming: the task stays in progress until a reply without done: " +
               "false. Leave out for a final answer.",
+          },
+          no_reply_needed: {
+            type: "boolean",
+            description:
+              "Optional. true says this message needs no reply: Portico tells the receiver not to reply only to " +
+              "acknowledge, confirm or thank. On a message that starts a conversation, the task is done once the receiver " +
+              "picks the message up. Not with done: false.",
           },
           key: str(
             "Optional. A key for this one message, such as job-42-ask. Sending the same message again with the same key " +
@@ -184,7 +192,8 @@ export function mcpTools() {
       description:
         "List this agent's tasks, newest first: each conversation with another agent, sent or received. Each task has an " +
         "outcome: needs_approval (a person decides), in_progress (queued, picked up, or answered with done: false), done " +
-        "(a final answer) or failed (with a reason: not_allowed, expired or no_answer), plus the latest answer's summary. " +
+        "(a final answer, or a message that needed no reply and was picked up) or failed (with a reason: not_allowed, " +
+        "expired or no_answer), plus the latest answer's summary. " +
         "Open tasks by default.",
       inputSchema: {
         type: "object",
@@ -358,6 +367,7 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
         replyTo: arg("reply_to"),
         summary: arg("summary"),
         done: args.done,
+        noReplyNeeded: args.no_reply_needed,
         key: arg("key"),
         attachments: args.attachments,
       });
@@ -365,7 +375,8 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
       const content = json(views.sent(message, delivery, workspace, agent));
       if (note) content.push({ type: "text", text: note });
       // Not for a held message (a person decides within days) or an offline session: waiting would only cost turns.
-      if (!agents.isPush(agent) && (delivery === "pushed" || delivery === "queued")) content.push({ type: "text", text: WAIT_HINT });
+      // Nor for a message that needs no reply: the note already says none is expected.
+      if (!agents.isPush(agent) && !message.noReplyNeeded && (delivery === "pushed" || delivery === "queued")) content.push({ type: "text", text: WAIT_HINT });
       return content;
     }
     case "create_upload": {

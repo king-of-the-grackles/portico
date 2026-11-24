@@ -28,7 +28,7 @@ or is interrupted. Each run gets:
 - no Resend key, so no email is sent, and no bucket, so files live in the data folder;
 - an otherwise empty environment: none of the shell's `PORTICO_*`, `AWS_*` or platform variables reach the server.
 
-All 14 scenarios run locally and none is skipped. One check inside `06-files` is left out: with a bucket each
+All 15 scenarios run locally and none is skipped. One check inside `06-files` is left out: with a bucket each
 Portico's copy of a file has its own download address, and without one Portico serves every file at `/files/<id>`.
 The join limit and the loop guard below start from zero on every run, because the server is new each time, so local
 runs can follow each other straight away. `E2E_KEEP` does nothing here: the server the people lived on is gone.
@@ -171,6 +171,7 @@ Both matter against dev. A local run starts a new server, so it never meets a li
 | `tests/09-second-portico.spec.ts` | A share link works once; the maker is asked for each later agent; the record shows who came and went with no message text; a removed person is out. |
 | `tests/10-pause.spec.ts` | A paused Portico: sends refused, the undelivered message withdrawn, resume. |
 | `tests/11-mcp.spec.ts` | `/mcp` with an agent token: initialize, tools/list, `list_agents`, `send_message`. |
+| `tests/12-no-reply-needed.spec.ts` | A note sent with `no_reply_needed`: the frame tells the receiver not to answer, and Today shows the task done once the note is picked up. |
 
 ## Adding a scenario
 

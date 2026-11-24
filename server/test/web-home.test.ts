@@ -108,6 +108,7 @@ function message(o: Partial<MessageView> & { id: string; from: AgentView; to: Ag
     decision: null,
     decidedAt: null,
     decidedBy: null,
+    noReplyNeeded: false,
     ...o,
     from: ref(o.from),
     to: ref(o.to),
@@ -145,6 +146,7 @@ function task(o: Partial<TaskView> & { id: string; from: AgentView; to: AgentVie
     heldAt: null,
     pickedUpAt: at(10, 1),
     answer: null,
+    noReplyNeeded: false,
     heldMessageId: null,
     messageCount: 1,
     project: null,
@@ -659,6 +661,55 @@ describe("rendering rules", () => {
     expect(taskLine({ ...HELD_TASK, outcome: "failed", reason: "expired" })).toBe("Expired: no decision within 3 days.");
     expect(taskLine(DENIED)).toBe("Not allowed by Chris.");
     expect(taskLine({ ...REVIEW, answer: { ...REVIEW.answer!, summary: null } })).toBe("Review done");
+  });
+
+  test("a task whose first message needed no reply: the line, the Sent step, no duration, and the tag on that message", () => {
+    const steps = [
+      { kind: "asked" as const, at: at(18, 2), by: null, decision: null },
+      { kind: "picked_up" as const, at: at(18, 2), by: null, decision: null },
+    ];
+    const NOTE = task({ id: "t-note", from: grok, to: codex, subject: "FYI: deploy window moved to Thursday", outcome: "done", noReplyNeeded: true, startedAt: at(18, 2), endedAt: at(18, 2), pickedUpAt: at(18, 2), steps });
+    const QUEUED = task({ id: "t-queued", from: grok, to: codex, subject: "FYI: standup notes", noReplyNeeded: true, startedAt: at(18, 3), pickedUpAt: null, steps: [steps[0]!] });
+    expect(taskLine(NOTE)).toBe("No reply needed. Picked up at 6:02 PM.");
+    expect(taskLine(QUEUED)).toBe("No reply needed. Queued until Codex checks for messages.");
+    // An answer sent anyway is what the line shows, as on any task; so is an update.
+    expect(taskLine({ ...NOTE, answer: REVIEW.answer })).toBe("Two bugs found, both fixed");
+    expect(taskLine({ ...QUEUED, pickedUpAt: at(18, 4), answer: { id: "m-u", subject: "On it", summary: null, final: false, createdAt: at(18, 5) } })).toBe("Update from Codex: On it");
+    // Held, denied or expired: today's words.
+    expect(taskLine({ ...QUEUED, outcome: "needs_approval" })).toBe("New contact, waiting for approval.");
+    expect(taskLine({ ...QUEUED, outcome: "failed", reason: "expired" })).toBe("Expired before Codex checked for messages.");
+    // A plain task's lines stay as they were.
+    expect(taskLine({ ...QUEUED, noReplyNeeded: false })).toBe("Queued until Codex checks for messages.");
+    expect(taskLine({ ...NOTE, noReplyNeeded: false })).toBe("Answered.");
+
+    const messages = [message({ id: "m-note", from: grok, to: codex, subject: NOTE.subject, text: "Thursday 10:00.", createdAt: at(18, 2), noReplyNeeded: true })];
+    const plain = [
+      message({ id: "m1", from: grok, to: codex, subject: "Review request", text: "Please review the bots.", createdAt: at(9, 9) }),
+      message({ id: "m2", from: codex, to: grok, subject: "Review done", text: "Two bugs, both fixed.", createdAt: at(9, 17), noReplyNeeded: true }),
+    ];
+    const today: TodayData = { ...TODAY, counts: { ...TODAY.counts, inProgress: 1, done: 2 }, inProgress: [QUEUED], done: [NOTE, REVIEW] };
+    const html = render(state({ today, openTasks: { "t-note": { task: NOTE, messages }, "t-review": { task: REVIEW, messages: plain } } }));
+    const t = text(html);
+    inOrder(t, "In progress", "FYI: standup notes", "No reply needed. Queued until Codex checks for messages.", "Done today", "FYI: deploy window moved to Thursday", "No reply needed. Picked up at 6:02 PM.");
+    // Sent, not Asked, and no Answered step; the plain task keeps Asked.
+    expect(t).toContain("Sent 6:02 PM Picked up by Codex 6:02 PM Grok Bot No reply needed 6:02 PM");
+    expect(t).toContain("Asked 9:09 AM Picked up by Codex 9:09 AM Answered 9:17 AM");
+    // The When column: no duration for a task that ended at pickup.
+    expect(html).toContain('<span class="trow-when tnum">6:02 PM</span>');
+    expect(html).toContain('<span class="trow-when tnum">9:09 AM, 8 min</span>');
+    // The tag sits on each message that carried the flag, in an existing pill style, and on no other.
+    const tag = '<span class="pill pill-event tmsg-tag">No reply needed</span>';
+    expect(html.split(tag)).toHaveLength(3);
+    expect(html.indexOf(tag)).toBeGreaterThan(html.indexOf('data-key="tm-m-note"'));
+    expect(html.lastIndexOf(tag)).toBeGreaterThan(html.indexOf('data-key="tm-m2"'));
+    expect(html.slice(html.indexOf('data-key="tm-m1"'), html.indexOf('data-key="tm-m2"'))).not.toContain("No reply needed");
+  });
+
+  test("a held message that needs no reply says so on its card", () => {
+    const held = [{ ...HELD, noReplyNeeded: true }];
+    const flagged = text(render(state({ held, today: { ...TODAY, decisions: { ...TODAY.decisions, held } } })));
+    inOrder(flagged, "Grok Bot wants to ask Claude Code (portico): Deploy the People export to staging", "No reply needed.", "Show message");
+    expect(text(render(state()))).not.toContain("No reply needed");
   });
 
   test("a description change names who made it: the agent itself, or the person", () => {

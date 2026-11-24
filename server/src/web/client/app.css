@@ -303,6 +303,8 @@ button.trow-main:hover { background: #f5f7f3; }
 .tmsg { padding: 12px 16px; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--hairline); display: flex; flex-direction: column; gap: 4px; }
 .tmsg-head { display: flex; align-items: center; gap: 8px; font-size: 14px; line-height: 20px; }
 .tmsg-at { margin-left: auto; font-size: 12px; line-height: 16px; color: var(--muted); }
+.tmsg-tag { margin-left: auto; }
+.tmsg-tag + .tmsg-at { margin-left: 0; }
 .tmsg-subject { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .tmsg-text { margin: 0; max-width: 72ch; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-soft); }
 .more-row { display: flex; justify-content: center; }

@@ -351,6 +351,7 @@ ${joins ? "" : signedInAs(me, back)}`,
     const manager = facts ? `${facts.managedBy.name}${facts.managedBy.handle ? ` (${facts.managedBy.handle})` : ""}${facts.managedBy.id === me.id ? ", the person signed in here" : ""}` : "nobody on Portico any more";
     const files = personViews(core, me).message(message).files;
     const sheet = html`<p class="asks">${quote(from)} to ${quote(to)}</p>
+${message.noReplyNeeded ? html`<p class="quiet">No reply needed.</p>` : ""}
 <p class="quiet">Subject</p>
 <blockquote class="quoted">${defang(message.subject)}</blockquote>
 <p class="quiet">Message</p>

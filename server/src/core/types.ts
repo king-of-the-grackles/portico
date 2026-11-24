@@ -185,6 +185,8 @@ export interface Message {
   summary: string | null;
   /** False for a reply that says more is coming (done: false): the task stays in progress. */
   final: boolean;
+  /** The sender said no reply is needed (no_reply_needed). Only a final message can say so. */
+  noReplyNeeded: boolean;
   /** The sender's own key for the message: sending again with the same key returns this message. */
   sendKey: string | null;
   status: MessageStatus;
@@ -303,4 +305,22 @@ export interface PorticoConfig {
    * passwords and passkeys, with a setup link for the first account and invites for the rest (a self-hosted server).
    */
   descopeProjectId: string | null;
+}
+
+/**
+ * The messages table's `final` column holds two facts, so that the flag needed no new column: 0 is an update with more to come
+ * (done: false), 1 is a final message, and 2 is a final message whose sender said no reply is needed
+ * (no_reply_needed). A row written before the flag existed holds 0 or 1 and reads as not flagged. Any value but 0 is
+ * final, which is also how a Portico server from before the flag reads a 2. An update can't carry the flag.
+ */
+export const FINAL = { update: 0, final: 1, noReplyNeeded: 2 } as const;
+
+/** What a message's two facts are stored as in `final`. */
+export function finalValue(m: Pick<Message, "final" | "noReplyNeeded">): number {
+  return !m.final ? FINAL.update : m.noReplyNeeded ? FINAL.noReplyNeeded : FINAL.final;
+}
+
+/** The two facts a stored `final` holds. */
+export function finalFacts(stored: number): Pick<Message, "final" | "noReplyNeeded"> {
+  return { final: stored !== FINAL.update, noReplyNeeded: stored === FINAL.noReplyNeeded };
 }

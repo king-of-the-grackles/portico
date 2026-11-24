@@ -112,6 +112,8 @@ export interface MessageView {
   decision: Decision | null;
   decidedAt: string | null;
   decidedBy: PersonRef | null;
+  /** The sender said no reply is needed: the "No reply needed" tag. */
+  noReplyNeeded: boolean;
   files: FileView[];
 }
 
@@ -181,6 +183,8 @@ export interface TaskView extends Place {
   pickedUpAt: string | null;
   /** The latest answer: its subject, the one-line summary its sender wrote, and whether more is coming. */
   answer: { id: string; subject: string; summary: string | null; final: boolean; createdAt: string } | null;
+  /** The first message said no reply is needed: the task is done once that message is picked up. */
+  noReplyNeeded: boolean;
   heldMessageId: string | null;
   messageCount: number;
   /** A session's folder on either side, for the Project filter. */
@@ -348,6 +352,7 @@ export function personViews(deps: ViewDeps, me: Person) {
       decision: m.decision,
       decidedAt: m.decidedAt,
       decidedBy: m.decidedBy ? personRef(m.decidedBy) : null,
+      noReplyNeeded: m.noReplyNeeded,
       files: files.of(m).map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.size })),
     };
   };
@@ -455,6 +460,7 @@ export function personViews(deps: ViewDeps, me: Person) {
     heldAt: t.heldAt,
     pickedUpAt: t.pickedUpAt,
     answer: t.answer,
+    noReplyNeeded: t.noReplyNeeded,
     heldMessageId: t.heldMessageId,
     messageCount: t.messageCount,
     project: projectOf(t.toId) ?? projectOf(t.fromId),

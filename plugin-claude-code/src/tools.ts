@@ -80,6 +80,13 @@ export const TOOLS: Tool[] = [
             "Optional, on a reply. false says more is coming: the task stays in progress until a reply without done: " +
             "false. Leave out for a final answer.",
         },
+        no_reply_needed: {
+          type: "boolean",
+          description:
+            "Optional. true says this message needs no reply: Portico tells the receiver not to reply only to " +
+            "acknowledge, confirm or thank. On a message that starts a conversation, the task is done once the receiver " +
+            "picks the message up. Not with done: false.",
+        },
         key: str(
           "Optional. A key for this one message, such as job-42-ask. Sending the same message again with the same key " +
             "sends nothing new and returns the first message, so a retry is safe. Every other message, updates and " +
@@ -145,7 +152,8 @@ export const TOOLS: Tool[] = [
     description:
       "List this agent's tasks, newest first: each conversation with another agent, sent or received. Each task has an " +
       "outcome: needs_approval (a person decides), in_progress (queued, picked up, or answered with done: false), done " +
-      "(a final answer) or failed (with a reason: not_allowed, expired or no_answer), plus the latest answer's summary. " +
+      "(a final answer, or a message that needed no reply and was picked up) or failed (with a reason: not_allowed, " +
+      "expired or no_answer), plus the latest answer's summary. " +
       "Open tasks by default.",
     inputSchema: {
       type: "object",
@@ -287,8 +295,8 @@ export async function runTool(
         const replyTo = optional(args, "reply_to");
         const summary = optional(args, "summary");
         const key = optional(args, "key");
-        // Missing fields go as empty strings, so Portico answers with its own plain error. done goes as given, so
-        // Portico checks the value.
+        // Missing fields go as empty strings, so Portico answers with its own plain error. done and no_reply_needed go
+        // as given, so Portico checks the values.
         const { message, delivery, portico, note } = await client.sendMessage({
           subject: optional(args, "subject") ?? "",
           text: optional(args, "text") ?? "",
@@ -296,13 +304,15 @@ export async function runTool(
           ...(replyTo !== undefined ? { reply_to: replyTo } : {}),
           ...(summary !== undefined ? { summary } : {}),
           ...(args.done !== undefined && args.done !== null ? { done: args.done } : {}),
+          ...(args.no_reply_needed !== undefined && args.no_reply_needed !== null ? { no_reply_needed: args.no_reply_needed } : {}),
           ...(key !== undefined ? { key } : {}),
           ...(args.attachments !== undefined && args.attachments !== null ? { attachments: args.attachments } : {}),
         });
         const result = json({ message, delivery, ...(portico ? { portico } : {}) });
         // Portico's note, as its own line, as on Portico's /mcp: a held message, or a subject or summary trimmed to fit.
         if (note) result.content.push({ type: "text", text: note });
-        if (opts.replyHint && (delivery === "pushed" || delivery === "queued")) result.content.push({ type: "text", text: opts.replyHint });
+        // No word on how the reply will come for a message that needs none: Portico's note says none is expected.
+        if (opts.replyHint && message.no_reply_needed !== true && (delivery === "pushed" || delivery === "queued")) result.content.push({ type: "text", text: opts.replyHint });
         return result;
       }
       case "create_upload": {
