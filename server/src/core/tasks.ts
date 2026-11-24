@@ -1,5 +1,6 @@
 import type { Content, ContentDb, Scope } from "./content";
 import { HOUR_MS, LIMITS } from "./limits";
+import { finalFacts } from "./types";
 import type { Decision, HeldFor, Message, MessageStatus } from "./types";
 
 /**
@@ -53,6 +54,11 @@ export interface Task {
   pickedUpAt: string | null;
   /** The latest answer from the agent that was asked. Not final when that agent said more is coming. */
   answer: { id: string; subject: string; summary: string | null; final: boolean; createdAt: string } | null;
+  /**
+   * The first message said no reply is needed: the task is done once that message is picked up, unless the agent
+   * asked answers anyway. A flag on a later message changes nothing here.
+   */
+  noReplyNeeded: boolean;
   /** A held message in the task, for the decision buttons. */
   heldMessageId: string | null;
   /**
@@ -101,12 +107,17 @@ function latest(...times: (string | null)[]): string {
  *
  * Done means the agent asked gave a final answer: its latest answer that went through (not held, declined or expired)
  * isn't an update with more to come. The task ended with the first of the final answers after the last update.
+ *
+ * Done also means a first message that said no reply is needed was picked up, with no answer from the agent asked:
+ * the task ended at pickup, and no wait for an answer ever starts. An answer sent anyway counts as on any other task.
  */
 export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
   const root = chain.find((m) => m.id === rootId) ?? chain[0]!;
   const answers = chain.filter((m) => m.fromId === root.toId && (m.status === "pending" || m.status === "delivered"));
   const lastAnswer = answers.at(-1) ?? null;
   const held = chain.find((m) => m.status === "held") ?? null;
+  // Only the conversation's own first message: once that one is pruned, the oldest reply left closes nothing.
+  const noReplyNeeded = root.id === rootId && root.noReplyNeeded;
 
   let outcome: TaskOutcome;
   let reason: TaskReason | null = null;
@@ -130,7 +141,10 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
     reason = "withdrawn";
     endedAt = root.withdrawnAt ?? root.createdAt;
   } else if (root.status === "pending") outcome = "in_progress";
-  else {
+  else if (noReplyNeeded && lastAnswer === null) {
+    outcome = "done";
+    endedAt = root.deliveredAt ?? root.createdAt;
+  } else {
     // Picked up: the clock runs from pickup, and starts again with each update.
     const givenUp = Date.parse(latest(root.deliveredAt ?? root.createdAt, lastAnswer?.createdAt ?? null)) + NO_ANSWER_AFTER_MS;
     if (givenUp <= now.getTime()) {
@@ -152,7 +166,7 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
   if (root.deliveredAt) steps.push({ kind: "picked_up", at: root.deliveredAt, personId: null, decision: null });
   if (root.status === "expired") steps.push({ kind: "expired", at: root.expiresAt, personId: null, decision: null });
   if (root.status === "withdrawn") steps.push({ kind: "withdrawn", at: root.withdrawnAt ?? root.createdAt, personId: null, decision: null });
-  if (outcome === "done") steps.push({ kind: "answered", at: endedAt!, personId: null, decision: null });
+  if (outcome === "done" && lastAnswer) steps.push({ kind: "answered", at: endedAt!, personId: null, decision: null });
 
   return {
     id: rootId,
@@ -176,6 +190,7 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
           createdAt: lastAnswer.createdAt,
         }
       : null,
+    noReplyNeeded,
     heldMessageId: held?.id ?? null,
     outboundHeld: neverSent(root),
     messageCount: chain.length,
@@ -220,7 +235,8 @@ function toTaskMessage(row: TaskRow, workspaceId: string): TaskMessage {
     replyTo: row.reply_to,
     rootId: row.root_id,
     summary: row.summary,
-    final: row.final !== 0,
+    // The `final` column holds two facts: see FINAL in types.ts.
+    ...finalFacts(row.final),
     status: row.status as MessageStatus,
     heldAt: row.held_at,
     heldFor: row.held_for as HeldFor | null,

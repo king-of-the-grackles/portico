@@ -137,6 +137,10 @@ export interface AgentMessage {
   text: string;
   status: string;
   reply_to: string | null;
+  /** The sender needs no reply. */
+  no_reply_needed: boolean;
+  /** From the inbox: the message inside Portico's frame. */
+  framed_message?: string;
   portico: { id: string; name: string };
   attachments: { id: string; name: string; type: string; size: number; url: string }[];
 }
@@ -147,6 +151,7 @@ export interface SendInput {
   text: string;
   reply_to?: string;
   done?: boolean;
+  no_reply_needed?: boolean;
   attachments?: string[];
 }
 

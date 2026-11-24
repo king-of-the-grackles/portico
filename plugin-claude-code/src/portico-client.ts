@@ -50,6 +50,8 @@ export interface MessageView {
   subject: string;
   text: string;
   reply_to: string | null;
+  /** The sender needs no reply. Absent from a Portico server older than the flag. */
+  no_reply_needed?: boolean;
   status: MessageStatus;
   created_at: string;
   expires_at: string;
@@ -100,6 +102,8 @@ export interface AgentTask {
   ended_at: string | null;
   picked_up_at: string | null;
   answer: { message_id: string; subject: string; summary: string | null; done: boolean; at: string } | null;
+  /** The first message said no reply is needed: the task is done once that message is picked up. */
+  no_reply_needed?: boolean;
   messages: number;
 }
 
@@ -112,6 +116,7 @@ export interface AgentTaskMessage {
   status: MessageStatus;
   created_at: string;
   done: boolean;
+  no_reply_needed?: boolean;
   /** Absent when withheld. */
   subject?: string;
   text?: string;
@@ -208,6 +213,8 @@ export class PorticoClient {
     summary?: string;
     /** false for an update with more to come. Sent as given: Portico checks the value. */
     done?: unknown;
+    /** true for a message that needs no reply. Sent as given: Portico checks the value. */
+    no_reply_needed?: unknown;
     key?: string;
     /** File IDs. Sent as given: Portico checks the value. */
     attachments?: unknown;

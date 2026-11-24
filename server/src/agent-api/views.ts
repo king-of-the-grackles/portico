@@ -61,6 +61,8 @@ export interface MessageOutView {
   subject: string;
   text: string;
   reply_to: string | null;
+  /** The sender needs no reply: don't answer only to acknowledge. */
+  no_reply_needed: boolean;
   status: MessageStatus;
   created_at: string;
   expires_at: string;
@@ -151,6 +153,7 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
     subject: m.subject,
     text: m.text,
     reply_to: m.replyTo,
+    no_reply_needed: m.noReplyNeeded,
     status: m.status,
     created_at: m.createdAt,
     expires_at: m.expiresAt,
@@ -166,6 +169,7 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
       text: m.text,
       replyTo: m.replyTo,
       final: m.final,
+      noReplyNeeded: m.noReplyNeeded,
       files: view.attachments,
       origin: { owner: view.from_owner, ownPerson: view.from_own_person, portico: porticoOf(m.workspaceId)?.phrase ?? "a Portico that is gone now" },
     });

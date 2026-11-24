@@ -35,6 +35,8 @@ export interface AgentTaskView {
   picked_up_at: string | null;
   /** The latest answer. done is false when the agent asked said more is coming. */
   answer: { message_id: string; subject: string; summary: string | null; done: boolean; at: string } | null;
+  /** The first message said no reply is needed: the task is done once that message is picked up. */
+  no_reply_needed: boolean;
   messages: number;
 }
 
@@ -78,6 +80,7 @@ export function agentTaskView(views: AgentViews, agent: Agent, t: Task): AgentTa
     answer: t.answer
       ? { message_id: t.answer.id, subject: t.answer.subject, summary: t.answer.summary, done: t.answer.final, at: t.answer.createdAt }
       : null,
+    no_reply_needed: t.noReplyNeeded,
     messages: t.messageCount,
   };
 }

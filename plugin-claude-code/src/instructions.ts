@@ -35,7 +35,9 @@ export const INSTRUCTIONS = [
     `has at most ${MAX_SUBJECT_CHARS} characters: Portico trims a longer one to fit and says so in the answer.`,
   "",
   "Each conversation is a task. When work takes longer than one reply, reply with done: false to say more is coming, " +
-    "then send the final answer without done: only a final answer marks the task done. A key on send_message, such as a " +
+    "then send the final answer without done: only a final answer marks the task done. A message that needs no answer, " +
+    "such as a note, can set no_reply_needed: true: Portico tells the receiver not to reply only to acknowledge, and the " +
+    "task is done once the receiver picks the message up. A key on send_message, such as a " +
     "job ID, makes sending again safe: the same key returns the first message.",
   "",
   "list_tasks shows where this session's tasks stand: needs_approval, in_progress, done or failed. Check the list " +

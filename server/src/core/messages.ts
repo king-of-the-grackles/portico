@@ -9,6 +9,7 @@ import type { InboxWaits } from "./inbox-waits";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
 import { letThrough } from "./tasks";
 import type { Workspaces } from "./workspaces";
+import { finalFacts, finalValue } from "./types";
 import type { Agent, Decision, DeliveryTier, HeldFor, Message, MessageStatus, Notice, Thread, Workspace } from "./types";
 
 interface MessageRow {
@@ -58,7 +59,8 @@ function toMessage(row: MessageRow, workspaceId: string): Message {
     replyTo: row.reply_to,
     rootId: row.root_id,
     summary: row.summary,
-    final: row.final !== 0,
+    // The `final` column holds two facts: see FINAL in types.ts.
+    ...finalFacts(row.final),
     sendKey: row.send_key,
     status: row.status as MessageStatus,
     heldAt: row.held_at,
@@ -253,7 +255,8 @@ export class Messages {
    * - approval: the receiver requires approval and doesn't always allow the sender.
    * The last two never hold a reply in a conversation the receiver itself wrote in during the last 24 hours, and two
    * agents of one person are never held by the first two. Every message obeys the size limit, the hourly limit and
-   * the loop guard. A reply with done: false says more is coming. A message with a key the
+   * the loop guard. A reply with done: false says more is coming. A message with no_reply_needed tells the receiver not
+   * to answer only to acknowledge: a reply is still accepted. A message with a key the
    * sender used before isn't sent again: the first one comes back. Attachments are file IDs: finished uploads of the
    * sender's own, or files the sender received.
    *
@@ -272,6 +275,7 @@ export class Messages {
       replyTo?: unknown;
       summary?: unknown;
       done?: unknown;
+      noReplyNeeded?: unknown;
       key?: unknown;
       attachments?: unknown;
     },
@@ -286,6 +290,13 @@ export class Messages {
       throw new PorticoError("bad_request", "done must be true or false.");
     }
     const final = input.done !== false;
+    if (input.noReplyNeeded !== undefined && input.noReplyNeeded !== null && typeof input.noReplyNeeded !== "boolean") {
+      throw new PorticoError("bad_request", "no_reply_needed must be true or false.");
+    }
+    const noReplyNeeded = input.noReplyNeeded === true;
+    if (noReplyNeeded && !final) {
+      throw new PorticoError("bad_request", "no_reply_needed can't go with done: false, which says more is coming. Leave one of the two out.");
+    }
     if (sendKey !== null) {
       const first = this.sentWithKey(caller.id, sendKey);
       if (first) {
@@ -308,6 +319,7 @@ export class Messages {
           first.subject !== subject ||
           first.text !== text ||
           first.final !== final ||
+          first.noReplyNeeded !== noReplyNeeded ||
           !sameReply ||
           first.toId !== to ||
           !sameFiles
@@ -322,7 +334,11 @@ export class Messages {
         return {
           message: first,
           delivery: first.status === "held" || !receiver ? "held" : this.agents.tier(receiver),
-          note: [...notes, "Already sent with this key, so nothing new was sent. This is the first message."].join(" "),
+          note: [
+            ...notes,
+            "Already sent with this key, so nothing new was sent. This is the first message.",
+            ...(receiver && first.noReplyNeeded && first.status !== "held" ? [noReplyNote(first, this.agents.nameFor(receiver, caller.ownerId))] : []),
+          ].join(" "),
           workspace: this.workspaces.known(first.workspaceId),
         };
       }
@@ -416,6 +432,7 @@ export class Messages {
         rootId: rootId ?? id,
         summary,
         final,
+        noReplyNeeded,
         sendKey,
         status: held ? "held" : "pending",
         heldAt: held ? at : null,
@@ -449,6 +466,7 @@ export class Messages {
       );
     }
     if (delivery === "held") notes.push(this.heldNote(message, caller, receiver, name));
+    else if (noReplyNeeded) notes.push(noReplyNote(message, name));
     return { message, delivery, note: notes.length > 0 ? notes.join(" ") : null, workspace };
   }
 
@@ -1079,13 +1097,14 @@ export class Messages {
   }
 
   private insert(db: Database, m: Message): void {
-    const { workspaceId: _workspace, ...row } = m;
+    const { workspaceId: _workspace, noReplyNeeded: _flag, ...row } = m;
+    // The `final` column holds two facts, final and no reply needed: see FINAL in types.ts.
     db.query(
       `INSERT INTO messages (id, thread_id, from_id, to_id, subject, text, reply_to, root_id, summary, final, send_key,
          status, held_at, held_for, decision, decided_by, decided_at, created_at, expires_at, delivered_at, withdrawn_at, sender_notified_at)
        VALUES ($id, $threadId, $fromId, $toId, $subject, $text, $replyTo, $rootId, $summary, $final, $sendKey,
          $status, $heldAt, $heldFor, $decision, $decidedBy, $decidedAt, $createdAt, $expiresAt, $deliveredAt, $withdrawnAt, $senderNotifiedAt)`,
-    ).run({ ...row, final: m.final ? 1 : 0 });
+    ).run({ ...row, final: finalValue(m) });
   }
 
   private pendingFor(content: ContentDb, agentId: string, now: string, limit: number): Message[] {
@@ -1128,6 +1147,14 @@ export class Messages {
   private iso(offsetMs = 0): string {
     return new Date(this.now().getTime() + offsetMs).toISOString();
   }
+}
+
+/**
+ * What the sender of a message that needs no reply hears, in place of how to wait for one. Only a first message closes
+ * its task at pickup: a reply's task follows the answers.
+ */
+function noReplyNote(m: Pick<Message, "id" | "rootId">, receiver: string): string {
+  return m.rootId === m.id ? `No reply is expected. The task shows as done once \`${receiver}\` picks the message up.` : "No reply is expected.";
 }
 
 /** When a message was sent: what an inbox is ordered by. */
