@@ -20,23 +20,17 @@ const PAGE = `<!doctype html>
   --teal: #1f6f5c; --teal-dark: #185a4a; --accent: #1f6f5c; --teal-wash: #eef4f1;
   --ink: #102b25; --ink-soft: #2f4640; --muted: #4e625c; --line: #c9d1c7;
   --card: #f7f8f5; --surface: #ffffff;
-  --ochre: #8a4f0e; --ochre-wash: #fbf1df; --danger: #9a2e22; --danger-wash: #f8ecea;
-  --quiet: #4f4a45; --quiet-wash: #ecebe8;
 }
 :root[data-theme="dark"] {
   --teal: #247a65; --teal-dark: #1e6b58; --accent: #7fd1b9; --teal-wash: #1d332d;
   --ink: #e8efe9; --ink-soft: #c5d1cb; --muted: #9fb0a9; --line: #34443f;
   --card: #16211e; --surface: #0f1917;
-  --ochre: #f0c078; --ochre-wash: #3a2c14; --danger: #f1a79d; --danger-wash: #3d1f1b;
-  --quiet: #c5ccc8; --quiet-wash: #2a2f2d;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --teal: #247a65; --teal-dark: #1e6b58; --accent: #7fd1b9; --teal-wash: #1d332d;
     --ink: #e8efe9; --ink-soft: #c5d1cb; --muted: #9fb0a9; --line: #34443f;
     --card: #16211e; --surface: #0f1917;
-    --ochre: #f0c078; --ochre-wash: #3a2c14; --danger: #f1a79d; --danger-wash: #3d1f1b;
-    --quiet: #c5ccc8; --quiet-wash: #2a2f2d;
     }
 }
 * { box-sizing: border-box; }
@@ -45,52 +39,35 @@ html, body { margin: 0; background: transparent; }
 body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); font-size: 14px; line-height: 20px; }
 [hidden] { display: none !important; }
 .card { max-width: 480px; padding: 16px; border-radius: 16px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); display: flex; flex-direction: column; gap: 12px; }
-.head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
-.pill { margin-left: auto; padding: 2px 10px; border-radius: 999px; font-size: 12px; line-height: 18px; font-weight: 700; white-space: nowrap; background: var(--quiet-wash); color: var(--quiet); }
-.pill[data-tone="ok"] { background: var(--teal-wash); color: var(--accent); }
-.pill[data-tone="wait"] { background: var(--ochre-wash); color: var(--ochre); }
-.pill[data-tone="no"] { background: var(--danger-wash); color: var(--danger); }
 h1 { margin: 0; font-size: 18px; line-height: 24px; font-weight: 700; letter-spacing: -0.01em; text-wrap: balance; overflow-wrap: anywhere; }
 p { margin: 0; color: var(--ink-soft); overflow-wrap: anywhere; text-wrap: pretty; }
-#lines { display: flex; flex-direction: column; gap: 8px; }
 .quoted { padding: 8px 12px; border-left: 3px solid var(--line); border-radius: 0 8px 8px 0; background: var(--surface); color: var(--ink); white-space: pre-wrap; }
-ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
-li { display: flex; align-items: flex-start; gap: 8px; color: var(--ink); overflow-wrap: anywhere; }
-li::before { flex: none; width: 16px; height: 16px; margin-top: 2px; border-radius: 50%; font-size: 11px; line-height: 16px; font-weight: 700; text-align: center; }
-li[data-tone="ok"]::before { content: "\\2713"; background: var(--teal-wash); color: var(--accent); }
-li[data-tone="warn"]::before { content: "!"; background: var(--ochre-wash); color: var(--ochre); }
-.actions { display: flex; margin-top: 4px; }
+.actions { display: flex; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; max-width: 100%; min-height: 44px; padding: 8px 16px; border-radius: 8px; font: inherit; font-size: 15px; line-height: 24px; font-weight: 600; cursor: pointer; white-space: nowrap; border: 1px solid var(--teal); background: var(--surface); color: var(--accent); }
 .btn:hover { background: var(--teal-wash); }
 .btn[data-primary="true"] { background: var(--teal); color: #ffffff; }
 .btn[data-primary="true"]:hover { background: var(--teal-dark); }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn svg { width: 14px; height: 14px; flex: none; }
-.help { font-size: 12px; line-height: 16px; color: var(--muted); }
-/* Under the button, one quiet block: what a press does, then the address, close together. */
-.addr { margin-top: -8px; font-size: 12px; line-height: 16px; color: var(--muted); user-select: all; -webkit-user-select: all; }
+/* The one quiet line a card may have. */
+.note { font-size: 13px; line-height: 18px; color: var(--muted); }
 @media (prefers-reduced-motion: no-preference) { .btn { transition: background-color 200ms ease; } }
 </style>
 </head>
 <body>
 <main class="card" id="card" hidden>
-  <div class="head"><span>Portico</span><span class="pill" id="pill"></span></div>
   <h1 id="title"></h1>
   <p class="quoted" id="quote" hidden></p>
-  <div id="lines"></div>
-  <ul id="facts" hidden></ul>
   <div class="actions" id="actions" hidden>
     <button type="button" class="btn" id="open"><span id="open-label"></span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3H3v10h10v-3"/><path d="M9 3h4v4"/><path d="M13 3L7 9"/></svg></button>
   </div>
-  <p class="help" id="help" hidden></p>
-  <p class="addr" id="addr" hidden></p>
+  <p class="note" id="note" hidden></p>
 </main>
 <script>
 (function () {
   "use strict";
   // Portico's public URL, written by the server. The button opens nothing anywhere else.
   var ORIGIN = __PORTICO_ORIGIN__;
-  var TONES = { ok: true, wait: true, no: true, quiet: true };
   var el = function (id) { return document.getElementById(id); };
   var text = function (value, max) { return typeof value === "string" ? value.slice(0, max) : ""; };
   var nextId = 1;
@@ -135,11 +112,6 @@ li[data-tone="warn"]::before { content: "!"; background: var(--ochre-wash); colo
       return null;
     }
   }
-  function paragraph(parent, value) {
-    var p = document.createElement("p");
-    p.textContent = value;
-    parent.appendChild(p);
-  }
   function localTime(at) {
     var date = new Date(at);
     if (isNaN(date.getTime())) return at;
@@ -150,58 +122,40 @@ li[data-tone="warn"]::before { content: "!"; background: var(--ochre-wash); colo
     }
   }
 
-  /** Draws the card from a tool result. Every string is set as text. A result with no card data shows its own text. */
+  /**
+   * Draws the card from a tool result: one header line, a message's subject, the one button, and at most one quiet
+   * line. Every string is set as text. A result with no card data (a refusal) shows its own text as the header.
+   */
   function show(result) {
     if (!result || typeof result !== "object") return;
-    var card = result.structuredContent;
-    if (!card || typeof card !== "object" || typeof card.title !== "string") {
+    var card = result.structuredContent && typeof result.structuredContent === "object" ? result.structuredContent : null;
+    var display = card && card.display && typeof card.display === "object" ? card.display : {};
+    var header = text(display.header, 300) || (card ? text(card.title, 300) : "");
+    if (header === "") {
       var first = Array.isArray(result.content) ? result.content[0] : null;
-      var plain = first && typeof first.text === "string" ? first.text : "";
-      if (plain === "") return;
-      card = { title: "Portico", pill: null, lines: plain.split("\\n").slice(0, 8) };
+      header = first ? text(first.text, 300) : "";
+      card = null;
+      display = {};
     }
-    var pill = card.pill && typeof card.pill === "object" ? card.pill : null;
-    el("pill").textContent = pill ? text(pill.text, 40) : "";
-    el("pill").hidden = !pill || text(pill.text, 40) === "";
-    el("pill").setAttribute("data-tone", pill && TONES[pill.tone] === true ? pill.tone : "quiet");
-    el("title").textContent = text(card.title, 300);
+    if (header === "") return;
+    el("title").textContent = header;
 
-    var quote = text(card.quote, 400);
-    el("quote").textContent = quote;
-    el("quote").hidden = quote === "";
+    var subject = text(display.subject, 400);
+    el("quote").textContent = subject;
+    el("quote").hidden = subject === "";
 
-    var lines = el("lines");
-    lines.textContent = "";
-    (Array.isArray(card.lines) ? card.lines : []).slice(0, 8).forEach(function (line) {
-      if (text(line, 600) !== "") paragraph(lines, text(line, 600));
-    });
-    if (card.ends && typeof card.ends === "object" && text(card.ends.label, 80) !== "" && text(card.ends.at, 40) !== "") {
-      paragraph(lines, text(card.ends.label, 80) + " " + localTime(text(card.ends.at, 40)) + ".");
-    }
-
-    var facts = el("facts");
-    facts.textContent = "";
-    (Array.isArray(card.facts) ? card.facts : []).slice(0, 6).forEach(function (fact) {
-      if (!fact || typeof fact !== "object" || text(fact.text, 300) === "") return;
-      var li = document.createElement("li");
-      li.setAttribute("data-tone", fact.tone === "ok" ? "ok" : "warn");
-      var span = document.createElement("span");
-      span.textContent = text(fact.text, 300);
-      li.appendChild(span);
-      facts.appendChild(li);
-    });
-    facts.hidden = facts.children.length === 0;
-
-    linkUrl = safeLink(card.link);
+    linkUrl = safeLink(card ? card.link : null);
     el("actions").hidden = linkUrl === null;
-    el("help").hidden = linkUrl === null || text(card.link.help, 300) === "";
-    el("addr").hidden = linkUrl === null;
     if (linkUrl !== null) {
       el("open-label").textContent = text(card.link.label, 40) || "Open Portico";
       el("open").setAttribute("data-primary", card.link.primary === true ? "true" : "false");
-      el("help").textContent = text(card.link.help, 300);
-      el("addr").textContent = linkUrl;
     }
+
+    var note = text(display.note, 200);
+    if (note !== "" && text(display.noteAt, 40) !== "") note = note + " " + localTime(text(display.noteAt, 40)) + ".";
+    el("note").textContent = note;
+    el("note").hidden = note === "";
+
     el("card").hidden = false;
     reportSize();
   }

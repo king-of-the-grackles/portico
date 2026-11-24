@@ -124,14 +124,15 @@ test("the card's page, drawn as a host draws it: text only, no request of its ow
     const card = page.frameLocator("iframe");
 
     await draw(result);
-    await expect(card.getByRole("heading", { level: 1 })).toHaveText("Message to helper is held");
-    await expect(card.locator("#pill")).toHaveText("Held");
+    await expect(card.getByRole("heading", { level: 1 })).toHaveText("Your message to helper is held");
     // The subject is shown as the text it is: no element came of it, and nothing in it ran.
     await expect(card.locator("#quote")).toHaveText(subject);
     await expect(card.locator("img")).toHaveCount(0);
     expect(await card.locator("html").getAttribute("data-theme")).toBe("dark");
     const link = `${BASE_URL}/held/${held}`;
-    await expect(card.locator("#addr")).toHaveText(link);
+    // All the card holds: the header, the subject, one button and one quiet line.
+    await expect(card.locator("#card > *:visible")).toHaveCount(4);
+    await expect(card.locator("button, a, input, [tabindex]")).toHaveCount(1);
     await card.getByRole("button", { name: "Review on Portico" }).click();
     await expect.poll(async () => (await seen()).filter((m) => m.method === "ui/open-link").map((m) => m.params)).toEqual([{ url: link }]);
 
@@ -142,15 +143,15 @@ test("the card's page, drawn as a host draws it: text only, no request of its ow
 
     // A card whose data points anywhere but Portico shows no button, and markup in any field stays text.
     for (const url of ["https://portico.example.net/held/1", "javascript:alert(1)", `${BASE_URL}.evil.example/`, "//evil.example/"]) {
-      await draw({ content: [{ type: "text", text: "x" }], structuredContent: { ...result.structuredContent, title: "<b>Bold</b><script>document.title='hit'</script>", lines: ["<a href='https://evil.example'>here</a>"], link: { label: "Go", url, primary: true, help: "x" } } });
+      await draw({ content: [{ type: "text", text: "x" }], structuredContent: { ...result.structuredContent, display: { header: "<b>Bold</b><script>document.title='hit'</script>", subject: "<i>s</i>", note: "<a href='https://evil.example'>here</a>" }, link: { label: "Go", url, primary: true, help: "x" } } });
       await expect(card.getByRole("heading", { level: 1 })).toHaveText("<b>Bold</b><script>document.title='hit'</script>");
       await expect(card.getByRole("button")).toHaveCount(0);
-      await expect(card.locator("a, b, #lines script")).toHaveCount(0);
-      await expect(card.locator("#addr")).toBeHidden();
+      await expect(card.locator("#note")).toHaveText("<a href='https://evil.example'>here</a>");
+      await expect(card.locator("a, b, i, #card script")).toHaveCount(0);
     }
     // An answer with no card data (a refusal) shows its own text.
     await draw({ content: [{ type: "text", text: "not_found: No such message." }], isError: true });
-    await expect(card.locator("#lines")).toHaveText("not_found: No such message.");
+    await expect(card.getByRole("heading", { level: 1 })).toHaveText("not_found: No such message.");
     await expect(card.getByRole("button")).toHaveCount(0);
 
     expect(await page.title()).toBe("host");

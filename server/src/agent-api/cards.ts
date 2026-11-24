@@ -45,6 +45,13 @@ export interface StatusCard {
   ends?: { label: string; at: string };
   /** The one button. Always on Portico's public URL, and only when this agent's own person is the one to open the page. */
   link?: { label: string; url: string; primary: boolean; help: string };
+  /**
+   * What the card itself draws, and all of it: one header line, a message's subject, and at most one quiet line (with
+   * `noteAt`, a time the page writes after the line in the reader's own time zone). The person looking at a card is
+   * the agent's own person, so these say "you" where the fields above name that person: those are read by the agent,
+   * which is not "you".
+   */
+  display: { header: string; subject?: string; note?: string; noteAt?: string };
 }
 
 export interface CardDeps {
@@ -101,9 +108,21 @@ function joinedCard(deps: CardDeps, agent: Agent): StatusCard {
       ? { text: `Nothing waits for a decision by ${me}`, tone: "ok" }
       : { text: `${held === 1 ? "1 message waits" : `${held} messages wait`} for a decision by ${me}`, tone: "warn" },
   );
+  const waits = held === 1 ? "1 message waits" : `${held} messages wait`;
+  // What the person can act on comes first: decisions that wait. Otherwise the one thing not working yet, if any.
+  const display: StatusCard["display"] =
+    held > 0
+      ? { header: `${waits} for your decision` }
+      : {
+          header: `${name} is on Portico`,
+          ...(wake && !wake.on
+            ? { note: wake.how === "schedule" && wake.schedule_minutes !== null ? `Checks for new messages every ${wake.schedule_minutes} minutes.` : "Not getting new messages automatically yet." }
+            : {}),
+        };
   return {
     state: "joined",
     status: "joined",
+    display,
     pill: { text: "Joined", tone: "ok" },
     title: `${name} is on Portico`,
     lines: [`Joined as ${name}, managed by ${me}. Agents that share a Portico with ${name} can message this agent.`],
@@ -125,15 +144,24 @@ function messageCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
   const open = m.status === "held" || m.status === "pending";
   const status = open && m.expiresAt <= deps.now().toISOString() ? "expired" : m.status;
   const by = named(deps, m.decidedBy, "A person");
+  const shown = (header: string, note: { note?: string; noteAt?: string } = {}): StatusCard["display"] => ({ header: `Your message to ${to} ${header}`, subject: m.subject, ...note });
   switch (status) {
     case "held": {
       // The sender's own person for an outbound hold, otherwise the receiver's. Null once that agent is gone.
       const deciderId = deps.agents.get(m.heldFor === "outbound" ? m.fromId : m.toId)?.ownerId ?? null;
       const own = deciderId === agent.ownerId;
       const decider = own ? me : named(deps, deciderId, "that agent's person");
+      // One quiet line: why, when the reason is a surprise (a new agent), otherwise who decides and by when.
+      const newAgent = m.heldFor === "new_agent" || (m.heldFor === "outbound" && !agent.outboundHold);
+      const note = own
+        ? newAgent
+          ? { note: "New agent, not confirmed yet." }
+          : { note: "Waits for your decision until", noteAt: m.expiresAt }
+        : { note: `Waits for ${decider} to decide until`, noteAt: m.expiresAt };
       return {
         ...base,
         status,
+        display: shown("is held", note),
         pill: { text: "Held", tone: "wait" },
         title: `Message to ${to} is held`,
         lines: [
@@ -150,6 +178,7 @@ function messageCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
       return {
         ...base,
         status,
+        display: shown("is on the way"),
         pill: m.heldAt === null ? { text: "Sent", tone: "quiet" } : { text: "Allowed", tone: "ok" },
         title: `Message to ${to} is on the way`,
         lines: [`${m.heldAt === null ? "" : `${by} allowed the message. `}${to} hasn't picked the message up yet.`],
@@ -158,6 +187,7 @@ function messageCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
       return {
         ...base,
         status,
+        display: shown("was delivered"),
         pill: m.heldAt === null ? { text: "Delivered", tone: "ok" } : { text: "Allowed", tone: "ok" },
         title: `Message to ${to} was delivered`,
         lines: [m.heldAt === null ? `${to} has the message now.` : `${by} allowed the message, and ${to} has the message now.`],
@@ -166,6 +196,7 @@ function messageCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
       return {
         ...base,
         status,
+        display: shown("was not allowed", { note: `${m.decidedBy === agent.ownerId ? "You" : by} chose Don't allow.` }),
         pill: { text: "Not allowed", tone: "no" },
         title: `Message to ${to} was not delivered`,
         lines: [`${by} chose Don't allow on Portico. Nothing was delivered.`],
@@ -174,6 +205,7 @@ function messageCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
       return {
         ...base,
         status,
+        display: shown("expired", m.heldAt !== null && m.decision === null ? { note: "Nobody decided in time." } : {}),
         pill: { text: "Expired", tone: "quiet" },
         title: `Message to ${to} expired`,
         lines: [m.heldAt !== null && m.decision === null ? "Nobody decided in time. Nothing was delivered." : `${to} didn't pick the message up in time.`],
@@ -182,6 +214,7 @@ function messageCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
       return {
         ...base,
         status,
+        display: shown("was withdrawn"),
         pill: { text: "Withdrawn", tone: "quiet" },
         title: `Message to ${to} was withdrawn`,
         lines: ["The Portico the message went through was paused, or one of the two agents left. The message was not delivered."],
@@ -215,12 +248,14 @@ function requestCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
   const place = request.workspaceId ? deps.workspaces.known(request.workspaceId) : null;
   const owner = named(deps, place?.ownerId ?? null, "the Portico's owner");
   const by = named(deps, request.decidedBy, "A person");
+  const ask = requestAsk(deps, agent, request);
   switch (status) {
     case "pending":
       if (forOwner) {
         return {
           ...base,
           status,
+          display: { header: cap(ask), note: `Waits for ${owner} to allow until`, noteAt: request.expiresAt },
           pill: { text: "Waiting", tone: "wait" },
           title: `${cap(what)} waits for ${owner}`,
           lines: [`${owner} asked to allow each agent ${me} adds there, and decides on Portico. Only ${owner} can open that page. Nothing has changed yet.`],
@@ -230,6 +265,7 @@ function requestCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
       return {
         ...base,
         status,
+        display: { header: `${cap(ask)}?`, note: `Asked by ${deps.views.nameOf(agent.id, agent)}. Runs out at`, noteAt: request.expiresAt },
         pill: { text: "Waiting", tone: "wait" },
         title: `Allow ${what}?`,
         lines: [`${deps.views.nameOf(agent.id, agent)} asks ${me} to allow ${what}. Nothing has changed yet.`],
@@ -240,6 +276,7 @@ function requestCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
       return {
         ...base,
         status,
+        display: { header: `Allowed: ${ask}` },
         pill: { text: "Allowed", tone: "ok" },
         title: `${cap(what)} was allowed`,
         lines: [`${by} chose Allow on Portico.${request.kind === "share" ? " list_porticos shows the share link to the agent that asked." : ""}`],
@@ -248,6 +285,7 @@ function requestCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
       return {
         ...base,
         status,
+        display: { header: `Not allowed: ${ask}` },
         pill: { text: "Not allowed", tone: "no" },
         title: `${cap(what)} was not allowed`,
         lines: [`${by} chose Don't allow on Portico. Nothing has changed.`],
@@ -256,10 +294,40 @@ function requestCard(deps: CardDeps, agent: Agent, id: string): StatusCard {
       return {
         ...base,
         status: "expired",
+        display: { header: `Ran out: ${ask}` },
         pill: { text: "Ran out", tone: "quiet" },
         title: "The request ran out",
         lines: [`Nobody allowed ${what} in time. Nothing has changed. The same call again makes a fresh request.`],
       };
+  }
+}
+
+/** What a request asks for, in a few words for the card's header: "share “Research” with one more person". */
+function requestAsk(deps: CardDeps, agent: Agent, request: ConsentRequest): string {
+  const place = request.workspaceId ? deps.workspaces.known(request.workspaceId) : null;
+  const where = place ? quote(place.name) : "a Portico";
+  const subject = request.detail.agentId ? deps.agents.get(request.detail.agentId) : null;
+  const subjectName = subject ? deps.agents.nameFor(subject, agent.ownerId) : "an agent";
+  switch (request.kind) {
+    case "share":
+      return `share ${where} with ${request.detail.email ? quote(request.detail.email) : "one more person"}`;
+    case "delete":
+      return `delete ${where}`;
+    case "remove_person":
+      return `take ${named(deps, request.detail.personId ?? null, "a person")} out of ${where}`;
+    case "enter":
+      return `bring ${deps.views.nameOf(agent.id, agent)} into ${where}`;
+    case "add_agent":
+    case "admit_agent":
+      return `bring ${subjectName} into ${where}`;
+    case "remove_agent":
+      return `take ${subjectName} out of ${where}`;
+    case "rename":
+      return `rename ${where}${request.detail.name ? ` to ${quote(request.detail.name)}` : ""}`;
+    case "create":
+      return request.detail.name ? `make the Portico ${quote(request.detail.name)}` : "make a new Portico";
+    default:
+      return "make a change";
   }
 }
 

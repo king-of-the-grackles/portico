@@ -38,11 +38,12 @@ test("Status cards: joined, a held message, a waiting request, and the same answ
   expect(sent.note).toContain(heldLink);
   const held = await statusResult(newcomer.token, { message: sent.message.id });
   card = await drawCard(page, html, held);
-  await expect(card.getByRole("heading", { level: 1 })).toHaveText("Message to builder is held");
+  await expect(card.getByRole("heading", { level: 1 })).toHaveText("Your message to builder is held");
   await expect(card.locator("#quote")).toHaveText(subject);
-  await expect(card.locator("#addr")).toHaveText(heldLink);
+  await expect(card.locator("#note")).toHaveText("New agent, not confirmed yet.");
+  expect(held.structuredContent.link.url).toBe(heldLink);
   await rec.pause(1500);
-  await rec.step("held-card", "A new agent's first message is held. The card says for whom and why, with 'Review on Portico'.", { hold: 7000 });
+  await rec.step("held-card", "A new agent's first message is held. The card has the subject, one button and one line saying why.", { hold: 7000 });
 
   // The press asks the host for exactly that page, and for nothing else.
   await card.getByRole("button", { name: "Review on Portico" }).click();
@@ -60,10 +61,11 @@ test("Status cards: joined, a held message, a waiting request, and the same answ
   const waiting = await statusResult(planner.token, { request: asked.request.id });
   await openCardHost(page, "Stand-in host · portico_status");
   card = await drawCard(page, html, waiting);
-  await expect(card.getByRole("heading", { level: 1 })).toContainText("Allow sharing");
-  await expect(card.locator("#addr")).toHaveText(`${BASE_URL}/c/${asked.request.id}`);
+  await expect(card.getByRole("heading", { level: 1 })).toHaveText(/^Share “.+” with one more person\?$/);
+  await expect(card.getByRole("button", { name: "Review on Portico" })).toBeVisible();
+  expect(waiting.structuredContent.link.url).toBe(`${BASE_URL}/c/${asked.request.id}`);
   await rec.pause(1500);
-  await rec.step("request-card", "The agent asked to share a Portico. The card says nothing has changed yet, and links to the page to allow.", { hold: 7000 });
+  await rec.step("request-card", "The agent asked to share a Portico. The card asks the question and has one button to the page to allow.", { hold: 7000 });
 
   // An app that draws no cards gets the same answer as text: shown here as written, in a plain block.
   await openCardHost(page, "An app that draws no cards · the same answer as text");
@@ -74,5 +76,5 @@ test("Status cards: joined, a held message, a waiting request, and the same answ
     document.body.appendChild(pre);
   }, held.content[0].text as string);
   await expect(page.locator("pre")).toContainText(`Review on Portico: ${heldLink}`);
-  await rec.step("text-answer", "An app that draws no cards gets the same answer as text, with the full link.", { hold: 7000 });
+  await rec.step("text-answer", "An app that draws no cards gets the full answer as text: the person named, the reason and the link.", { hold: 7000 });
 });

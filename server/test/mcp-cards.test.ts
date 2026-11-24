@@ -5,7 +5,7 @@ import { appTools, mcpTools, MODERN_PROTOCOL_VERSION, UI_EXTENSION } from "../sr
 import { porticoTools } from "../src/agent-api/portico-tools";
 import { wakeSteps } from "../src/core/wake-setup";
 import type { Person } from "../src/core/types";
-import { addAppAgent, addComputer, addMember, addOwner, addSession, answerConsent, askToJoin, callAs, copyProblems, DAY, HOUR, joinCodeOn, makePortico, PUBLIC_URL, signIn, submitJoinCode, type TestPortico } from "./helpers";
+import { addAppAgent, addComputer, addMember, addOwner, addSession, answerConsent, askToJoin, callAs, copyProblems, DAY, HOUR, joinCodeOn, makePortico, PUBLIC_URL, signIn, submitJoinCode, type TestPortico, wordProblems } from "./helpers";
 
 /**
  * The status card: portico_status, the page a host draws from its answer, and the text every other client reads.
@@ -167,7 +167,9 @@ describe("the page", () => {
     expect(script).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\b|new Function|setAttribute\("(on|src|href|style)/);
     expect(script).not.toMatch(/window\.open\(|location\.(href|assign|replace)|\.submit\(|navigator\./);
     expect(script).not.toMatch(/localStorage|sessionStorage|document\.cookie|indexedDB/);
-    expect(script.match(/textContent/g)!.length).toBeGreaterThan(8);
+    // Every place the page puts a string on screen.
+    expect(script.match(/\.textContent = /g)).toHaveLength(4);
+    expect(script).not.toMatch(/createElement|appendChild|cloneNode/);
     // Every message the page can send or act on.
     expect([...new Set(script.match(/"(ui\/[a-z/-]+|ping)"/g))].sort()).toEqual(
       ['"ping"', '"ui/initialize"', '"ui/notifications/host-context-changed"', '"ui/notifications/initialized"', '"ui/notifications/size-changed"', '"ui/notifications/tool-result"', '"ui/open-link"', '"ui/resource-teardown"'],
@@ -175,7 +177,7 @@ describe("the page", () => {
     // Messages come only from the host's window, and the button opens only what safeLink let through.
     expect(script).toContain("if (event.source !== window.parent) return;");
     expect(script).toContain("url.origin === ORIGIN");
-    expect(script.match(/linkUrl/g)!.length).toBeGreaterThan(6);
+    expect(script.match(/linkUrl/g)!.length).toBeGreaterThan(5);
     expect(script).not.toMatch(/openExternal\(\{ href: (?!linkUrl)/);
     expect(script).toContain('request("ui/open-link", { url: linkUrl })');
   });
@@ -206,6 +208,7 @@ describe("joined", () => {
     expect(answer.structuredContent).toEqual({
       state: "joined",
       status: "joined",
+      display: { header: "dot is on Portico", note: "Not getting new messages automatically yet." },
       pill: { text: "Joined", tone: "ok" },
       title: "dot is on Portico",
       lines: ["Joined as dot, managed by “Chris”. Agents that share a Portico with dot can message this agent."],
@@ -529,6 +532,78 @@ describe("the nudge", () => {
     }
     const rest = await (await callAs(p, grok, "POST", "/api/agent/portico-tools/delete_portico", { portico: "Chris's shared Portico" })).text();
     expect(rest).not.toContain("portico_status");
+  });
+});
+
+describe("what the card itself shows", () => {
+  /** Everything a card draws: the header, the subject, the button's label, and the one quiet line. */
+  const drawn = (card: StatusCard) => ({ ...card.display, ...(card.link ? { button: card.link.label } : {}) });
+
+  test("joined: the header and the button, and decisions that wait become the card's point", async () => {
+    const { p, dot, grok } = await world();
+    expect(drawn((await status(p, dot)).structuredContent!)).toEqual({ header: "dot is on Portico", note: "Not getting new messages automatically yet.", button: "Open Portico" });
+    await tool(p, dot, "set_inbox_schedule", { minutes: 30 });
+    expect(drawn((await status(p, dot)).structuredContent!)).toEqual({ header: "dot is on Portico", note: "Checks for new messages every 30 minutes.", button: "Open Portico" });
+    await tool(p, grok, "send_message", { to: "muse", subject: "One", text: "t" });
+    expect(drawn((await status(p, dot)).structuredContent!)).toEqual({ header: "1 message waits for your decision", button: "Review on Portico" });
+    await tool(p, grok, "send_message", { to: "muse", subject: "Two", text: "t" });
+    expect(drawn((await status(p, dot)).structuredContent!).header).toBe("2 messages wait for your decision");
+  });
+
+  test("a held message says 'you' when the agent's own person decides, and names the person when someone else does", async () => {
+    const w = await world();
+    const { p, chris, dot } = w;
+    await withMaya(w);
+    const own = sent(await tool(p, dot, "send_message", { to: "muse", subject: "Notes from Tuesday", text: "t" }));
+    const expiresAt = p.messages.get({ agent: dot.agent.id }, own)!.expiresAt;
+    const ownAnswer = await status(p, dot, { message: own });
+    expect(drawn(ownAnswer.structuredContent!)).toEqual({ header: "Your message to muse is held", subject: "Notes from Tuesday", note: "Waits for your decision until", noteAt: expiresAt, button: "Review on Portico" });
+    // The text is for the agent, which is not "you": the person stays named there, and the card's own words stay out.
+    expect(ownAnswer.content[0]!.text).toContain("Nothing is delivered until “Chris” decides on Portico.");
+    expect(ownAnswer.content[0]!.text).not.toMatch(/\byou\b|\byour\b/i);
+    expect(JSON.stringify(ownAnswer.structuredContent!.display)).not.toContain("Chris");
+
+    const theirs = sent(await tool(p, dot, "send_message", { to: "maya/scout", subject: "Hello", text: "t" }));
+    const other = (await status(p, dot, { message: theirs })).structuredContent!;
+    expect(drawn(other)).toEqual({ header: "Your message to maya/scout is held", subject: "Hello", note: "Waits for “Maya” to decide until", noteAt: expiresAt });
+
+    p.agents.markUnproven({ agentId: dot.agent.id });
+    const first = sent(await tool(p, dot, "send_message", { to: "grok", subject: "First", text: "t" }));
+    expect(drawn((await status(p, dot, { message: first })).structuredContent!)).toEqual({ header: "Your message to grok is held", subject: "First", note: "New agent, not confirmed yet.", button: "Review on Portico" });
+
+    p.approvals.decide(chris.id, own, "deny");
+    expect(drawn((await status(p, dot, { message: own })).structuredContent!)).toEqual({ header: "Your message to muse was not allowed", subject: "Notes from Tuesday", note: "You chose Don't allow." });
+    p.approvals.decide(chris.id, first, "allow_once");
+    expect(drawn((await status(p, dot, { message: first })).structuredContent!)).toEqual({ header: "Your message to grok is on the way", subject: "First" });
+  });
+
+  test("a request: what was asked in a few words, the button while the request waits, and the outcome after", async () => {
+    const { p, chris, dot } = await world();
+    const ask = async (name: string, args: Record<string, unknown>) => (JSON.parse((await tool(p, dot, name, args)).content[0]!.text) as { request: { id: string; expires_at: string } }).request;
+    const share = await ask("share_portico", { portico: "Chris's shared Portico" });
+    expect(drawn((await status(p, dot, { request: share.id })).structuredContent!)).toEqual({
+      header: "Share “Chris's shared Portico” with one more person?",
+      note: "Asked by dot. Runs out at",
+      noteAt: share.expires_at,
+      button: "Review on Portico",
+    });
+    p.consents.decide(chris.id, share.id, { decision: "approve" });
+    expect(drawn((await status(p, dot, { request: share.id })).structuredContent!)).toEqual({ header: "Allowed: share “Chris's shared Portico” with one more person" });
+    const gone = await ask("delete_portico", { portico: "Chris's shared Portico" });
+    expect(drawn((await status(p, dot, { request: gone.id })).structuredContent!).header).toBe("Delete “Chris's shared Portico”?");
+    p.consents.decide(chris.id, gone.id, { decision: "deny" });
+    expect(drawn((await status(p, dot, { request: gone.id })).structuredContent!)).toEqual({ header: "Not allowed: delete “Chris's shared Portico”" });
+  });
+
+  test("the card's own words follow the copy rules, and never go into the text answer", async () => {
+    const { p, dot } = await world();
+    const held = sent(await tool(p, dot, "send_message", { to: "muse", subject: "s", text: "t" }));
+    for (const args of [{}, { message: held }]) {
+      const answer = await status(p, dot, args);
+      expect(wordProblems(JSON.stringify(answer.structuredContent!.display))).toEqual([]);
+      expect(answer.content[0]!.text).toBe(cardText(answer.structuredContent!));
+      expect(cardText({ ...answer.structuredContent!, display: { header: "x" } })).toBe(answer.content[0]!.text);
+    }
   });
 });
 
