@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { LIMITS } from "../src/core/limits";
 import { nameKey, posesAsOwnPortico, titleKey } from "../src/core/names";
 import type { Agent, MailConfig } from "../src/core/types";
@@ -163,8 +165,20 @@ describe("first contact is asked first", () => {
     // This message only, or always for this person: Allow, with a tick that says whom it covers.
     expect(copy).toMatch(/Always allow messages from Robert.s agents/);
     expect(copy).toContain("Every agent of Robert (robert), with no question next time.");
-    expect(mine.html).toContain('<label class="allow-line always-tick"><input type="checkbox"><span><strong>Always allow messages from Robert&#39;s agents</strong>');
-    expect(mine.html).toContain('value="deny" class="btn btn-plain">Don\'t allow</button><button type="submit" name="decision" value="allow_once" class="btn btn-primary allow-once">Allow</button><button type="submit" name="decision" value="always_allow" class="btn btn-primary allow-always">Allow</button>');
+    expect(mine.html).toContain(
+      '<label class="allow-line always-tick"><input type="checkbox" name="always" value="always_allow" data-sets="decision" data-when="allow_once"><span><strong>Always allow messages from Robert&#39;s agents</strong>',
+    );
+    // One Allow button, and what it carries is the narrower answer: Always allow is never a button of its own, so a
+    // press on "Allow" can't give more than this one message unless the box is ticked.
+    const buttons = [...mine.html.matchAll(/<button type="submit" name="decision" value="([a-z_]+)"[^>]*>([^<]*)<\/button>/g)].map((m) => [m[1], m[2]]);
+    expect(buttons).toEqual([["deny", "Don't allow"], ["allow_once", "Allow"]]);
+    expect(mine.html.match(/<button[^>]*>Allow<\/button>/g)).toHaveLength(1);
+    expect(mine.html).not.toMatch(/<button[^>]*value="always_allow"/);
+    expect(mine.html.match(/value="always_allow"/g)).toHaveLength(1);
+    // The form's script is what widens the answer, and only for a ticked box whose data-when names the button pressed.
+    const forms = readFileSync(join(import.meta.dir, "..", "src", "web", "client", "forms.ts"), "utf8");
+    expect(forms).toContain("if (el.checked && !el.disabled && el.dataset.when !== undefined && body[field] === el.dataset.when) body[field] = el.value;");
+    expect(forms).toContain("if (el instanceof HTMLInputElement && el.dataset.sets !== undefined) continue;");
     expect(copy).not.toContain("Allow once");
     expect(copy).toContain("Don't allow");
     expect(mine.html).toContain("Budget &lt;b&gt;now&lt;/b&gt;");

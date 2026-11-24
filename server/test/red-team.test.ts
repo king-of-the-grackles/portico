@@ -753,7 +753,8 @@ describe("Always allow covers the whole computer", () => {
     const heldPage = (await page(p, `/held/${first.id}`, cookies.chris)).html;
     expect(heldPage).toContain("<strong>Always allow sessions on studio</strong>");
     expect(visibleCopy(heldPage)).toContain("Every session on studio, now and later. Undo it in Settings.");
-    expect(heldPage).toContain('name="decision" value="always_allow" class="btn btn-primary allow-always">Allow</button>');
+    expect(heldPage).toContain('<input type="checkbox" name="always" value="always_allow" data-sets="decision" data-when="allow_once">');
+    expect(heldPage).not.toMatch(/<button[^>]*value="always_allow"/);
     p.approvals.decide(chris.id, first.id, "always_allow");
     // The other session's waiting message goes with it, and neither session is asked about again.
     expect(p.messages.get({ person: chris.id }, second.id)!.status).toBe("pending");

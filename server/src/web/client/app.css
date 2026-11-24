@@ -281,7 +281,7 @@ html:has(.sheet-wrap) { overflow: hidden; }
 .dcard-about { display: block; font-weight: 400; color: var(--ink); }
 .dcard-note { margin: 2px 0 0; font-size: 13px; line-height: 18px; color: var(--muted); }
 .dcard-note strong { font-weight: 600; color: #7a3a0e; }
-.dcard-body { display: flex; flex-direction: column; gap: 4px; }
+.dcard-quote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
 .dcard-subject { margin: 0; font-size: 17px; line-height: 24px; font-weight: 600; overflow-wrap: anywhere; }
 .dcard-detail { margin: 0; font-size: 15px; line-height: 22px; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* The answers to a question: a list at one width, one under another. The agent's choices are outlined in the app's

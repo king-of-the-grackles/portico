@@ -36,6 +36,12 @@ test("first contact between two people is held: once per message, or never again
   const second = unique("Second contact");
   const two = await scout.send({ to, subject: second, text: "Asking once more." });
   expect(two.delivery).toBe("held");
+  // Ticked and then Don't allow is still only Don't allow: the tick widens Allow and nothing else.
+  const three = await scout.send({ to, subject: unique("Third contact"), text: "And once more." });
+  expect(three.delivery).toBe("held");
+  await page.goto(`/held/${three.message.id}`);
+  await page.getByRole("checkbox", { name: /^Always allow / }).check();
+  await decideHeld(page, three.message.id, "Don't allow");
   await decideHeld(page, two.message.id, "Always allow");
   await helper.receive(second);
 

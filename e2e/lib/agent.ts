@@ -125,8 +125,12 @@ export async function joinThroughPage(page: Page, join: Join, opts: AllowOptions
 export async function decideHeld(page: Page, messageId: string, choice: "Allow" | "Always allow" | "Don't allow"): Promise<void> {
   await page.goto(`/held/${messageId}`);
   await expect(page.getByRole("heading", { level: 1, name: "Allow this message?" })).toBeVisible();
+  // One Allow button: what it sends is "this message", unless the box is ticked.
+  await expect(page.getByRole("button", { name: "Allow", exact: true })).toHaveCount(1);
   if (choice === "Always allow") await page.getByRole("checkbox", { name: /^Always allow / }).check();
+  const sent = page.waitForRequest((req) => req.method() === "POST" && req.url().endsWith(`/api/approvals/held/${messageId}`));
   await page.getByRole("button", { name: choice === "Don't allow" ? "Don't allow" : "Allow", exact: true }).click();
+  expect((await sent).postDataJSON(), "what the page sent for this press").toEqual({ decision: choice === "Always allow" ? "always_allow" : choice === "Allow" ? "allow_once" : "deny" });
   await expect(page.getByRole("heading", { level: 1, name: "Already decided" })).toBeVisible();
 }
 

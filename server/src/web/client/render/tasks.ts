@@ -176,6 +176,8 @@ export function taskHead(): string {
 
 // A decision card is read and acted on in a few seconds, so it carries four things and no more: one line of who and
 // what, the question or the subject, the answers, and one small line of grey text. Everything else is on the full page.
+// What an agent wrote never stands as Portico's own words: a subject, a question and what goes with it sit in a quote
+// (a rule down the left, as on the full pages), and a task's name inside a heading is in quotation marks.
 
 /**
  * The card's one small line: when the decision lapses, and before that, for an agent its person hasn't confirmed
@@ -217,7 +219,7 @@ export function renderHeldCard(s: HomeState, m: HeldCard): string {
       <h3 id="dc-${id}" class="dcard-title"><a class="dcard-link" href="/held/${encodeURIComponent(m.id)}">${esc(m.from.label)} ${m.noReplyNeeded ? "has a note for" : "wants to message"} ${esc(m.to.label)}</a></h3>
       ${cardNote(s, m.expiresAt, newAgent)}
     </div></div>
-    <p class="dcard-subject">${esc(m.subject)}</p>
+    <blockquote class="dcard-quote"><p class="dcard-subject">${esc(m.subject)}</p></blockquote>
     ${decideRow(s, m)}
   </article>`;
 }
@@ -273,10 +275,10 @@ export function renderQuestionCard(s: HomeState, q: QuestionCard): string {
   const id = esc(q.id);
   return `<article class="dcard qcard" aria-labelledby="di-${id}" data-key="di-${id}">
     <div class="dcard-head">${logo(q.agent.kind, "", kindInfo(q.agent.kind).label)}<div class="grow">
-      <h3 id="di-${id}" class="dcard-title">${esc(q.agent.label)} asks you${when(q.task, () => `<span class="dcard-about">${esc(q.task!.subject)}</span>`)}</h3>
+      <h3 id="di-${id}" class="dcard-title">${esc(q.agent.label)} asks you${when(q.task, () => `<span class="dcard-about">“${esc(q.task!.subject)}”</span>`)}</h3>
       ${cardNote(s, q.expiresAt, q.newAgent)}
     </div></div>
-    <div class="dcard-body"><p class="dcard-subject">${esc(q.question)}</p>${when(q.detail, () => `<p class="dcard-detail">${esc(q.detail)}</p>`)}</div>
+    <blockquote class="dcard-quote"><p class="dcard-subject">${esc(q.question)}</p>${when(q.detail, () => `<p class="dcard-detail">${esc(q.detail)}</p>`)}</blockquote>
     ${questionAnswers(s, q)}
   </article>`;
 }

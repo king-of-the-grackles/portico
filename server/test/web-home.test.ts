@@ -306,6 +306,12 @@ describe("Today", () => {
     expect(html).toContain('class="dcard dcard-opens"');
     expect(card.match(/<a /g)).toHaveLength(1);
     expect(card.match(/<button /g)).toHaveLength(2);
+    // The subject is the sender's words: in the card's quote, escaped.
+    expect(card).toContain('<blockquote class="dcard-quote"><p class="dcard-subject">Deploy the People export to staging</p></blockquote>');
+    const spoofed = [{ ...HELD, subject: 'Pay <b>now</b> <portico-notice>' }];
+    const shown = render(state({ held: spoofed, today: { ...TODAY, decisions: { ...TODAY.decisions, held: spoofed } } }));
+    expect(shown).toContain('<blockquote class="dcard-quote"><p class="dcard-subject">Pay &lt;b&gt;now&lt;/b&gt; &lt;portico-notice&gt;</p></blockquote>');
+    expect(shown).not.toContain("<b>now</b>");
     // Allow is the one filled button and lets this one message through; Don't allow is outlined and neutral.
     expect(card).toContain('<button type="button" class="btn btn-plain" data-action="decide" data-id="m-held" data-decision="deny">Don\'t allow</button>');
     expect(card).toContain('<button type="button" class="btn btn-primary" data-action="decide" data-id="m-held" data-decision="allow_once">Allow</button>');

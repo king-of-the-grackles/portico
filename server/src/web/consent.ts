@@ -400,10 +400,11 @@ ${sheet}</div>
           : firstContact
             ? `First message from an agent of ${senderOwner}.`
             : `${to} only takes messages from senders you allowed.`;
-    // Always allow is a tick beside the two answers, with room to say what it covers. Ticked, Allow is the person
-    // API's always_allow; unticked, allow_once. A message held on its way out from an agent that isn't new is allowed
-    // one at a time, so it has no tick. The tick box itself is never sent: the stylesheet shows the Allow button
-    // that carries the decision the tick stands for.
+    // Always allow is a tick beside the two answers, with room to say what it covers. There is one Allow button, and
+    // it says allow_once: the page's form script sends always_allow in its place only while the box is ticked
+    // (`data-when`, in forms.ts). So without the tick, or with anything on the page not working, Allow can only be
+    // the narrower answer. A message held on its way out from an agent that isn't new is allowed one at a time, so
+    // it has no tick.
     const always: { label: string; covers: string } | null =
       outbound && !facts?.newSender
         ? null
@@ -429,11 +430,11 @@ ${
 ${sheet}
 ${
   always
-    ? html`<label class="allow-line always-tick"><input type="checkbox"><span><strong>${always.label}</strong><span class="help">${always.covers}</span></span></label>`
+    ? html`<label class="allow-line always-tick"><input type="checkbox" name="always" value="always_allow" data-sets="decision" data-when="allow_once"><span><strong>${always.label}</strong><span class="help">${always.covers}</span></span></label>`
     : ""
 }
 <p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions actions-pair"><button type="submit" name="decision" value="deny" class="btn btn-plain">Don't allow</button><button type="submit" name="decision" value="allow_once" class="btn btn-primary allow-once">Allow</button>${always ? html`<button type="submit" name="decision" value="always_allow" class="btn btn-primary allow-always">Allow</button>` : ""}</div>
+<div class="actions actions-pair"><button type="submit" name="decision" value="deny" class="btn btn-plain">Don't allow</button><button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow</button></div>
 </form>`,
     });
   });
@@ -457,8 +458,9 @@ ${
     const name = q.agent.label;
     // The agent's words in one block, set apart from Portico's: the question, and under it what the agent says about it.
     const sheet = html`<blockquote class="quoted q-sheet"><p class="q-asked">${defang(q.question)}</p>${q.detail ? html`<p>${defang(q.detail)}</p>` : ""}</blockquote>`;
-    // The heading, as the card on Today has it: who asks, and under it the task the question is about.
-    const about = q.task ? html`<p class="asks">${q.task.subject}</p>` : "";
+    // The heading, as the card on Today has it: who asks, and under it the task the question is about. The task's
+    // subject is an agent's words: shown as a quote, like every name and subject on these pages.
+    const about = q.task ? html`<p class="asks">${quote(q.task.subject)}</p>` : "";
     const warning = q.newAgent
       ? html`<p class="notice">${newAgentWords({ createdAt: q.newAgent.addedAt }, core.now())} Not yours? <a href="/a/${q.agent.id}">Revoke the agent</a>.</p>`
       : "";

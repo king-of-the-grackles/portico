@@ -8,6 +8,8 @@ function fields(form: HTMLFormElement, submitter: HTMLElement | null): Record<st
   for (const el of Array.from(form.elements)) {
     if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) continue;
     if (!el.name || el.disabled) continue;
+    // A tick that widens an answer is not a field of its own: see below.
+    if (el instanceof HTMLInputElement && el.dataset.sets !== undefined) continue;
     if (el instanceof HTMLInputElement && el.type === "checkbox" && el.dataset.list !== undefined) {
       // Ticks that make a list: every ticked value under the one name, and an empty list when none is ticked.
       const list = Array.isArray(body[el.name]) ? (body[el.name] as string[]) : [];
@@ -24,6 +26,14 @@ function fields(form: HTMLFormElement, submitter: HTMLElement | null): Record<st
   }
   // A form with two answers (Allow, Don't allow) names each on its button: the one pressed goes along.
   if (submitter instanceof HTMLButtonElement && submitter.name) body[submitter.name] = submitter.value;
+  // A tick box that widens one answer: <input type="checkbox" data-sets="decision" data-when="allow_once"
+  // value="always_allow">. Only while it is ticked, and only when the button pressed gave exactly the answer named in
+  // data-when, the tick's own value goes in that answer's place. Every other press goes as the button says, so a
+  // button never carries more than its label.
+  for (const el of Array.from(form.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-sets]'))) {
+    const field = el.dataset.sets!;
+    if (el.checked && !el.disabled && el.dataset.when !== undefined && body[field] === el.dataset.when) body[field] = el.value;
+  }
   return body;
 }
 

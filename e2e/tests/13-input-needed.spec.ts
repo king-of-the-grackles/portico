@@ -33,7 +33,7 @@ test("an agent asks its person, the person answers in one press, and the agent g
   const card = input.getByRole("article").filter({ hasText: question });
   await expect(card).toBeVisible();
   // The card: who asks and about which task, the question with what the agent says about it, and the answers.
-  await expect(card.getByRole("heading", { level: 3 })).toHaveText(new RegExp(`asks you${subject}$`));
+  await expect(card.getByRole("heading", { level: 3 })).toHaveText(new RegExp(`asks you“${subject}”$`));
   await expect(card).toContainText("The old tests round half down.");
   await expect(card).toContainText(/Expires /);
   await expect(card).not.toContainText("New agent");

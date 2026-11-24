@@ -55,12 +55,8 @@
 .q-form .q-words:focus { display: block; }
 /* Skip: a small grey link under the page's one button. */
 .q-skip { align-self: center; }
-/* A held message's page: Always allow is a tick, and ticking it swaps which Allow button shows. The two carry the
-   two decisions (this message, or always), so the form sends the right one with no script. */
+/* A held message's page: Always allow is a tick beside the one Allow button. Unticked, it reads as off. */
 .always-tick:not(:has(input:checked)) { border-color: var(--line); background: var(--surface); }
-.held-form .allow-always { display: none; }
-.held-form:has(.always-tick input:checked) .allow-always { display: inline-flex; }
-.held-form:has(.always-tick input:checked) .allow-once { display: none; }
 
 /* /join: steps an agent reads. */
 .narrow.doc { max-width: 720px; gap: 16px; }
