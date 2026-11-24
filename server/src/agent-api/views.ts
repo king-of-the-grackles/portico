@@ -227,12 +227,12 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
 
   /** How a question ended goes out in the answer frame, which says so; every other notice in the notice frame. */
   const notice = (n: AgentNotice): NoticeView => {
+    // Whether a notice wakes comes with the notice: AgentNotices works it out in one place (`waking`), which also
+    // keeps such a notice in every batch. The question only picks the frame.
+    const wake = n.wake ? { wake: true as const } : {};
     const about = questions?.ofNotice(n.id) ?? null;
-    if (!about) return { id: n.id, at: n.at, text: n.text, framed_message: frameNotice(n.text) };
-    // Whether a notice wakes is worked out here, from what the notice is linked to, since a notice's own row says
-    // nothing about its kind: today that is the question it reports on. A later notice an agent waits on (a
-    // cancelled task) sets `wake` in this one place the same way.
-    return { id: n.id, at: n.at, text: n.text, framed_message: frameAnswer({ questionId: about.id, status: about.status, level: about.level, via: about.via, text: n.text }), question: about, wake: true };
+    if (!about) return { id: n.id, at: n.at, text: n.text, framed_message: frameNotice(n.text), ...wake };
+    return { id: n.id, at: n.at, text: n.text, framed_message: frameAnswer({ questionId: about.id, status: about.status, level: about.level, via: about.via, text: n.text }), question: about, ...wake };
   };
 
   /** The person who manages the viewer, as a quote: a name a person typed reaches an agent only that way. */

@@ -266,6 +266,11 @@ export class Questions {
     return row ? { id: row.id, status: row.status, level: row.answer_level, via: row.answered_via } : null;
   }
 
+  /** The notices that told the agent how its questions ended: the ones the agent was waiting on. */
+  noticesOf(agentId: string): string[] {
+    return (this.db.query("SELECT notice_id AS id FROM questions WHERE agent_id = $agentId AND notice_id IS NOT NULL").all({ agentId }) as { id: string }[]).map((row) => row.id);
+  }
+
   /**
    * Saves a question from the agent to its own person. `taskId` is a task the caller already checked the agent is in,
    * or null. Nothing here takes a person to ask: the question always goes to the person who manages the agent.

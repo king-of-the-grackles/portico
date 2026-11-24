@@ -8,6 +8,11 @@ export interface AgentNotice {
   at: string;
   /** Portico's own sentence. Names other people typed are quoted in it. */
   text: string;
+  /**
+   * The agent is waiting on this notice (how its question ended): a stopped session starts a turn for it, and it is
+   * never left out of a batch by older notices. False for every other notice.
+   */
+  wake: boolean;
 }
 
 interface Row {
@@ -15,9 +20,10 @@ interface Row {
   agent_id: string;
   at: string;
   text: string;
+  rowid: number;
 }
 
-const toNotice = (row: Row): AgentNotice => ({ id: row.id, agentId: row.agent_id, at: row.at, text: row.text });
+const toNotice = (row: Row, wake: boolean): AgentNotice => ({ id: row.id, agentId: row.agent_id, at: row.at, text: row.text, wake });
 
 /**
  * Portico's own notices to agents. A notice is a row in the directory, never a message: it has no sender, lives in no
@@ -38,12 +44,40 @@ export class AgentNotices {
     return id;
   }
 
-  /** What the agent hasn't been told yet, oldest first. Changes nothing. */
+  /**
+   * Which of an agent's notices the agent is waiting on, by notice ID: the one place that decides what wakes. A
+   * notice's own row says nothing about its kind, so this is worked out from what each notice is linked to. Set by
+   * portico.ts: today, the notices that say how the agent's questions ended. A later feature whose notice an agent
+   * waits on (a cancelled task) adds its notices' IDs there, and gets the mark and the place in every batch with it.
+   */
+  waking: (agentId: string) => string[] = () => [];
+
+  /**
+   * What the agent hasn't been told yet, oldest first, at most `limit`. Changes nothing. The notices the agent is
+   * waiting on are taken into the batch first and the others fill the room that is left, oldest first: however many
+   * notices about who came or went sit unread in front of an answer, the answer is in the next batch. The batch
+   * itself is in time order.
+   */
   waiting(agentId: string, limit = 100): AgentNotice[] {
-    const rows = this.db
-      .query("SELECT id, agent_id, at, text FROM agent_notices WHERE agent_id = $agentId AND delivered_at IS NULL ORDER BY at, rowid LIMIT $limit")
-      .all({ agentId, limit }) as Row[];
-    return rows.map(toNotice);
+    const columns = "id, agent_id, at, text, rowid";
+    const ids = JSON.stringify(this.waking(agentId));
+    const first = this.db
+      .query(
+        `SELECT ${columns} FROM agent_notices WHERE agent_id = $agentId AND delivered_at IS NULL
+           AND id IN (SELECT value FROM json_each($ids)) ORDER BY at, rowid LIMIT $limit`,
+      )
+      .all({ agentId, ids, limit }) as Row[];
+    const rest =
+      first.length >= limit
+        ? []
+        : (this.db
+            .query(
+              `SELECT ${columns} FROM agent_notices WHERE agent_id = $agentId AND delivered_at IS NULL
+                 AND id NOT IN (SELECT value FROM json_each($ids)) ORDER BY at, rowid LIMIT $limit`,
+            )
+            .all({ agentId, ids, limit: limit - first.length }) as Row[]);
+    const waking = new Set(first.map((row) => row.id));
+    return [...first, ...rest].sort((a, b) => a.at.localeCompare(b.at) || a.rowid - b.rowid).map((row) => toNotice(row, waking.has(row.id)));
   }
 
   count(agentId: string): number {

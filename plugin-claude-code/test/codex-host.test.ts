@@ -6,6 +6,7 @@ import { CodexConversation } from "../src/codex/conversation";
 import { CODEX_HOST } from "../src/codex/server";
 import { createPorticoPlugin, createWaitingServer, type PorticoPlugin, porticoPrompt, stopHookOutput } from "../src/plugin";
 import { PorticoClient } from "../src/portico-client";
+import { DELIVERY_BATCH_MAX } from "../../server/src/core/messages";
 import { NO_WAIT_NOTE, WAKE_HINT } from "../src/tools";
 import { appAgent, captureLog, fakeCodex, fakeHost, joinTestComputer, startPortico, type TestPortico, waitFor } from "./helpers";
 
@@ -160,6 +161,45 @@ describe("a Codex conversation's server", () => {
     await Bun.sleep(150);
     expect(codex.turns).toHaveLength(2);
     expect(p.agentNotices.waiting(agent()!.id)).toHaveLength(1);
+  });
+
+  test("with a full batch of older notices in front of the answer, the answer still starts exactly one turn, and the notice left out comes later", async () => {
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), "portico-codex-folder-")));
+    stops.push(async () => rmSync(folder, { recursive: true, force: true }));
+    const codex = fakeCodex({ "thread-1": { cwd: folder, status: { type: "idle" } } });
+    const { p, host } = await conversation({ codex, folder });
+    const agent = () => p.agents.byAddress("api-codex@macbook");
+    await waitFor(() => agent() !== null && p.agentStreams.canWake(agent()!.id), 5000);
+
+    // As many notices about who came or went as one batch holds: none starts a turn, and none is acked.
+    for (let i = 0; i < DELIVERY_BATCH_MAX; i++) p.agentNotices.add(agent()!.id, `“Dana” (dana) came into the Portico “Launch ${i}”.`);
+    const asked = JSON.parse(text(await host.callTool({ name: "request_input", arguments: { question: "Ship today?" } }))[0]!) as { question: { id: string } };
+    await Bun.sleep(80);
+    expect(codex.turns).toEqual([]);
+    expect(p.agentNotices.count(agent()!.id)).toBe(DELIVERY_BATCH_MAX);
+
+    // The owner answers, later than every one of them.
+    p.clock.advance(60_000);
+    p.questions.answer(p.owner.id, asked.question.id, { text: "Yes, ship." }, "web");
+    await waitFor(() => codex.turns.length === 1, 5000);
+    expect(codex.turns[0]!.text.match(/<portico-answer /g)).toHaveLength(1);
+    expect(codex.turns[0]!.text).toContain(`<portico-answer question_id="${asked.question.id}" status="answered" level="checked" via="web">`);
+    expect(codex.turns[0]!.text).toContain("\nAnswer: Yes, ship.\n");
+    // The batch is acked once: the answer and the notices that rode along are gone, and the one left out still waits.
+    await waitFor(() => p.agentNotices.count(agent()!.id) === 1);
+    const left = p.agentNotices.waiting(agent()!.id);
+    expect(left.map((n) => [n.text, n.wake])).toEqual([[`“Dana” (dana) came into the Portico “Launch ${DELIVERY_BATCH_MAX - 1}”.`, false]]);
+    expect(codex.turns[0]!.text).not.toContain(left[0]!.text);
+    codex.setStatus("thread-1", { type: "idle" });
+    await Bun.sleep(120);
+    expect(codex.turns).toHaveLength(1);
+
+    // Nothing is lost: the notice left out is handed over with the next message.
+    p.messages.send(appAgent(p, "grok", { kind: "grok-bot" }).agent, { to: "api-codex", subject: "Ready?", text: "Ready for the deploy?" });
+    await waitFor(() => codex.turns.length === 2, 5000);
+    expect(codex.turns[1]!.text).toContain(left[0]!.text);
+    expect(codex.turns[1]!.text).not.toContain("<portico-answer ");
+    await waitFor(() => p.agentNotices.count(agent()!.id) === 0);
   });
 
   test("the Stop hook hands a stopped conversation the answer to its question and acks it; who came into a Portico keeps no conversation going", async () => {

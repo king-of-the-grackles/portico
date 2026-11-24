@@ -593,6 +593,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     newId,
     log: logInfo,
   });
+  // The notices an agent is waiting on: how its questions ended. This list is what marks a notice as one that wakes
+  // a stopped session and keeps it in every batch; a later feature adds its own notices' IDs here.
+  agentNotices.waking = (agentId) => questions.noticesOf(agentId);
   agents.onGone = (agentIds) => {
     try {
       questions.withdrawFor(agentIds);

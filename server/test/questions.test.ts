@@ -7,6 +7,7 @@ import type { QuestionCard, TaskView } from "../src/api/views";
 import { newAgentWords } from "../src/core/consent-words";
 import { defang, frameAnswer } from "../src/core/framing";
 import { LIMITS } from "../src/core/limits";
+import { DELIVERY_BATCH_MAX } from "../src/core/messages";
 import { MAIL_LIMITS } from "../src/core/mail";
 import type { WebhookRequest } from "../src/core/webhooks";
 import { MODERN_PROTOCOL_VERSION } from "../src/agent-api/mcp";
@@ -14,6 +15,7 @@ import {
   addAppAgent,
   addComputer,
   addMember,
+  addSession,
   addOwner,
   callAs,
   callPerson,
@@ -923,6 +925,94 @@ describe("input needed: a session is woken for the notice", () => {
     }
     await codex.events.cancel();
     await claude.events.cancel();
+  });
+});
+
+describe("input needed: the answer is in the next batch, whatever waits in front of it", () => {
+  type Batch = { messages: unknown[]; updates: unknown[]; notices: { id: string; at: string; text: string; wake?: boolean; question?: { id: string; status: string } }[] };
+  const inTimeOrder = (notices: { at: string }[]) => notices.every((n, i) => i === 0 || notices[i - 1]!.at <= n.at);
+
+  test("a session's deliveries: a full batch of older notices about who came or went doesn't crowd the answer out, and nothing is lost", async () => {
+    const p = makePortico();
+    const chris = await addOwner(p, "Chris");
+    const { computer, token } = addComputer(p, chris);
+    const { agent, key } = addSession(p, computer);
+    const deliveries = async () => (await (await callAs(p, { token, key }, "GET", "/api/agent/deliveries")).json()) as Batch;
+    // As many ordinary notices as one batch holds, all older than the answer.
+    for (let i = 0; i < DELIVERY_BATCH_MAX; i++) {
+      p.agentNotices.add(agent.id, `“Dana” (dana) came into the Portico “Launch ${i}”.`);
+      if (i % 100 === 99) p.clock.advance(MINUTE);
+    }
+    const before = await deliveries();
+    expect(before.notices).toHaveLength(DELIVERY_BATCH_MAX);
+    expect(before.notices.some((n) => n.wake !== undefined)).toBe(false);
+
+    p.clock.advance(MINUTE);
+    const asked = p.questions.ask(agent, { question: "Ship today?" });
+    p.questions.answer(chris.id, asked.id, { text: "Yes" }, "web");
+    expect(p.agentNotices.count(agent.id)).toBe(DELIVERY_BATCH_MAX + 1);
+
+    const batch = await deliveries();
+    expect(batch.messages).toEqual([]);
+    expect(batch.updates).toEqual([]);
+    // No larger than the limit, in time order, and the answer is in it, marked as one that wakes.
+    expect(batch.notices).toHaveLength(DELIVERY_BATCH_MAX);
+    expect(inTimeOrder(batch.notices)).toBe(true);
+    const answer = batch.notices.filter((n) => n.wake === true);
+    expect(answer).toHaveLength(1);
+    expect(answer[0]!.question).toMatchObject({ id: asked.id, status: "answered" });
+    expect(batch.notices.at(-1)!.id).toBe(answer[0]!.id);
+    // The room that is left went to the oldest of the others: the newest ordinary notice is the one that waits.
+    expect(batch.notices.filter((n) => n.wake === undefined).map((n) => n.text)).toEqual(before.notices.slice(0, DELIVERY_BATCH_MAX - 1).map((n) => n.text));
+    // Peeking changes nothing: the same batch again.
+    expect((await deliveries()).notices.map((n) => n.id)).toEqual(batch.notices.map((n) => n.id));
+
+    // The plugin acks the batch once its turn started: what was left out is delivered next, and nothing is lost.
+    const acked = await callAs(p, { token, key }, "POST", "/api/agent/deliveries/ack", { messages: [], updates: [], notices: batch.notices.map((n) => n.id) });
+    expect(((await acked.json()) as { acked: { notices: number } }).acked.notices).toBe(DELIVERY_BATCH_MAX);
+    const rest = await deliveries();
+    expect(rest.notices.map((n) => [n.text, n.wake])).toEqual([[before.notices.at(-1)!.text, undefined]]);
+
+    // Several waking notices and a full queue behind them: every waking one is in the batch, oldest first.
+    const more = [p.questions.ask(agent, { question: "Two?" }), p.questions.ask(agent, { question: "Three?" })];
+    for (let i = 0; i < DELIVERY_BATCH_MAX; i++) p.agentNotices.add(agent.id, `Another ${i}`);
+    p.clock.advance(MINUTE);
+    for (const q of more) p.questions.skip(chris.id, q.id, "web");
+    const crowded = await deliveries();
+    expect(crowded.notices).toHaveLength(DELIVERY_BATCH_MAX);
+    expect(inTimeOrder(crowded.notices)).toBe(true);
+    expect(crowded.notices.filter((n) => n.wake === true).map((n) => n.question?.id)).toEqual(more.map((q) => q.id));
+  });
+
+  test("check_inbox, over REST and MCP: the answer is among the notices one check takes, and the rest come with the next check", async () => {
+    const { p, chris, muse, grok } = await world();
+    // One check takes at most this many notices.
+    const CHECK_MAX = 100;
+    for (const [who, read] of [
+      [muse, async () => (await rest(p, muse, "GET", "/api/agent/inbox")).body as Batch],
+      [grok, async () => JSON.parse((await mcp(p, grok, "check_inbox")).texts[1]!) as Batch],
+    ] as const) {
+      const agent = p.agents.require(who.agent.id);
+      for (let i = 0; i < CHECK_MAX + 20; i++) p.agentNotices.add(agent.id, `“Dana” (dana) came into the Portico “Launch ${i}”.`);
+      p.clock.advance(MINUTE);
+      const asked = p.questions.ask(agent, { question: "Ship today?" });
+      p.questions.answer(chris.id, asked.id, { text: "Yes" }, "web");
+
+      const first = await read();
+      expect(first.notices).toHaveLength(CHECK_MAX);
+      expect(inTimeOrder(first.notices)).toBe(true);
+      expect(first.notices.filter((n) => n.wake === true).map((n) => n.question?.id)).toEqual([asked.id]);
+      expect(first.notices.at(-1)!.question?.id).toBe(asked.id);
+      // The others keep their order and are all handed over, 21 of them with the next check; then nothing is left.
+      const second = await read();
+      expect(second.notices).toHaveLength(21);
+      expect(second.notices.some((n) => n.wake !== undefined)).toBe(false);
+      expect([...first.notices, ...second.notices].filter((n) => n.wake === undefined).map((n) => n.text)).toEqual(
+        Array.from({ length: CHECK_MAX + 20 }, (_, i) => `“Dana” (dana) came into the Portico “Launch ${i}”.`),
+      );
+      expect((await read()).notices).toEqual([]);
+      expect(p.agentNotices.count(agent.id)).toBe(0);
+    }
   });
 });
 
