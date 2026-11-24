@@ -460,6 +460,8 @@ This is how the hosted app (`app.portico.chat`) and its dev copy (`dev.portico.c
 5. **Production.** Without a migration, deploys in the `production` environment. With one, deploys in `production-migration`, which waits for a reviewer, and snapshots the volume first. Then it checks, with GETs only, that `/healthz` answers with the commit and that the sign-in page and `/api/agent/openapi.json` answer 200.
 6. **If that check fails.** Without a migration, the previous image is deployed again and the run fails. With one, nothing is rolled back, because the old code would run on a changed database: the run fails and its summary names the snapshot, for a person to decide.
 
+**Rollback drill.** To see dev's rollback work without a broken commit, start the workflow by hand on `main` with the box "Rollback drill" ticked (`gh workflow run deploy.yml --ref main -f drill=true`). The dev job then builds the commit `main` already has under the name `drill-<run number>`: the image runs as usual, the wait for the commit's own ID fails after a minute, and the rollback step deploys the previous image again. The drill has passed when the run is red, its summary says "Rolled back", and `dev.portico.chat/healthz` reports the commit it reported before. Dev restarts twice; its data is not touched. Nothing after the dev job runs in a drill: the plan and production jobs are skipped by their own condition as well as by the failed dev job. If the image running before can't be recorded, the drill stops before it deploys anything.
+
 Nothing runs unless the repository variable `DEPLOY_ENABLED` is `true`; unset it to stop deploys. Each run's summary page says what was deployed and how it went.
 
 | Where in GitHub's settings | What to create |

@@ -9,6 +9,12 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      # A rollback drill, on dev only: see "Rollback drill" in the README. Nothing after the dev job runs in a drill.
+      drill:
+        description: "Rollback drill: fail one dev deploy on purpose and roll it back. Production is not touched."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,6 +34,8 @@ env:
   DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
   # The same flyctl the commands below were written against; bump on purpose.
   FLYCTL_VERSION: 0.5.12
+  # 'true' only for a manual run with the drill box ticked. A run that follows CI has no inputs.
+  DRILL: ${{ github.event_name == 'workflow_dispatch' && inputs.drill == true }}
   DEV_APP: portico-dev
   DEV_URL: https://dev.portico.chat
   PRODUCTION_APP: portico-chat
@@ -86,15 +94,28 @@ jobs:
           echo "image=$image" >>"$GITHUB_OUTPUT"
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
 
+      # A drill puts up an image only to roll it back: without the image to go back to, it doesn't start.
+      - name: "Drill: stop unless the running image was recorded"
+        if: env.DRILL == 'true' && steps.previous.outputs.image == ''
+        run: |
+          echo "The image running in $DEV_APP could not be recorded, so a drill could not roll back: not deploying." >&2
+          exit 1
+
+      # In a drill the build is the same commit under another name, 'drill-<run number>': the image runs as usual, and
+      # the wait below, which looks for the commit's own ID, fails. That failure is what the drill is for.
       - name: Deploy
         id: deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --build-arg "PORTICO_COMMIT=$DEPLOY_SHA"
+          BUILD_COMMIT: ${{ env.DRILL == 'true' && format('drill-{0}', github.run_number) || env.DEPLOY_SHA }}
+        run: flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --build-arg "PORTICO_COMMIT=$BUILD_COMMIT"
 
       - name: Wait until dev answers with this commit
         id: healthz
-        run: scripts/deploy/wait-healthz.sh "$DEV_URL" "$DEPLOY_SHA" 300
+        env:
+          # A drill's wait is meant to fail, so it is short.
+          WAIT_SECONDS: ${{ env.DRILL == 'true' && '60' || '300' }}
+        run: scripts/deploy/wait-healthz.sh "$DEV_URL" "$DEPLOY_SHA" "$WAIT_SECONDS"
 
       # Migration or not: dev's data is disposable, so the old code may run on whatever the new code left behind. The
       # job still fails, so the later jobs are skipped.
@@ -134,6 +155,9 @@ jobs:
         run: |
           {
             echo "### Dev deploy: $RESULT"
+            if [ "$DRILL" = "true" ]; then
+              echo "- **This was a rollback drill.** The build was named \`drill-$GITHUB_RUN_NUMBER\` so that the wait for commit \`$DEPLOY_SHA\` fails and the rollback runs. A red run with 'Rolled back' below is the drill passing: dev is then back on the image it ran before, which holds the same commit. Production is not part of a drill."
+            fi
             echo "- App: \`$DEV_APP\` ($DEV_URL)"
             echo "- Commit: \`$DEPLOY_SHA\`"
             echo "- Image running before: \`${PREVIOUS_IMAGE:-not recorded}\`"
@@ -229,6 +253,8 @@ jobs:
   plan-production:
     name: Plan production
     needs: e2e-dev
+    # Never in a drill, whatever the jobs before it did.
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.drill == true) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Reads which pull requests the commits came from, and the settings of the environment a visible change waits in.
@@ -294,8 +320,10 @@ jobs:
     # watch-dev is skipped when nothing visible goes out, and a skipped job would skip this one with it: so the
     # condition is spelled out. Production deploys only after a plan that succeeded, and after watch-dev either
     # wasn't needed or was approved. A rejected or failed watch-dev stops here.
+    # Never in a drill, whatever the jobs before it did.
     if: >-
       !cancelled()
+      && !(github.event_name == 'workflow_dispatch' && inputs.drill == true)
       && needs.plan-production.result == 'success'
       && (needs.watch-dev.result == 'success'
         || (needs.watch-dev.result == 'skipped' && needs.plan-production.outputs.visible == 'false'))
