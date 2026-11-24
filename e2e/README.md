@@ -91,8 +91,7 @@ a local server first: start one as `local.sh` does and set `E2E_BASE_URL`. Produ
 
 ### Sending the recording
 
-The recording goes to the person who approves, in their Portico chat. One message carries at most five files, and
-every screenshot is sent as a file of its own, never combined into one sheet, so each can be opened and answered:
+The recording goes to the person who approves, in their Portico chat. Every screenshot is sent as a file of its own, never combined into one sheet, so each can be opened and answered:
 
 1. **First message:** `smoke.mp4`, with the steps from `steps.md` as text in the message.
 2. **Second message:** the screenshots as separate PNG files, up to five, under the names the flow gave them

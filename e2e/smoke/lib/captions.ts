@@ -37,7 +37,7 @@ export const PHONE = { width: 390, height: 844 };
 export const VIDEO = { width: PHONE.width * 2, height: PHONE.height * 2, bar: 240 };
 export const CAPTION_LINE_CHARS = 46;
 export const CAPTION_MAX_LINES = 3;
-/** Each screenshot is sent as a file of its own, and one Portico message carries five files. */
+/** Each screenshot is sent as a file of its own, in one message a person can take in: five at most. */
 export const MAX_SHOTS = 5;
 export const MIN_SHOTS = 3;
 

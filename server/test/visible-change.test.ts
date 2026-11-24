@@ -189,7 +189,7 @@ describe("the recording's captions (e2e/smoke/lib/captions.ts)", () => {
     expect(problem({ steps: [...five, step(40, "Video only.", 4.7, null)], total: 50 })).toBeNull();
     expect(problem({ steps: [], total: 50 })).toContain("no steps");
     expect(problem({ steps: five.slice(0, 2), total: 50 })).toContain("2 screenshots");
-    // One message carries five files, and every screenshot is a file of its own.
+    // Every screenshot is a file of its own, and five is what one message should hold.
     expect(problem({ steps: [...five, step(40, "A sixth.")], total: 50 })).toContain("6 screenshots: 3 to 5");
     expect(problem({ steps: five, total: 12 })).toContain("12 seconds");
     expect(problem({ steps: five, total: 140 })).toContain("140 seconds");
