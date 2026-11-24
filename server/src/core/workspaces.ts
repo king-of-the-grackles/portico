@@ -2,6 +2,8 @@ import type { Database } from "bun:sqlite";
 import { quote } from "./framing";
 import type { Changes } from "./changes";
 import { PorticoError } from "./errors";
+import { checkLength } from "./lengths";
+import { LIMITS } from "./limits";
 import { posesAsOwnPortico, titleKey } from "./names";
 import { AGENTS_POLICIES, type AgentsPolicy, type Workspace, type WorkspaceKind } from "./types";
 
@@ -52,7 +54,7 @@ export const PERSONAL_NAME = "Personal";
  * people's starting Porticos never read the same. Nobody can give a Portico this name (`posesAsOwnPortico`).
  */
 export const STARTER_NAME = "Shared";
-export const MAX_WORKSPACE_NAME = 60;
+export const MAX_WORKSPACE_NAME = LIMITS.maxWorkspaceNameChars;
 
 /**
  * A Portico's name as typed: trimmed, on one line, at most 60 characters. A name is optional: without one ("" here)
@@ -63,9 +65,7 @@ export function cleanWorkspaceName(value: unknown): string {
   if (typeof value !== "string") throw new PorticoError("bad_request", "name must be a string.");
   const name = value.replace(/\s+/g, " ").trim();
   if (/[\u0000-\u001f\u007f]/.test(name)) throw new PorticoError("bad_request", "A Portico's name is plain text on one line.");
-  if (Array.from(name).length > MAX_WORKSPACE_NAME) {
-    throw new PorticoError("bad_request", `A Portico's name can be at most ${MAX_WORKSPACE_NAME} characters.`);
-  }
+  checkLength("name", name, MAX_WORKSPACE_NAME);
   return name;
 }
 

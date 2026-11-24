@@ -206,12 +206,12 @@ describe("a task's outcome", () => {
     expect(p.tasks.get(mine(p), ask.id)!.messageIds).toEqual([reply.id]);
   });
 
-  test("a summary is optional, one line, at most 120 characters", () => {
+  test("a summary is optional and one line; one over 120 characters is trimmed to fit", () => {
     expect(checkSummary(undefined)).toBeNull();
     expect(checkSummary("   ")).toBeNull();
     expect(checkSummary(" Done ")).toBe("Done");
     expect(errorCode(() => checkSummary("two\nlines"))).toBe("bad_request");
-    expect(errorCode(() => checkSummary("x".repeat(121)))).toBe("bad_request");
+    expect(checkSummary("x".repeat(121))).toBe(`${"x".repeat(119)}…`);
     expect(errorCode(() => checkSummary(42))).toBe("bad_request");
   });
 

@@ -86,8 +86,13 @@ test("the plugin's copy follows the rules: the tools, the instructions and every
 test("send_message requires subject and text, and names the built-in limits", () => {
   const send = TOOLS.find((tool) => tool.name === "send_message")!;
   expect(send.inputSchema.required).toEqual(["subject", "text"]);
-  const properties = send.inputSchema.properties as Record<string, { description: string }>;
+  const properties = send.inputSchema.properties as Record<string, { description: string; maxLength?: number }>;
   expect(properties.subject!.description).toContain("at most 120 characters");
+  expect(properties.subject!.description).toContain("trims a longer one");
+  expect(properties.subject!.maxLength).toBe(120);
+  expect(properties.summary!.maxLength).toBe(120);
+  expect(INSTRUCTIONS).toContain("at most 120 characters: Portico trims a longer one to fit");
+  expect(INSTRUCTIONS).toContain("in at most 500 characters");
   expect(properties.text!.description).toBe("The message, in plain text. Up to 64 KB.");
 });
 

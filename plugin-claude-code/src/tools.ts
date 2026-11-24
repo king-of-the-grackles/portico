@@ -3,9 +3,12 @@ import { ApiError, type Inbox, MAX_INBOX_WAIT_SECONDS, type PorticoClient } from
 import { PORTICO_TOOL_NAMES } from "./portico-tools";
 
 /** Portico's built-in limits, as its /mcp tools name them. */
-const MAX_SUBJECT_CHARS = 120;
+export const MAX_SUBJECT_CHARS = 120;
 const MAX_MESSAGE_KB = 64;
-const MAX_DESCRIPTION_CHARS = 500;
+export const MAX_DESCRIPTION_CHARS = 500;
+export const MAX_DOING_CHARS = 120;
+const MAX_SEND_KEY_CHARS = 200;
+const MAX_FILE_NAME_CHARS = 200;
 const DOING_HOURS = 24;
 const MAX_FILE_MB = 100;
 const MAX_INLINE_FILE_KB = 100;
@@ -24,7 +27,8 @@ const TASK_FILTERS = ["open", "all", "needs_approval", "in_progress", "done", "f
 
 // The same tools as Portico's /mcp (server/src/agent-api/mcp.ts). test/tools.test.ts fails if they drift apart.
 const noArgs: Tool["inputSchema"] = { type: "object", properties: {}, additionalProperties: false };
-const str = (description: string) => ({ type: "string", description });
+/** A string argument. maxLength is for the caller to read: Portico checks every length, and trims a subject or summary. */
+const str = (description: string, maxLength?: number) => ({ type: "string", description, ...(maxLength === undefined ? {} : { maxLength }) });
 
 export const TOOLS: Tool[] = [
   {
@@ -59,13 +63,16 @@ export const TOOLS: Tool[] = [
         to: str("Who to send to: a name from list_agents. Optional with reply_to, which answers the other side of that message."),
         subject: str(
           `Required. One line, at most ${MAX_SUBJECT_CHARS} characters, saying what this message asks for or tells. ` +
-            "A person reads the subject first when approving.",
+            "Portico trims a longer one to fit and says so in the answer. A person reads the subject first when approving.",
+          MAX_SUBJECT_CHARS,
         ),
         text: str(`The message, in plain text. Up to ${MAX_MESSAGE_KB} KB.`),
         reply_to: str("Optional. The ID of the message this answers."),
         summary: str(
           `Optional, for a long answer: one line, at most ${MAX_SUBJECT_CHARS} characters, saying what the answer ` +
-            "found or did. A person scanning Portico's activity list reads this instead of the whole text.",
+            "found or did. Portico trims a longer one to fit and says so in the answer. A person scanning Portico's " +
+            "activity list reads this instead of the whole text.",
+          MAX_SUBJECT_CHARS,
         ),
         done: {
           type: "boolean",
@@ -76,7 +83,8 @@ export const TOOLS: Tool[] = [
         key: str(
           "Optional. A key for this one message, such as job-42-ask. Sending the same message again with the same key " +
             "sends nothing new and returns the first message, so a retry is safe. Every other message, updates and " +
-            "final answers included, needs a new key.",
+            `final answers included, needs a new key. At most ${MAX_SEND_KEY_CHARS} characters.`,
+          MAX_SEND_KEY_CHARS,
         ),
         attachments: {
           type: "array",
@@ -101,7 +109,7 @@ export const TOOLS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        name: str("Required. The file's name, such as report.pdf."),
+        name: str(`Required. The file's name, such as report.pdf. At most ${MAX_FILE_NAME_CHARS} characters.`, MAX_FILE_NAME_CHARS),
         type: str("Optional. The media type, such as application/pdf. text/plain for text, otherwise application/octet-stream."),
         size: { type: "number", description: "The file's size in bytes. Required unless text is given." },
         text: str(`The file's content, for a text file up to ${MAX_INLINE_FILE_KB} KB. Leave out to upload bytes.`),
@@ -179,9 +187,13 @@ export const TOOLS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        description: str(`Optional. What this agent handles, at most ${MAX_DESCRIPTION_CHARS} characters.`),
+        description: str(
+          `Optional. What this agent handles, at most ${MAX_DESCRIPTION_CHARS} characters. A longer one is refused.`,
+          MAX_DESCRIPTION_CHARS,
+        ),
         doing: str(
-          `Optional. One line, at most 120 characters. Shows for ${DOING_HOURS} hours, or until replaced; "" clears the line.`,
+          `Optional. One line, at most ${MAX_DOING_CHARS} characters. A longer one is refused. Shows for ${DOING_HOURS} hours, or until replaced; "" clears the line.`,
+          MAX_DOING_CHARS,
         ),
       },
       additionalProperties: false,
@@ -199,7 +211,7 @@ export const TOOLS: Tool[] = [
       type: "object",
       properties: {
         kind: { type: "string", enum: [...FEEDBACK_KINDS], description: "Required. What the item is about." },
-        title: str(`Required. One line, at most ${MAX_FEEDBACK_TITLE_CHARS} characters.`),
+        title: str(`Required. One line, at most ${MAX_FEEDBACK_TITLE_CHARS} characters. A longer one is refused.`, MAX_FEEDBACK_TITLE_CHARS),
         details: str(`Required. What happened, what was expected and how to see the problem again, or what is wanted. At most ${MAX_FEEDBACK_DETAILS_KB} KB.`),
       },
       required: ["kind", "title", "details"],
@@ -288,7 +300,7 @@ export async function runTool(
           ...(args.attachments !== undefined && args.attachments !== null ? { attachments: args.attachments } : {}),
         });
         const result = json({ message, delivery, ...(portico ? { portico } : {}) });
-        // A held message's note, as its own line, as on Portico's /mcp.
+        // Portico's note, as its own line, as on Portico's /mcp: a held message, or a subject or summary trimmed to fit.
         if (note) result.content.push({ type: "text", text: note });
         if (opts.replyHint && (delivery === "pushed" || delivery === "queued")) result.content.push({ type: "text", text: opts.replyHint });
         return result;

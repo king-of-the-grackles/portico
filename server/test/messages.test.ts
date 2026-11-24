@@ -12,10 +12,11 @@ async function setup() {
 }
 
 describe("sending", () => {
-  test("a subject is required, one line, at most 120 characters", () => {
+  test("a subject is required and one line; one over 120 characters is trimmed to fit", () => {
     expect(errorCode(() => checkSubject(""))).toBe("bad_request");
     expect(errorCode(() => checkSubject("two\nlines"))).toBe("bad_request");
-    expect(errorCode(() => checkSubject("x".repeat(121)))).toBe("bad_request");
+    expect(checkSubject("x".repeat(120))).toBe("x".repeat(120));
+    expect(checkSubject("x".repeat(121))).toBe(`${"x".repeat(119)}…`);
     expect(checkSubject("  Find a time with Sam  ")).toBe("Find a time with Sam");
   });
 

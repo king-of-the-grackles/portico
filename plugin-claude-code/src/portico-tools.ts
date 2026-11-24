@@ -21,7 +21,8 @@ export const PORTICO_TOOLS: Tool[] = [
       "properties": {
         "name": {
           "type": "string",
-          "description": "Optional. The Portico's name, such as Launch."
+          "description": "Optional. The Portico's name, such as Launch. At most 60 characters.",
+          "maxLength": 60
         },
         "agents": {
           "type": "array",
@@ -93,7 +94,8 @@ export const PORTICO_TOOLS: Tool[] = [
         },
         "name": {
           "type": "string",
-          "description": "Required. The new name, such as Launch."
+          "description": "Required. The new name, such as Launch. At most 60 characters.",
+          "maxLength": 60
         }
       },
       "required": [

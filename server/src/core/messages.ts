@@ -3,6 +3,7 @@ import type { Agents } from "./agents";
 import type { Changes } from "./changes";
 import { type Content, type ContentDb, merged, type Scope } from "./content";
 import { PorticoError } from "./errors";
+import { checkLength, trimField } from "./lengths";
 import { LOOP_LIMIT, LOOP_WINDOW_MS, loopGuardRetryAt } from "./guards";
 import type { InboxWaits } from "./inbox-waits";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
@@ -115,34 +116,27 @@ const PENDING = "to_id = $agent AND status = 'pending' AND expires_at > $now";
 /** Anything that breaks a line, or that a frame would turn into a line break: CR, LF, NEL and the Unicode separators. */
 export const LINE_BREAK = /[\r\n\u0085\u2028\u2029]/;
 
-/** A subject as given: trimmed, one line, 1 to 120 characters. */
-export function checkSubject(value: unknown): string {
+/**
+ * A subject as given: trimmed, one line, 1 to 120 characters. A longer one is cut to fit at a word boundary, and
+ * `notes` gets a sentence saying so.
+ */
+export function checkSubject(value: unknown, notes?: string[]): string {
   if (typeof value !== "string" || value.trim() === "") {
     throw new PorticoError("bad_request", "subject is required: one line saying what the message asks for.");
   }
   if (LINE_BREAK.test(value.trim())) throw new PorticoError("bad_request", "subject must be one line.");
-  const subject = value.trim();
-  if (Array.from(subject).length > LIMITS.maxSubjectChars) {
-    throw new PorticoError("bad_request", `subject can be at most ${LIMITS.maxSubjectChars} characters.`);
-  }
-  return subject;
+  return trimField("subject", value.trim(), LIMITS.maxSubjectChars, notes);
 }
 
-/** An optional summary: trimmed, one line, at most 120 characters; empty or absent is none. */
-export function checkSummary(value: unknown): string | null {
+/** An optional summary: trimmed, one line, at most 120 characters, a longer one cut to fit; empty or absent is none. */
+export function checkSummary(value: unknown, notes?: string[]): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "string") throw new PorticoError("bad_request", "summary must be a string.");
   const summary = value.trim();
   if (summary === "") return null;
   if (LINE_BREAK.test(summary)) throw new PorticoError("bad_request", "summary must be one line.");
-  if (Array.from(summary).length > LIMITS.maxSubjectChars) {
-    throw new PorticoError("bad_request", `summary can be at most ${LIMITS.maxSubjectChars} characters.`);
-  }
-  return summary;
+  return trimField("summary", summary, LIMITS.maxSubjectChars, notes);
 }
-
-/** The longest key a sender can give a message. */
-const MAX_SEND_KEY = 200;
 
 /** An optional key: trimmed, one line, at most 200 characters; empty or absent is none. */
 function checkSendKey(value: unknown): string | null {
@@ -151,7 +145,7 @@ function checkSendKey(value: unknown): string | null {
   const key = value.trim();
   if (key === "") return null;
   if (LINE_BREAK.test(key)) throw new PorticoError("bad_request", "key must be one line.");
-  if (Array.from(key).length > MAX_SEND_KEY) throw new PorticoError("bad_request", `key can be at most ${MAX_SEND_KEY} characters.`);
+  checkLength("key", key, LIMITS.maxSendKeyChars);
   return key;
 }
 
@@ -282,9 +276,11 @@ export class Messages {
       attachments?: unknown;
     },
   ): { message: Message; delivery: DeliveryTier; note: string | null; workspace: Workspace | null } {
-    const subject = checkSubject(input.subject);
+    // What the sender hears besides the message: first, anything Portico trimmed to fit.
+    const notes: string[] = [];
+    const subject = checkSubject(input.subject, notes);
     const text = checkText(input.text);
-    const summary = checkSummary(input.summary);
+    const summary = checkSummary(input.summary, notes);
     const sendKey = checkSendKey(input.key);
     if (input.done !== undefined && input.done !== null && typeof input.done !== "boolean") {
       throw new PorticoError("bad_request", "done must be true or false.");
@@ -326,7 +322,7 @@ export class Messages {
         return {
           message: first,
           delivery: first.status === "held" || !receiver ? "held" : this.agents.tier(receiver),
-          note: "Already sent with this key, so nothing new was sent. This is the first message.",
+          note: [...notes, "Already sent with this key, so nothing new was sent. This is the first message."].join(" "),
           workspace: this.workspaces.known(first.workspaceId),
         };
       }
@@ -445,7 +441,6 @@ export class Messages {
     this.notify({ kind: "message_sent", message });
     this.changes.about({ agents: [message.fromId, message.toId] }, ...(message.status === "held" ? (["threads", "approvals"] as const) : (["threads"] as const)));
     const name = this.agents.nameFor(receiver, caller.ownerId);
-    const notes: string[] = [];
     if (moved) {
       notes.push(
         `The message reply_to names is in a conversation whose Portico no longer joins this agent and ${name}, so ` +

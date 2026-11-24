@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { addressOf } from "./agents";
 import { PorticoError } from "./errors";
+import { checkLength } from "./lengths";
 import { DAY_MS, HOUR_MS, LIMITS } from "./limits";
 import type { Agent } from "./types";
 
@@ -98,9 +99,7 @@ export class Feedback {
     // Control characters carry nothing a reader needs; a title is one line.
     const title = typeof input.title === "string" ? strip(input.title).replace(/\s+/g, " ").trim() : "";
     if (title === "") throw new PorticoError("bad_request", "title must be one line saying what the feedback is about.");
-    if ([...title].length > LIMITS.maxFeedbackTitleChars) {
-      throw new PorticoError("bad_request", `title is at most ${LIMITS.maxFeedbackTitleChars} characters.`);
-    }
+    checkLength("title", title, LIMITS.maxFeedbackTitleChars);
     const details = typeof input.details === "string" ? strip(input.details).trim() : "";
     if (details === "") throw new PorticoError("bad_request", "details must say what happened or what is wanted.");
     if (Buffer.byteLength(details, "utf8") > LIMITS.maxFeedbackDetailsKb * 1024) {

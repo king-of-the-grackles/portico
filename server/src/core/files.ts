@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Agents } from "./agents";
 import type { Content, ContentDb } from "./content";
 import { PorticoError } from "./errors";
+import { checkLength } from "./lengths";
 import { type FileStore, FolderStore, uploadKey, workspaceFileKey } from "./file-store";
 import { DAY_MS, HOUR_MS, LIMITS, MINUTE_MS } from "./limits";
 import { letThrough } from "./tasks";
@@ -104,7 +105,6 @@ function toFile(row: FileRow, workspaceId: string): StoredFile {
 const MAX_FILE_BYTES = LIMITS.maxFileMb * 1024 * 1024;
 const MAX_INLINE_BYTES = LIMITS.maxInlineFileKb * 1024;
 const MAX_STORED_BYTES = LIMITS.maxStoredGb * 1024 * 1024 * 1024;
-const MAX_NAME_CHARS = 200;
 const TYPE = /^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/i;
 /** An upload a message carries is kept this long after the upload started: long past the copy into the workspace. */
 const ATTACHED_UPLOAD_MS = DAY_MS;
@@ -115,7 +115,7 @@ function checkName(value: unknown): string {
   const name = value.trim();
   if (/[\u0000-\u001f\u007f\u0085\u2028\u2029/\\]/.test(name)) throw new PorticoError("bad_request", "name must be a plain file name: one line, no folders.");
   if (name === "." || name === "..") throw new PorticoError("bad_request", "name must be a plain file name.");
-  if (Array.from(name).length > MAX_NAME_CHARS) throw new PorticoError("bad_request", `name can be at most ${MAX_NAME_CHARS} characters.`);
+  checkLength("name", name, LIMITS.maxFileNameChars);
   return name;
 }
 
