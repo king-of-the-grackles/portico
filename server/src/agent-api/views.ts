@@ -81,6 +81,12 @@ export interface NoticeView {
    * `<portico-answer>` frame; `level` and `via` say how far Portico checked who answered, and by which path.
    */
   question?: { id: string; status: string; level: string | null; via: string | null };
+  /**
+   * True on a notice the agent is waiting on, such as how its question ended: a session that stopped to wait starts
+   * a turn for it, as for a message. Absent on every other notice (who came into or left a Portico), which starts no
+   * turn and rides along with the next message or check. A client reads a missing field as "does not wake".
+   */
+  wake?: true;
 }
 
 /** A question this agent asked its own person, as the agent reads it back. Never an answer: that comes as a notice. */
@@ -223,7 +229,10 @@ export function agentViews(agents: Agents, people: People, files: Files, workspa
   const notice = (n: AgentNotice): NoticeView => {
     const about = questions?.ofNotice(n.id) ?? null;
     if (!about) return { id: n.id, at: n.at, text: n.text, framed_message: frameNotice(n.text) };
-    return { id: n.id, at: n.at, text: n.text, framed_message: frameAnswer({ questionId: about.id, status: about.status, level: about.level, via: about.via, text: n.text }), question: about };
+    // Whether a notice wakes is worked out here, from what the notice is linked to, since a notice's own row says
+    // nothing about its kind: today that is the question it reports on. A later notice an agent waits on (a
+    // cancelled task) sets `wake` in this one place the same way.
+    return { id: n.id, at: n.at, text: n.text, framed_message: frameAnswer({ questionId: about.id, status: about.status, level: about.level, via: about.via, text: n.text }), question: about, wake: true };
   };
 
   /** The person who manages the viewer, as a quote: a name a person typed reaches an agent only that way. */

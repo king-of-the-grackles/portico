@@ -12,6 +12,7 @@ import type { WebhookRequest } from "../src/core/webhooks";
 import { MODERN_PROTOCOL_VERSION } from "../src/agent-api/mcp";
 import {
   addAppAgent,
+  addComputer,
   addMember,
   addOwner,
   callAs,
@@ -24,6 +25,7 @@ import {
   HOUR,
   makePortico,
   MINUTE,
+  openSessionStream,
   PUBLIC_URL,
   signIn,
   type TestPortico,
@@ -708,6 +710,8 @@ describe("input needed: every surface offers request_input", () => {
     expect(body.properties.options.items.maxLength).toBe(40);
     expect(doc.components.schemas.Question.required).toContain("link");
     expect(doc.components.schemas.Notice.properties.question.properties.via.enum).toEqual(["web", "popup", null]);
+    expect(doc.components.schemas.Notice.properties.wake.type).toBe("boolean");
+    expect(doc.components.schemas.Notice.required).not.toContain("wake");
     expect(doc.paths["/api/agent/inbox"].get.responses["200"].content["application/json"].schema.properties.input_note).toBeDefined();
     expect(copyProblems(JSON.stringify(op))).toEqual([]);
 
@@ -874,6 +878,51 @@ describe("input needed: a new agent may ask, and the card and page say so", () =
     // The new agent's answer is as checked as any.
     await person(p, cookie, "POST", `/api/questions/${id}`, { decision: "answer", option: 0 });
     expect((await notices(p, muse))[0]!.question).toEqual({ id, status: "answered", level: "checked", via: "web" });
+  });
+});
+
+describe("input needed: a session is woken for the notice", () => {
+  test("the stream of a session that asked is nudged when its question ends, and the notice says it wakes; other notices don't", async () => {
+    const p = makePortico();
+    const chris = await addOwner(p, "Chris");
+    const { computer, token } = addComputer(p, chris);
+    // A Codex conversation whose bridge can start turns, and a Claude Code session: both are nudged through the stream.
+    const codex = await openSessionStream(p, token, { key: "codex-key-1", repo: "api", folderId: "c".repeat(64), wake: true, client: "codex" });
+    const claude = await openSessionStream(p, token, { key: "claude-key-1", repo: "web", folderId: "d".repeat(64) });
+    const agents = p.agents.ownedBy(chris.id);
+    const codexAgent = agents.find((a) => a.kind === "codex")!;
+    const claudeAgent = agents.find((a) => a.kind === "claude-code")!;
+    expect(computer.ownerId).toBe(chris.id);
+    for (const [stream, agent, key] of [[codex, codexAgent, "codex-key-1"], [claude, claudeAgent, "claude-key-1"]] as const) {
+      const asked = p.questions.ask(agent, { question: "Ship today?" });
+      p.questions.answer(chris.id, asked.id, { text: "Yes" }, "web");
+      expect((await stream.events.next()).event).toBe("nudge");
+      // What the plugin then reads: the notice, marked as one that wakes.
+      const pending = (await (await callAs(p, { token, key }, "GET", "/api/agent/deliveries")).json()) as { messages: unknown[]; updates: unknown[]; notices: { id: string; wake?: boolean; question?: { id: string } }[] };
+      expect(pending.messages).toEqual([]);
+      expect(pending.updates).toEqual([]);
+      expect(pending.notices).toHaveLength(1);
+      expect(pending.notices[0]).toMatchObject({ wake: true, question: { id: asked.id, status: "answered" } });
+      await callAs(p, { token, key }, "POST", "/api/agent/deliveries/ack", { messages: [], updates: [], notices: [pending.notices[0]!.id] });
+      // A skip and a lapse wake too.
+      const skipped = p.questions.ask(agent, { question: "Skip?" });
+      p.questions.skip(chris.id, skipped.id, "web");
+      expect((await stream.events.next()).event).toBe("nudge");
+      const lapsing = p.questions.ask(agent, { question: "Lapse?", expiresInMinutes: 5 });
+      p.clock.advance(6 * MINUTE);
+      p.sweepMinute();
+      const after = (await (await callAs(p, { token, key }, "GET", "/api/agent/deliveries")).json()) as { notices: { wake?: boolean; question?: { id: string; status: string } }[] };
+      expect(after.notices.map((n) => [n.question?.id, n.question?.status, n.wake])).toEqual([[skipped.id, "skipped", true], [lapsing.id, "expired", true]]);
+      // A notice about a Portico the agent came into carries no wake at all.
+      const launch = p.workspaces.create(chris.id, `Launch ${agent.kind}`);
+      p.workspaces.addAgent(chris.id, launch.id, agent.id);
+      const all = (await (await callAs(p, { token, key }, "GET", "/api/agent/deliveries")).json()) as { notices: Record<string, unknown>[] };
+      expect(all.notices).toHaveLength(3);
+      expect("wake" in all.notices[2]!).toBe(false);
+      expect("question" in all.notices[2]!).toBe(false);
+    }
+    await codex.events.cancel();
+    await claude.events.cancel();
   });
 });
 

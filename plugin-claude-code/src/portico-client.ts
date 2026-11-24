@@ -86,6 +86,11 @@ export interface NoticeDelivery {
   framed_message: string;
   /** Present on the notice that says how a question asked with request_input ended. */
   question?: { id: string; status: string; level: string | null; via: string | null };
+  /**
+   * True on a notice this session is waiting on, such as how its question ended: a stopped session starts a turn for
+   * it. Absent on every other notice, and from a Portico server that doesn't say: then the notice starts no turn.
+   */
+  wake?: boolean;
 }
 
 /** What `POST /api/agent/questions` returns: the question, the line to show the person, and what happens next. */
@@ -165,6 +170,15 @@ export interface Inbox {
   /** How many of this agent's own questions wait for its person, and the sentence with each one's link. */
   input_needed?: number;
   input_note?: string;
+}
+
+/**
+ * Whether what waits is worth starting a turn for, or keeping a conversation going: a message, the outcome of a sent
+ * message, or a notice Portico marks as one the session waits on (the answer to its question). Portico's other
+ * notices, about who came into or left a Portico, start nothing: they ride along with the next message or check.
+ */
+export function startsTurn(inbox: Inbox): boolean {
+  return inbox.messages.length > 0 || inbox.updates.length > 0 || (inbox.notices ?? []).some((notice) => notice.wake === true);
 }
 
 /** The IDs this session delivered, for `POST /api/agent/deliveries/ack`. Updates go by their message's ID. */

@@ -126,6 +126,33 @@ describe("a Codex conversation's link to its conversation", () => {
     expect(a.reports).toEqual(["idle", "busy"]);
   });
 
+  test("a notice the conversation waits on starts a turn by itself and is acked once; a notice about who came or went starts none", async () => {
+    const answer = { id: "n-answer", at: "2026-10-27T10:00:00.000Z", text: "Answered", framed_message: '<portico-answer question_id="q1" status="answered">Answered</portico-answer>', wake: true };
+    const membership = { id: "n-joined", at: "2026-10-27T10:00:01.000Z", text: "Dana came in", framed_message: "<portico-notice>Dana came in</portico-notice>" };
+    const { codex, acks, bridge, hold } = setup({ a: { cwd: FOLDER, status: idle } }, { inbox: { messages: [], updates: [], notices: [membership] } });
+    const { link } = bridge("a");
+    link.start();
+    await link.settled(1000);
+    // Who came into a Portico: no turn, nothing acked, whatever the server says or leaves out about waking.
+    link.nudge();
+    await Bun.sleep(40);
+    hold({ messages: [], updates: [], notices: [{ ...membership, wake: false }] });
+    link.nudge();
+    await Bun.sleep(40);
+    expect(codex.turns).toEqual([]);
+    expect(acks).toEqual([]);
+    // The answer to the conversation's own question: a turn starts with it, and it is acked, with the notice that rode along.
+    hold({ messages: [], updates: [], notices: [membership, answer] });
+    link.nudge();
+    await waitFor(() => acks.length === 1);
+    expect(codex.turns).toHaveLength(1);
+    expect(acks[0]).toEqual({ messages: [], updates: [], notices: ["n-joined", "n-answer"] });
+    link.nudge();
+    await Bun.sleep(40);
+    expect(codex.turns).toHaveLength(1);
+    expect(acks).toHaveLength(1);
+  });
+
   test("a nudge while busy waits for the turn to end; a nudge with nothing waiting starts nothing", async () => {
     const { codex, acks, bridge, hold } = setup({ a: { cwd: FOLDER, status: { type: "active", activeFlags: [] } } });
     const { link } = bridge("a");

@@ -258,6 +258,11 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
             at: { type: "string", format: "date-time" },
             text: { type: "string" },
             framed_message: { type: "string", description: "The notice in Portico's frame: <portico-answer> for how a question ended, <portico-notice> for anything else." },
+            wake: {
+              type: "boolean",
+              description:
+                "True on a notice this agent is waiting on, such as how its question ended: worth starting a run for, as a message is. Absent on every other notice.",
+            },
             question: {
               type: "object",
               description: "Present on the notice that says how a question asked with requestInput ended.",

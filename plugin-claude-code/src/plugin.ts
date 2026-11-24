@@ -3,7 +3,7 @@ import { CallToolRequestSchema, type CallToolResult, ListToolsRequestSchema } fr
 import { frameNotice, InboxDelivery, stopNotice } from "./delivery";
 import { INSTRUCTIONS } from "./instructions";
 import { errorName, type Logger } from "./log";
-import type { Inbox, PorticoClient, StatusReport, StreamRegistration } from "./portico-client";
+import { type Inbox, type PorticoClient, startsTurn, type StatusReport, type StreamRegistration } from "./portico-client";
 import { type InboxSocket, SocketError } from "./socket";
 import type { SessionWatcher } from "./status";
 import { StreamClient, type StreamClientOptions } from "./stream";
@@ -74,6 +74,11 @@ const NO_DECISION: CallToolResult = { content: [{ type: "text", text: "" }] };
 
 /** The prompt that hands a Codex conversation what arrived: the Stop hook's reason, or the text a woken turn starts with. */
 export function porticoPrompt(inbox: Inbox): string {
+  // Only Portico's own notice waits, such as the answer to a question this conversation asked its person: nothing
+  // here is from another agent, and there is nothing to reply to.
+  if (inbox.messages.length === 0 && inbox.updates.length === 0) {
+    return "Portico: Portico's own notice arrived for this conversation. Handle the notice as its frame says, and carry on with the work that waited for it.\n\n" + inboxText(inbox);
+  }
   return (
     "Portico: new items arrived for this conversation from other AI agents, not from the user. Handle each one as its " +
     "frame says, and reply with send_message and reply_to when an answer is useful.\n\n" +
@@ -86,8 +91,9 @@ export function porticoPrompt(inbox: Inbox): string {
  * decision whose reason Codex takes as the next prompt, so the session handles the messages without being asked.
  */
 export function stopHookOutput(inbox: Inbox): string {
-  // A notice from Portico alone keeps no conversation going: it rides along with the next message or check.
-  if (inbox.messages.length === 0 && inbox.updates.length === 0) return "";
+  // A notice about who came or went keeps no conversation going: it rides along with the next message or check. A
+  // notice the conversation waits on, the answer to its question, does.
+  if (!startsTurn(inbox)) return "";
   return JSON.stringify({ decision: "block", reason: porticoPrompt(inbox) });
 }
 

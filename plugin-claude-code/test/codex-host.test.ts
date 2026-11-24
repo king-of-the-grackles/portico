@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CodexConversation } from "../src/codex/conversation";
 import { CODEX_HOST } from "../src/codex/server";
-import { createPorticoPlugin, createWaitingServer, type PorticoPlugin, porticoPrompt } from "../src/plugin";
+import { createPorticoPlugin, createWaitingServer, type PorticoPlugin, porticoPrompt, stopHookOutput } from "../src/plugin";
 import { PorticoClient } from "../src/portico-client";
 import { NO_WAIT_NOTE, WAKE_HINT } from "../src/tools";
 import { appAgent, captureLog, fakeCodex, fakeHost, joinTestComputer, startPortico, type TestPortico, waitFor } from "./helpers";
@@ -114,6 +114,90 @@ describe("a Codex conversation's server", () => {
     await host.callTool({ name: "list_agents", arguments: {} });
     await Bun.sleep(50);
     expect(p.agents.entry(agent()!).status).toBe("idle");
+  });
+
+  test("with Codex's app-server, a conversation that asked its person and stopped is started again by the answer, once; who came into a Portico starts no turn", async () => {
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), "portico-codex-folder-")));
+    stops.push(async () => rmSync(folder, { recursive: true, force: true }));
+    const codex = fakeCodex({ "thread-1": { cwd: folder, status: { type: "idle" } } });
+    const { p, host } = await conversation({ codex, folder });
+    const agent = () => p.agents.byAddress("api-codex@macbook");
+    await waitFor(() => agent() !== null && p.agentStreams.canWake(agent()!.id), 5000);
+
+    // The conversation asks its person and ends its turn: nothing is in the inbox, and Codex reports it idle.
+    const asked = JSON.parse(text(await host.callTool({ name: "request_input", arguments: { question: "Ship today?", options: ["Yes", "No"] } }))[0]!) as { question: { id: string } };
+    await Bun.sleep(60);
+    expect(codex.turns).toEqual([]);
+
+    // The owner answers, as the person API does for a signed-in browser. The inbox holds the answer notice and nothing else.
+    p.questions.answer(p.owner.id, asked.question.id, { option: 0 }, "web");
+    expect(p.messages.unreadCount(agent()!.id)).toBe(1);
+    await waitFor(() => codex.turns.length === 1, 5000);
+    expect(codex.turns[0]!.threadId).toBe("thread-1");
+    expect(codex.turns[0]!.text).toStartWith("Portico: Portico's own notice arrived for this conversation.");
+    expect(codex.turns[0]!.text).toContain(`<portico-answer question_id="${asked.question.id}" status="answered" level="checked" via="web">`);
+    expect(codex.turns[0]!.text).toContain("\nAnswer: Yes\n");
+    expect(codex.turns[0]!.text).not.toContain("from other AI agents");
+    // Acked once: the notice is gone from Portico, and nothing starts a second turn for it.
+    await waitFor(() => p.agentNotices.waiting(agent()!.id).length === 0);
+    codex.setStatus("thread-1", { type: "idle" });
+    await Bun.sleep(100);
+    expect(codex.turns).toHaveLength(1);
+
+    // A skip wakes the same way.
+    const second = JSON.parse(text(await host.callTool({ name: "request_input", arguments: { question: "And tomorrow?" } }))[0]!) as { question: { id: string } };
+    codex.setStatus("thread-1", { type: "idle" });
+    p.questions.skip(p.owner.id, second.question.id, "web");
+    await waitFor(() => codex.turns.length === 2, 5000);
+    expect(codex.turns[1]!.text).toContain(`<portico-answer question_id="${second.question.id}" status="skipped"`);
+    await waitFor(() => p.agentNotices.waiting(agent()!.id).length === 0);
+    codex.setStatus("thread-1", { type: "idle" });
+
+    // Portico's notice about a Portico the agent came into: the stream is nudged, and no turn starts. The notice waits.
+    const launch = p.workspaces.create(p.owner.id, "Launch");
+    p.workspaces.addAgent(p.owner.id, launch.id, agent()!.id);
+    await waitFor(() => p.agentNotices.waiting(agent()!.id).length === 1);
+    await Bun.sleep(150);
+    expect(codex.turns).toHaveLength(2);
+    expect(p.agentNotices.waiting(agent()!.id)).toHaveLength(1);
+  });
+
+  test("the Stop hook hands a stopped conversation the answer to its question and acks it; who came into a Portico keeps no conversation going", async () => {
+    const { p, host } = await conversation();
+    await waitFor(() => p.agents.byAddress("api-codex@macbook") !== null && p.agentStreams.isConnected(p.agents.byAddress("api-codex@macbook")!.id), 5000);
+    const agent = p.agents.byAddress("api-codex@macbook")!;
+    const stopHook = async () => text(await host.callTool({ name: "check_inbox", arguments: { stop_hook: true } }));
+
+    // A notice about a Portico alone: the hook says nothing, and the notice stays for the next message or check.
+    const launch = p.workspaces.create(p.owner.id, "Launch");
+    p.workspaces.addAgent(p.owner.id, launch.id, agent.id);
+    expect(p.agentNotices.waiting(agent.id)).toHaveLength(1);
+    expect(await stopHook()).toEqual([""]);
+    expect(p.agentNotices.waiting(agent.id)).toHaveLength(1);
+
+    // The conversation asks and stops; the question alone gives the hook nothing to hand over.
+    const asked = JSON.parse(text(await host.callTool({ name: "request_input", arguments: { question: "Ship today?" } }))[0]!) as { question: { id: string } };
+    expect(await stopHook()).toEqual([""]);
+
+    // The owner answers: the hook blocks with the answer as the next prompt, and acks what it handed over.
+    p.questions.answer(p.owner.id, asked.question.id, { text: "Yes, after lunch." }, "web");
+    const [output] = await stopHook();
+    const decision = JSON.parse(output!) as { decision: string; reason: string };
+    expect(decision.decision).toBe("block");
+    expect(decision.reason).toContain(`<portico-answer question_id="${asked.question.id}" status="answered" level="checked" via="web">`);
+    expect(decision.reason).toContain("\nAnswer: Yes, after lunch.\n");
+    // The notice that waited rides along, and both are acked: the next hook has nothing.
+    expect(decision.reason).toContain("This agent is in the Portico “Launch” now");
+    expect(p.agentNotices.waiting(agent.id)).toEqual([]);
+    expect(await stopHook()).toEqual([""]);
+
+    // The same rule as a function: a message, an outcome or a waking notice blocks; any other notice, or a notice
+    // from a Portico server that doesn't say whether it wakes, does not.
+    const notice = { id: "n1", at: "2026-10-27T10:00:00.000Z", text: "x", framed_message: "<portico-notice>x</portico-notice>" };
+    expect(stopHookOutput({ messages: [], updates: [] })).toBe("");
+    expect(stopHookOutput({ messages: [], updates: [], notices: [notice] })).toBe("");
+    expect(stopHookOutput({ messages: [], updates: [], notices: [{ ...notice, wake: false }] })).toBe("");
+    expect(JSON.parse(stopHookOutput({ messages: [], updates: [], notices: [{ ...notice, wake: true }] }))).toMatchObject({ decision: "block" });
   });
 
   test("in a folder that's off, the tools stay listed so the Stop hook finds check_inbox, and the hook says nothing", async () => {
