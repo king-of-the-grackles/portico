@@ -18,6 +18,9 @@ primary_region = "iad"
   PORTICO_DESCOPE_PROJECT_ID = "P3MJNT5ZQa28nKZ4hv7GP4Jqo4Ic"
   PORTICO_MAIL_FROM = "Portico Dev <no-reply@mail.portico.chat>"
   PORTICO_PLUGIN_SOURCE = "king-of-the-grackles/portico"
+  # Dev only. The browser suite joins 8 agents a run from one address, and runs follow each other: the usual limit of
+  # 10 starts per address per 15 minutes would fail every second run. The live app's file never has this line.
+  PORTICO_JOIN_STARTS_PER_ADDRESS = "500"
 
 # SQLite lives on one volume, so Portico runs on one machine: deploy with --ha=false.
 [mounts]

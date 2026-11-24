@@ -18,11 +18,25 @@ describe("config", () => {
       webhooksAllowPrivate: false,
       retiredHosts: [],
       feedbackReviewToken: null,
+      joinStartsPerClient: 10,
       commit: "unknown",
       files: null,
       mail: null,
       descopeProjectId: null,
     });
+  });
+
+  test("PORTICO_JOIN_STARTS_PER_ADDRESS is a whole number from 1 to 1000, and no deployment file but dev's sets it", () => {
+    expect(parseEnv({ PORTICO_JOIN_STARTS_PER_ADDRESS: " 500 " }, "k").joinStartsPerClient).toBe(500);
+    expect(parseEnv({ PORTICO_JOIN_STARTS_PER_ADDRESS: "" }, "k").joinStartsPerClient).toBe(10);
+    for (const bad of ["0", "-5", "1.5", "1001", "many", "1e2"]) {
+      expect(() => parseEnv({ PORTICO_JOIN_STARTS_PER_ADDRESS: bad }, "k")).toThrow("PORTICO_JOIN_STARTS_PER_ADDRESS must be a whole number from 1 to 1000");
+    }
+    // The live app keeps the usual limit: only the dev app's file may raise it, and the Deploy workflow never sets it.
+    const root = join(import.meta.dir, "..", "..");
+    const mentions = (file: string) => readFileSync(join(root, file), "utf8").includes("PORTICO_JOIN_STARTS_PER_ADDRESS");
+    expect(mentions("fly.dev.toml")).toBe(true);
+    for (const file of ["fly.hosted.toml", "fly.toml", "render.yaml", "Dockerfile", ".github/workflows/deploy.yml"]) expect(mentions(file)).toBe(false);
   });
 
   test("PORTICO_COMMIT names the commit the build was made from, and is unknown when unset or blank", () => {

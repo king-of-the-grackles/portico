@@ -49,6 +49,7 @@ export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfi
     webhooksAllowPrivate: false,
     retiredHosts: [],
     feedbackReviewToken: null,
+    joinStartsPerClient: 10,
     commit: "unknown",
     mail: null,
     files: null,
@@ -448,11 +449,33 @@ export function fakeWebhooks(answer: (req: WebhookRequest) => WebhookResult = ()
 export type FakeWebhooks = ReturnType<typeof fakeWebhooks>;
 
 /**
- * Lets queued microtasks and zero-delay timers run, e.g. notices and change batches, and gives a wake or an event its
- * time to leave: decrypting its key is WebCrypto's work on another thread, a few steps of well under a millisecond each.
+ * How many WebCrypto calls are under way. Encrypting and decrypting a stored secret is WebCrypto's work on another
+ * thread, so how long one takes depends on how busy the computer is: flush() waits on this count, not on a guess.
  */
-export function flush(): Promise<void> {
-  return Bun.sleep(10);
+let cryptoPending = 0;
+{
+  const subtle = crypto.subtle as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+  for (const name of ["encrypt", "decrypt", "importKey", "digest", "sign", "verify", "deriveBits", "deriveKey"]) {
+    const real = subtle[name]!;
+    subtle[name] = function (this: unknown, ...args: unknown[]) {
+      cryptoPending++;
+      return real.apply(this, args).finally(() => cryptoPending--);
+    };
+  }
+}
+
+/**
+ * Lets queued microtasks and zero-delay timers run, e.g. notices and change batches, and waits for a wake or an event
+ * to leave. Each of those decrypts its key first, a few WebCrypto steps one after another; flush() is done once two
+ * looks in a row, 5 ms apart, find none of them under way. A fixed sleep here failed whenever the computer was busy.
+ */
+export async function flush(): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (let quiet = 0; quiet < 2; ) {
+    await Bun.sleep(cryptoPending > 0 ? 1 : 5);
+    quiet = cryptoPending === 0 ? quiet + 1 : 0;
+    if (Date.now() > deadline) throw new Error("flush(): WebCrypto work was still under way after 10 seconds.");
+  }
 }
 
 export interface SseEvent {
