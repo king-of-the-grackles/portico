@@ -1,5 +1,6 @@
 // The MCP endpoint: an agent's token on /mcp, JSON-RPC over HTTP, the same tools as the REST API.
 import { BASE_URL } from "../lib/env";
+import { CARD_HOST, cardMessages, cardPage, drawCard, openCardHost } from "../lib/card-host";
 import { expect, test, unique } from "../lib/fixtures";
 
 let nextId = 1;
@@ -44,14 +45,6 @@ test("an agent connects to /mcp with its token, lists agents and sends a message
   expect(sent.message.subject).toBe(subject);
   expect((await helper.receive(subject)).text).toBe("Hello from the MCP side.");
 });
-
-/** The page a card host draws for portico_status, read the way a host reads it. */
-async function cardPage(token: string): Promise<string> {
-  const read = await rpc(token, "resources/read", { uri: "ui://portico/status-v1.html" });
-  expect(read.status).toBe(200);
-  expect(read.body.result.contents[0].mimeType).toBe("text/html;profile=mcp-app");
-  return read.body.result.contents[0].text;
-}
 
 test("a client that draws no cards gets a held message's standing as text, with the link to its page", async ({ world }) => {
   const alice = await world.person("alice");
@@ -117,46 +110,17 @@ test("the card's page, drawn as a host draws it: text only, no request of its ow
     const send = (await rpc(probe.token, "tools/call", { name: "send_message", arguments: { to: "helper", subject, text: "t" } })).body.result;
     held = JSON.parse(send.content[0].text).message.id;
     const result = (await rpc(probe.token, "tools/call", { name: "portico_status", arguments: { message: held } })).body.result;
-    // The page under the content policy a host applies when the resource asks for nothing: no network at all.
-    const policy = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:; connect-src 'none';">`;
-    const html = (await cardPage(probe.token)).replace("<head>", `<head>${policy}`);
+    // The page as the server serves it, under the content policy a host applies when the resource asks for nothing.
+    const html = await cardPage(probe.token);
 
-    const HOST = "http://card-host.test/";
+    const HOST = CARD_HOST;
     const requests: string[] = [];
     page.on("request", (request) => requests.push(request.url()));
-    await page.route("**/*", (route) => (route.request().url() === HOST ? route.fulfill({ contentType: "text/html", body: "<!doctype html><title>host</title><body></body>" }) : route.abort()));
-    await page.goto(HOST);
-
-    /** A stand-in host: a sandboxed frame, the MCP Apps handshake, then the tool's result. Records what the page sends. */
-    const draw = (toolResult: unknown) =>
-      page.evaluate(
-        ({ html, toolResult }) => {
-          const w = window as unknown as { seen: any[]; listener?: (event: MessageEvent) => void };
-          w.seen = [];
-          document.querySelector("iframe")?.remove();
-          if (w.listener) window.removeEventListener("message", w.listener);
-          const frame = document.createElement("iframe");
-          frame.setAttribute("sandbox", "allow-scripts");
-          frame.style.cssText = "width: 480px; height: 480px; border: 0";
-          frame.srcdoc = html;
-          const say = (message: unknown) => frame.contentWindow!.postMessage(message, "*");
-          w.listener = (event) => {
-            if (event.source !== frame.contentWindow) return;
-            const m = event.data;
-            w.seen.push(m);
-            if (m.method === "ui/initialize") {
-              say({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2026-01-26", hostInfo: { name: "test-host", version: "1" }, hostCapabilities: { openLinks: {} }, hostContext: { theme: "dark" } } });
-            } else if (m.method === "ui/notifications/initialized") {
-              say({ jsonrpc: "2.0", method: "ui/notifications/tool-input", params: { arguments: {} } });
-              say({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: toolResult });
-            } else if (m.method === "ui/open-link") say({ jsonrpc: "2.0", id: m.id, result: {} });
-          };
-          window.addEventListener("message", w.listener);
-          document.body.appendChild(frame);
-        },
-        { html, toolResult },
-      );
-    const seen = () => page.evaluate(() => (window as unknown as { seen: any[] }).seen);
+    // Anything but the stand-in host's own page is refused, and would show in the list below.
+    await page.route("**/*", (route) => route.abort());
+    await openCardHost(page);
+    const draw = (toolResult: unknown) => drawCard(page, html, toolResult, "dark");
+    const seen = () => cardMessages(page);
     const card = page.frameLocator("iframe");
 
     await draw(result);
