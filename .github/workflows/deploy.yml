@@ -94,12 +94,25 @@ jobs:
           echo "image=$image" >>"$GITHUB_OUTPUT"
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
 
-      # A drill puts up an image only to roll it back: without the image to go back to, it doesn't start.
-      - name: "Drill: stop unless the running image was recorded"
-        if: env.DRILL == 'true' && steps.previous.outputs.image == ''
+      # A drill puts up an image only to roll it back, so it starts only when that is certain to be harmless:
+      # the image to go back to was recorded, and dev already runs the commit the drill would build. Then the drill
+      # image is the same code as the one running, and no migration can run on dev's data. Read-only: one GET.
+      - name: "Drill: stop unless dev already runs this commit and its image was recorded"
+        if: env.DRILL == 'true'
+        env:
+          PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
         run: |
-          echo "The image running in $DEV_APP could not be recorded, so a drill could not roll back: not deploying." >&2
-          exit 1
+          if [ -z "$PREVIOUS_IMAGE" ]; then
+            echo "The image running in $DEV_APP could not be recorded, so a drill could not roll back: not deploying." >&2
+            exit 1
+          fi
+          body="$(curl -fsS --max-time 15 --retry 2 --retry-delay 5 "$DEV_URL/healthz" || true)"
+          running="$(jq -r '.commit // empty' <<<"$body" 2>/dev/null || true)"
+          if [ "$running" != "$DEPLOY_SHA" ]; then
+            echo "A drill only runs when dev already has the commit it would build, so that nothing new, and no migration, reaches dev's data. $DEV_URL/healthz reports '${running:-no commit}', not $DEPLOY_SHA: not deploying. Run an ordinary deploy first, then the drill." >&2
+            exit 1
+          fi
+          echo "Dev runs $DEPLOY_SHA, the commit the drill builds: the drill image is the same code."
 
       # In a drill the build is the same commit under another name, 'drill-<run number>': the image runs as usual, and
       # the wait below, which looks for the commit's own ID, fails. That failure is what the drill is for.
