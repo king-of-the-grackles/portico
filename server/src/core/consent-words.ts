@@ -6,18 +6,21 @@ export { quote };
 import { LIMITS } from "./limits";
 import type { Agent } from "./types";
 
-/** "Nov 22", with the year when it isn't this year: a day as the server writes one, in UTC. */
-export function utcDay(at: string, now: Date = new Date()): string {
+/**
+ * "Nov 22", with the year when it isn't this year: a day as the server writes one, in UTC. `now` is the application's
+ * clock, never the computer's own: the caller hands it in, so the words don't change with the day the code runs.
+ */
+export function utcDay(at: string, now: Date): string {
   const d = new Date(at);
   const sameYear = d.getUTCFullYear() === now.getUTCFullYear();
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC", ...(sameYear ? {} : { year: "numeric" }) });
 }
 
 /** What the person who manages a new agent reads about it, before that person has said the agent is theirs. */
-export const newAgentWords = (agent: { createdAt: string }, now: Date = new Date()) => `New agent, added ${utcDay(agent.createdAt, now)}. You haven't confirmed this agent yet.`;
+export const newAgentWords = (agent: { createdAt: string }, now: Date) => `New agent, added ${utcDay(agent.createdAt, now)}. You haven't confirmed this agent yet.`;
 
 /** Why an agent that could act at once asks first. */
-const NEW_ASKER = (agent: Agent, me: string) => `${newAgentWords(agent)} That is why Portico asks. Not an agent ${me} started? Choose Don't allow and revoke the agent on the agent's page.`;
+const NEW_ASKER = (agent: Agent, me: string, now: Date) => `${newAgentWords(agent, now)} That is why Portico asks. Not an agent ${me} started? Choose Don't allow and revoke the agent on the agent's page.`;
 
 const KIND_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
@@ -46,12 +49,12 @@ export interface ConsentWords {
  * The words for one request, as the person deciding reads them. `me` is that person's name; `agentName` is how the
  * person knows the asking agent, for the kinds an agent of the person's asks.
  */
-export function consentWords(view: ConsentView, me: string, agentName: (agent: Agent) => string): ConsentWords {
+export function consentWords(view: ConsentView, me: string, agentName: (agent: Agent) => string, now: Date): ConsentWords {
   const words = wordsFor(view, me, agentName);
   // An agent nobody vouched for asks: the page says so, whatever is asked.
   const agent = view.agent;
   const asks = agent?.unproven && view.request.agentId === agent.id && view.request.personId === agent.ownerId;
-  return agent && asks ? { ...words, then: [...words.then, NEW_ASKER(agent, me)] } : words;
+  return agent && asks ? { ...words, then: [...words.then, NEW_ASKER(agent, me, now)] } : words;
 }
 
 function wordsFor(view: ConsentView, me: string, agentName: (agent: Agent) => string): ConsentWords {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { mcpTools } from "../src/agent-api/mcp";
 import { openApiDocument } from "../src/agent-api/openapi";
 import { porticoTools } from "../src/agent-api/portico-tools";
+import { newAgentWords, utcDay } from "../src/core/consent-words";
 import { shareEmail } from "../src/core/mail";
 import { filesUnder, sourceWordProblems, stringPieces } from "./copy-source";
 import { addOwner, callAs, copyProblems, makePortico, PUBLIC_URL, signIn, visibleCopy, wordProblems, workedExample } from "./helpers";
@@ -207,5 +208,26 @@ describe("copy sweeps", () => {
     expect(copyProblems(visibleCopy("<p>We keep their agents</p>"))).toHaveLength(2);
     expect(copyProblems(visibleCopy("<p>The hub is down</p>"))).toHaveLength(1);
     expect(copyProblems(visibleCopy("<pre>you can paste this</pre><p>Portico</p>"))).toEqual([]);
+  });
+});
+
+describe("the day a new agent was added, as the server writes it", () => {
+  const agent = { createdAt: "2026-10-27T23:30:00.000Z" };
+
+  test("the year shows only when it isn't the application clock's year", () => {
+    expect(utcDay(agent.createdAt, new Date("2026-11-24T12:00:00Z"))).toBe("Oct 27");
+    expect(utcDay(agent.createdAt, new Date("2027-01-01T00:00:00Z"))).toBe("Oct 27, 2026");
+    expect(newAgentWords(agent, new Date("2026-12-31T23:59:59Z"))).toBe("New agent, added Oct 27. You haven't confirmed this agent yet.");
+    expect(newAgentWords(agent, new Date("2027-01-01T00:00:00Z"))).toBe("New agent, added Oct 27, 2026. You haven't confirmed this agent yet.");
+  });
+
+  test("it is a UTC day, whatever the server's own time zone", () => {
+    expect(utcDay("2026-10-27T23:30:00-08:00", new Date("2026-11-24T12:00:00Z"))).toBe("Oct 28");
+  });
+
+  test("the clock is always handed in: nothing here reads the computer's own date", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "src", "core", "consent-words.ts"), "utf8");
+    expect(source).not.toContain("new Date()");
+    expect(source).not.toContain("Date.now()");
   });
 });

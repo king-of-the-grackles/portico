@@ -331,7 +331,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       const person = request.personId ? people.get(request.personId) : null;
       const view = person ? consents.describe(person, request.id) : null;
       if (!mail.enabled || !person || !view) return;
-      const words = consentWords(view, person.name, (agent) => agents.nameFor(agent, person.id));
+      const words = consentWords(view, person.name, (agent) => agents.nameFor(agent, person.id), now());
       mailed(
         "consent",
         mail.notify("consent", request.id, person, {
@@ -368,9 +368,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     const from = quote(agents.addressFor(sender, person.id));
     const to = quote(agents.addressFor(receiver, person.id));
     const why = m.heldFor === "new_agent"
-      ? `A message from ${from} to ${to} is held. ${newAgentWords(sender)} This is that agent's first message to ${to}.`
+      ? `A message from ${from} to ${to} is held. ${newAgentWords(sender, now())} This is that agent's first message to ${to}.`
       : outbound && sender.unproven
-      ? `A message from ${from} to ${to} is held. ${newAgentWords(sender)}`
+      ? `A message from ${from} to ${to} is held. ${newAgentWords(sender, now())}`
       : outbound
       ? `A message from ${from} to ${to} is held: ${person.name} asked to see what that agent sends to other people's agents first.`
       : m.heldFor === "first_contact"
