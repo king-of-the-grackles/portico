@@ -192,12 +192,15 @@ function heldReason(s: HomeState, m: HeldCard): string {
   return parts.join(" ");
 }
 
-/** A held message: who wants what, why it waits, and the decision. Show message opens the text. */
+/**
+ * A held message: who wants what, why it waits, and the decision. Show message opens the text. A message that needs
+ * no reply asks for nothing, so its heading calls it a note.
+ */
 export function renderHeldCard(s: HomeState, m: HeldCard): string {
   const shown = s.shownMessages[m.id] === true;
   return `<article class="dcard" aria-labelledby="dc-${esc(m.id)}" data-key="dc-${esc(m.id)}">
     <div class="dcard-head">${logo(m.from.kind, "", kindInfo(m.from.kind).label)}<div class="grow">
-      <h3 id="dc-${esc(m.id)}" class="dcard-title">${esc(m.from.label)} wants to ask ${esc(m.to.label)}: ${esc(m.subject)}</h3>
+      <h3 id="dc-${esc(m.id)}" class="dcard-title">${esc(m.from.label)} ${m.noReplyNeeded ? "has a note for" : "wants to ask"} ${esc(m.to.label)}: ${esc(m.subject)}</h3>
       <p class="dcard-why tnum">${esc(heldReason(s, m))}</p>
       ${when(m.noReplyNeeded, `<p class="dcard-why">No reply needed.</p>`)}
     </div></div>
