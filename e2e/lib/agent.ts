@@ -39,10 +39,10 @@ export interface Join {
   show: string;
 }
 
-/** POST /api/join: counts against the server's limit of 10 starts per address per 15 minutes. */
+/** POST /api/join: counts against the server's limit of starts per address per 15 minutes (10, unless the deployment raised it). */
 export async function startJoin(name: string, shareLink?: string): Promise<Join> {
   const { status, body } = await http("POST", "/api/join", { body: { kind: "agent", name, client: "other", ...(shareLink ? { link: shareLink } : {}) } });
-  if (status === 429) throw new Error("The server's join limit is used up for this address (10 starts per 15 minutes). Wait, then run with E2E_KEEP=1 so reruns reuse their agents.");
+  if (status === 429) throw new Error("The server's join limit is used up for this address (starts per 15 minutes). On a test deployment, raise PORTICO_JOIN_STARTS_PER_ADDRESS (e2e/README.md); otherwise wait, then run with E2E_KEEP=1 so reruns reuse their agents.");
   if (status !== 201) throw new ApiError(status, body, "POST /api/join");
   return body;
 }

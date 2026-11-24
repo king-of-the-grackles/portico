@@ -286,6 +286,12 @@ export interface PorticoConfig {
    * It reads and never writes. Null when unset: the address answers 404 and nothing can read the items over HTTP.
    */
   feedbackReviewToken: string | null;
+  /**
+   * PORTICO_JOIN_STARTS_PER_ADDRESS: how many requests to join one client address can start in 15 minutes. Unset, the
+   * limit is LIMITS.consentStartsPerClient. Only for a deployment whose data may be thrown away, where a test suite
+   * joins many agents from one address: a live Portico never sets it.
+   */
+  joinStartsPerClient: number;
   /** PORTICO_COMMIT: the git commit this build was made from, set by the image build. "unknown" when unset. */
   commit: string;
   /** Where files' bytes live: a bucket when one is configured, otherwise the data folder. */

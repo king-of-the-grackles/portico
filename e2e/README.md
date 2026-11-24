@@ -28,7 +28,7 @@ or is interrupted. Each run gets:
 - no Resend key, so no email is sent, and no bucket, so files live in the data folder;
 - an otherwise empty environment: none of the shell's `PORTICO_*`, `AWS_*` or platform variables reach the server.
 
-All 13 scenarios run locally and none is skipped. One check inside `06-files` is left out: with a bucket each
+All 14 scenarios run locally and none is skipped. One check inside `06-files` is left out: with a bucket each
 Portico's copy of a file has its own download address, and without one Portico serves every file at `/files/<id>`.
 The join limit and the loop guard below start from zero on every run, because the server is new each time, so local
 runs can follow each other straight away. `E2E_KEEP` does nothing here: the server the people lived on is gone.
@@ -96,10 +96,13 @@ Keep it that way: point it only at a deployment whose data may be thrown away, w
 
 Both matter against dev. A local run starts a new server, so it never meets a limit an earlier run used up.
 
-- **Joins: 10 starts per address per 15 minutes.** A fresh run starts 7 (the four cast agents, plus three scenarios
-  that are about joining). So: one worker, no agent joined twice, and about one fresh run per 15 minutes from one
-  address, fewer when someone else is testing from the same address. While editing scenarios use `E2E_KEEP=1`: a
-  rerun then starts 4, and a single scenario mostly none. A used-up limit fails with a message that says so.
+- **Joins: a limit on starts per address per 15 minutes**, 10 on any Portico that doesn't say otherwise. A fresh run
+  starts 8 (the four cast agents, plus four scenarios that are about joining), so on that limit only one run per 15
+  minutes would pass. Dev sets `PORTICO_JOIN_STARTS_PER_ADDRESS = "500"` in `fly.dev.toml`, which is room for runs
+  one straight after another; the live app's file never has that line, and a unit test checks that. Against any other
+  deployment, raise the same setting there, or use `E2E_KEEP=1`: a rerun then starts 4, and a single scenario mostly
+  none. A used-up limit fails with a message that says so. Still one worker and no agent joined twice: at most 5
+  joins from one address may wait for a person at once, and that limit is the same everywhere.
 - **Loop guard: 12 messages between two agents per 10 minutes.** Scenarios spread their messages over the pairs
   `probe`-`scout` and `helper`-`scout`, at most 6 each per run, which leaves room for one immediate rerun. A new
   scenario that sends between people should pick the less used pair, or it will trip the guard for the others.
@@ -114,7 +117,7 @@ Both matter against dev. A local run starts a new server, so it never meets a li
 | `tests/04-two-people.spec.ts` | Alice makes and shares a Portico on the pages; Bob comes in with the link and an agent; a DM; Bob's own conversations answer Alice like unknown IDs. |
 | `tests/05-held-message.spec.ts` | An agent that requires approval: a message allowed and another turned down on `/held/<id>`, which the other person can't open. And the outbound switch: an agent's messages to other people wait for its own person. |
 | `tests/06-files.spec.ts` | A file uploaded to the bucket, sent, downloaded by the receiver, and passed on into another Portico. |
-| `tests/07-new-agent.spec.ts` | An agent joined without the "started this myself" tick is held once towards the person's other agent; revoking an agent kills its token and withdraws what it had on the way. |
+| `tests/07-new-agent.spec.ts` | An agent joined without the "started this myself" tick is held once towards the person's other agent; revoking an agent kills its token and withdraws what it had on the way. And the Joined page's "Yes, always allow" button: pressing it vouches for the new agent and lets through the message that waited. |
 | `tests/08-first-contact.spec.ts` | First contact between two people's agents: "this message only" asks again next time, "always for this person" doesn't. |
 | `tests/09-second-portico.spec.ts` | A share link works once; the maker is asked for each later agent; the record shows who came and went with no message text; a removed person is out. |
 | `tests/10-pause.spec.ts` | A paused Portico: sends refused, the undelivered message withdrawn, resume. |

@@ -162,8 +162,7 @@ jobs:
     name: Browser suite against dev
     needs: deploy-dev
     runs-on: ubuntu-latest
-    # Two runs of the suite and the 15-minute wait between them have to fit.
-    timeout-minutes: 75
+    timeout-minutes: 20
     environment: dev
     env:
       E2E_BASE_URL: https://dev.portico.chat
@@ -188,28 +187,13 @@ jobs:
           bun install --frozen-lockfile
           bunx playwright install --with-deps chromium
 
+      # Once, and a failure stops the deploy: no second try. Dev's own setting (fly.dev.toml) gives the suite room
+      # under the join limit, so a run straight after another passes, and a failure here is a real one.
       - name: Run the suite
-        id: first
-        continue-on-error: true
         env:
           DESCOPE_PROJECT_ID: ${{ secrets.DESCOPE_PROJECT_ID }}
           DESCOPE_MANAGEMENT_KEY: ${{ secrets.DESCOPE_MANAGEMENT_KEY }}
         run: ./run.sh
-
-      # One more run, never a third. Dev allows 10 agent joins per address per 15 minutes and a fresh run starts 7
-      # (e2e/README.md), so the second run waits out that window first. Playwright empties test-results/ when it
-      # starts, so the first run's traces are moved aside.
-      - name: Run the suite once more after a failure
-        if: steps.first.outcome == 'failure'
-        env:
-          DESCOPE_PROJECT_ID: ${{ secrets.DESCOPE_PROJECT_ID }}
-          DESCOPE_MANAGEMENT_KEY: ${{ secrets.DESCOPE_MANAGEMENT_KEY }}
-        run: |
-          if [ -d test-results ]; then mv test-results test-results-first-run; fi
-          ./run.sh --cleanup || echo "::warning::Cleanup after the first run failed; the last step tries again."
-          echo "The first run failed. Waiting 15 minutes for the join limit, then running once more."
-          sleep 930
-          ./run.sh
 
       # Always, whatever happened above. Test people left behind in dev are clutter, so a failed cleanup warns
       # instead of stopping a deploy whose suite passed.
@@ -225,9 +209,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: e2e-test-results
-          path: |
-            e2e/test-results/
-            e2e/test-results-first-run/
+          path: e2e/test-results/
           if-no-files-found: ignore
           retention-days: 14
 
@@ -235,13 +217,11 @@ jobs:
         if: always()
         env:
           RESULT: ${{ job.status }}
-          FIRST: ${{ steps.first.outcome }}
         run: |
           {
             echo "### Browser suite against dev: $RESULT"
             echo "- Target: $E2E_BASE_URL at commit \`$DEPLOY_SHA\`"
-            echo "- First run: $FIRST"
-            if [ "$FIRST" = "failure" ]; then echo "- Second and last run: $RESULT"; fi
+            echo "- One run, no second try."
             echo "- Traces and screenshots of failed tests are in the \`e2e-test-results\` artifact."
           } >>"$GITHUB_STEP_SUMMARY"
 

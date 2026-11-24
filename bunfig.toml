@@ -1,3 +1,5 @@
 [test]
 # Keeps every test away from the real home folder.
 preload = ["./plugin-claude-code/test/preload.ts"]
+# A bare `bun test` runs the unit tests only: the browser suite in e2e/ has its own runner (e2e/local.sh).
+pathIgnorePatterns = ["e2e/**"]

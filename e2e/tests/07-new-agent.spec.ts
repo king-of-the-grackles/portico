@@ -1,6 +1,7 @@
 // An agent that joined without its person's "I started this myself": its first message to each of the person's other
-// agents waits for the person, once. And revoking an agent stops it in one step.
-import { decideHeld } from "../lib/agent";
+// agents waits for the person, once. Revoking an agent stops it in one step. And the person can vouch for it on the
+// page the join ends on.
+import { allowOnConsentPage, decideHeld, startJoin, submitJoinCode } from "../lib/agent";
 import { nonce } from "../lib/env";
 import { expect, test, unique } from "../lib/fixtures";
 
@@ -62,4 +63,42 @@ test("a new agent nobody vouched for is held once, and revoking it stops it", as
 
   // Helper no longer lists it.
   expect((await helper.agents()).agents.map((a: any) => a.name)).not.toContain(name);
+});
+
+test("the Joined page's Always allow vouches for a new agent, and lets through what was waiting", async ({ world, browserAs }) => {
+  const alice = await world.person("alice");
+  const helper = await world.agent("alice", "helper");
+  const page = await browserAs(alice);
+
+  // A join with the tick left off, by hand, so the page Alice ends on stays open.
+  const name = `novice-${nonce(4)}`;
+  const join = await startJoin(name);
+  const code = await allowOnConsentPage(page, join, { mine: false });
+  expect(code, "the code the page shows after Allow").not.toBeNull();
+  const handed = await submitJoinCode(join, code!);
+  expect(handed.status).toBe(200);
+  const novice = world.adopt("alice", name, handed.body.token);
+
+  // ---- nobody vouched yet: its first message waits ----
+  const first = unique("Novice's first words");
+  const sent = await novice.send({ to: "helper", subject: first, text: "Hello, I am new here." });
+  expect(sent.delivery).toBe("held");
+  expect((await helper.inbox()).messages.map((m) => m.subject)).not.toContain(first);
+
+  // ---- the page Alice is on turns into Joined, with the question and the one button ----
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name: "Joined" })).toBeVisible();
+  await expect(page.getByText(`Did you start ${name}?`)).toBeVisible();
+  const vouched = page.waitForResponse((r) => r.request().method() === "POST" && /^\/api\/agents\/[^/]+\/always-allow$/.test(new URL(r.url()).pathname));
+  await page.getByRole("button", { name: `Yes, always allow ${name}` }).click();
+  expect((await vouched).status()).toBe(200);
+  // The page comes back without the question.
+  await expect(page.getByText(`${name} is always allowed.`)).toBeVisible();
+  await expect(page.getByRole("button", { name: `Yes, always allow ${name}` })).toHaveCount(0);
+
+  // ---- what waited for the agent being new arrives, and the next message is not held ----
+  expect((await helper.receive(first)).from).toBe(name);
+  const second = unique("Novice's second message");
+  expect((await novice.send({ to: "helper", subject: second, text: "And again." })).delivery).not.toBe("held");
+  await helper.receive(second);
 });

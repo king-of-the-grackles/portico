@@ -43,7 +43,7 @@ export function joinSentence(publicUrl: string, request: Pick<ConsentRequest, "i
  */
 export function joinApi(core: Core): Hono {
   const route = new Hono();
-  const starts = new WindowLimiter(core.now, LIMITS.consentStartsPerClient, 15 * MINUTE_MS);
+  const starts = new WindowLimiter(core.now, core.config.joinStartsPerClient, 15 * MINUTE_MS);
 
   route.use("*", requireSetupDone(core));
   route.use("*", jsonBodyLimit());

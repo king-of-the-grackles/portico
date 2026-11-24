@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { SECRETS_KEY_HELP, SECRETS_KEY_MISSING, secretsKeyBytes } from "./core/secrets";
 import { REVIEW_TOKEN_MIN_CHARS } from "./core/feedback";
+import { LIMITS } from "./core/limits";
 import { cleanPublicUrl } from "./core/settings";
 import type { BucketConfig, MailConfig, PorticoConfig } from "./core/types";
 
@@ -28,6 +29,9 @@ const RETIRED: Record<string, string> = {
     "PORTICO_HOSTED_DOMAIN is no longer read. Set PORTICO_PUBLIC_URL to the address people open, and PORTICO_DATA_DIR to the data folder.",
   PORTICO_HOSTED_DATA: "PORTICO_HOSTED_DATA is no longer read. Set PORTICO_DATA_DIR to the data folder.",
 };
+
+/** The most PORTICO_JOIN_STARTS_PER_ADDRESS can raise the join limit to: still a limit, even on a test deployment. */
+export const JOIN_STARTS_MAX = 1000;
 
 /**
  * Everything is optional: PORT, PORTICO_DATA_DIR (default ./data), PORTICO_PUBLIC_URL, PORTICO_PLUGIN_SOURCE,
@@ -78,6 +82,14 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
   if (feedbackReviewToken !== null && (feedbackReviewToken.length < REVIEW_TOKEN_MIN_CHARS || /\s/.test(feedbackReviewToken))) {
     problems.push(`PORTICO_FEEDBACK_REVIEW_TOKEN must be a random value of at least ${REVIEW_TOKEN_MIN_CHARS} characters, without spaces`);
   }
+  let joinStartsPerClient: number = LIMITS.consentStartsPerClient;
+  const rawJoinStarts = env.PORTICO_JOIN_STARTS_PER_ADDRESS?.trim();
+  if (rawJoinStarts) {
+    joinStartsPerClient = Number(rawJoinStarts);
+    if (!/^\d+$/.test(rawJoinStarts) || joinStartsPerClient < 1 || joinStartsPerClient > JOIN_STARTS_MAX) {
+      problems.push(`PORTICO_JOIN_STARTS_PER_ADDRESS must be a whole number from 1 to ${JOIN_STARTS_MAX}`);
+    }
+  }
   const files = bucketConfig(env, problems);
   const mail = mailConfig(env, problems, publicUrl ? `Portico <invites@mail.${new URL(publicUrl).hostname}>` : null);
   if (problems.length > 0) throw new ConfigError(problems);
@@ -94,6 +106,7 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     webhooksAllowPrivate: env.PORTICO_WEBHOOKS_ALLOW_PRIVATE?.trim() === "1",
     retiredHosts,
     feedbackReviewToken,
+    joinStartsPerClient,
     commit: env.PORTICO_COMMIT?.trim() || "unknown",
     files,
     mail,

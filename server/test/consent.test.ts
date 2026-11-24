@@ -532,6 +532,21 @@ describe("anyone can ask to join, so asking is limited and tells nothing", () =>
     expect((await start("203.0.113.5")).status).toBe(201);
   });
 
+  test("PORTICO_JOIN_STARTS_PER_ADDRESS raises the starts one address gets, for a deployment a test suite runs against", async () => {
+    const p = makePortico({ config: { joinStartsPerClient: 25 } });
+    await addOwner(p);
+    let n = 0;
+    // Each from the same address, and each answered before the next, so none is turned away for waiting.
+    const start = async () => {
+      const res = await p.app.request("/api/join", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.5" }, body: JSON.stringify({ kind: "agent", name: `helper-${n++}` }) });
+      if (res.status === 201) p.db.query("UPDATE consent_requests SET status = 'denied' WHERE id = $id").run({ id: ((await res.json()) as { id: string }).id });
+      return res.status;
+    };
+    const statuses: number[] = [];
+    for (let i = 0; i < 26; i++) statuses.push(await start());
+    expect(statuses).toEqual([...Array(25).fill(201), 429]);
+  });
+
   test("joining stays closed until setup is done, and bad input is refused", async () => {
     const before = makePortico({ setup: false });
     expect((await before.app.request("/api/join", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status).toBe(503);
