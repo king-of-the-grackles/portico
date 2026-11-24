@@ -296,14 +296,20 @@ describe("Today", () => {
     inOrder(t, "Needs a decision", "In progress", "Done today");
   });
 
-  test("a held message: who wants what, why it waits, and Don't allow, Always allow <sender>, Allow once at the right", () => {
+  test("a held message: who wants what, why it waits, then Always allow <sender> and Allow once, then a quieter row that starts with Don't allow", () => {
     const html = render(state());
     const t = text(html);
     expect(t).toContain("Grok Bot wants to ask Claude Code (portico): Deploy the People export to staging");
     expect(t).toContain(
       "First time Grok Bot has asked Claude Code (portico) for anything, and new contacts need approval. Expires today at 6:00 PM.",
     );
-    inOrder(t, "Show message", "Don't allow", "Always allow Grok Bot", "Allow once");
+    // The order a person reads and tabs: the content, the main action, then the way out and the ways to look closer.
+    inOrder(t, "new contacts need approval", "Always allow Grok Bot", "Allow once", "Don't allow", "Show message", "Open the page");
+    // Allow once is the one filled button; Don't allow is text in the danger color, in a row of its own under it.
+    const card = html.slice(html.indexOf('data-key="dc-m-held"'), html.indexOf("</article>", html.indexOf('data-key="dc-m-held"')));
+    expect(card.match(/class="btn btn-primary"/g)).toHaveLength(1);
+    expect(html).toContain('<div class="actions-quiet">\n      <button type="button" class="btn btn-deny" data-action="decide" data-id="m-held" data-decision="deny">Don\'t allow</button>');
+    expect(html).not.toMatch(/tabindex="[1-9]/);
     expect(html).not.toContain("The text");
     expect(text(render(state({ shownMessages: { "m-held": true } })))).toContain("The text");
   });
@@ -378,7 +384,7 @@ describe("Activity", () => {
     expect(t).toContain("Asked 9:09 AM Picked up by Codex 9:09 AM Answered 9:17 AM");
     inOrder(t, "Please review the bots.", "Two bugs, both fixed.");
     expect(t).toContain("Loading the messages.");
-    inOrder(t, "Deploy the People export", "Don't allow", "Always allow Grok Bot", "Allow once");
+    inOrder(t, "Deploy the People export", "Always allow Grok Bot", "Allow once", "Don't allow");
   });
 
   test("joins, sessions and setting changes show among the tasks when asked, narrowed by project", () => {

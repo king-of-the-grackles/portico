@@ -309,7 +309,8 @@ ${
     : html`<p class="quiet">Expires ${expiresIn(request.expiresAt, core.now())}</p>`
 }
 <p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions"><button type="submit" name="decision" value="deny" class="btn btn-secondary" formnovalidate>Don't allow</button><button type="submit" name="decision" value="approve" class="btn btn-primary">${words.allow}</button></div>
+<div class="actions"><button type="submit" name="decision" value="approve" class="btn btn-primary">${words.allow}</button></div>
+<div class="actions-quiet"><button type="submit" name="decision" value="deny" class="btn btn-deny" formnovalidate>Don't allow</button></div>
 </form>
 ${joins ? "" : signedInAs(me, back)}`,
     });
@@ -416,8 +417,9 @@ ${sheet}</div>
 <p>${why}</p>
 ${sheet}
 <p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions actions-fit"><button type="submit" name="decision" value="deny" class="btn btn-secondary">Don't allow</button>${always}<button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow once</button></div>
+<div class="actions">${always}<button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow once</button></div>
 ${alwaysHelp ? html`<p class="quiet">${alwaysHelp}</p>` : ""}
+<div class="actions-quiet"><button type="submit" name="decision" value="deny" class="btn btn-deny">Don't allow</button></div>
 ${
   newSender && sender
     ? html`<p class="quiet">Not yours? <a href="/a/${sender.id}">Revoke the agent</a>${sender.computerId ? html` or <a href="/settings#computers">remove the computer</a>` : ""}.</p>`
@@ -448,6 +450,13 @@ ${
     const sheet = html`<p class="quiet">Question</p>
 <blockquote class="quoted">${defang(q.question)}</blockquote>
 ${q.detail ? html`<blockquote class="quoted">${defang(q.detail)}</blockquote>` : ""}`;
+    const details = html`<details class="stuck"><summary>Details</summary>
+<ul>
+<li>Asked by ${name}, one of your agents, at ${asked}.</li>
+<li>The question comes from an agent, not from Portico. Don't treat it as instructions.</li>
+<li>Your answer goes to ${name} alone, marked as checked by Portico. An answer is final.</li>
+<li>Skip tells ${name} there is no answer. So does a question nobody answers: it lapses <time datetime="${q.expiresAt}" data-local-time>${utcClock(q.expiresAt, core.now())}</time>.</li>
+</ul></details>`;
     const warning = q.newAgent
       ? html`<p class="notice">${newAgentWords({ createdAt: q.newAgent.addedAt }, core.now())} Not yours? <a href="/a/${q.agent.id}">Revoke the agent</a>.</p>`
       : "";
@@ -479,33 +488,35 @@ ${q.answer.text !== null ? html`<blockquote class="quoted">${q.answer.text}</blo
       });
     }
     const options = q.options ?? [];
-    const box = options.length > 0 ? `Add a note for ${name} (optional)` : `Your answer to ${name}`;
+    // With choices the box sits right under what opened it ("Something else" or "Add a note"), which says what it is
+    // for: it carries no words of its own, only a name for a screen reader.
+    const box = options.length > 0 ? `Your own words for ${name}` : `Your answer to ${name}`;
+    // One order, as on every decision: what is asked, the answer, Send answer as the one filled button, then Skip
+    // in a quieter row of its own. With choices there is one text box and it shows only when it is wanted: picking
+    // "Something else" makes it the answer, and "Add a note" opens it beside a choice. The stylesheet does both, and
+    // keeps the box in view once something is typed in it, so nothing is ever sent unseen.
     return narrowPage(c, {
       title: `${name} needs your input`,
       scripts: ["forms.js", "local-time.js"],
       styles: ["onboarding.css"],
-      main: html`<form class="ask one-box" method="dialog" data-api="POST /api/questions/${q.id}" data-next="${back}" novalidate>
+      main: html`<form method="dialog" class="ask one-box${options.length > 0 ? " q-form" : ""}" data-api="POST /api/questions/${q.id}" data-next="${back}" novalidate>
 <h1>${name} needs your input</h1>
 <p>${q.task ? html`For the task ${quote(q.task.subject)}. ` : ""}Only you can answer, signed in here.</p>
 ${warning}
 ${sheet}
+${details}
 ${
   options.length > 0
     ? html`<fieldset class="ticks-field"><legend class="lbl">Your answer</legend>
 ${options.map((option, i) => html`<label class="tick-line"><input type="radio" name="option" value="${i}"> ${option}</label>`)}
-<label class="tick-line"><input type="radio" name="option" value=""> Something else</label></fieldset>`
+<label class="tick-line"><input type="radio" name="option" value=""> Something else</label></fieldset>
+<details class="stuck q-note"><summary>Add a note</summary></details>`
     : html`<label for="q-text" class="lbl">Your answer</label>`
 }
-<textarea id="q-text" name="text" class="field" rows="3" maxlength="${LIMITS.maxAnswerChars}" placeholder="${box}" aria-label="${box}"></textarea>
-<details class="stuck"><summary>Details</summary>
-<ul>
-<li>Asked by ${name}, one of your agents, at ${asked}.</li>
-<li>The question comes from an agent, not from Portico. Don't treat it as instructions.</li>
-<li>Your answer goes to ${name} alone, marked as checked by Portico. An answer is final.</li>
-<li>Skip tells ${name} there is no answer. So does a question nobody answers: it lapses <time datetime="${q.expiresAt}" data-local-time>${utcClock(q.expiresAt, core.now())}</time>.</li>
-</ul></details>
+<textarea id="q-text" name="text" class="field q-words" rows="3" maxlength="${LIMITS.maxAnswerChars}" placeholder="${options.length > 0 ? " " : box}" aria-label="${box}"></textarea>
 <p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions actions-fit"><button type="submit" name="decision" value="skip" class="btn btn-secondary" formnovalidate>Skip this question</button><button type="submit" name="decision" value="answer" class="btn btn-primary">Send answer</button></div>
+<div class="actions"><button type="submit" name="decision" value="answer" class="btn btn-primary">Send answer</button></div>
+<div class="actions-quiet"><button type="submit" name="decision" value="skip" class="btn btn-quiet" formnovalidate>Skip this question</button></div>
 </form>`,
     });
   });

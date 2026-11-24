@@ -126,6 +126,16 @@ describe("input needed: an agent asks its own person, and the answer comes back 
     expect(home.indexOf(">Input needed</h2>")).toBeLessThan(home.indexOf(">In progress</h2>"));
     expect(home).toContain("Muse needs your input</h3>");
     expect(home).toContain(`data-action="q-answer" data-id="${id}" data-option="1">Half up (new rule)</button>`);
+    // One order, read and tabbed: the question, the choices stacked in the agent's order, then a quieter row with
+    // Skip first and the ways to look closer after it. Nothing on the card is a filled button: a choice is the action.
+    const card = home.slice(home.indexOf(`data-key="di-${id}"`), home.indexOf("</article>", home.indexOf(`data-key="di-${id}"`)));
+    const order = [QUESTION, 'class="choices"', "Half down (keep old)", "Half up (new rule)", 'class="actions-quiet"', 'class="btn btn-quiet" data-action="q-skip"', "Answer in your own words", "Open the page"].map((part) => card.indexOf(part));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(card.match(/class="btn btn-choice"/g)).toHaveLength(2);
+    expect(card).not.toContain("btn-primary");
+    expect(card).not.toContain("btn-text");
+    expect(card).not.toMatch(/tabindex="[1-9]/);
     expect(home).toContain("1 needs a decision");
     expect(home).toContain('<span class="badge tnum">1<span class="sr"> waiting for a decision</span></span>');
     expect(copyProblems(visibleCopy(home))).toEqual([]);
@@ -194,6 +204,11 @@ describe("input needed: an agent asks its own person, and the answer comes back 
     expect(html).toContain('name="decision" value="answer"');
     expect(html).not.toContain('type="radio"');
     expect(html).not.toContain("New agent");
+    // The question, the box, Send answer as the one filled button, then Skip in a quieter row of its own.
+    const order = ['class="quoted"', 'name="text"', 'value="answer" class="btn btn-primary"', 'class="actions-quiet"', 'value="skip" class="btn btn-quiet"'].map((part) => html.indexOf(part));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(html.match(/btn-primary/g)).toHaveLength(1);
     expect(copyProblems(visibleCopy(html))).toEqual([]);
 
     // The form's own post: the button pressed and the text typed. Nothing typed is no answer.
@@ -220,6 +235,12 @@ describe("input needed: an agent asks its own person, and the answer comes back 
     const withChoices = await (await callPerson(p, cookie, "GET", `/q/${second}`)).text();
     expect(withChoices).toContain('<input type="radio" name="option" value="0"> Half down (keep old)</label>');
     expect(withChoices).toContain('<input type="radio" name="option" value=""> Something else</label>');
+    // The choices, "Add a note", one text box that the stylesheet shows when it is wanted, Send answer, then Skip.
+    const pageOrder = ['value="0"> Half down', 'value=""> Something else', "<summary>Add a note</summary>", 'name="text" class="field q-words"', 'value="answer" class="btn btn-primary"', 'value="skip" class="btn btn-quiet"'].map((part) => withChoices.indexOf(part));
+    expect(pageOrder.every((at) => at >= 0)).toBe(true);
+    expect([...pageOrder].sort((a, b) => a - b)).toEqual(pageOrder);
+    expect(withChoices.match(/<textarea/g)).toHaveLength(1);
+    expect(withChoices).toContain('class="ask one-box q-form"');
     expect(copyProblems(visibleCopy(withChoices))).toEqual([]);
     expect((await person(p, cookie, "POST", `/api/questions/${second}`, { decision: "answer", option: "7" })).status).toBe(400);
     expect((await person(p, cookie, "POST", `/api/questions/${second}`, { decision: "answer", option: "" })).status).toBe(400);

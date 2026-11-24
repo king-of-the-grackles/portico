@@ -43,6 +43,20 @@
 .ticks-field .tick-line input { margin: 0; width: 18px; height: 18px; accent-color: var(--teal); }
 .ticks-field .tick-line:has(input:checked) { border-color: var(--teal); background: var(--teal-wash); }
 @media (max-width: 600px) { .ask { padding: 16px; } }
+/* A question with choices, on its own page: one text box, shown only when it is wanted. Picking "Something else"
+   makes the box the answer; "Add a note" opens it beside a choice. Once something is typed the box stays in view,
+   whatever is picked afterwards, so nothing is sent that the person can't see. */
+.q-form .q-words { display: none; }
+.q-form:has(input[name="option"][value=""]:checked) .q-words,
+.q-form:has(.q-note[open]) .q-words,
+.q-form .q-words:not(:placeholder-shown),
+.q-form .q-words:focus { display: block; }
+.q-form:has(input[name="option"][value=""]:checked) .q-note { display: none; }
+/* The same disclosure mark as Details, on a 44px target. */
+.q-note summary { min-height: 0; padding: 12px 0; }
+.q-note[open] summary { padding-bottom: 4px; }
+/* On a page the way out stands alone in its row, at the far end from the button above it. */
+.narrow .actions-quiet > .btn:first-child { margin-left: -16px; }
 
 /* /join: steps an agent reads. */
 .narrow.doc { max-width: 720px; gap: 16px; }

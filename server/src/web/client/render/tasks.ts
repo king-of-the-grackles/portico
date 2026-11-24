@@ -144,7 +144,7 @@ function renderOpened(s: HomeState, t: TaskView, detail: TaskDetail | null): str
     ${renderSteps(t)}
     ${messages}
     ${when(t.questions.length > 0, () => `<ol class="tmsgs" aria-label="Questions">${t.questions.map((q) => renderTaskQuestion(s, q)).join("")}</ol>`)}
-    ${when(decision, () => `<div class="actions">${decideButtons(s, decision!)}</div>`)}
+    ${when(decision, () => decideRows(s, decision!))}
   </div>`;
 }
 
@@ -184,12 +184,22 @@ function alwaysName(s: HomeState, m: HeldCard): string {
   return s.agents.find((a) => a.id === m.from.id)?.computer?.name ?? m.from.label;
 }
 
-export function decideButtons(s: HomeState, m: HeldCard): string {
+/**
+ * The decision on a held message, laid out as every decision is: the row that lets the message through first, Allow
+ * once as the one filled button with Always allow beside it, then a quieter row under a rule. That row starts with
+ * the way out, Don't allow, and ends with `links`, the ways to look closer. The page reads and tabs in that order.
+ */
+export function decideRows(s: HomeState, m: HeldCard, links = ""): string {
   const busy = s.busy === `decide:${m.id}`;
   const id = esc(m.id);
-  return `<button type="button" class="btn btn-text" data-action="decide" data-id="${id}" data-decision="deny"${when(busy, " disabled")}>Don't allow</button>
+  return `<div class="actions">
       ${when(m.facts.heldFor !== "outbound" || m.facts.newSender, () => `<button type="button" class="btn btn-secondary" data-action="decide" data-id="${id}" data-decision="always_allow"${when(busy, " disabled")}>Always allow <span class="btn-name">${esc(alwaysName(s, m))}</span></button>`)}
-      <button type="button" class="btn btn-primary" data-action="decide" data-id="${id}" data-decision="allow_once"${when(busy, " disabled")}>Allow once</button>`;
+      <button type="button" class="btn btn-primary" data-action="decide" data-id="${id}" data-decision="allow_once"${when(busy, " disabled")}>Allow once</button>
+    </div>
+    <div class="actions-quiet">
+      <button type="button" class="btn btn-deny" data-action="decide" data-id="${id}" data-decision="deny"${when(busy, " disabled")}>Don't allow</button>
+      ${when(links, `<span class="actions-links">${links}</span>`)}
+    </div>`;
 }
 
 /** Why the message waits, in Portico's own words: never anything the sender wrote. */
@@ -224,10 +234,11 @@ export function renderHeldCard(s: HomeState, m: HeldCard): string {
     </div></div>
     ${when(shown, () => `<div class="msg-box enter" data-key="dm-${esc(m.id)}"><p class="msg-full">${esc(m.text)}</p></div>`)}
     ${renderFiles(m.files)}
-    <div class="actions">
-      <span class="actions-links"><button type="button" class="btn btn-link" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Hide message" : "Show message"}</button><a class="btn btn-link" href="/held/${encodeURIComponent(m.id)}">Open the page</a></span>
-      ${decideButtons(s, m)}
-    </div>
+    ${decideRows(
+      s,
+      m,
+      `<button type="button" class="btn btn-link" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Hide message" : "Show message"}</button><a class="btn btn-link" href="/held/${encodeURIComponent(m.id)}">Open the page</a>`,
+    )}
   </article>`;
 }
 
@@ -260,8 +271,11 @@ function questionOutcome(q: QuestionCard): string {
 }
 
 /**
- * The answer row of a waiting question: one press on a choice sends it, "Answer in your own words" opens a text
- * box, and a question with no choices starts with the box. Skip tells the agent there is no answer.
+ * How a waiting question is answered, laid out as every decision is. The choices come first, stacked at one width in
+ * the order the agent gave them: one press on a choice sends it, so on a question with choices they are the main
+ * action and nothing beside them looks like a button. A question with no choices starts with the text box and Send
+ * answer, the one filled button; "Answer in your own words" opens the same box under the choices. Then a quieter row
+ * under a rule: Skip, which tells the agent there is no answer and stops nothing, and the ways to look closer.
  */
 function questionActions(s: HomeState, q: QuestionCard, slot: "card" | "task"): string {
   const id = esc(q.id);
@@ -273,14 +287,17 @@ function questionActions(s: HomeState, q: QuestionCard, slot: "card" | "task"): 
   const typing = options.length === 0 || s.answerOpen[q.id] === true;
   const text = s.answerText[q.id] ?? "";
   return `${when(
-    typing,
-    () => `<label class="sr" for="${box}">Your answer to ${esc(q.agent.label)}</label><textarea id="${box}" class="field q-text" rows="2" maxlength="1000" placeholder="Your answer to ${esc(q.agent.label)}" data-input="q-text:${id}">${esc(text)}</textarea>`,
+    options.length > 0,
+    () => `<div class="choices" role="group" aria-label="Choices">${options.map((option, i) => `<button type="button" class="btn btn-choice" data-action="q-answer" data-id="${id}" data-option="${i}"${off}>${esc(option)}</button>`).join("")}</div>`,
   )}
-    <div class="actions">
+    ${when(
+      typing,
+      () => `<label class="sr" for="${box}">Your answer to ${esc(q.agent.label)}</label><textarea id="${box}" class="field q-text" rows="2" maxlength="1000" placeholder="Your answer to ${esc(q.agent.label)}" data-input="q-text:${id}">${esc(text)}</textarea>
+    <div class="actions"><button type="button" class="btn btn-primary" data-action="q-send" data-id="${id}"${off}>Send answer</button></div>`,
+    )}
+    <div class="actions-quiet">
+      <button type="button" class="btn btn-quiet" data-action="q-skip" data-id="${id}"${off}>Skip</button>
       <span class="actions-links">${when(options.length > 0 && !typing, `<button type="button" class="btn btn-link" data-action="q-open" data-id="${id}">Answer in your own words</button>`)}<a class="btn btn-link" href="/q/${encodeURIComponent(q.id)}">Open the page</a></span>
-      <button type="button" class="btn btn-text" data-action="q-skip" data-id="${id}"${off}>Skip</button>
-      ${options.map((option, i) => `<button type="button" class="btn btn-secondary" data-action="q-answer" data-id="${id}" data-option="${i}"${off}>${esc(option)}</button>`).join("")}
-      ${when(typing, `<button type="button" class="btn btn-primary" data-action="q-send" data-id="${id}"${off}>Send answer</button>`)}
     </div>`;
 }
 

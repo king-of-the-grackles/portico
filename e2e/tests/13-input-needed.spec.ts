@@ -106,6 +106,17 @@ test("an agent asks its person, the person answers in one press, and the agent g
   // Skip: the card goes, and the agent is told there is no answer.
   const skippable = unique("Should the old fixtures be deleted?");
   const third = await helper.requestInput({ question: skippable, options: ["Delete", "Keep"] });
+  // On its page, a question with choices shows one text box only when it is wanted: "Something else" or "Add a note".
+  await page.goto(third.question.link);
+  const ownWords = page.getByRole("textbox", { name: /^Your own words for / });
+  await expect(ownWords).toBeHidden();
+  await page.getByText("Add a note", { exact: true }).click();
+  await expect(ownWords).toBeVisible();
+  await page.getByText("Add a note", { exact: true }).click();
+  await expect(ownWords).toBeHidden();
+  await page.getByText("Something else", { exact: true }).click();
+  await expect(ownWords).toBeVisible();
+  await expect(page.getByText("Add a note", { exact: true })).toBeHidden();
   await page.goto("/");
   const skipCard = page.getByRole("region", { name: "Input needed" }).getByRole("article").filter({ hasText: skippable });
   await expect(skipCard).toBeVisible();

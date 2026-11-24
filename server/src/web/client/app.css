@@ -273,17 +273,20 @@ html:has(.sheet-wrap) { overflow: hidden; }
 .dcard { padding: 16px 20px; border-radius: 14px; background: var(--surface); box-shadow: 0 0 0 1px var(--hairline), 0 1px 3px rgba(16, 43, 37, 0.06); display: flex; flex-direction: column; gap: 12px; }
 .dcard-head { display: flex; align-items: flex-start; gap: 12px; }
 .dcard-title { margin: 0; font-size: 17px; line-height: 24px; font-weight: 600; overflow-wrap: anywhere; }
-.actions-links { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.actions-links { display: flex; align-items: center; gap: 4px; margin-left: auto; min-width: 0; }
 .dcard-why { margin: 4px 0 0; font-size: 14px; line-height: 20px; color: var(--ink-soft); }
 .code-inline { font-size: 16px; letter-spacing: 0.08em; }
 .dcard .msg-box { box-shadow: 0 0 0 1px var(--hairline); }
-/* Input needed: the agent's question in its box, the answer under it. Choices can be long, so the row wraps. */
+/* Input needed: the agent's question in its box, then the answer. The choices are a list at one width, in the agent's
+   order, and one press on a choice answers: they are the card's main action, so each is a whole-width button and
+   nothing sits beside one. A long choice wraps inside its own button. */
 .q-question { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .q-new strong { color: #7a3a0e; }
 .q-text { width: 100%; min-height: 64px; }
-.qcard .actions, .tmsg .actions { flex-wrap: wrap; }
-.qcard .actions .btn-secondary, .tmsg .actions .btn-secondary { overflow-wrap: anywhere; white-space: normal; text-align: left; }
-.tmsg .q-text { margin-top: 8px; }
+.choices { display: flex; flex-direction: column; gap: 8px; }
+.app .btn-choice { width: 100%; justify-content: flex-start; padding: 10px 16px; border: 1px solid var(--teal); background: var(--surface); color: var(--teal-dark); font-size: 15px; line-height: 22px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.app .btn-choice:hover { background: var(--teal-wash); }
+.tmsg .choices, .tmsg .q-text { margin-top: 8px; }
 .tmsg .actions { margin-top: 8px; }
 /* A question in its task: on a phone the tag and the time drop to a line of their own instead of breaking the time. */
 .tmsg-q .tmsg-head { flex-wrap: wrap; }
@@ -386,11 +389,15 @@ button.trow-main:hover { background: #f5f7f3; }
   .fsels { margin-left: 0; width: 100%; }
   .fsel { flex: 1 1 160px; min-width: 0; }
   .dcard { padding: 16px; }
-  /* Phones: the two links on one line, the decision on the next, each line whole. */
-  .dcard .actions { flex-wrap: wrap; gap: 4px 6px; }
-  .dcard .actions-links { flex-basis: 100%; }
-  .dcard .actions > .btn { flex: 1 1 auto; padding: 8px 6px; }
+  /* Phones: the main action's row fills the card's width, and the quiet row under it stays on one line. */
+  .dcard .actions { gap: 6px; }
+  .dcard .actions > .btn { flex: 1 1 0; padding: 8px 6px; }
   .dcard .actions .btn-name { display: none; }
+  .actions-quiet { gap: 0; }
+  .actions-quiet .actions-links { gap: 0; }
+  .actions-quiet .btn { padding: 8px; }
+  .actions-quiet > .btn:first-child { margin-left: -8px; }
+  .actions-quiet .actions-links { margin-right: -8px; }
   .fold-body { padding-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .nav { transition: none; } }
