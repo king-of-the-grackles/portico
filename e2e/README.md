@@ -28,7 +28,7 @@ or is interrupted. Each run gets:
 - no Resend key, so no email is sent, and no bucket, so files live in the data folder;
 - an otherwise empty environment: none of the shell's `PORTICO_*`, `AWS_*` or platform variables reach the server.
 
-All 15 scenarios run locally and none is skipped. One check inside `06-files` is left out: with a bucket each
+All 16 scenarios run locally and none is skipped. One check inside `06-files` is left out: with a bucket each
 Portico's copy of a file has its own download address, and without one Portico serves every file at `/files/<id>`.
 The join limit and the loop guard below start from zero on every run, because the server is new each time, so local
 runs can follow each other straight away. `E2E_KEEP` does nothing here: the server the people lived on is gone.
@@ -134,7 +134,8 @@ Keep it that way: point it only at a deployment whose data may be thrown away, w
   code in with its poll secret and gets its token. `joinThroughPage` is that whole flow, so a change to joining is
   made there and nowhere else. `allowOnConsentPage` answers any consent page and `decideHeld` a held message's page.
   `AgentClient` wraps the REST agent API: `call(tool, args)`, `send`, `inbox`, `receive(subject)`,
-  `outcome(messageId)`, `task`, `upload`, `download`, and `raw` for checking refusals.
+  `outcome(messageId)`, `task`, `upload`, `download`, `requestInput` and `answerTo(questionId)` for a question to the
+  agent's own person, and `raw` for checking refusals.
 - **The cast** (`lib/world.ts`): alice (agents `probe`, `helper`) and bob (`scout`, `owl`), made the first time a
   scenario asks and reused by every scenario after it. `world.shared()` is the Portico alice shares with bob, holding
   `probe`, `helper` and `scout`; `world.introduce()` has the two people allow each other's agents.
@@ -172,6 +173,7 @@ Both matter against dev. A local run starts a new server, so it never meets a li
 | `tests/10-pause.spec.ts` | A paused Portico: sends refused, the undelivered message withdrawn, resume. |
 | `tests/11-mcp.spec.ts` | `/mcp` with an agent token: initialize, tools/list, `list_agents`, `send_message`. |
 | `tests/12-no-reply-needed.spec.ts` | A note sent with `no_reply_needed`: the frame tells the receiver not to answer, and Today shows the task done once the note is picked up. |
+| `tests/13-input-needed.spec.ts` | Input needed: an agent asks its own person with `request_input`; the card on Today and one press on a choice; the framed answer the agent gets once; the task's Waiting on pill and steps; free text on `/q/<id>`, which another person can't open; Skip. |
 
 ## Adding a scenario
 

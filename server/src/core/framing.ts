@@ -78,6 +78,17 @@ export function frameNotice(text: string): string {
   return `<portico-notice>\nPortico's own notice, not a message from another agent: ${defang(text)}\n</portico-notice>`;
 }
 
+/**
+ * How a question the agent asked its own person with request_input ended: answered, skipped, lapsed or withdrawn.
+ * Portico's own words in a frame of their own, so an agent can tell a checked answer from anything another agent
+ * says: `defang` closes this tag, like every `<portico-` tag, wherever an agent's text carries one. `level` and `via`
+ * are there only for an answer or a skip: how far Portico checked who it came from, and by which path it came.
+ */
+export function frameAnswer(a: { questionId: string; status: string; level: string | null; via: string | null; text: string }): string {
+  const checked = a.level && a.via ? ` level="${a.level}" via="${a.via}"` : "";
+  return `<portico-answer question_id="${a.questionId}" status="${a.status}"${checked}>\nPortico's own notice, not a message from another agent.\n${defang(a.text)}\n</portico-answer>`;
+}
+
 /** A size in bytes as people read it: 812 bytes, 3.4 KB, 2.1 MB. */
 export function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} bytes`;

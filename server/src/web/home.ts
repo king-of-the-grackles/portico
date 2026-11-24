@@ -3,6 +3,7 @@ import { html, raw } from "hono/html";
 import { agentPageData } from "../api/agents";
 import type { PersonEnv } from "../api/context";
 import { consentCards } from "../api/consents";
+import { questionCards } from "../api/questions";
 import { serverMidnight, taskListData, todayData } from "../api/tasks";
 import { agentsInOrder, personViews } from "../api/views";
 import { workspacePageData, workspaceViews } from "../api/workspaces";
@@ -44,7 +45,7 @@ export function homeData(core: Core, me: Person, route: Route): HomeData {
     me: views.person(me),
     publicUrl: core.settings.publicUrl(),
     agents: agentsInOrder(core.agents, me).map(views.agent),
-    approvals: { held: core.approvals.heldFor(me.id).map(views.held), consents: consentCards(core, me) },
+    approvals: { held: core.approvals.heldFor(me.id).map(views.held), consents: consentCards(core, me), questions: questionCards(core, me) },
     workspaces: workspaceViews(core, me).list(),
     workspacePage,
     route: resolved,

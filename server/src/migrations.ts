@@ -58,6 +58,45 @@ export const DIRECTORY_MIGRATIONS: readonly Migration[] = [
     db.run("CREATE INDEX feedback_agent ON feedback (agent_id, created_at)");
     db.run("CREATE INDEX feedback_person ON feedback (person_id, created_at)");
   },
+  // 205: what an agent asks its own person with request_input, and the answer only that person's signed-in browser
+  // can give. No foreign keys, as with feedback: a question is the record of who answered what, so the row outlives a
+  // removed agent until the history window prunes it; the sweeps withdraw or delete what a removed agent or person
+  // leaves. The question and the answer are short text kept here, since a question may belong to no task and so to no
+  // Portico's content database. `task_id` is the first message of the task a question is about. `options` is a JSON
+  // list of choices and `answer_option` the place of the one pressed. `answered_via` is the path an answer or a skip
+  // came by: `web` is Portico's own pages, and `popup` is there for a desktop prompt nothing offers yet, so that one
+  // needs no migration. `answer_level` is how far Portico checked who answered: `checked` (a signed-in session of
+  // `person_id`) is the only level written today, and the column takes any name, so a stronger one needs no migration.
+  // `stakes` is reserved: nothing reads or writes it yet. It is for a question whose asker says the answer needs a
+  // stronger level, such as a passkey press. `ended_at` is when the question stopped waiting, however it ended, and
+  // `notice_id` the one notice that told the agent.
+  (db) => {
+    db.run(`CREATE TABLE questions (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      person_id TEXT NOT NULL,
+      task_id TEXT,
+      question TEXT NOT NULL,
+      detail TEXT,
+      options TEXT,
+      status TEXT NOT NULL CHECK (status IN ('waiting', 'answered', 'skipped', 'expired', 'withdrawn')),
+      answer_option INTEGER,
+      answer_text TEXT,
+      answered_by TEXT,
+      answered_at TEXT,
+      answered_via TEXT CHECK (answered_via IN ('web', 'popup')),
+      answer_level TEXT,
+      stakes TEXT,
+      ended_at TEXT,
+      notice_id TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    )`);
+    db.run("CREATE INDEX questions_person ON questions (person_id, status)");
+    db.run("CREATE INDEX questions_agent ON questions (agent_id, created_at)");
+    db.run("CREATE INDEX questions_task ON questions (task_id)");
+    db.run("CREATE INDEX questions_status_expires ON questions (status, expires_at)");
+  },
 ];
 
 /**

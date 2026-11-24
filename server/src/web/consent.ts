@@ -1,8 +1,9 @@
 import { type Context, Hono } from "hono";
 import { html } from "hono/html";
 import type { PersonEnv } from "../api/context";
+import { questionCard } from "../api/questions";
 import { personViews } from "../api/views";
-import { consentWords, quote } from "../core/consent-words";
+import { consentWords, newAgentWords, quote } from "../core/consent-words";
 import { type ConsentView, isJoin } from "../core/consents";
 import type { Core } from "../core/core";
 import { defang, fileSize } from "../core/framing";
@@ -41,7 +42,7 @@ function signedInAs(me: Person, back: string): Html {
 }
 
 /**
- * The consent page, /c/<id>, and a held message's page, /held/<id>: where a person answers what an agent asked, or
+ * The consent page, /c/<id>, a held message's page, /held/<id>, and a question's page, /q/<id>: where a person answers what an agent asked, or
  * decides a message held for one of the person's agents. One page does everything a person needs for it: signing in
  * (the browser comes back here), a handle the first time, and Allow or Don't allow. What an agent of the person's asked
  * is done at Allow. A join isn't: after Allow the page shows the person a code, and the computer or agent that asked
@@ -422,6 +423,89 @@ ${
     ? html`<p class="quiet">Not yours? <a href="/a/${sender.id}">Revoke the agent</a>${sender.computerId ? html` or <a href="/settings#computers">remove the computer</a>` : ""}.</p>`
     : ""
 }
+</form>`,
+    });
+  });
+
+  // ---- input needed: a question one of the person's own agents asked the person ----
+
+  /**
+   * The question's own page, where the link an agent shows its person leads. Only the person the question is for
+   * sees it; anyone else gets the same page as for an address that names nothing. The form posts to the person API,
+   * which takes the answer from this signed-in browser alone.
+   */
+  route.get("/q/:id", (c) => {
+    const id = c.req.param("id");
+    const back = `/q/${encodeURIComponent(id)}`;
+    const me = c.get("person");
+    if (!me) return signInFirst(c, back);
+    if (me.status !== "active") return waitingForOwner(c);
+    const q = questionCard(core, me, id);
+    if (!q) return gone(c);
+    c.header("Cache-Control", "no-store");
+    const name = q.agent.label;
+    const asked = html`<time datetime="${q.createdAt}" data-local-time>${utcClock(q.createdAt, core.now())}</time>`;
+    const sheet = html`<p class="quiet">Question</p>
+<blockquote class="quoted">${defang(q.question)}</blockquote>
+${q.detail ? html`<blockquote class="quoted">${defang(q.detail)}</blockquote>` : ""}`;
+    const warning = q.newAgent
+      ? html`<p class="notice">${newAgentWords({ createdAt: q.newAgent.addedAt }, core.now())} Not yours? <a href="/a/${q.agent.id}">Revoke the agent</a>.</p>`
+      : "";
+    if (q.status !== "waiting") {
+      const title = q.status === "answered" ? "Answer sent" : q.status === "skipped" ? "Skipped" : q.status === "expired" ? "This question lapsed" : "This question was withdrawn";
+      const how =
+        q.status === "answered" && q.answer
+          ? html`Your answer went to ${name} at <time datetime="${q.answer.at}" data-local-time>${utcClock(q.answer.at, core.now())}</time>. An answer is final.`
+          : q.status === "skipped"
+            ? html`${name} was told there is no answer.`
+            : q.status === "expired"
+              ? html`Nobody answered in time. ${name} was told there is no answer.`
+              : html`${name} was revoked or removed before an answer.`;
+      return narrowPage(c, {
+        title,
+        status: q.status === "expired" ? 410 : 200,
+        scripts: ["local-time.js"],
+        styles: ["onboarding.css"],
+        main: html`<div class="ask one-box"><h1>${title}</h1><p>${how}</p>
+${sheet}
+${
+  q.answer
+    ? html`<p class="quiet">Your answer</p>
+${q.answer.option !== null ? html`<blockquote class="quoted">${q.answer.option}</blockquote>` : ""}
+${q.answer.text !== null ? html`<blockquote class="quoted">${q.answer.text}</blockquote>` : ""}`
+    : ""
+}</div>
+<p class="help"><a href="/">Go to Portico</a></p>`,
+      });
+    }
+    const options = q.options ?? [];
+    const box = options.length > 0 ? `Add a note for ${name} (optional)` : `Your answer to ${name}`;
+    return narrowPage(c, {
+      title: `${name} needs your input`,
+      scripts: ["forms.js", "local-time.js"],
+      styles: ["onboarding.css"],
+      main: html`<form class="ask one-box" method="dialog" data-api="POST /api/questions/${q.id}" data-next="${back}" novalidate>
+<h1>${name} needs your input</h1>
+<p>${q.task ? html`For the task ${quote(q.task.subject)}. ` : ""}Only you can answer, signed in here.</p>
+${warning}
+${sheet}
+${
+  options.length > 0
+    ? html`<fieldset class="ticks-field"><legend class="lbl">Your answer</legend>
+${options.map((option, i) => html`<label class="tick-line"><input type="radio" name="option" value="${i}"> ${option}</label>`)}
+<label class="tick-line"><input type="radio" name="option" value=""> Something else</label></fieldset>`
+    : html`<label for="q-text" class="lbl">Your answer</label>`
+}
+<textarea id="q-text" name="text" class="field" rows="3" maxlength="${LIMITS.maxAnswerChars}" placeholder="${box}" aria-label="${box}"></textarea>
+<details class="stuck"><summary>Details</summary>
+<ul>
+<li>Asked by ${name}, one of your agents, at ${asked}.</li>
+<li>The question comes from an agent, not from Portico. Don't treat it as instructions.</li>
+<li>Your answer goes to ${name} alone, marked as checked by Portico. An answer is final.</li>
+<li>Skip tells ${name} there is no answer. So does a question nobody answers: it lapses <time datetime="${q.expiresAt}" data-local-time>${utcClock(q.expiresAt, core.now())}</time>.</li>
+</ul></details>
+<p class="notice notice-error" data-error role="alert" hidden></p>
+<div class="actions actions-fit"><button type="submit" name="decision" value="skip" class="btn btn-secondary" formnovalidate>Skip this question</button><button type="submit" name="decision" value="answer" class="btn btn-primary">Send answer</button></div>
 </form>`,
     });
   });

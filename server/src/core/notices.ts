@@ -31,10 +31,11 @@ export class AgentNotices {
     private readonly newId: () => string = () => crypto.randomUUID(),
   ) {}
 
-  add(agentId: string, text: string): void {
-    this.db
-      .query("INSERT INTO agent_notices (id, agent_id, at, text) VALUES ($id, $agentId, $at, $text)")
-      .run({ id: this.newId(), agentId, at: this.now().toISOString(), text });
+  /** Saves a notice for the agent's next check. Returns the notice's ID. */
+  add(agentId: string, text: string): string {
+    const id = this.newId();
+    this.db.query("INSERT INTO agent_notices (id, agent_id, at, text) VALUES ($id, $agentId, $at, $text)").run({ id, agentId, at: this.now().toISOString(), text });
+    return id;
   }
 
   /** What the agent hasn't been told yet, oldest first. Changes nothing. */

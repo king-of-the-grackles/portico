@@ -118,7 +118,7 @@ describe("a Codex conversation's server", () => {
 
   test("in a folder that's off, the tools stay listed so the Stop hook finds check_inbox, and the hook says nothing", async () => {
     const { host } = await conversation({ off: true });
-    expect((await host.listTools()).tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "submit_feedback", "list_porticos", "create_portico", "add_to_portico", "remove_from_portico", "rename_portico", "delete_portico", "share_portico", "join_portico"]);
+    expect((await host.listTools()).tools.map((tool) => tool.name)).toEqual(["list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "submit_feedback", "request_input", "list_porticos", "create_portico", "add_to_portico", "remove_from_portico", "rename_portico", "delete_portico", "share_portico", "join_portico"]);
     expect(text(await host.callTool({ name: "check_inbox", arguments: { stop_hook: true } }))).toEqual([""]);
     const call = (await host.callTool({ name: "list_agents", arguments: {} })) as Text;
     expect(call.isError).toBe(true);
@@ -130,7 +130,7 @@ describe("a Codex conversation's server", () => {
     const host = await fakeHost({ server });
     stops.push(() => host.close());
     expect(host.host.getInstructions()).toBe(CODEX_HOST.instructions);
-    expect((await host.host.listTools()).tools).toHaveLength(16);
+    expect((await host.host.listTools()).tools).toHaveLength(17);
     expect(text(await host.host.callTool({ name: "check_inbox", arguments: { stop_hook: true } }))).toEqual([""]);
     expect(text(await host.host.callTool({ name: "check_inbox", arguments: {} }))[0]).toBe(CODEX_HOST.notJoinedNote);
   });

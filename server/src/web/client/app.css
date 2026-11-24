@@ -260,7 +260,7 @@ html:has(.sheet-wrap) { overflow: hidden; }
 /* Count chips and status pills share the four outcome colors. */
 .cchips { display: flex; flex-wrap: wrap; gap: 8px; }
 .cchip { display: inline-flex; align-items: center; min-height: 36px; padding: 6px 14px; border-radius: 999px; font-size: 14px; line-height: 20px; font-weight: 600; text-decoration: none; }
-.cchip-decide, .pill-needs_approval { background: var(--ochre-wash); color: #7a3a0e; }
+.cchip-decide, .pill-needs_approval, .pill-waiting { background: var(--ochre-wash); color: #7a3a0e; }
 .cchip-progress, .pill-in_progress { background: #e7eef7; color: #23466e; }
 .cchip-done, .pill-done { background: #e1ece6; color: #1f4d3e; }
 .cchip-failed, .pill-failed { background: #ecebe8; color: #4f4a45; }
@@ -277,6 +277,18 @@ html:has(.sheet-wrap) { overflow: hidden; }
 .dcard-why { margin: 4px 0 0; font-size: 14px; line-height: 20px; color: var(--ink-soft); }
 .code-inline { font-size: 16px; letter-spacing: 0.08em; }
 .dcard .msg-box { box-shadow: 0 0 0 1px var(--hairline); }
+/* Input needed: the agent's question in its box, the answer under it. Choices can be long, so the row wraps. */
+.q-question { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.q-new strong { color: #7a3a0e; }
+.q-text { width: 100%; min-height: 64px; }
+.qcard .actions, .tmsg .actions { flex-wrap: wrap; }
+.qcard .actions .btn-secondary, .tmsg .actions .btn-secondary { overflow-wrap: anywhere; white-space: normal; text-align: left; }
+.tmsg .q-text { margin-top: 8px; }
+.tmsg .actions { margin-top: 8px; }
+/* A question in its task: on a phone the tag and the time drop to a line of their own instead of breaking the time. */
+.tmsg-q .tmsg-head { flex-wrap: wrap; }
+.tmsg-q .tmsg-at { white-space: nowrap; }
+.q-outcome { color: var(--ink-soft); }
 
 /* Task rows: status, task, who, when. Opening a row shows its steps and messages. */
 .tlist { list-style: none; margin: 0; padding: 0; border-radius: 14px; background: var(--surface); box-shadow: 0 0 0 1px var(--hairline); overflow: hidden; }

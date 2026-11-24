@@ -948,6 +948,7 @@ export class Agents {
     const clearContent = this.content.gather([agent.id]);
     this.db.query("DELETE FROM agents WHERE id = $id").run({ id: agent.id });
     clearContent();
+    this.onGone?.([agent.id]);
     this.activity?.record("agent_removed", { personId, detail: { name: addressOf(agent), kind: agent.kind } });
     this.forget([agent.id]);
     this.log("agent_removed", { agent_id: agent.id });
@@ -980,6 +981,7 @@ export class Agents {
     })();
     this.workspaces.agentRevoked(agent.id, personId);
     this.activity?.record("agent_revoked", { agentId: agent.id, personId, detail: { name: addressOf(agent) } });
+    this.onGone?.([agent.id]);
     this.forget([agent.id]);
     this.log("agent_revoked", { agent_id: agent.id });
     this.changes.about({ people: [personId, agent.ownerId] }, "agents", "threads", "approvals", "computers", "workspaces");
@@ -1081,6 +1083,8 @@ export class Agents {
    * connector is on the person's account, and the person is told at once.
    */
   onJoined: ((agent: Agent) => void) | null = null;
+  /** Agents were revoked or removed by their person: what they asked that still waits is withdrawn. Set by portico.ts. */
+  onGone: ((agentIds: string[]) => void) | null = null;
 
   private iso(offsetMs = 0): string {
     return new Date(this.now().getTime() + offsetMs).toISOString();

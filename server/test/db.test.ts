@@ -55,10 +55,11 @@ describe("the two kinds of database", () => {
     for (const table of ["threads", "messages", "message_files", "files", "released_names"]) expect(tables).not.toContain(table);
     expect(versionOf(db)).toBe(SCHEMA_VERSION);
     expect(kindOf(db)).toBe(DIRECTORY.applicationId);
-    // Three migrations since the baseline: the shared Portico every person starts with, a share link's allow choice,
-    // and the minutes between an app agent's scheduled inbox checks.
-    expect(DIRECTORY_MIGRATIONS).toHaveLength(4);
-    expect(SCHEMA_VERSION).toBe(204);
+    // Five migrations since the baseline: the shared Portico every person starts with, a share link's allow choice,
+    // the minutes between an app agent's scheduled inbox checks, feedback, and the questions agents ask their people.
+    expect(DIRECTORY_MIGRATIONS).toHaveLength(5);
+    expect(SCHEMA_VERSION).toBe(205);
+    expect(tables).toContain("questions");
   });
 
   test("a new content database holds threads, messages and files, at its own version, and nothing of the directory", () => {
@@ -247,6 +248,60 @@ describe("migrations, for both kinds", () => {
     expect(versionOf(db)).toBe(SCHEMA_VERSION);
     const starters = db.query("SELECT w.owner_id AS owner, (SELECT count(*) FROM workspace_people p WHERE p.workspace_id = w.id) AS people FROM workspaces w WHERE w.name = 'Shared' ORDER BY owner").all();
     expect(starters).toEqual([{ owner: "p1", people: 1 }, { owner: "p2", people: 0 }]);
+  });
+
+  test("a directory at version 204 opens at 205 with its data intact, and gains the questions table and nothing else", () => {
+    const path = tempPath("portico.db");
+    const before = new Database(path, { strict: true });
+    before.run("PRAGMA foreign_keys = ON");
+    prepare(before, { migrations: DIRECTORY_MIGRATIONS.slice(0, 4) });
+    expect(versionOf(before)).toBe(204);
+    const at = "2026-10-27T12:00:00.000Z";
+    before.query("INSERT INTO people (id, name, role, status, password_hash, created_at) VALUES ('p1', 'Maya', 'owner', 'active', 'h', $at)").run({ at });
+    before.query("INSERT INTO agents (id, owner_id, name, kind, type, description, created_at) VALUES ('a1', 'p1', 'muse', 'muse', 'app', '', $at)").run({ at });
+    before.query("INSERT INTO agent_notices (id, agent_id, at, text) VALUES ('n1', 'a1', $at, 'hello')").run({ at });
+    before
+      .query("INSERT INTO feedback (id, kind, title, details, agent_id, agent_name, person_id, created_at) VALUES ('f1', 'idea', 't', 'd', 'a1', 'muse', 'p1', $at)")
+      .run({ at });
+    const schemaBefore = before.query("SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string; sql: string }[];
+    const rowsBefore = Object.fromEntries(["people", "agents", "agent_notices", "feedback", "workspaces"].map((table) => [table, before.query(`SELECT * FROM ${table} ORDER BY 1`).all()]));
+    before.close();
+
+    const db = openDb(path);
+    expect(versionOf(db)).toBe(205);
+    expect(SCHEMA_VERSION).toBe(205);
+    // Every row that was there is still there, unchanged.
+    for (const [table, rows] of Object.entries(rowsBefore)) expect(db.query(`SELECT * FROM ${table} ORDER BY 1`).all()).toEqual(rows);
+    // Every table and index that was there has the same definition: the migration only adds.
+    const schemaAfter = db.query("SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string; sql: string }[];
+    expect(schemaAfter.filter((item) => !item.name.startsWith("questions"))).toEqual(schemaBefore);
+    expect(schemaAfter.filter((item) => item.name.startsWith("questions")).map((item) => item.name)).toEqual([
+      "questions",
+      "questions_agent",
+      "questions_person",
+      "questions_status_expires",
+      "questions_task",
+    ]);
+    // The new table takes a question, both answer paths, and no other; no foreign key leaves it.
+    const insert = (id: string, via: string | null) =>
+      db
+        .query("INSERT INTO questions (id, agent_id, person_id, question, status, answered_via, created_at, expires_at) VALUES ($id, 'gone-agent', 'gone-person', 'q', 'answered', $via, $at, $at)")
+        .run({ id, via, at });
+    insert("q1", "web");
+    insert("q2", "popup");
+    insert("q3", null);
+    expect(() => insert("q4", "email")).toThrow();
+    expect(() => db.run("INSERT INTO questions (id, agent_id, person_id, question, status, created_at, expires_at) VALUES ('q5', 'a', 'p', 'q', 'open', 't', 't')")).toThrow();
+    expect(db.query("PRAGMA foreign_key_list(questions)").all()).toEqual([]);
+    expect((db.query("SELECT stakes, answer_level FROM questions WHERE id = 'q1'").get() as Record<string, unknown>)).toEqual({ stakes: null, answer_level: null });
+    db.close();
+    // The copy made before the upgrade is the database as it was.
+    const backups = readdirSync(join(path, "..")).filter((file) => file.endsWith(".bak"));
+    expect(backups).toHaveLength(1);
+    const backup = new Database(join(path, "..", backups[0]!), { readonly: true });
+    expect(versionOf(backup)).toBe(204);
+    expect(tablesOf(backup)).not.toContain("questions");
+    backup.close();
   });
 
   test("a migration that breaks a foreign key is rolled back", () => {

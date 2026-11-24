@@ -158,7 +158,7 @@ describe("MCP Events", () => {
     const { p, dot } = await setup();
     const { body } = await call(p, dot.token, "events/list");
     const events = body.result!.events as Record<string, unknown>[];
-    expect(events.map((e) => [e.name, e.delivery])).toEqual([["message.received", ["webhook"]]]);
+    expect(events.map((e) => [e.name, e.delivery])).toEqual([["message.received", ["webhook"]], ["notice.waiting", ["webhook"]]]);
     expect(events[0]!.payloadSchema).toMatchObject({ required: ["agent", "message_id", "from", "waiting"] });
   });
 

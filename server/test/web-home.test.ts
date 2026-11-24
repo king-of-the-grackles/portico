@@ -150,6 +150,8 @@ function task(o: Partial<TaskView> & { id: string; from: AgentView; to: AgentVie
     heldMessageId: null,
     messageCount: 1,
     project: null,
+    waitingOn: null,
+    questions: [],
     steps: [
       { kind: "asked", at: at(10, 0), by: null, decision: null },
       { kind: "picked_up", at: at(10, 1), by: null, decision: null },
@@ -211,7 +213,7 @@ const HELD_TASK = task({
 const TODAY: TodayData = {
   since: at(0, 0),
   counts: { decide: 3, inProgress: 1, done: 1, failed: 0 },
-  decisions: { held: [HELD], consents: [ASKED], waiting: [asking] },
+  decisions: { held: [HELD], consents: [ASKED], waiting: [asking], questions: [] },
   inProgress: [OPEN],
   done: [REVIEW],
   failed: [],
@@ -333,7 +335,7 @@ describe("Today", () => {
     const empty: TodayData = {
       ...TODAY,
       counts: { decide: 0, inProgress: 0, done: 0, failed: 0 },
-      decisions: { held: [], consents: [], waiting: [] },
+      decisions: { held: [], consents: [], waiting: [], questions: [] },
       inProgress: [],
       done: [],
     };

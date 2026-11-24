@@ -155,10 +155,26 @@ export interface SendInput {
   attachments?: string[];
 }
 
+/** One of Portico's own notices, as the inbox hands it over. `question` is set on the one about how a question ended. */
+export interface AgentNotice {
+  id: string;
+  text: string;
+  framed_message: string;
+  question?: { id: string; status: string; level: string | null; via: string | null };
+}
+
+/** What request_input answers: the question, with the link the agent shows its person. */
+export interface AskedQuestion {
+  question: { id: string; status: string; question: string; options: string[] | null; task: string | null; expires_at: string; link: string };
+  show: string;
+  note: string;
+}
+
 export class AgentClient {
   /** Everything the inbox handed over so far: a check takes messages out of the inbox, so they are kept here. */
   private got: AgentMessage[] = [];
   private gotUpdates: { message_id: string; status: string }[] = [];
+  private gotNotices: AgentNotice[] = [];
 
   constructor(
     readonly owner: string,
@@ -193,11 +209,33 @@ export class AgentClient {
   }
 
   /** check_inbox once: what arrived since the last check. */
-  async inbox(waitSeconds = 0): Promise<{ messages: AgentMessage[]; updates: { message_id: string; status: string }[] }> {
+  async inbox(waitSeconds = 0): Promise<{ messages: AgentMessage[]; updates: { message_id: string; status: string }[]; notices: AgentNotice[]; input_needed?: number; input_note?: string }> {
     const box = await this.ok("GET", `/inbox${waitSeconds ? `?wait=${waitSeconds}` : ""}`);
     this.got.push(...box.messages);
     this.gotUpdates.push(...box.updates);
+    this.gotNotices.push(...(box.notices ?? []));
     return box;
+  }
+
+  /** request_input: asks this agent's own person a question. `{ question, show, note }`. */
+  requestInput(input: { question: string; detail?: string; options?: string[]; task?: string; expires_in_minutes?: number }): Promise<AskedQuestion> {
+    return this.ok("POST", "/questions", input);
+  }
+
+  /** Checks the inbox until Portico's notice about how a question ended has arrived. */
+  async answerTo(questionId: string, timeoutMs = 20_000): Promise<AgentNotice> {
+    const until = Date.now() + timeoutMs;
+    for (;;) {
+      const found = this.gotNotices.find((n) => n.question?.id === questionId);
+      if (found) return found;
+      if (Date.now() > until) throw new Error(`${this.name} got no notice about the question ${questionId}.`);
+      await this.inbox(3);
+    }
+  }
+
+  /** How many notices about the question the inbox has handed over so far: one, however often the inbox is checked. */
+  noticesAbout(questionId: string): number {
+    return this.gotNotices.filter((n) => n.question?.id === questionId).length;
   }
 
   /** Checks the inbox until a message with this subject has arrived. */

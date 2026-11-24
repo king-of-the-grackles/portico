@@ -46,6 +46,12 @@ export function eventText(e: ActivityView): { tag: string; line: string; who: st
       return { tag: "Setting", line: `Ask before ${agent} sends to other people's agents: ${onOff(e.detail.on)}`, who: person };
     case "agent_revoked":
       return { tag: "Revoked", line: `${agent} revoked: signed out and out of every Portico`, who: person };
+    case "input_asked":
+      return { tag: "Input", line: `${agent} asked for input`, who: agent };
+    case "input_answered":
+      return { tag: "Input", line: `Answered a question from ${agent}`, who: person };
+    case "input_skipped":
+      return { tag: "Input", line: `Skipped a question from ${agent}`, who: person };
     case "portico_agent_joined":
       return { tag: "Portico", line: `${agent} came into a Portico`, who: person };
     case "portico_agent_left":

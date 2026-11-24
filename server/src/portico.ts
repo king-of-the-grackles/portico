@@ -16,7 +16,7 @@ import { consentWords, newAgentWords, quote } from "./core/consent-words";
 import { Consents } from "./core/consents";
 import { Content } from "./core/content";
 import { type AccountCheck, accountFrom, Descope } from "./core/descope";
-import { EventSubscriptions } from "./core/events";
+import { EventSubscriptions, NOTICE_WAITING } from "./core/events";
 import { type FileStore, fileStoreFor } from "./core/file-store";
 import { Files } from "./core/files";
 import { InboxWaits } from "./core/inbox-waits";
@@ -32,6 +32,7 @@ import { neverSent, Tasks } from "./core/tasks";
 import type { AccountSignIn, Agent, Message, Notice, Person, PorticoConfig, Workspace } from "./core/types";
 import { WakeUrls } from "./core/wake-urls";
 import { Feedback } from "./core/feedback";
+import { type Question, Questions, waitWords } from "./core/questions";
 import { type WorkspaceEvent, Workspaces } from "./core/workspaces";
 import { safePost, type WebhookPost } from "./core/webhooks";
 import { ConfigError } from "./config";
@@ -212,6 +213,18 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     wakeUrls.kick(receiver.id, { ...info, lastCheckIn: presence.lastCheckIn(receiver.id) });
     events.deliver(receiver.id, info);
   };
+  // One of Portico's own notices is waiting for an app agent: the agent is woken through its wake URL, and through
+  // its subscription to notice.waiting when it has one. For any feature whose notice should start an app's run (the
+  // answer to a question, and whatever comes later): the caller names the notice and its kind. Messages keep wakeApp,
+  // and a subscription to message.received never gets a notice.
+  const wakeAppForNotice = (agentId: string, noticeId: string, kind: string) => {
+    if (!wakeUrls.has(agentId) && !events.has(agentId, NOTICE_WAITING)) return;
+    const agent = agents.get(agentId);
+    if (!agent || agent.revokedAt !== null) return;
+    const info = { agentName: agents.display(agent), noticeId, kind, waiting: messages.unreadCount(agent.id) };
+    wakeUrls.kick(agent.id, { ...info, lastCheckIn: presence.lastCheckIn(agent.id) });
+    events.deliverNotice(agent.id, info);
+  };
   const handleNotice = (notice: Notice) => {
     const m = notice.message;
     switch (notice.kind) {
@@ -298,7 +311,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     log: logInfo,
   });
   messages.extraUnread = (agentId) => agentNotices.count(agentId);
-  const tasks = new Tasks({ content, now });
+  const tasks = new Tasks({ content, now, questions: { ofTask: (id) => questions.ofTask(id), byTask: () => questions.byTask() } });
   const mail = new ShareMail({
     db,
     config: config.mail,
@@ -509,11 +522,83 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       wake(viewer.id);
     }
   };
-  const tellAgent = (agentId: string, text: string) => {
+  /**
+   * Tells one agent in Portico's own words: the notice waits for the agent's next check, a session's stream is nudged
+   * and a waiting check_inbox returns. With `wakeKind`, an app agent is woken for the notice as well, as for a
+   * message: for a notice the agent is waiting on. Returns the notice's ID, or null when nothing was saved. A revoked
+   * agent is told nothing, unless `evenRevoked`: then the notice is saved, and nothing is woken.
+   */
+  const tellAgent = (agentId: string, text: string, opts: { wakeKind?: string; evenRevoked?: boolean } = {}): string | null => {
     const agent = agents.get(agentId);
-    if (!agent || agent.revokedAt !== null) return;
-    agentNotices.add(agent.id, text);
+    if (!agent || (agent.revokedAt !== null && !opts.evenRevoked)) return null;
+    const noticeId = agentNotices.add(agent.id, text);
+    if (agent.revokedAt !== null) return noticeId;
     wake(agent.id);
+    const kind = opts.wakeKind;
+    if (kind !== undefined) {
+      queueMicrotask(() => {
+        try {
+          wakeAppForNotice(agent.id, noticeId, kind);
+        } catch (err) {
+          log("error", "notice_wake_failed", { kind, error: errorName(err) });
+        }
+      });
+    }
+    return noticeId;
+  };
+
+  // ---- questions an agent asks its own person ----
+
+  // The question's page is emailed to the person, once: who asks, never what. The page needs sign-in.
+  const mailQuestion = (q: Question) => {
+    if (!mail.enabled) return;
+    const agent = agents.get(q.agentId);
+    const person = people.get(q.personId);
+    if (!agent || !person) return;
+    const name = agents.nameFor(agent, person.id);
+    mailed(
+      "question",
+      // The mails table lists its kinds, and a question's email is a link to a page only its person can answer on, as
+      // a consent request's is: the same kind, with a reference of its own.
+      mail.notify("consent", `question:${q.id}`, person, {
+        subject: `${name} needs input on Portico`,
+        lines: [
+          `${quote(name)}, one of ${person.name}'s agents, asked ${person.name} a question and waits for the answer.${agent.unproven ? ` ${newAgentWords(agent, now())}` : ""}`,
+          "To read the question and answer, open this page and sign in to Portico:",
+        ],
+        link: questions.link(q.id),
+        after: [
+          `Only ${person.name}, signed in, can answer on that page. The question waits ${waitWords(Date.parse(q.expiresAt) - Date.parse(q.createdAt))}, then lapses, and the agent is told that no answer came.`,
+        ],
+        stop: { line: "To stop the agent that asked, revoke the agent in one step on the agent's page:", link: `${settings.publicUrl()}/a/${agent.id}` },
+      }),
+    );
+  };
+  const questions: Questions = new Questions({
+    db,
+    agents,
+    people,
+    activity,
+    changes,
+    publicUrl: () => settings.publicUrl(),
+    // The agent that asked is waiting on this notice, so an app agent is woken for it. A revoked agent's notice is
+    // saved all the same: the record of what Portico said.
+    tell: (agentId, text, kind) => tellAgent(agentId, text, { wakeKind: kind, evenRevoked: true }) ?? "",
+    taskAgents: (q) => {
+      const found = q.taskId ? tasks.get({ agent: q.agentId }, q.taskId) : null;
+      return found ? [found.task.fromId, found.task.toId] : [];
+    },
+    onAsked: mailQuestion,
+    now,
+    newId,
+    log: logInfo,
+  });
+  agents.onGone = (agentIds) => {
+    try {
+      questions.withdrawFor(agentIds);
+    } catch (err) {
+      log("error", "questions_withdraw_failed", { error: errorName(err) });
+    }
   };
   const named = (subject: Agent, viewer: Agent) => `\`${agents.nameFor(subject, viewer.ownerId)}\``;
   const onWorkspaceEvent = (event: WorkspaceEvent) => {
@@ -728,6 +813,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     personStreams,
     wakeUrls,
     feedback,
+    questions,
     events,
     accountSignIn,
     now,
@@ -797,6 +883,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       sweep("oauth_clients", () => computers.sweepUnusedClients());
       sweep("sign_in_limits", () => accounts.sweepLimiters());
       sweep("consent_requests", () => consents.sweepMinute());
+      sweep("questions_expired", () => questions.expireDue());
+      sweep("questions_withdrawn", () => questions.withdrawOrphans());
       void sweepRecordMail();
     },
     sweepDaily() {
@@ -805,6 +893,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       sweep("runs", () => agents.pruneRuns());
       sweep("activity", () => activity.prune());
       sweep("agent_notices", () => agentNotices.prune());
+      sweep("questions", () => questions.prune());
       sweep("web_sessions", () => accounts.sweep());
       sweep("people", () => people.sweep());
       sweep("computers", () => computers.sweep());

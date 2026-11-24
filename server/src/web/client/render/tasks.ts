@@ -1,7 +1,7 @@
 // Tasks and decisions, shared by Today, Activity and the agent pages: one row per task (status, task, who, when) whose
 // steps open inside the row, and the cards for what needs a person's decision. Pure: state in, HTML out.
 import { agentState, clock, date, duration, esc, expiresIn, kindInfo, logo, pav, when } from "./common.js";
-import type { AgentRef, AgentView, ConsentCard, FileView, HeldCard, HomeState, MessageView, TaskDetail, TaskOutcome, TaskView } from "./types.js";
+import type { AgentRef, AgentView, ConsentCard, FileView, HeldCard, HomeState, MessageView, QuestionCard, TaskDetail, TaskOutcome, TaskView } from "./types.js";
 
 /** The four outcomes, in plain words. */
 export const OUTCOME_LABEL: Record<TaskOutcome, string> = {
@@ -20,12 +20,20 @@ export function statusPill(outcome: TaskOutcome): string {
   return `<span class="pill pill-${outcome}">${OUTCOME_LABEL[outcome]}</span>`;
 }
 
+/** A task's pill: where it stands, or while one of its agents waits for its own person's answer, whom it waits on. */
+function taskPill(t: TaskView): string {
+  if (t.waitingOn) return `<span class="pill pill-waiting">Waiting on ${esc(t.waitingOn.person.name || "a person")}</span>`;
+  return statusPill(t.outcome);
+}
+
 /** The task's second line: the answer's summary when done, otherwise where it stands. */
 export function taskLine(t: TaskView): string {
   switch (t.outcome) {
     case "needs_approval":
       return "New contact, waiting for approval.";
     case "in_progress":
+      // Who asked whom and when: never what was asked, which is between an agent and its own person.
+      if (t.waitingOn) return `${t.waitingOn.agent.label} asked ${t.waitingOn.person.name || "a person"} a question at ${clock(t.waitingOn.askedAt)}. No answer yet.`;
       if (t.answer) return `Update from ${t.to.label}: ${t.answer.summary ?? t.answer.subject}`;
       if (t.pickedUpAt) return `Picked up at ${clock(t.pickedUpAt)}, no answer yet.`;
       return `${when(t.noReplyNeeded, "No reply needed. ")}Queued until ${t.to.label} checks for messages.`;
@@ -61,21 +69,27 @@ function who(t: TaskView, from: AgentRef, to: AgentRef, perspective: string | nu
   return `${esc(from.label)} <span aria-label="to">→</span> ${esc(to.label)}`;
 }
 
-const STEP_LABEL = {
+const STEP_LABEL: Record<TaskView["steps"][number]["kind"], (t: TaskView, by: string | null, always: boolean, agent: string | null) => string> = {
   // A message that needs no reply asks for nothing.
-  asked: (t: TaskView) => (t.noReplyNeeded ? "Sent" : "Asked"),
-  allowed: (_t: TaskView, by: string | null, always: boolean) => `${always ? "Always allowed" : "Allowed once"}${by ? ` by ${by}` : ""}`,
-  denied: (_t: TaskView, by: string | null) => `Not allowed${by ? ` by ${by}` : ""}`,
-  picked_up: (t: TaskView) => `Picked up by ${t.to.label}`,
+  asked: (t) => (t.noReplyNeeded ? "Sent" : "Asked"),
+  allowed: (_t, by, always) => `${always ? "Always allowed" : "Allowed once"}${by ? ` by ${by}` : ""}`,
+  denied: (_t, by) => `Not allowed${by ? ` by ${by}` : ""}`,
+  picked_up: (t) => `Picked up by ${t.to.label}`,
   expired: () => "Expired",
   withdrawn: () => "Withdrawn",
   answered: () => "Answered",
-} as const;
+  // A question one of the two agents asked its own person: who and when, never what.
+  input_asked: (_t, by, _always, agent) => `${agent ?? "An agent"} asked ${by ?? "a person"}`,
+  input_answered: (_t, by) => `Answered by ${by ?? "a person"}`,
+  input_skipped: (_t, by) => `Skipped by ${by ?? "a person"}`,
+  input_expired: (_t, by) => `No answer from ${by ?? "a person"}`,
+  input_withdrawn: () => "Question withdrawn",
+};
 
 function renderSteps(t: TaskView): string {
   return `<ol class="steps-row" aria-label="Steps">${t.steps
     .map((step) => {
-      const label = STEP_LABEL[step.kind](t, step.by?.name ?? null, step.decision === "always_allow");
+      const label = STEP_LABEL[step.kind](t, step.by?.name || null, step.decision === "always_allow", step.agent?.label ?? null);
       return `<li><span class="step-label">${esc(label)}</span><span class="tnum step-at">${clock(step.at)}</span></li>`;
     })
     .join("")}</ol>`;
@@ -129,6 +143,7 @@ function renderOpened(s: HomeState, t: TaskView, detail: TaskDetail | null): str
   return `<div class="trow-open enter" data-key="to-${esc(t.id)}">
     ${renderSteps(t)}
     ${messages}
+    ${when(t.questions.length > 0, () => `<ol class="tmsgs" aria-label="Questions">${t.questions.map((q) => renderTaskQuestion(s, q)).join("")}</ol>`)}
     ${when(decision, () => `<div class="actions">${decideButtons(s, decision!)}</div>`)}
   </div>`;
 }
@@ -138,7 +153,7 @@ export function renderTaskRow(s: HomeState, t: TaskView, perspective: string | n
   const open = t.id in s.openTasks;
   return `<li class="trow${when(open, " is-open")}" data-key="t-${esc(t.id)}">
     <button type="button" class="trow-main" data-action="task-toggle" data-id="${esc(t.id)}" aria-expanded="${open}">
-      <span class="trow-status">${statusPill(t.outcome)}</span>
+      <span class="trow-status">${taskPill(t)}</span>
       <span class="trow-task"><span class="trow-subject">${esc(t.subject)}</span><span class="trow-line">${esc(taskLine(t))}${when(t.readOnly, () => ` ${esc(readOnlyLine(t))}`)}</span></span>
       <span class="trow-who">${who(t, t.from, t.to, perspective)}</span>
       <span class="trow-when tnum">${taskWhen(t)}</span>
@@ -228,6 +243,78 @@ export function renderConsentCard(s: HomeState, r: ConsentCard): string {
     </div></div>
     <div class="actions"><a class="btn btn-primary" href="${esc(r.link)}">Open the page</a></div>
   </article>`;
+}
+
+// ---- input needed ----
+
+/** How a question that no longer waits ended, for the person it was asked: the person's own answer included. */
+function questionOutcome(q: QuestionCard): string {
+  if (q.status === "answered" && q.answer) {
+    const parts = [q.answer.option, q.answer.text].filter((part): part is string => part !== null && part !== "");
+    return `Answered at ${clock(q.answer.at)}: ${parts.join(". ")}`;
+  }
+  if (q.status === "skipped") return `Skipped${q.endedAt ? ` at ${clock(q.endedAt)}` : ""}.`;
+  if (q.status === "expired") return "No answer in time: the question lapsed.";
+  if (q.status === "withdrawn") return "Withdrawn: the agent was revoked or removed.";
+  return "";
+}
+
+/**
+ * The answer row of a waiting question: one press on a choice sends it, "Answer in your own words" opens a text
+ * box, and a question with no choices starts with the box. Skip tells the agent there is no answer.
+ */
+function questionActions(s: HomeState, q: QuestionCard, slot: "card" | "task"): string {
+  const id = esc(q.id);
+  // The same question can show on its card and in its task: each text box needs an ID of its own.
+  const box = `qa-${slot}-${id}`;
+  const busy = s.busy === `question:${q.id}`;
+  const off = when(busy, " disabled");
+  const options = q.options ?? [];
+  const typing = options.length === 0 || s.answerOpen[q.id] === true;
+  const text = s.answerText[q.id] ?? "";
+  return `${when(
+    typing,
+    () => `<label class="sr" for="${box}">Your answer to ${esc(q.agent.label)}</label><textarea id="${box}" class="field q-text" rows="2" maxlength="1000" placeholder="Your answer to ${esc(q.agent.label)}" data-input="q-text:${id}">${esc(text)}</textarea>`,
+  )}
+    <div class="actions">
+      <span class="actions-links">${when(options.length > 0 && !typing, `<button type="button" class="btn btn-link" data-action="q-open" data-id="${id}">Answer in your own words</button>`)}<a class="btn btn-link" href="/q/${encodeURIComponent(q.id)}">Open the page</a></span>
+      <button type="button" class="btn btn-text" data-action="q-skip" data-id="${id}"${off}>Skip</button>
+      ${options.map((option, i) => `<button type="button" class="btn btn-secondary" data-action="q-answer" data-id="${id}" data-option="${i}"${off}>${esc(option)}</button>`).join("")}
+      ${when(typing, `<button type="button" class="btn btn-primary" data-action="q-send" data-id="${id}"${off}>Send answer</button>`)}
+    </div>`;
+}
+
+/** The warning on a question from an agent its person hasn't confirmed yet: the words a held message's card says. */
+function newAgentWarning(s: HomeState, q: QuestionCard): string {
+  return when(q.newAgent, () => `<p class="dcard-why q-new"><strong>New agent, added ${esc(date(q.newAgent!.addedAt, s.now))}.</strong> You haven't confirmed this agent yet.</p>`);
+}
+
+/**
+ * Something one of the person's own agents asked the person. The heading and the line under it are Portico's; the
+ * question, the background and the choices are the agent's words, in a box of their own.
+ */
+export function renderQuestionCard(s: HomeState, q: QuestionCard): string {
+  const id = esc(q.id);
+  return `<article class="dcard qcard" aria-labelledby="di-${id}" data-key="di-${id}">
+    <div class="dcard-head">${logo(q.agent.kind, "", kindInfo(q.agent.kind).label)}<div class="grow">
+      <h3 id="di-${id}" class="dcard-title">${esc(q.agent.label)} needs your input</h3>
+      <p class="dcard-why tnum">${when(q.task, () => `For the task “${esc(q.task!.subject)}”. `)}Only you can answer. ${expiresIn(q.expiresAt, s.now)}</p>
+      ${newAgentWarning(s, q)}
+    </div></div>
+    <div class="msg-box"><p class="q-question">${esc(q.question)}</p>${when(q.detail, () => `<p class="msg-full">${esc(q.detail)}</p>`)}</div>
+    ${questionActions(s, q, "card")}
+  </article>`;
+}
+
+/** A question in its task, opened: shown only to the person it was asked, with the answer or the way to give one. */
+function renderTaskQuestion(s: HomeState, q: QuestionCard): string {
+  const waiting = q.status === "waiting" && s.questions.some((card) => card.id === q.id);
+  return `<li class="tmsg tmsg-q" data-key="tq-${esc(q.id)}">
+    <div class="tmsg-head">${logo(q.agent.kind, "logo-sm")}<strong>${esc(q.agent.label)}</strong><span class="pill pill-waiting tmsg-tag">Question for ${esc(s.me.name)}</span><span class="tnum tmsg-at">${clock(q.createdAt)}</span></div>
+    <p class="tmsg-subject">${esc(q.question)}</p>
+    ${when(q.detail, () => `<p class="tmsg-text">${esc(q.detail)}</p>`)}
+    ${waiting ? questionActions(s, q, "task") : `<p class="tmsg-text q-outcome">${esc(q.status === "waiting" ? "Waiting for an answer." : questionOutcome(q))}</p>`}
+  </li>`;
 }
 
 /** A coding agent stopped to ask something in its own terminal: the answer goes there, not through Portico. */

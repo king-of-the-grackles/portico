@@ -16,6 +16,7 @@ import type {
   PasskeyView,
   PersonRef,
   PersonView,
+  QuestionCard,
   RunView,
   TaskView,
 } from "../../../api/views";
@@ -41,6 +42,7 @@ export type {
   PasskeyView,
   PersonRef,
   PersonView,
+  QuestionCard,
   RunView,
   TaskListData,
   TaskOutcome,
@@ -75,7 +77,7 @@ export interface HomeData {
   me: PersonView;
   publicUrl: string;
   agents: AgentView[];
-  approvals: { held: HeldCard[]; consents: ConsentCard[] };
+  approvals: { held: HeldCard[]; consents: ConsentCard[]; questions?: QuestionCard[] };
   /** The person's Porticos, the person's own first. */
   workspaces: WorkspaceView[];
   workspacePage: WorkspacePageData | null;
@@ -156,6 +158,11 @@ export interface HomeState {
   held: HeldCard[];
   /** What the person's agents asked that waits on the consent page. */
   consents: ConsentCard[];
+  /** "Input needed": what the person's own agents asked the person, still waiting. */
+  questions: QuestionCard[];
+  /** The text boxes open on those cards ("Answer in your own words"), and what is typed in each, by question ID. */
+  answerOpen: Record<string, boolean>;
+  answerText: Record<string, string>;
   workspaces: WorkspaceView[];
   workspacePage: WorkspacePageData | null;
   wsForm: WorkspaceForm | null;

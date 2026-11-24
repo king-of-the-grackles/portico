@@ -12,11 +12,12 @@ import type { Tasks } from "../core/tasks";
 import type { WakeUrls } from "../core/wake-urls";
 import type { Feedback } from "../core/feedback";
 import type { AgentNotices } from "../core/notices";
+import type { Questions } from "../core/questions";
 import { parseStatusReport, type Presence } from "../core/presence";
 import { errorName, log } from "../log";
 import { type AgentEnv, requireAgent, requireSession, type Resolver, unauthorized } from "./auth";
 import { jsonBodyLimit } from "./limits";
-import { getAgentTask, listAgentTasks } from "./tasks";
+import { findAgentTask, getAgentTask, listAgentTasks } from "./tasks";
 import { type AgentViews, UNTRUSTED_PROFILES } from "./views";
 import { runPorticoTool, PORTICO_TOOL_NAMES, type PorticoToolDeps, porticoFilter } from "./portico-tools";
 
@@ -38,6 +39,13 @@ const UploadBody = z.object({
   text: z.string().nullish(),
 });
 const FeedbackBody = z.object({ kind: z.string(), title: z.string(), details: z.string() });
+const QuestionBody = z.object({
+  question: z.string(),
+  detail: z.string().nullish(),
+  options: z.array(z.string()).nullish(),
+  task: z.string().nullish(),
+  expires_in_minutes: z.number().nullish(),
+});
 const ProfileBody = z.object({ description: z.string().nullish(), doing: z.string().nullish() });
 const WakeBody = z.union([z.object({ url: z.string(), key: z.string() }), z.object({ schedule_minutes: z.number().nullable() })]);
 const AckIds = z.array(z.string()).max(DELIVERY_BATCH_MAX).default([]);
@@ -79,6 +87,8 @@ export interface AgentRestDeps {
   porticoTools: PorticoToolDeps;
   /** Portico's own notices to agents, delivered beside messages and outcomes. */
   notices: AgentNotices;
+  /** What agents ask their own people. An agent can ask here, and nothing more: no route answers. */
+  questions: Questions;
 }
 
 /**
@@ -214,6 +224,7 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       updates: updates.map((m) => views.update(m, agent)),
       notices: deps.notices.take(agent.id).map(views.notice),
       ...views.heldForPerson(agent),
+      ...views.inputNeeded(agent),
       ...views.wakeStatus(agent),
     });
   });
@@ -228,6 +239,17 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
       updates: pending.updates.map((m) => views.update(m, agent)),
       notices: deps.notices.waiting(agent.id, DELIVERY_BATCH_MAX).map(views.notice),
     });
+  });
+
+  // A question for the agent's own person. This is the only route about questions: the answer is given in that
+  // person's signed-in browser, through the person API, and comes back as Portico's own notice.
+  api.post("/questions", async (c) => {
+    const body = QuestionBody.parse(await readJson(c));
+    const agent = c.get("agent");
+    const taskId = body.task === undefined || body.task === null || body.task === "" ? null : findAgentTask(deps, agent, body.task).task.id;
+    const question = deps.questions.ask(agent, { question: body.question, detail: body.detail, options: body.options, taskId, expiresInMinutes: body.expires_in_minutes });
+    agents.checkedIn(agent);
+    return c.json(views.asked(question, agent), 201);
   });
 
   // Feedback about Portico: saved, and nothing else happens.

@@ -1,5 +1,6 @@
 import type { Content, ContentDb, Scope } from "./content";
 import { HOUR_MS, LIMITS } from "./limits";
+import type { TaskQuestion } from "./questions";
 import { finalFacts } from "./types";
 import type { Decision, HeldFor, Message, MessageStatus } from "./types";
 
@@ -20,15 +21,33 @@ export type TaskReason = "not_allowed" | "expired" | "no_answer" | "withdrawn";
 /** A task where nothing happens for this long after pickup, or after the latest update, didn't go through. */
 export const NO_ANSWER_AFTER_MS = LIMITS.messageExpiryHours * HOUR_MS;
 
-export type TaskStepKind = "asked" | "allowed" | "denied" | "picked_up" | "answered" | "expired" | "withdrawn";
+/**
+ * The steps of a task. The `input_` steps are about a question one of the two agents asked its own person with
+ * request_input: asked, then answered, skipped, lapsed or withdrawn. They say who and when, never the text.
+ */
+export type TaskStepKind =
+  | "asked"
+  | "allowed"
+  | "denied"
+  | "picked_up"
+  | "answered"
+  | "expired"
+  | "withdrawn"
+  | "input_asked"
+  | "input_answered"
+  | "input_skipped"
+  | "input_expired"
+  | "input_withdrawn";
 
 export interface TaskStep {
   kind: TaskStepKind;
   at: string;
-  /** The person who decided, for allowed and denied. */
+  /** The person who decided, for allowed and denied. For an input step: the person who was asked. */
   personId: string | null;
   /** For allowed: once or always. */
   decision: Decision | null;
+  /** For an input step: the agent that asked. */
+  agentId?: string | null;
 }
 
 export interface Task {
@@ -59,6 +78,11 @@ export interface Task {
    * asked answers anyway. A flag on a later message changes nothing here.
    */
   noReplyNeeded: boolean;
+  /**
+   * The task is in progress and one of its agents waits for its own person's answer to a question: the oldest such
+   * question, for the "Waiting on" pill. Null otherwise.
+   */
+  waitingOn: { questionId: string; agentId: string; personId: string; askedAt: string } | null;
   /** A held message in the task, for the decision buttons. */
   heldMessageId: string | null;
   /**
@@ -110,8 +134,11 @@ function latest(...times: (string | null)[]): string {
  *
  * Done also means a first message that said no reply is needed was picked up, with no answer from the agent asked:
  * the task ended at pickup, and no wait for an answer ever starts. An answer sent anyway counts as on any other task.
+ *
+ * A question an agent asked its own person about the task counts as an update: the no-answer clock starts again when
+ * the question is asked.
  */
-export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
+export function taskOf(rootId: string, chain: TaskMessage[], now: Date, questions: readonly TaskQuestion[] = []): Task {
   const root = chain.find((m) => m.id === rootId) ?? chain[0]!;
   const answers = chain.filter((m) => m.fromId === root.toId && (m.status === "pending" || m.status === "delivered"));
   const lastAnswer = answers.at(-1) ?? null;
@@ -146,7 +173,7 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
     endedAt = root.deliveredAt ?? root.createdAt;
   } else {
     // Picked up: the clock runs from pickup, and starts again with each update.
-    const givenUp = Date.parse(latest(root.deliveredAt ?? root.createdAt, lastAnswer?.createdAt ?? null)) + NO_ANSWER_AFTER_MS;
+    const givenUp = Date.parse(latest(root.deliveredAt ?? root.createdAt, lastAnswer?.createdAt ?? null, ...questions.map((q) => q.createdAt))) + NO_ANSWER_AFTER_MS;
     if (givenUp <= now.getTime()) {
       outcome = "failed";
       reason = "no_answer";
@@ -167,6 +194,16 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
   if (root.status === "expired") steps.push({ kind: "expired", at: root.expiresAt, personId: null, decision: null });
   if (root.status === "withdrawn") steps.push({ kind: "withdrawn", at: root.withdrawnAt ?? root.createdAt, personId: null, decision: null });
   if (outcome === "done" && lastAnswer) steps.push({ kind: "answered", at: endedAt!, personId: null, decision: null });
+  if (questions.length > 0) {
+    for (const q of questions) {
+      steps.push({ kind: "input_asked", at: q.createdAt, personId: q.personId, decision: null, agentId: q.agentId });
+      if (q.status !== "waiting" && q.endedAt) steps.push({ kind: `input_${q.status}`, at: q.endedAt, personId: q.personId, decision: null, agentId: q.agentId });
+    }
+    // In the order things happened; steps at the same moment keep the order above.
+    const order = new Map(steps.map((step, i) => [step, i]));
+    steps.sort((a, b) => a.at.localeCompare(b.at) || order.get(a)! - order.get(b)!);
+  }
+  const waiting = outcome === "in_progress" ? (questions.find((q) => q.status === "waiting") ?? null) : null;
 
   return {
     id: rootId,
@@ -177,7 +214,7 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
     outcome,
     reason,
     startedAt: root.createdAt,
-    updatedAt: latest(...chain.flatMap((m) => [m.createdAt, m.decidedAt, m.deliveredAt, m.withdrawnAt]), endedAt),
+    updatedAt: latest(...chain.flatMap((m) => [m.createdAt, m.decidedAt, m.deliveredAt, m.withdrawnAt]), ...questions.flatMap((q) => [q.createdAt, q.endedAt]), endedAt),
     endedAt,
     heldAt: root.heldAt,
     pickedUpAt: root.deliveredAt,
@@ -191,6 +228,7 @@ export function taskOf(rootId: string, chain: TaskMessage[], now: Date): Task {
         }
       : null,
     noReplyNeeded,
+    waitingOn: waiting ? { questionId: waiting.id, agentId: waiting.agentId, personId: waiting.personId, askedAt: waiting.createdAt } : null,
     heldMessageId: held?.id ?? null,
     outboundHeld: neverSent(root),
     messageCount: chain.length,
@@ -271,6 +309,8 @@ export interface TaskFilter {
 
 export interface TasksDeps {
   content: Content;
+  /** The questions agents asked their own people about tasks: one task's, and every task's by task ID. No text. */
+  questions?: { ofTask: (taskId: string) => TaskQuestion[]; byTask: () => Map<string, TaskQuestion[]> };
   now?: () => Date;
 }
 
@@ -283,10 +323,12 @@ type BuildFilter = Omit<TaskFilter, "outcome" | "before" | "since" | "limit">;
  */
 export class Tasks {
   private readonly content: Content;
+  private readonly questions: TasksDeps["questions"];
   private readonly now: () => Date;
 
   constructor(deps: TasksDeps) {
     this.content = deps.content;
+    this.questions = deps.questions;
     this.now = deps.now ?? (() => new Date());
   }
 
@@ -320,7 +362,7 @@ export class Tasks {
       const chain = (db.query(`SELECT ${COLUMNS} FROM messages WHERE root_id = $rootId ORDER BY created_at, rowid`).all({ rootId }) as TaskRow[])
         .map((row) => toTaskMessage(row, workspaceId))
         .filter((m) => readable(m, mine));
-      if (chain.length > 0) return { task: taskOf(rootId, chain, this.now()), messageIds: chain.map((m) => m.id) };
+      if (chain.length > 0) return { task: taskOf(rootId, chain, this.now(), this.questions?.ofTask(rootId) ?? []), messageIds: chain.map((m) => m.id) };
     }
     return null;
   }
@@ -358,14 +400,15 @@ export class Tasks {
     const tasks: Task[] = [];
     // The reader's own agents: a message that never left another side isn't part of any task the reader sees.
     const mine = filter.visible ?? (filter.agentId ? [filter.agentId] : null);
-    for (const content of this.content.of(within)) tasks.push(...this.tasksIn(content, where, bindings, now, mine));
+    const questions = this.questions?.byTask() ?? new Map<string, TaskQuestion[]>();
+    for (const content of this.content.of(within)) tasks.push(...this.tasksIn(content, where, bindings, now, mine, questions));
     // A task still held on its way out is its sender's side's alone: a person sees it only for that person's own agent.
     const own = filter.visible;
     const shown = own ? tasks.filter((task) => !task.outboundHeld || own.includes(task.fromId)) : tasks;
     return shown.sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id));
   }
 
-  private tasksIn(content: ContentDb, where: string, bindings: Record<string, string>, now: Date, mine: string[] | null): Task[] {
+  private tasksIn(content: ContentDb, where: string, bindings: Record<string, string>, now: Date, mine: string[] | null, questions: Map<string, TaskQuestion[]>): Task[] {
     // Every message of a conversation is between the same two agents, so filtering messages keeps whole tasks.
     const rows = content.db.query(`SELECT ${COLUMNS} FROM messages ${where} ORDER BY created_at, rowid`).all(bindings) as TaskRow[];
     const chains = new Map<string, TaskMessage[]>();
@@ -376,6 +419,6 @@ export class Tasks {
       chain.push(m);
       chains.set(m.rootId, chain);
     }
-    return [...chains].map(([rootId, chain]) => taskOf(rootId, chain, now));
+    return [...chains].map(([rootId, chain]) => taskOf(rootId, chain, now, questions.get(rootId) ?? []));
   }
 }
