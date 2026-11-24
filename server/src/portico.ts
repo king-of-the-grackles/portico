@@ -12,7 +12,7 @@ import { recordWords } from "./core/record-words";
 import { DAY_MS, MINUTE_MS } from "./core/limits";
 import { Changes, type Topic } from "./core/changes";
 import { Computers } from "./core/computers";
-import { consentWords, quote } from "./core/consent-words";
+import { consentWords, newAgentWords, quote } from "./core/consent-words";
 import { Consents } from "./core/consents";
 import { Content } from "./core/content";
 import { type AccountCheck, accountFrom, Descope } from "./core/descope";
@@ -368,9 +368,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     const from = quote(agents.addressFor(sender, person.id));
     const to = quote(agents.addressFor(receiver, person.id));
     const why = m.heldFor === "new_agent"
-      ? `A message from ${from} to ${to} is held: ${from} joined Portico lately, and this is that agent's first message to ${to}.`
+      ? `A message from ${from} to ${to} is held. ${newAgentWords(sender)} This is that agent's first message to ${to}.`
       : outbound && sender.unproven
-      ? `A message from ${from} to ${to} is held: ${from} joined Portico lately, and ${person.name} hasn't vouched for that agent yet.`
+      ? `A message from ${from} to ${to} is held. ${newAgentWords(sender)}`
       : outbound
       ? `A message from ${from} to ${to} is held: ${person.name} asked to see what that agent sends to other people's agents first.`
       : m.heldFor === "first_contact"

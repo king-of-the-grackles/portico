@@ -1005,7 +1005,7 @@ export class Messages {
       const where = this.heldLink ? ` on Portico's page, ${this.heldLink(message.id)}` : " on Portico's pages";
       const why = caller.outboundHold
         ? `${person} asked to see each message this agent sends to other people's agents first`
-        : `this agent joined Portico lately, so until ${person} vouches for this agent, ${person} sees each message this agent sends to other people's agents first`;
+        : `this agent is new and ${person} hasn't confirmed this agent yet, so ${person} sees each message this agent sends to other people's agents first`;
       return (
         `Held for ${person}: ${why}, and decides${where}. ` +
         `Once allowed, the message goes on to ${name}, whose own person may be asked too. ${outcome}`
@@ -1013,7 +1013,7 @@ export class Messages {
     }
     if (message.heldFor === "new_agent") {
       const person = this.personName(caller.ownerId);
-      return `Held: this agent joined Portico lately, so ${person} is asked once before this agent's first message reaches ${name}. ${outcome}`;
+      return `Held: this agent is new and ${person} hasn't confirmed this agent yet, so ${person} is asked once before this agent's first message reaches ${name}. ${outcome}`;
     }
     if (message.heldFor === "first_contact") {
       const person = this.personName(receiver.ownerId);

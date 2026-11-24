@@ -6,8 +6,18 @@ export { quote };
 import { LIMITS } from "./limits";
 import type { Agent } from "./types";
 
+/** "Nov 22", with the year when it isn't this year: a day as the server writes one, in UTC. */
+export function utcDay(at: string, now: Date = new Date()): string {
+  const d = new Date(at);
+  const sameYear = d.getUTCFullYear() === now.getUTCFullYear();
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC", ...(sameYear ? {} : { year: "numeric" }) });
+}
+
+/** What the person who manages a new agent reads about it, before that person has said the agent is theirs. */
+export const newAgentWords = (agent: { createdAt: string }, now: Date = new Date()) => `New agent, added ${utcDay(agent.createdAt, now)}. You haven't confirmed this agent yet.`;
+
 /** Why an agent that could act at once asks first. */
-const NEW_ASKER = (me: string) => `Portico asks because the agent joined lately and ${me} hasn't vouched for the agent yet. Not an agent ${me} started? Choose Don't allow and revoke the agent on the agent's page.`;
+const NEW_ASKER = (agent: Agent, me: string) => `${newAgentWords(agent)} That is why Portico asks. Not an agent ${me} started? Choose Don't allow and revoke the agent on the agent's page.`;
 
 const KIND_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
@@ -39,8 +49,9 @@ export interface ConsentWords {
 export function consentWords(view: ConsentView, me: string, agentName: (agent: Agent) => string): ConsentWords {
   const words = wordsFor(view, me, agentName);
   // An agent nobody vouched for asks: the page says so, whatever is asked.
-  const asks = view.agent?.unproven && view.request.agentId === view.agent.id && view.request.personId === view.agent.ownerId;
-  return asks ? { ...words, then: [...words.then, NEW_ASKER(me)] } : words;
+  const agent = view.agent;
+  const asks = agent?.unproven && view.request.agentId === agent.id && view.request.personId === agent.ownerId;
+  return agent && asks ? { ...words, then: [...words.then, NEW_ASKER(agent, me)] } : words;
 }
 
 function wordsFor(view: ConsentView, me: string, agentName: (agent: Agent) => string): ConsentWords {

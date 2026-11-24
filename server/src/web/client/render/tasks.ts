@@ -1,6 +1,6 @@
 // Tasks and decisions, shared by Today, Activity and the agent pages: one row per task (status, task, who, when) whose
 // steps open inside the row, and the cards for what needs a person's decision. Pure: state in, HTML out.
-import { agentState, clock, duration, esc, expiresIn, kindInfo, logo, pav, when } from "./common.js";
+import { agentState, clock, date, duration, esc, expiresIn, kindInfo, logo, pav, when } from "./common.js";
 import type { AgentRef, AgentView, ConsentCard, FileView, HeldCard, HomeState, MessageView, TaskDetail, TaskOutcome, TaskView } from "./types.js";
 
 /** The four outcomes, in plain words. */
@@ -180,9 +180,12 @@ export function decideButtons(s: HomeState, m: HeldCard): string {
 /** Why the message waits, in Portico's own words: never anything the sender wrote. */
 function heldReason(s: HomeState, m: HeldCard): string {
   const parts: string[] = [];
-  if (m.facts.heldFor === "outbound" && m.facts.newSender) return `${m.from.label} joined Portico lately, so ${s.me.name} sees what ${m.from.label} sends to other people's agents first. Nothing has reached ${m.to.label}. Always allow vouches for ${m.from.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
+  // A sender nobody confirmed is always one of the reader's own agents, so the day it was added is in the page's state.
+  const added = s.agents.find((a) => a.id === m.from.id)?.createdAt;
+  const newAgent = `${added ? `New agent, added ${date(added, s.now)}.` : "New agent."} You haven't confirmed this agent yet.`;
+  if (m.facts.heldFor === "outbound" && m.facts.newSender) return `${newAgent} ${s.me.name} sees what ${m.from.label} sends to other people's agents first. Nothing has reached ${m.to.label}. Always allow confirms ${m.from.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
   if (m.facts.heldFor === "outbound") return `${m.from.label} sends to other people's agents only once ${s.me.name} has seen each message. Nothing has reached ${m.to.label}.`;
-  if (m.facts.heldFor === "new_agent") return `${m.from.label} joined Portico lately, and this is the first message from ${m.from.label} to ${m.to.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
+  if (m.facts.heldFor === "new_agent") return `${newAgent} This is the first message from ${m.from.label} to ${m.to.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
   if (m.facts.heldFor === "first_contact") parts.push(`${s.me.name} hasn't allowed messages from ${m.facts.managedBy.name}'s agents yet.`);
   if (m.facts.replyToRecipient) parts.push(`Follows a message from ${m.to.label}, but starts a new conversation.`);
   else if (m.facts.earlier.length === 0) parts.push(`First time ${m.from.label} has asked ${m.to.label} for anything, and new contacts need approval.`);
