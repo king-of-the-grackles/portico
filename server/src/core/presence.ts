@@ -1,5 +1,6 @@
 import { PorticoError } from "./errors";
 import { defang } from "./framing";
+import { LIMITS } from "./limits";
 import type { SessionStatus, StatusReport } from "./types";
 
 const STATUSES = new Set(["busy", "idle", "waiting"]);
@@ -20,7 +21,7 @@ export function parseStatusReport(body: unknown): StatusReport {
   const repo = oneLine(b.repo, 100);
   return {
     status: b.status as SessionStatus,
-    doing: oneLine(b.doing, 120),
+    doing: oneLine(b.doing, LIMITS.maxDoingChars),
     // A basename only, even if a client sends a path.
     repo: repo?.split(/[\\/]/).filter(Boolean).pop() ?? null,
     branch: oneLine(b.branch, 100),

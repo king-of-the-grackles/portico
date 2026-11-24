@@ -8,7 +8,7 @@ import type { Shares } from "../core/shares";
 import type { Agent, Workspace } from "../core/types";
 import type { Workspaces } from "../core/workspaces";
 
-const str = (description: string) => ({ type: "string", description });
+const str = (description: string, maxLength?: number) => ({ type: "string", description, ...(maxLength === undefined ? {} : { maxLength }) });
 const PORTICO = "Required. A Portico's ID or name, from list_porticos.";
 const AGENT = "Required. One agent of the person who manages this agent, by the name list_agents shows.";
 
@@ -41,7 +41,7 @@ export function porticoTools() {
       inputSchema: {
         type: "object",
         properties: {
-          name: str("Optional. The Portico's name, such as Launch."),
+          name: str(`Optional. The Portico's name, such as Launch. At most ${LIMITS.maxWorkspaceNameChars} characters.`, LIMITS.maxWorkspaceNameChars),
           agents: {
             type: "array",
             items: { type: "string" },
@@ -93,7 +93,7 @@ export function porticoTools() {
         "after the people there. An agent that joined Portico lately, before that person vouched for the agent, gets waiting_for_person instead: that person allows the change on Portico's page.",
       inputSchema: {
         type: "object",
-        properties: { portico: str(PORTICO), name: str("Required. The new name, such as Launch.") },
+        properties: { portico: str(PORTICO), name: str(`Required. The new name, such as Launch. At most ${LIMITS.maxWorkspaceNameChars} characters.`, LIMITS.maxWorkspaceNameChars) },
         required: ["portico", "name"],
         additionalProperties: false,
       },

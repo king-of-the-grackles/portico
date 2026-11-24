@@ -5,6 +5,7 @@ import type { Changes } from "./changes";
 import type { Computers } from "./computers";
 import type { Content } from "./content";
 import { PorticoError } from "./errors";
+import { checkLength } from "./lengths";
 import { defang } from "./framing";
 import { isBroadcast } from "./guards";
 import { DAY_MS, HOUR_MS, LIMITS, NAME } from "./limits";
@@ -121,8 +122,6 @@ const KEY = /^[A-Za-z0-9_-]{8,100}$/;
 const FOLDER_ID = /^[a-f0-9]{64}$/;
 const MAX_REPO = 200;
 const MAX_DEDUPE = 99;
-/** The longest doing line, as status reports clip theirs. */
-const MAX_DOING = 120;
 /** A session's last_seen_at is written by its status reports at most this often. */
 const TOUCH_INTERVAL_MS = 60_000;
 
@@ -208,18 +207,14 @@ export function checkAgentName(value: unknown): string {
     throw new PorticoError("bad_request", "A name uses lowercase letters, digits and single hyphens.");
   }
   const name = value.trim();
-  if (name.length > LIMITS.maxNameChars) {
-    throw new PorticoError("bad_request", `A name can be at most ${LIMITS.maxNameChars} characters.`);
-  }
+  checkLength("name", name, LIMITS.maxNameChars);
   return name;
 }
 
 function checkDescription(value: unknown): string {
   if (typeof value !== "string") throw new PorticoError("bad_request", "description must be a string.");
   const description = defang(value).replace(/\s+/g, " ").trim();
-  if (Array.from(description).length > LIMITS.maxDescriptionChars) {
-    throw new PorticoError("bad_request", `A description can be at most ${LIMITS.maxDescriptionChars} characters.`);
-  }
+  checkLength("description", description, LIMITS.maxDescriptionChars);
   return description;
 }
 
@@ -919,9 +914,7 @@ export class Agents {
     if (changes.doing !== undefined && changes.doing !== null) {
       if (typeof changes.doing !== "string") throw new PorticoError("bad_request", "doing must be a string.");
       const doing = defang(changes.doing).replace(/\s+/g, " ").trim();
-      if (Array.from(doing).length > MAX_DOING) {
-        throw new PorticoError("bad_request", `doing can be at most ${MAX_DOING} characters.`);
-      }
+      checkLength("doing", doing, LIMITS.maxDoingChars);
       bindings.doing = doing === "" ? null : doing;
       bindings.doingAt = doing === "" ? null : this.iso();
       sets.push("doing = $doing", "doing_at = $doingAt");

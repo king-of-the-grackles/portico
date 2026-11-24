@@ -313,14 +313,18 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
               subject: {
                 type: "string",
                 maxLength: LIMITS.maxSubjectChars,
-                description: "One line saying what this message asks for or tells. A person reads the subject first when approving.",
+                description:
+                  `One line, at most ${LIMITS.maxSubjectChars} characters, saying what this message asks for or tells. Portico trims a longer one ` +
+                  "to fit and says so in the answer's note. A person reads the subject first when approving.",
               },
               text: { type: "string", description: `Up to ${LIMITS.maxMessageKb} KB.` },
               reply_to: { type: "string", description: "The ID of the message this answers." },
               summary: {
                 type: "string",
                 maxLength: LIMITS.maxSubjectChars,
-                description: "Optional, for a long answer: one line saying what the answer found or did, shown in Portico's activity list.",
+                description:
+                  `Optional, for a long answer: one line, at most ${LIMITS.maxSubjectChars} characters, saying what the answer found or did, shown in ` +
+                  "Portico's activity list. Portico trims a longer one to fit and says so in the answer's note.",
               },
               done: {
                 type: "boolean",
@@ -328,10 +332,10 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
               },
               key: {
                 type: "string",
-                maxLength: 200,
+                maxLength: LIMITS.maxSendKeyChars,
                 description:
                   "Optional. A key for this one message: sending the same message again with the same key returns the first " +
-                  "message. Every other message, updates and final answers included, needs a new key.",
+                  `message. Every other message, updates and final answers included, needs a new key. At most ${LIMITS.maxSendKeyChars} characters.`,
               },
               attachments: {
                 type: "array",
@@ -349,7 +353,10 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
                 message: { $ref: "#/components/schemas/Message" },
                 delivery: { type: "string", enum: ["pushed", "queued", "offline", "held"] },
                 portico: { $ref: "#/components/schemas/Portico", description: "The Portico the message went through." },
-                note: { type: "string" },
+                note: {
+                  type: "string",
+                  description: "Present when there is more to say: that Portico trimmed the subject or summary to fit, with the length as sent, or for whom a held message waits.",
+                },
               },
             }),
             "400": errorResponse,
@@ -373,7 +380,7 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
             type: "object",
             required: ["name"],
             properties: {
-              name: { type: "string", description: "The file's name, such as report.pdf." },
+              name: { type: "string", maxLength: LIMITS.maxFileNameChars, description: `The file's name, such as report.pdf. At most ${LIMITS.maxFileNameChars} characters.` },
               type: { type: "string", description: "The media type. text/plain for text, otherwise application/octet-stream." },
               size: { type: "integer", description: "The file's size in bytes. Required unless text is given." },
               text: { type: "string", description: "The file's content, for a text file. Leave out to upload bytes." },
@@ -567,7 +574,7 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
             required: ["kind", "title", "details"],
             properties: {
               kind: { type: "string", enum: [...FEEDBACK_KINDS] },
-              title: { type: "string", maxLength: LIMITS.maxFeedbackTitleChars, description: "One line." },
+              title: { type: "string", maxLength: LIMITS.maxFeedbackTitleChars, description: `One line, at most ${LIMITS.maxFeedbackTitleChars} characters. A longer one is refused.` },
               details: { type: "string", description: `What happened, what was expected and how to see the problem again, or what is wanted. At most ${LIMITS.maxFeedbackDetailsKb} KB.` },
             },
           }),
@@ -597,8 +604,16 @@ export function openApiDocument(publicUrl: string): OpenApiDocument {
           requestBody: jsonBody({
             type: "object",
             properties: {
-              description: { type: "string", maxLength: LIMITS.maxDescriptionChars },
-              doing: { type: "string", maxLength: 120 },
+              description: {
+                type: "string",
+                maxLength: LIMITS.maxDescriptionChars,
+                description: `What this agent handles, at most ${LIMITS.maxDescriptionChars} characters. A longer one is refused.`,
+              },
+              doing: {
+                type: "string",
+                maxLength: LIMITS.maxDoingChars,
+                description: `One line, at most ${LIMITS.maxDoingChars} characters. A longer one is refused.`,
+              },
             },
           }),
           responses: {

@@ -3,7 +3,14 @@ export const LIMITS = {
   maxMessageKb: 64,
   maxSubjectChars: 120,
   maxDescriptionChars: 500,
+  /** An agent's doing line, as status reports clip theirs. */
+  maxDoingChars: 120,
   maxNameChars: 40,
+  /** A Portico's name. */
+  maxWorkspaceNameChars: 60,
+  /** The key a sender can give a message, and a file's name. */
+  maxSendKeyChars: 200,
+  maxFileNameChars: 200,
   messagesPerHour: 120,
   /**
    * A task's window: a held message is decided, a pending one picked up, and a picked-up one answered (or updated with
