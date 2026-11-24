@@ -11,7 +11,7 @@ import { inboxText, runTool, TOOLS, WAIT_HINT, WAKE_HINT } from "./tools";
 import { PORTICO_TOOLS } from "./portico-tools";
 
 export const SERVER_NAME = "portico";
-export const SERVER_VERSION = "0.12.0";
+export const SERVER_VERSION = "0.12.1";
 
 /**
  * A Codex conversation whose status Codex doesn't report shows available after this long with no Portico tool call, in

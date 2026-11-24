@@ -15,7 +15,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "create_portico",
-    "description": "Make a Portico for the person who manages this agent, holding some of that person's agents: this agent, unless agents says otherwise. Nobody else is in the Portico until share_portico brings someone in. Without a name, the Portico is named after the people there. An agent that joined Portico lately, before that person vouched for the agent, gets waiting_for_person instead: that person allows the change on Portico's page.",
+    "description": "Make a Portico for the person who manages this agent, holding some of that person's agents: this agent, unless agents says otherwise. Nobody else is in the Portico until share_portico brings someone in. Without a name, the Portico is named after the people there. A new agent that person hasn't confirmed yet gets waiting_for_person instead: that person allows the change on Portico's page.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -37,7 +37,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "add_to_portico",
-    "description": "Put one agent of the person who manages this agent into a Portico that person is in. Everyone in the Portico can then message the agent. In a Portico that person made, the agent is in at once. In a Portico someone else made, the answer is waiting_for_person: that person allows the request on Portico's page, or, where the Portico's owner asked to allow each agent, the owner does (waiting_for_owner). An agent that person took out of that person's own Portico stays out: only the person puts such an agent anywhere, on Portico's pages. An agent that joined Portico lately, before that person vouched for the agent, gets waiting_for_person instead: that person allows the change on Portico's page.",
+    "description": "Put one agent of the person who manages this agent into a Portico that person is in. Everyone in the Portico can then message the agent. In a Portico that person made, the agent is in at once. In a Portico someone else made, the answer is waiting_for_person: that person allows the request on Portico's page, or, where the Portico's owner asked to allow each agent, the owner does (waiting_for_owner). An agent that person took out of that person's own Portico stays out: only the person puts such an agent anywhere, on Portico's pages. A new agent that person hasn't confirmed yet gets waiting_for_person instead: that person allows the change on Portico's page.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -59,7 +59,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "remove_from_portico",
-    "description": "Take one agent, or one person, out of a Portico. With agent: one agent of the person who manages this agent leaves the Portico at once, and nobody reaches the agent through that Portico any more. With person: that person leaves with every agent that person has there, once the person who manages this agent allows that on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link, which only that person can open. Only a Portico's owner removes someone else; anyone can leave. Give agent or person, not both. An agent that joined Portico lately, before that person vouched for the agent, gets waiting_for_person instead: that person allows the change on Portico's page.",
+    "description": "Take one agent, or one person, out of a Portico. With agent: one agent of the person who manages this agent leaves the Portico at once, and nobody reaches the agent through that Portico any more. With person: that person leaves with every agent that person has there, once the person who manages this agent allows that on Portico's page: the answer is waiting_for_person, with a sentence to show that carries the link, which only that person can open. Only a Portico's owner removes someone else; anyone can leave. Give agent or person, not both. A new agent that person hasn't confirmed yet gets waiting_for_person instead: that person allows the change on Portico's page.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -84,7 +84,7 @@ export const PORTICO_TOOLS: Tool[] = [
   },
   {
     "name": "rename_portico",
-    "description": "Give a Portico a name, or a new one. Only the Portico's owner can. An empty name goes back to naming the Portico after the people there. An agent that joined Portico lately, before that person vouched for the agent, gets waiting_for_person instead: that person allows the change on Portico's page.",
+    "description": "Give a Portico a name, or a new one. Only the Portico's owner can. An empty name goes back to naming the Portico after the people there. A new agent that person hasn't confirmed yet gets waiting_for_person instead: that person allows the change on Portico's page.",
     "inputSchema": {
       "type": "object",
       "properties": {

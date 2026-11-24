@@ -154,15 +154,18 @@ describe("copy sweeps", () => {
     expect(files.flatMap(sourceWordProblems)).toEqual([]);
   });
 
-  test("nothing a person reads says an agent joined lately: a new agent is new, added on a day, and not yet confirmed", () => {
-    // Tool descriptions are read by agents only, and the plugin ships its own copy of them.
-    const agentOnly = [join(REPO, "server", "src", "agent-api", "portico-tools.ts"), join(REPO, "plugin-claude-code", "src", "portico-tools.ts")];
-    const files = [...filesUnder(join(REPO, "server", "src"), [".ts"]), ...filesUnder(join(REPO, "plugin-claude-code", "src"), [".ts"])].filter((path) => !agentOnly.includes(path));
+  test("nothing a person or an agent reads says an agent joined lately: a new agent is new, and not yet confirmed", () => {
+    const files = [...filesUnder(join(REPO, "server", "src"), [".ts"]), ...filesUnder(join(REPO, "plugin-claude-code", "src"), [".ts"])];
     expect(files.length).toBeGreaterThan(100);
-    const said = files.flatMap((path) => stringPieces(readFileSync(path, "utf8")).filter((piece) => /joined (Portico )?lately/i.test(piece.text)).map((piece) => `${path}:${piece.line}`));
+    const lately = /joined (Portico )?lately/i;
+    const said = files.flatMap((path) => stringPieces(readFileSync(path, "utf8")).filter((piece) => lately.test(piece.text)).map((piece) => `${path}:${piece.line}`));
     expect(said).toEqual([]);
-    // The rule sees the words where they still are, so the sweep above is not empty by accident.
-    expect(agentOnly.flatMap((path) => stringPieces(readFileSync(path, "utf8"))).some((piece) => /joined (Portico )?lately/i.test(piece.text))).toBe(true);
+    // The rule sees such words in a string, so the sweep above is not empty by accident.
+    expect(stringPieces('const note = "this agent joined Portico lately";').some((piece) => lately.test(piece.text))).toBe(true);
+    // The four tools that change a Portico say what a new agent gets, in the server's list and in the plugin's copy.
+    for (const path of [join(REPO, "server", "src", "agent-api", "portico-tools.ts"), join(REPO, "plugin-claude-code", "src", "portico-tools.ts")]) {
+      expect(readFileSync(path, "utf8").split("A new agent that person hasn't confirmed yet gets waiting_for_person instead")).toHaveLength(5);
+    }
   });
 
   test("the READMEs and the plugin's commands", () => {
