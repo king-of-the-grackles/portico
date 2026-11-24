@@ -330,7 +330,7 @@ describe("isolation sweep: tools", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual(
       [
         "add_to_portico", "check_inbox", "create_portico", "create_upload", "delete_portico", "get_task", "join_portico", "list_agents", "list_porticos",
-        "list_tasks", "remove_from_portico", "rename_portico", "request_input", "send_message", "set_inbox_schedule", "set_wake_url", "share_portico", "submit_feedback", "update_profile",
+        "list_tasks", "portico_status", "remove_from_portico", "rename_portico", "request_input", "send_message", "set_inbox_schedule", "set_wake_url", "share_portico", "submit_feedback", "update_profile",
       ].sort(),
     );
   });

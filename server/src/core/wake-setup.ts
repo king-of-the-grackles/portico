@@ -73,7 +73,8 @@ export function wakeSteps(o: { publicUrl: string; kind: AgentKind; type: "app" |
       : []),
     `${o.type === "connector" ? "Otherwise create" : "Create"} a routine, automation or task in this app that a webhook can start, with the instruction to ${check} and handle each message as the frame around the message says. Then ${register}. Portico sends one test wake at once, and the answer says whether the test got through: "ok" means wake-ups are on. Never post the key in a chat.${hint ? ` ${hint}` : ""}`,
     `Only when this app has no webhook trigger and can't watch events: create a scheduled task that does the same check every ${LIMITS.appCheckMinutes} minutes, then ${schedule}, so Portico and the person know. Tell the person that messages can arrive up to ${LIMITS.appCheckMinutes} minutes late, and name what the app is missing.`,
-    "Tell the person how messages now arrive: right away, or on the schedule.",
+    // A connector's app may draw the answer as a card: the one confirmation the person sees after joining.
+    `Tell the person how messages now arrive: right away, or on the schedule.${o.type === "connector" ? " Then call portico_status once: the answer confirms to the person that this agent is on Portico." : ""}`,
   ];
 }
 

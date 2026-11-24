@@ -467,6 +467,8 @@ export class Messages {
     }
     if (delivery === "held") notes.push(this.heldNote(message, caller, receiver, name));
     else if (noReplyNeeded) notes.push(noReplyNote(message, name));
+    const review = delivery === "held" ? this.heldReview(message, caller, receiver) : null;
+    if (review) notes.push(review);
     return { message, delivery, note: notes.length > 0 ? notes.join(" ") : null, workspace };
   }
 
@@ -1026,6 +1028,16 @@ export class Messages {
       `Held: ${name} requires approval for new conversations. Replies (reply_to) in a ` +
       `conversation ${name} wrote in during the last ${LIMITS.replyWindowHours} hours aren't held. ${outcome}`
     );
+  }
+
+  /**
+   * Where the sender's own person decides a held message: said after the hold's own sentence whenever that person is
+   * the one who decides. An outbound hold's sentence names the page already, and another person's page is nobody
+   * else's to open.
+   */
+  private heldReview(message: Message, caller: Agent, receiver: Agent): string | null {
+    if (!this.heldLink || message.heldFor === "outbound" || receiver.ownerId !== caller.ownerId) return null;
+    return `${this.personName(caller.ownerId)} decides on Portico's page: ${this.heldLink(message.id)}`;
   }
 
   private getIn(content: ContentDb, id: string): Message | null {
