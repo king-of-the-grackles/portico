@@ -27,7 +27,7 @@ export function consentCards(core: Core, me: Person): ConsentCard[] {
   const card = (request: ConsentRequest): ConsentCard | null => {
     const view = core.consents.describe(me, request.id);
     if (!view) return null;
-    const words = consentWords(view, me.name, (agent) => core.agents.nameFor(agent, me.id));
+    const words = consentWords(view, me.name, (agent) => core.agents.nameFor(agent, me.id), core.now());
     return { id: request.id, kind: request.kind, title: words.title, asks: words.asks, link: `/c/${request.id}`, workspaceId: request.workspaceId, expiresAt: request.expiresAt };
   };
   return core.consents.waitingFor(me.id).map(card).filter((c): c is ConsentCard => c !== null);

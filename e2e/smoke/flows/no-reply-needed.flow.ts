@@ -48,9 +48,10 @@ test("A note that needs no reply is done once it is picked up", async ({ world, 
   await page.goto("/");
   const card = page.getByRole("region", { name: "Needs a decision" }).getByRole("article").filter({ hasText: heldSubject });
   await expect(card).toContainText(`newcomer has a note for builder: ${heldSubject}`);
+  await expect(card).toContainText(/New agent, added \w{3} \d{1,2}\. You haven't confirmed this agent yet\./);
   await expect(card).toContainText("No reply needed.");
   await card.scrollIntoViewIfNeeded();
-  await rec.step("held-card", "A note from an agent not yet vouched for waits for a decision. Its card is headed 'has a note for', not 'wants to ask'.", { hold: 5000 });
+  await rec.step("held-card", "A note from a new agent waits for a decision. Its card says 'New agent, added…' and 'You haven't confirmed this agent yet.'", { hold: 5000 });
 
   await page.goto(`/held/${held.message.id}`);
   await expect(page.getByRole("heading", { level: 1, name: "Allow this message?" })).toBeVisible();

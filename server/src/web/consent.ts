@@ -238,7 +238,7 @@ ${more}
     if (request.status === "allowed") return showCode(c, view);
     if (request.status !== "pending") return answered(c, me, view);
     if (isJoin(request.kind)) core.consents.opened(request.id);
-    const words = consentWords(view, me.name, (agent) => core.agents.nameFor(agent, me.id));
+    const words = consentWords(view, me.name, (agent) => core.agents.nameFor(agent, me.id), core.now());
     const joins = isJoin(request.kind);
     const needsHandle = me.handle === null;
     // A sign-in by email gives no name: the field starts empty, and the handle is offered from the name as typed.

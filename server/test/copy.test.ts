@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { mcpTools } from "../src/agent-api/mcp";
 import { openApiDocument } from "../src/agent-api/openapi";
 import { porticoTools } from "../src/agent-api/portico-tools";
+import { newAgentWords, utcDay } from "../src/core/consent-words";
 import { shareEmail } from "../src/core/mail";
 import { filesUnder, sourceWordProblems, stringPieces } from "./copy-source";
 import { addOwner, callAs, copyProblems, makePortico, PUBLIC_URL, signIn, visibleCopy, wordProblems, workedExample } from "./helpers";
@@ -153,6 +154,17 @@ describe("copy sweeps", () => {
     expect(files.flatMap(sourceWordProblems)).toEqual([]);
   });
 
+  test("nothing a person reads says an agent joined lately: a new agent is new, added on a day, and not yet confirmed", () => {
+    // Tool descriptions are read by agents only, and the plugin ships its own copy of them.
+    const agentOnly = [join(REPO, "server", "src", "agent-api", "portico-tools.ts"), join(REPO, "plugin-claude-code", "src", "portico-tools.ts")];
+    const files = [...filesUnder(join(REPO, "server", "src"), [".ts"]), ...filesUnder(join(REPO, "plugin-claude-code", "src"), [".ts"])].filter((path) => !agentOnly.includes(path));
+    expect(files.length).toBeGreaterThan(100);
+    const said = files.flatMap((path) => stringPieces(readFileSync(path, "utf8")).filter((piece) => /joined (Portico )?lately/i.test(piece.text)).map((piece) => `${path}:${piece.line}`));
+    expect(said).toEqual([]);
+    // The rule sees the words where they still are, so the sweep above is not empty by accident.
+    expect(agentOnly.flatMap((path) => stringPieces(readFileSync(path, "utf8"))).some((piece) => /joined (Portico )?lately/i.test(piece.text))).toBe(true);
+  });
+
   test("the READMEs and the plugin's commands", () => {
     const docs = [join(REPO, "README.md"), join(REPO, "plugin-claude-code", "README.md"), ...filesUnder(join(REPO, "plugin-claude-code", "commands"), [".md"])];
     for (const path of docs) {
@@ -196,5 +208,26 @@ describe("copy sweeps", () => {
     expect(copyProblems(visibleCopy("<p>We keep their agents</p>"))).toHaveLength(2);
     expect(copyProblems(visibleCopy("<p>The hub is down</p>"))).toHaveLength(1);
     expect(copyProblems(visibleCopy("<pre>you can paste this</pre><p>Portico</p>"))).toEqual([]);
+  });
+});
+
+describe("the day a new agent was added, as the server writes it", () => {
+  const agent = { createdAt: "2026-10-27T23:30:00.000Z" };
+
+  test("the year shows only when it isn't the application clock's year", () => {
+    expect(utcDay(agent.createdAt, new Date("2026-11-24T12:00:00Z"))).toBe("Oct 27");
+    expect(utcDay(agent.createdAt, new Date("2027-01-01T00:00:00Z"))).toBe("Oct 27, 2026");
+    expect(newAgentWords(agent, new Date("2026-12-31T23:59:59Z"))).toBe("New agent, added Oct 27. You haven't confirmed this agent yet.");
+    expect(newAgentWords(agent, new Date("2027-01-01T00:00:00Z"))).toBe("New agent, added Oct 27, 2026. You haven't confirmed this agent yet.");
+  });
+
+  test("it is a UTC day, whatever the server's own time zone", () => {
+    expect(utcDay("2026-10-27T23:30:00-08:00", new Date("2026-11-24T12:00:00Z"))).toBe("Oct 28");
+  });
+
+  test("the clock is always handed in: nothing here reads the computer's own date", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "src", "core", "consent-words.ts"), "utf8");
+    expect(source).not.toContain("new Date()");
+    expect(source).not.toContain("Date.now()");
   });
 });

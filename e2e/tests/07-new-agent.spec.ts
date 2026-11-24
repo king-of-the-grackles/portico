@@ -17,7 +17,7 @@ test("a new agent nobody vouched for is held once, and revoking it stops it", as
   const first = unique("Rookie's first words");
   const sent = await rookie.send({ to: "helper", subject: first, text: "Hello, I am new here." });
   expect(sent.delivery).toBe("held");
-  expect(sent.note).toContain("joined Portico lately");
+  expect(sent.note).toContain("this agent is new and");
   expect((await helper.inbox()).messages.map((m) => m.subject)).not.toContain(first);
 
   // ---- and what it asks to change about Porticos waits for her too ----
@@ -29,6 +29,9 @@ test("a new agent nobody vouched for is held once, and revoking it stops it", as
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Needs a decision" })).toBeVisible();
   await expect(page.getByText(first).first()).toBeVisible();
+  // The card says the agent is new and when it was added, in plain words.
+  await expect(page.getByText(/New agent, added [A-Z][a-z]{2} \d{1,2}\. You haven't confirmed this agent yet\. This is the first message from /)).toBeVisible();
+  await expect(page.getByText(/joined (Portico )?lately/)).toHaveCount(0);
   await decideHeld(page, sent.message.id, /^Always allow$/);
   expect((await helper.receive(first)).from).toBe(name);
 
