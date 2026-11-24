@@ -705,11 +705,17 @@ describe("rendering rules", () => {
     expect(html.slice(html.indexOf('data-key="tm-m1"'), html.indexOf('data-key="tm-m2"'))).not.toContain("No reply needed");
   });
 
-  test("a held message that needs no reply says so on its card", () => {
+  test("a held message that needs no reply says so on its card, and its heading calls it a note", () => {
     const held = [{ ...HELD, noReplyNeeded: true }];
     const flagged = text(render(state({ held, today: { ...TODAY, decisions: { ...TODAY.decisions, held } } })));
-    inOrder(flagged, "Grok Bot wants to ask Claude Code (portico): Deploy the People export to staging", "No reply needed.", "Show message");
-    expect(text(render(state()))).not.toContain("No reply needed");
+    inOrder(flagged, "Grok Bot has a note for Claude Code (portico): Deploy the People export to staging", "No reply needed.", "Show message");
+    // A note asks nothing.
+    expect(flagged).not.toContain("wants to ask");
+    // A held message that does ask keeps its heading.
+    const asking = text(render(state()));
+    expect(asking).toContain("Grok Bot wants to ask Claude Code (portico): Deploy the People export to staging");
+    expect(asking).not.toContain("has a note for");
+    expect(asking).not.toContain("No reply needed");
   });
 
   test("a description change names who made it: the agent itself, or the person", () => {
