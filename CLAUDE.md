@@ -16,3 +16,13 @@ Checks before a pull request: `bun run typecheck`, `bun test`, and `bun run type
   people setting up their own Portico.
 - **A change that touches `server/src/migrations.ts` or `server/src/db.ts` waits for a person.** Open the pull request,
   say that it changes the database, and leave merging and everything after it to them.
+
+## A change a user can see
+
+- **Label it `visible`** when a user would see or do something differently: a screen, its wording, a flow, an email.
+  In the pull request's text, name the flows to record on one line: `Smoke flows: join`. When no flow in
+  `e2e/smoke/flows/` shows the change, add or edit one in the same pull request (see `e2e/README.md`).
+- **What the label does:** after the merge the Deploy workflow puts the commit on dev, runs the browser suite, and then
+  waits in the environment `visible-change`. The flows are recorded on dev with `e2e/smoke.sh --commit <commit> <flows>`
+  (the run's summary prints the line) and a person watches the recording before approving production.
+- Code, tests, deploy scripts and docs that leave every screen and email as it was are not visible: no label.
