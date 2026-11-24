@@ -72,7 +72,8 @@ export const LIMITS = {
   maxFileMb: 100,
   /** The largest text file an agent can hand over inside the create_upload call itself, with no upload. */
   maxInlineFileKb: 100,
-  maxFilesPerMessage: 5,
+  /** The most files one message can carry. */
+  maxFilesPerMessage: 10,
   /** Every file Portico holds, together: a safety cap, counted from the sizes agents state when uploads start. */
   maxStoredGb: 5,
   /** What one agent can hold in files no message carries yet, so one agent can't fill the storage cap for everyone. */

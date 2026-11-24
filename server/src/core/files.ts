@@ -322,7 +322,7 @@ export class Files {
     return { file, upload: { method: "PUT", url, expires_at: file.uploadExpiresAt! } };
   }
 
-  /** The file IDs a send names: a list of at most five, each once. */
+  /** The file IDs a send names: a list of at most LIMITS.maxFilesPerMessage, each once. */
   ids(value: unknown): string[] {
     if (value === undefined || value === null) return [];
     if (!Array.isArray(value) || value.some((id) => typeof id !== "string" || id.trim() === "")) {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { addAppAgent, addMember, addOwner, callAs, callPerson, DAY, fakeBucket, flush, HOUR, makePortico, MINUTE, PUBLIC_URL, signIn, together } from "./helpers";
+import { LIMITS } from "../src/core/limits";
 import { type FileStore, uploadKey, workspaceFileKey } from "../src/core/file-store";
 
 interface Slot {
@@ -21,7 +22,7 @@ async function setup(opts: { fileStore?: FileStore } = {}) {
     const res = await callAs(p, who, "POST", "/api/agent/messages", { subject: "Report", text: "Attached.", ...body });
     return {
       status: res.status,
-      body: (await res.json()) as { message: { id: string; attachments: Slot["file"][] }; delivery: string; error?: string; message_?: string },
+      body: (await res.json()) as { message: { id: string; attachments: Slot["file"][] }; delivery: string; error?: string },
     };
   };
   /** The path and query of an address Portico made, for app.request. */
@@ -117,20 +118,24 @@ describe("files in the data folder", () => {
     expect((await upload(grok, { name: "a.txt", type: "not a type", text: "x" })).status).toBe(400);
 
     const ids: string[] = [];
-    for (let i = 0; i < 6; i++) ids.push((await upload(grok, { name: `f${i}.txt`, text: "x" })).body.file.id);
-    expect((await send(grok, { to: "muse", attachments: ids })).status).toBe(400);
-    expect((await send(grok, { to: "muse", attachments: ids.slice(0, 5) })).status).toBe(201);
+    for (let i = 0; i < LIMITS.maxFilesPerMessage + 1; i++) ids.push((await upload(grok, { name: `f${i}.txt`, text: "x" })).body.file.id);
+    // One file too many is refused with the one-line error; exactly the limit goes through.
+    const tooMany = await send(grok, { to: "muse", attachments: ids });
+    expect(tooMany.status).toBe(400);
+    expect((tooMany.body as unknown as { message: string }).message).toBe("A message can carry at most 10 files.");
+    expect((await send(grok, { to: "muse", attachments: ids.slice(0, LIMITS.maxFilesPerMessage) })).status).toBe(201);
     expect((await send(grok, { to: "muse", attachments: ["nope"] })).status).toBe(400);
 
     // Uploads no message carries yet count together from the moment each starts, so parallel uploads can't pass the cap.
-    p.db.run("UPDATE uploads SET size = 5 * 1024 * 1024 * 1024 - 10 WHERE id = ?", [ids[5]!]);
+    p.db.run("UPDATE uploads SET size = 5 * 1024 * 1024 * 1024 - 10 WHERE id = ?", [ids[10]!]);
     expect((await upload(muse, { name: "big.bin", size: 11 })).status).toBe(413);
     expect((await upload(muse, { name: "ok.bin", size: 4 })).status).toBe(201);
-    p.db.run("UPDATE uploads SET size = 1 WHERE id = ?", [ids[5]!]);
+    p.db.run("UPDATE uploads SET size = 1 WHERE id = ?", [ids[10]!]);
 
     // Each workspace has a storage cap of its own, checked as a file is attached: a send past the cap is refused whole.
     const personal = p.content.for(p.workspaces.personal(chris.id).id).db;
-    personal.run("UPDATE files SET size = 5 * 1024 * 1024 * 1024 - 10 WHERE id = ?", [ids[0]!]);
+    // The message's other 1-byte files count too, so the room left is exactly 10 bytes.
+    personal.run("UPDATE files SET size = 5 * 1024 * 1024 * 1024 - 10 - ? WHERE id = ?", [LIMITS.maxFilesPerMessage - 1, ids[0]!]);
     const big = (await upload(muse, { name: "big.txt", text: "x".repeat(11) })).body.file.id;
     const small = (await upload(muse, { name: "small.txt", text: "x".repeat(4) })).body.file.id;
     const before = personal.query("SELECT COUNT(*) AS n FROM messages").get();
