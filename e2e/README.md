@@ -52,6 +52,55 @@ E2E_HTML_REPORT=1 ./run.sh    # also write playwright-report/
 
 A failed test leaves a trace and screenshots under `test-results/`: `bunx playwright show-trace <trace.zip>`.
 
+## Record a visible change on dev
+
+`./smoke.sh` records one flow on dev as a short video for a person who reads no code: what they watch before a
+visible change goes to production (see "Deploys" in the main README).
+
+```sh
+cd e2e
+./smoke.sh --list                               # the flows there are
+./smoke.sh --commit <commit> join               # record smoke/flows/join.flow.ts
+./smoke.sh --commit <commit> --out <folder> join
+```
+
+- `--commit` is the commit being approved. The run refuses to start unless dev's `/healthz` reports it.
+- Each flow writes `smoke.mp4`, `01-<step>.png` and so on, and `steps.md` to `<folder>/<commit>/<flow>/`. The folder
+  defaults to `~/portico-smoke` and may not be inside the repository.
+- It needs `ffmpeg`, `fc-match` and a sans-serif font, so it runs on a person's or an agent's computer, not in CI.
+- It signs in as the suite does, with a new test person in the dev-only Descope project, and cleans up the same way:
+  the Descope user and the person's agents are removed. Nothing else on dev is read or changed.
+- A token is never on screen. The 4-digit join code is, and it is used up in the same recording.
+
+A flow is a Playwright test that imports `test` from `smoke/lib/recorder.ts` and gets `rec`, a phone-sized browser
+with video on, beside the suite's `world`:
+
+```ts
+test("What the video shows, as its title", async ({ world, rec }) => {
+  await rec.page.goto("/");
+  await rec.step("sign-in", "A signed-out visitor is sent to the sign-in page.");
+  await rec.type("Handle", "sam");                      // typed a key at a time
+  await rec.step("welcome", "The person picks a handle.", { shot: false });   // in the video, no screenshot
+  rec.cannotShow("Typing into the sign-in screen.");    // said in steps.md
+});
+```
+
+Keep a flow to what `smoke/render.ts` accepts: 30 to 90 seconds, 3 to 5 screenshots, captions of at most three
+lines. Make people through `world` (`newcomer`, `person`, `agent`) so the cleanup knows them. Try a new flow against
+a local server first: start one as `local.sh` does and set `E2E_BASE_URL`. Production is refused.
+
+### Sending the recording
+
+The recording goes to the person who approves, in their Portico chat. Every screenshot is sent as a file of its own, never combined into one sheet, so each can be opened and answered:
+
+1. **First message:** `smoke.mp4`, with the steps from `steps.md` as text in the message.
+2. **Second message:** the screenshots as separate PNG files, up to five, under the names the flow gave them
+   (`01-sign-in.png`), each listed by name in the message text with one line saying what it shows. A flow saves five
+   screenshots at most, so they fit one message.
+
+Each subject starts with who it is for and names the pull request, for example
+`For Chris: PR #21 on dev, the join flow (video)`. Several flows are sent one after another, each as its own pair.
+
 ## What it needs
 
 Everything comes from the environment:

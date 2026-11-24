@@ -1,6 +1,7 @@
 name: Deploy
 
-# Dev first, the browser suite against dev, then production. See "Deploys" in the README.
+# Dev first, the browser suite against dev, then production; a visible change waits in between for a person who has
+# watched it on dev. See "Deploys" in the README.
 on:
   # Runs after CI has passed for a push to main. Never for a pull request.
   workflow_run:
@@ -230,10 +231,19 @@ jobs:
     needs: e2e-dev
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Reads which pull requests the commits came from, and the settings of the environment a visible change waits in.
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     outputs:
       migration: ${{ steps.plan.outputs.migration }}
       live_commit: ${{ steps.plan.outputs.live_commit }}
       reason: ${{ steps.plan.outputs.reason }}
+      visible: ${{ steps.visible.outputs.visible }}
+      visible_reason: ${{ steps.visible.outputs.visible_reason }}
+      visible_prs: ${{ steps.visible.outputs.visible_prs }}
+      smoke_flows: ${{ steps.visible.outputs.smoke_flows }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -246,9 +256,49 @@ jobs:
         id: plan
         run: scripts/deploy/plan-production.sh "$DEPLOY_SHA" "$PRODUCTION_URL"
 
+      # A change users can see (a pull request with the label 'visible') waits below for a person. This step fails,
+      # and nothing reaches production, when such a change goes out and the environment it waits in has no reviewer.
+      - name: Look for a visible change
+        id: visible
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIVE_COMMIT: ${{ steps.plan.outputs.live_commit }}
+        run: scripts/deploy/visible.sh "$DEPLOY_SHA" "$LIVE_COMMIT"
+
+  # Only for a visible change. The job does nothing itself: its environment 'visible-change' has a required reviewer
+  # (set in the repository's settings), who approves after watching the recording made on dev with e2e/smoke.sh.
+  # It holds no secret and deploys nothing. A migration is asked about separately, below.
+  watch-dev:
+    name: Wait for the dev recording to be approved
+    needs: plan-production
+    if: needs.plan-production.outputs.visible == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: visible-change
+    env:
+      VISIBLE_REASON: ${{ needs.plan-production.outputs.visible_reason }}
+      SMOKE_FLOWS: ${{ needs.plan-production.outputs.smoke_flows }}
+    steps:
+      - name: Summary
+        run: |
+          {
+            echo "### Visible change: approved"
+            echo "- Commit: \`$DEPLOY_SHA\`"
+            echo "- Why it waited: $VISIBLE_REASON"
+            echo "- Flows recorded on dev: ${SMOKE_FLOWS:-none named}"
+          } >>"$GITHUB_STEP_SUMMARY"
+
   deploy-production:
     name: Deploy to production
-    needs: plan-production
+    needs: [plan-production, watch-dev]
+    # watch-dev is skipped when nothing visible goes out, and a skipped job would skip this one with it: so the
+    # condition is spelled out. Production deploys only after a plan that succeeded, and after watch-dev either
+    # wasn't needed or was approved. A rejected or failed watch-dev stops here.
+    if: >-
+      !cancelled()
+      && needs.plan-production.result == 'success'
+      && (needs.watch-dev.result == 'success'
+        || (needs.watch-dev.result == 'skipped' && needs.plan-production.outputs.visible == 'false'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # 'production-migration' has a required reviewer (set in the repository's settings), so a deploy that may change
