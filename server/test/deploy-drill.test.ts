@@ -19,13 +19,14 @@ function sections(): Record<string, string> {
   return out;
 }
 
-const NOT_A_DRILL = "if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.drill == true) }}";
+const NOT_A_DRILL_TERM = "!(github.event_name == 'workflow_dispatch' && inputs.drill == true)";
+const NOT_A_DRILL = `if: \${{ ${NOT_A_DRILL_TERM} }}`;
 
 describe("the rollback drill", () => {
   const parts = sections();
 
   test("the workflow has the jobs this test knows", () => {
-    for (const name of ["top", "deploy-dev", "e2e-dev", "plan-production", "deploy-production"]) expect(parts[name]?.length ?? 0, name).toBeGreaterThan(100);
+    for (const name of ["top", "deploy-dev", "e2e-dev", "plan-production", "watch-dev", "deploy-production"]) expect(parts[name]?.length ?? 0, name).toBeGreaterThan(100);
   });
 
   test("it is a box on the manual run, off unless ticked, and never on for a run that follows CI", () => {
@@ -38,17 +39,44 @@ describe("the rollback drill", () => {
       if (name === "top" || name === "deploy-dev") continue;
       // Everything a later job says about a drill is its own guard: one comment and one condition.
       const mentions = text.split("\n").filter((line) => /drill/i.test(line)).map((line) => line.trim());
-      const allowed = name === "plan-production" || name === "deploy-production" ? ["# Never in a drill, whatever the jobs before it did.", NOT_A_DRILL] : [];
+      const comment = "# Never in a drill, whatever the jobs before it did.";
+      const allowed = name === "plan-production" ? [comment, NOT_A_DRILL] : name === "deploy-production" ? [comment, `&& ${NOT_A_DRILL_TERM}`] : [];
       expect(mentions, name).toEqual(allowed);
     }
   });
 
-  test("the plan and production jobs are skipped in a drill by their own condition, and still need the job before them", () => {
+  test("the plan job is skipped in a drill by its own condition, and still needs the browser suite", () => {
     expect(parts["plan-production"]).toContain(`needs: e2e-dev\n    # Never in a drill, whatever the jobs before it did.\n    ${NOT_A_DRILL}\n`);
-    expect(parts["deploy-production"]).toContain(NOT_A_DRILL);
-    expect(parts["deploy-production"]).toMatch(/needs: (plan-production|\[plan-production, watch-dev\])\n/);
     // No status function in the guard, so GitHub still requires the jobs before it to have succeeded.
-    for (const fn of ["always()", "!cancelled()", "failure()"]) expect(NOT_A_DRILL).not.toContain(fn);
+    for (const fn of ["always()", "cancelled()", "failure()"]) expect(NOT_A_DRILL).not.toContain(fn);
+  });
+
+  test("production needs all of: not a drill, a plan that succeeded, and the visible wait approved or not needed", () => {
+    const production = parts["deploy-production"]!;
+    expect(production).toContain("needs: [plan-production, watch-dev]\n");
+    const start = production.indexOf("    if: >-\n");
+    const condition = production.slice(start, production.indexOf("    runs-on:", start));
+    // The whole condition, word for word: every part joined by &&, so none of them can stand in for another.
+    expect(condition).toBe(
+      [
+        "    if: >-",
+        "      !cancelled()",
+        `      && ${NOT_A_DRILL_TERM}`,
+        "      && needs.plan-production.result == 'success'",
+        "      && (needs.watch-dev.result == 'success'",
+        "        || (needs.watch-dev.result == 'skipped' && needs.plan-production.outputs.visible == 'false'))",
+        "",
+      ].join("\n"),
+    );
+    // The job has no other condition of its own.
+    expect(production.match(/^ {4}if:/gm)?.length).toBe(1);
+  });
+
+  test("the job that waits for a visible change can't run in a drill either: it needs the plan, which is skipped", () => {
+    const wait = parts["watch-dev"]!;
+    expect(wait).toContain("needs: plan-production\n    if: needs.plan-production.outputs.visible == 'true'\n");
+    expect(wait).not.toContain("always()");
+    expect(wait).not.toContain("cancelled()");
   });
 
   test("production is always built under the commit's own ID", () => {
