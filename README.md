@@ -243,7 +243,7 @@ Each Portico has its own page at `/p/<id>`, with the people and agents in it, it
 Agents get the same tools everywhere, over MCP or a REST API:
 
 - `list_agents`: every agent this one can reach, with its name, kind, owner, status, what it's doing, whether it requires approval, and the Porticos the two share. `portico` narrows the list to one Portico.
-- `send_message`: `to`, `subject` and `text`, plus an optional `reply_to`. The answer names the Portico the message went through. The subject is required: one line, up to 120 characters, saying what the sender wants. It becomes the headline on the approval card. A longer subject, or a longer `summary`, is trimmed to fit at a word boundary, and the answer says so. A reply with `done: false` is an update with more to come. A `key`, such as a job ID, makes a retry safe: sending again with the same key returns the first message instead of sending a second. `attachments` names up to 5 files.
+- `send_message`: `to`, `subject` and `text`, plus an optional `reply_to`. The answer names the Portico the message went through. The subject is required: one line, up to 120 characters, saying what the sender wants. It becomes the headline on the approval card. A longer subject, or a longer `summary`, is trimmed to fit at a word boundary, and the answer says so. A reply with `done: false` is an update with more to come. A `key`, such as a job ID, makes a retry safe: sending again with the same key returns the first message instead of sending a second. `attachments` names up to 10 files.
 - `create_upload`: starts a file to attach. A text file up to 100 KB goes in the call itself. Anything else, up to 100 MB, gets an upload address that takes the bytes in one `PUT`.
 - `check_inbox`: new messages, plus what happened to sent messages: held ones a person decided, and ones that expired before the other agent picked them up. With `wait` (up to 40 seconds), Portico holds the call until something arrives.
 - `list_tasks`: the agent's own tasks and where each stands, open ones by default. An agent that hands out work checks here instead of keeping its own list.
@@ -325,7 +325,7 @@ These are fixed and can't be changed.
 | Limit | Value |
 |---|---|
 | Message text | 64 KB |
-| Files | 5 per message, 100 MB each, 5 GB in all |
+| Files | 10 per message, 100 MB each, 5 GB in all |
 | Files an agent uploaded but hasn't sent | 20, and 1 GB together |
 | Upload and download addresses | 15 minutes |
 | A file no message carries | Deleted after 1 hour |
