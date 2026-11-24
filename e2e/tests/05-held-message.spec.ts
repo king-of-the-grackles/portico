@@ -35,7 +35,9 @@ test("a held message is allowed on its page and then delivered", async ({ world,
     await page.getByText("Details", { exact: true }).click();
     await expect(page.getByText(`the Portico “${shared.name}”`)).toBeVisible();
     await expect(page.getByText("May I see the budget?")).toBeVisible();
-    await decideHeld(page, sent.message.id, "Allow once");
+    // Allow lets this one message through; the tick says what Always allow covers: this sender, to this agent.
+    await expect(page.getByRole("checkbox", { name: new RegExp(`^Always allow ${bob.handle}/scout to message helper`) })).not.toBeChecked();
+    await decideHeld(page, sent.message.id, "Allow");
     await expect(page.getByText("This message was allowed.")).toBeVisible();
 
     // Now helper has it, and scout is told.
@@ -89,8 +91,12 @@ test("an agent's outgoing messages to other people wait for its own person when 
     // Messages to her own agents are not held.
     expect((await probe.send({ to: "helper", subject: unique("Own agent"), text: "No hold here." })).delivery).not.toBe("held");
 
-    // Alice reads it on the message's page and lets it go; it reaches scout.
-    await decideHeld(page, sent.message.id, "Allow once");
+    // Alice reads it on the message's page and lets it go; it reaches scout. A message held on its way out is
+    // allowed one at a time: the page has no Always allow tick.
+    await page.goto(`/held/${sent.message.id}`);
+    await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
+    await expect(page.getByRole("checkbox")).toHaveCount(0);
+    await decideHeld(page, sent.message.id, "Allow");
     expect((await scout.receive(subject)).text).toBe("Here is our offer.");
     expect(await probe.outcome(sent.message.id)).toBe("delivered");
   } finally {

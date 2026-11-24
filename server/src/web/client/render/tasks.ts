@@ -144,7 +144,7 @@ function renderOpened(s: HomeState, t: TaskView, detail: TaskDetail | null): str
     ${renderSteps(t)}
     ${messages}
     ${when(t.questions.length > 0, () => `<ol class="tmsgs" aria-label="Questions">${t.questions.map((q) => renderTaskQuestion(s, q)).join("")}</ol>`)}
-    ${when(decision, () => decideRows(s, decision!))}
+    ${when(decision, () => decideRow(s, decision!))}
   </div>`;
 }
 
@@ -174,71 +174,51 @@ export function taskHead(): string {
 
 // ---- decisions ----
 
-/** Don't allow, Always allow <sender> and Allow once on a held message: the primary action last, at the right. */
+// A decision card is read and acted on in a few seconds, so it carries four things and no more: one line of who and
+// what, the question or the subject, the answers, and one small line of grey text. Everything else is on the full page.
+
 /**
- * What Always allow covers, as the held message's own page names it: the sender's computer (every session there), the
- * other person for a first contact, or the sender.
+ * The card's one small line: when the decision lapses, and before that, for an agent its person hasn't confirmed
+ * yet, that the agent is new and when it was added. The whole sentence about a new agent is on the full page.
  */
-function alwaysName(s: HomeState, m: HeldCard): string {
-  if (m.facts.heldFor === "first_contact") return m.facts.managedBy.name;
-  return s.agents.find((a) => a.id === m.from.id)?.computer?.name ?? m.from.label;
+function cardNote(s: HomeState, expiresAt: string, newAgent: { addedAt: string | null } | null): string {
+  const expires = expiresIn(expiresAt, s.now).replace(/\.$/, "");
+  // With the warning in front, the day is enough: the line stays one line on a phone.
+  if (newAgent) return `<p class="dcard-note tnum"><strong>${newAgent.addedAt ? `New agent, added ${esc(date(newAgent.addedAt, s.now))}` : "New agent"}</strong> · ${esc(expires.replace(/ at \d.*$/, ""))}</p>`;
+  return `<p class="dcard-note tnum">${esc(expires)}</p>`;
 }
 
 /**
- * The decision on a held message, laid out as every decision is: the row that lets the message through first, Allow
- * once as the one filled button with Always allow beside it, then a quieter row under a rule. That row starts with
- * the way out, Don't allow, and ends with `links`, the ways to look closer. The page reads and tabs in that order.
+ * The two answers to a held message, on one line at one width: Don't allow, then Allow as the one filled button.
+ * Allow lets this one message through. Always allow is a tick on the message's own page, where there is room to
+ * say what it covers.
  */
-export function decideRows(s: HomeState, m: HeldCard, links = ""): string {
+export function decideRow(s: HomeState, m: HeldCard): string {
   const busy = s.busy === `decide:${m.id}`;
   const id = esc(m.id);
-  return `<div class="actions">
-      ${when(m.facts.heldFor !== "outbound" || m.facts.newSender, () => `<button type="button" class="btn btn-secondary" data-action="decide" data-id="${id}" data-decision="always_allow"${when(busy, " disabled")}>Always allow <span class="btn-name">${esc(alwaysName(s, m))}</span></button>`)}
-      <button type="button" class="btn btn-primary" data-action="decide" data-id="${id}" data-decision="allow_once"${when(busy, " disabled")}>Allow once</button>
-    </div>
-    <div class="actions-quiet">
-      <button type="button" class="btn btn-deny" data-action="decide" data-id="${id}" data-decision="deny"${when(busy, " disabled")}>Don't allow</button>
-      ${when(links, `<span class="actions-links">${links}</span>`)}
+  return `<div class="actions actions-pair">
+      <button type="button" class="btn btn-plain" data-action="decide" data-id="${id}" data-decision="deny"${when(busy, " disabled")}>Don't allow</button>
+      <button type="button" class="btn btn-primary" data-action="decide" data-id="${id}" data-decision="allow_once"${when(busy, " disabled")}>Allow</button>
     </div>`;
 }
 
-/** Why the message waits, in Portico's own words: never anything the sender wrote. */
-function heldReason(s: HomeState, m: HeldCard): string {
-  const parts: string[] = [];
-  // A sender nobody confirmed is always one of the reader's own agents, so the day it was added is in the page's state.
-  const added = s.agents.find((a) => a.id === m.from.id)?.createdAt;
-  const newAgent = `${added ? `New agent, added ${date(added, s.now)}.` : "New agent."} You haven't confirmed this agent yet.`;
-  if (m.facts.heldFor === "outbound" && m.facts.newSender) return `${newAgent} ${s.me.name} sees what ${m.from.label} sends to other people's agents first. Nothing has reached ${m.to.label}. Always allow confirms ${m.from.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
-  if (m.facts.heldFor === "outbound") return `${m.from.label} sends to other people's agents only once ${s.me.name} has seen each message. Nothing has reached ${m.to.label}.`;
-  if (m.facts.heldFor === "new_agent") return `${newAgent} This is the first message from ${m.from.label} to ${m.to.label}. Not started by ${s.me.name}? Choose Don't allow, then revoke ${m.from.label} on the agent's page.`;
-  if (m.facts.heldFor === "first_contact") parts.push(`${s.me.name} hasn't allowed messages from ${m.facts.managedBy.name}'s agents yet.`);
-  if (m.facts.replyToRecipient) parts.push(`Follows a message from ${m.to.label}, but starts a new conversation.`);
-  else if (m.facts.earlier.length === 0) parts.push(`First time ${m.from.label} has asked ${m.to.label} for anything, and new contacts need approval.`);
-  else parts.push(`New contacts need approval. ${m.from.label} has asked before.`);
-  if (m.facts.managedBy.id !== s.me.id) parts.push(`${m.from.label} is managed by ${m.facts.managedBy.name}.`);
-  parts.push(expiresIn(m.expiresAt, s.now));
-  return parts.join(" ");
-}
-
 /**
- * A held message: who wants what, why it waits, and the decision. Show message opens the text. A message that needs
- * no reply asks for nothing, so its heading calls it a note.
+ * A held message: who wants to message whom, the subject, and the two answers. The card itself opens the message's
+ * page: the heading is the link and its hit area covers the card, under the two buttons. A message that needs no
+ * reply asks for nothing, so its heading calls it a note.
  */
 export function renderHeldCard(s: HomeState, m: HeldCard): string {
-  const shown = s.shownMessages[m.id] === true;
-  return `<article class="dcard" aria-labelledby="dc-${esc(m.id)}" data-key="dc-${esc(m.id)}">
+  const id = esc(m.id);
+  // A sender nobody confirmed is always one of the reader's own agents, so the day it was added is in the page's state.
+  const isNew = m.facts.heldFor === "new_agent" || (m.facts.heldFor === "outbound" && m.facts.newSender);
+  const newAgent = isNew ? { addedAt: s.agents.find((a) => a.id === m.from.id)?.createdAt ?? null } : null;
+  return `<article class="dcard dcard-opens" aria-labelledby="dc-${id}" data-key="dc-${id}">
     <div class="dcard-head">${logo(m.from.kind, "", kindInfo(m.from.kind).label)}<div class="grow">
-      <h3 id="dc-${esc(m.id)}" class="dcard-title">${esc(m.from.label)} ${m.noReplyNeeded ? "has a note for" : "wants to ask"} ${esc(m.to.label)}: ${esc(m.subject)}</h3>
-      <p class="dcard-why tnum">${esc(heldReason(s, m))}</p>
-      ${when(m.noReplyNeeded, `<p class="dcard-why">No reply needed.</p>`)}
+      <h3 id="dc-${id}" class="dcard-title"><a class="dcard-link" href="/held/${encodeURIComponent(m.id)}">${esc(m.from.label)} ${m.noReplyNeeded ? "has a note for" : "wants to message"} ${esc(m.to.label)}</a></h3>
+      ${cardNote(s, m.expiresAt, newAgent)}
     </div></div>
-    ${when(shown, () => `<div class="msg-box enter" data-key="dm-${esc(m.id)}"><p class="msg-full">${esc(m.text)}</p></div>`)}
-    ${renderFiles(m.files)}
-    ${decideRows(
-      s,
-      m,
-      `<button type="button" class="btn btn-link" data-action="message-toggle" data-id="${esc(m.id)}" aria-expanded="${shown}">${shown ? "Hide message" : "Show message"}</button><a class="btn btn-link" href="/held/${encodeURIComponent(m.id)}">Open the page</a>`,
-    )}
+    <p class="dcard-subject">${esc(m.subject)}</p>
+    ${decideRow(s, m)}
   </article>`;
 }
 
@@ -271,55 +251,33 @@ function questionOutcome(q: QuestionCard): string {
 }
 
 /**
- * How a waiting question is answered, laid out as every decision is. The choices come first, stacked at one width in
- * the order the agent gave them: one press on a choice sends it, so on a question with choices they are the main
- * action and nothing beside them looks like a button. A question with no choices starts with the text box and Send
- * answer, the one filled button; "Answer in your own words" opens the same box under the choices. Then a quieter row
- * under a rule: Skip, which tells the agent there is no answer and stops nothing, and the ways to look closer.
+ * The answers to a waiting question, one under another at one width. The agent's choices come first, in the agent's
+ * order: one press on a choice sends it. Last, and quieter so nobody takes it for a choice the agent gave, "Other
+ * answer…" opens the question's own page, where the person answers in words or skips. A question with no choices has
+ * one button, "Answer…", to the same page.
  */
-function questionActions(s: HomeState, q: QuestionCard, slot: "card" | "task"): string {
+function questionAnswers(s: HomeState, q: QuestionCard): string {
   const id = esc(q.id);
-  // The same question can show on its card and in its task: each text box needs an ID of its own.
-  const box = `qa-${slot}-${id}`;
-  const busy = s.busy === `question:${q.id}`;
-  const off = when(busy, " disabled");
+  const off = when(s.busy === `question:${q.id}`, " disabled");
   const options = q.options ?? [];
-  const typing = options.length === 0 || s.answerOpen[q.id] === true;
-  const text = s.answerText[q.id] ?? "";
-  return `${when(
-    options.length > 0,
-    () => `<div class="choices" role="group" aria-label="Choices">${options.map((option, i) => `<button type="button" class="btn btn-choice" data-action="q-answer" data-id="${id}" data-option="${i}"${off}>${esc(option)}</button>`).join("")}</div>`,
-  )}
-    ${when(
-      typing,
-      () => `<label class="sr" for="${box}">Your answer to ${esc(q.agent.label)}</label><textarea id="${box}" class="field q-text" rows="2" maxlength="1000" placeholder="Your answer to ${esc(q.agent.label)}" data-input="q-text:${id}">${esc(text)}</textarea>
-    <div class="actions"><button type="button" class="btn btn-primary" data-action="q-send" data-id="${id}"${off}>Send answer</button></div>`,
-    )}
-    <div class="actions-quiet">
-      <button type="button" class="btn btn-quiet" data-action="q-skip" data-id="${id}"${off}>Skip</button>
-      <span class="actions-links">${when(options.length > 0 && !typing, `<button type="button" class="btn btn-link" data-action="q-open" data-id="${id}">Answer in your own words</button>`)}<a class="btn btn-link" href="/q/${encodeURIComponent(q.id)}">Open the page</a></span>
-    </div>`;
-}
-
-/** The warning on a question from an agent its person hasn't confirmed yet: the words a held message's card says. */
-function newAgentWarning(s: HomeState, q: QuestionCard): string {
-  return when(q.newAgent, () => `<p class="dcard-why q-new"><strong>New agent, added ${esc(date(q.newAgent!.addedAt, s.now))}.</strong> You haven't confirmed this agent yet.</p>`);
+  const page = `/q/${encodeURIComponent(q.id)}`;
+  if (options.length === 0) return `<div class="choices"><a class="btn btn-primary" href="${page}">Answer…</a></div>`;
+  return `<div class="choices">${options.map((option, i) => `<button type="button" class="btn btn-choice" data-action="q-answer" data-id="${id}" data-option="${i}"${off}>${esc(option)}</button>`).join("")}<a class="btn btn-other" href="${page}">Other answer…</a></div>`;
 }
 
 /**
- * Something one of the person's own agents asked the person. The heading and the line under it are Portico's; the
- * question, the background and the choices are the agent's words, in a box of their own.
+ * Something one of the person's own agents asked the person. The heading is Portico's; the question, what the agent
+ * says about it and the choices are the agent's words.
  */
 export function renderQuestionCard(s: HomeState, q: QuestionCard): string {
   const id = esc(q.id);
   return `<article class="dcard qcard" aria-labelledby="di-${id}" data-key="di-${id}">
     <div class="dcard-head">${logo(q.agent.kind, "", kindInfo(q.agent.kind).label)}<div class="grow">
-      <h3 id="di-${id}" class="dcard-title">${esc(q.agent.label)} needs your input</h3>
-      <p class="dcard-why tnum">${when(q.task, () => `For the task “${esc(q.task!.subject)}”. `)}Only you can answer. ${expiresIn(q.expiresAt, s.now)}</p>
-      ${newAgentWarning(s, q)}
+      <h3 id="di-${id}" class="dcard-title">${esc(q.agent.label)} asks you${when(q.task, () => `<span class="dcard-about">${esc(q.task!.subject)}</span>`)}</h3>
+      ${cardNote(s, q.expiresAt, q.newAgent)}
     </div></div>
-    <div class="msg-box"><p class="q-question">${esc(q.question)}</p>${when(q.detail, () => `<p class="msg-full">${esc(q.detail)}</p>`)}</div>
-    ${questionActions(s, q, "card")}
+    <div class="dcard-body"><p class="dcard-subject">${esc(q.question)}</p>${when(q.detail, () => `<p class="dcard-detail">${esc(q.detail)}</p>`)}</div>
+    ${questionAnswers(s, q)}
   </article>`;
 }
 
@@ -330,7 +288,7 @@ function renderTaskQuestion(s: HomeState, q: QuestionCard): string {
     <div class="tmsg-head">${logo(q.agent.kind, "logo-sm")}<strong>${esc(q.agent.label)}</strong><span class="pill pill-waiting tmsg-tag">Question for ${esc(s.me.name)}</span><span class="tnum tmsg-at">${clock(q.createdAt)}</span></div>
     <p class="tmsg-subject">${esc(q.question)}</p>
     ${when(q.detail, () => `<p class="tmsg-text">${esc(q.detail)}</p>`)}
-    ${waiting ? questionActions(s, q, "task") : `<p class="tmsg-text q-outcome">${esc(q.status === "waiting" ? "Waiting for an answer." : questionOutcome(q))}</p>`}
+    ${waiting ? questionAnswers(s, q) : `<p class="tmsg-text q-outcome">${esc(q.status === "waiting" ? "Waiting for an answer." : questionOutcome(q))}</p>`}
   </li>`;
 }
 

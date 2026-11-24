@@ -160,9 +160,12 @@ describe("first contact is asked first", () => {
     const copy = visibleCopy(mine.html);
     expect(copy).toContain("First message from an agent of Robert (robert).");
     expect(copy).toContain("“robert/dots”");
-    expect(copy).toMatch(/Always allow\s+Robert/);
-    expect(copy).toContain("Always allow covers every agent of Robert (robert).");
-    expect(copy).toContain("Allow once");
+    // This message only, or always for this person: Allow, with a tick that says whom it covers.
+    expect(copy).toMatch(/Always allow messages from Robert.s agents/);
+    expect(copy).toContain("Every agent of Robert (robert), with no question next time.");
+    expect(mine.html).toContain('<label class="allow-line always-tick"><input type="checkbox"><span><strong>Always allow messages from Robert&#39;s agents</strong>');
+    expect(mine.html).toContain('value="deny" class="btn btn-plain">Don\'t allow</button><button type="submit" name="decision" value="allow_once" class="btn btn-primary allow-once">Allow</button><button type="submit" name="decision" value="always_allow" class="btn btn-primary allow-always">Allow</button>');
+    expect(copy).not.toContain("Allow once");
     expect(copy).toContain("Don't allow");
     expect(mine.html).toContain("Budget &lt;b&gt;now&lt;/b&gt;");
     expect(copyProblems(copy.replace("Budget  b now /b", ""))).toEqual([]);

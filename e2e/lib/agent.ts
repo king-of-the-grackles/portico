@@ -118,11 +118,15 @@ export async function joinThroughPage(page: Page, join: Join, opts: AllowOptions
   return body.token;
 }
 
-/** A held message's own page, /held/<id>, answered by the signed-in person with the button of that name. */
-export async function decideHeld(page: Page, messageId: string, button: "Allow once" | "Don't allow" | RegExp): Promise<void> {
+/**
+ * A held message's own page, /held/<id>, answered by the signed-in person: Allow (this message), Always allow (the
+ * tick on the page, then Allow) or Don't allow.
+ */
+export async function decideHeld(page: Page, messageId: string, choice: "Allow" | "Always allow" | "Don't allow"): Promise<void> {
   await page.goto(`/held/${messageId}`);
   await expect(page.getByRole("heading", { level: 1, name: "Allow this message?" })).toBeVisible();
-  await page.getByRole("button", { name: button }).click();
+  if (choice === "Always allow") await page.getByRole("checkbox", { name: /^Always allow / }).check();
+  await page.getByRole("button", { name: choice === "Don't allow" ? "Don't allow" : "Allow", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Already decided" })).toBeVisible();
 }
 

@@ -645,7 +645,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
       page.set({ held: s().held.filter((m) => m.id !== id) });
       note(
         decision === "allow_once"
-          ? `Allowed once. Sent to ${card.to.label}.`
+          ? `Allowed. Sent to ${card.to.label}.`
           : decision === "always_allow"
             ? `Sent. ${card.from.label} is always allowed now.`
             : `Not allowed. ${card.from.label} was told.`,
@@ -661,23 +661,18 @@ function startHome(root: HTMLElement, data: HomeData): void {
   };
 
   /**
-   * The person's answer to a question one of the person's own agents asked, or a skip. The call is the person API's,
-   * with this browser's sign-in: nothing else can answer. An answer is final, so the card goes once it is sent.
+   * One press on a choice: the person's answer to a question one of the person's own agents asked. The call is the
+   * person API's, with this browser's sign-in: nothing else can answer. An answer is final, so the card goes once it
+   * is sent. An answer in words, and Skip, are on the question's own page.
    */
-  const answerQuestion = async (id: string, body: { decision: "answer" | "skip"; option?: number; text?: string }) => {
+  const answerQuestion = async (id: string, option: number) => {
     const card = s().questions.find((q) => q.id === id);
-    if (!card || s().busy) return;
-    if (body.decision === "answer" && body.option === undefined && !(body.text ?? "").trim()) {
-      page.set({ notice: { text: "Type an answer first.", error: true } });
-      return;
-    }
+    if (!card || s().busy || !Number.isInteger(option)) return;
     page.set({ busy: `question:${id}` });
     try {
-      await api("POST", `/api/questions/${encodeURIComponent(id)}`, body);
-      const { [id]: _text, ...answerText } = s().answerText;
-      const { [id]: _open, ...answerOpen } = s().answerOpen;
-      page.set({ questions: s().questions.filter((q) => q.id !== id), answerText, answerOpen });
-      note(body.decision === "skip" ? `Skipped. ${card.agent.label} was told there is no answer.` : `Answer sent to ${card.agent.label}.`, true);
+      await api("POST", `/api/questions/${encodeURIComponent(id)}`, { decision: "answer", option });
+      page.set({ questions: s().questions.filter((q) => q.id !== id) });
+      note(`Answer sent to ${card.agent.label}.`, true);
       refresh(["approvals", "activity"]);
     } catch (err) {
       fail(err);
@@ -971,8 +966,7 @@ function startHome(root: HTMLElement, data: HomeData): void {
     },
     input(name, value) {
       const edit = s().edit;
-      if (name.startsWith("q-text:")) page.set({ answerText: { ...s().answerText, [name.slice("q-text:".length)]: value.slice(0, 1000) } });
-      else if (name === "edit-name" && edit) page.set({ edit: { ...edit, name: value, error: "" } });
+      if (name === "edit-name" && edit) page.set({ edit: { ...edit, name: value, error: "" } });
       else if (name === "edit-desc" && edit) page.set({ edit: { ...edit, description: value.slice(0, 500) } });
       else if (name === "wake-url" && s().wakeEdit) page.set({ wakeEdit: { ...s().wakeEdit!, url: value, error: "" } });
       else if (name === "wake-key" && s().wakeEdit) page.set({ wakeEdit: { ...s().wakeEdit!, key: value, error: "" } });
@@ -1131,17 +1125,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
           return page.set({ settingsOpen: !s().settingsOpen, confirmRemove: false, confirmRevoke: false });
         case "decide":
           return void decide(id, el.dataset.decision as "allow_once" | "always_allow" | "deny");
-        case "q-open":
-          return page.set({ answerOpen: { ...s().answerOpen, [id]: true } });
-        case "q-answer": {
-          // A choice, with whatever is typed in the open box as a note beside it.
-          const typed = (s().answerText[id] ?? "").trim();
-          return void answerQuestion(id, { decision: "answer", option: Number(el.dataset.option), ...(typed ? { text: typed } : {}) });
-        }
-        case "q-send":
-          return void answerQuestion(id, { decision: "answer", text: s().answerText[id] ?? "" });
-        case "q-skip":
-          return void answerQuestion(id, { decision: "skip" });
+        case "q-answer":
+          return void answerQuestion(id, Number(el.dataset.option));
         case "edit-start": {
           const agent = pageAgent();
           if (agent) page.set({ edit: { name: agent.name, description: agent.description, error: "" }, saved: false, settingsOpen: true });

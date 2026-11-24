@@ -309,8 +309,7 @@ ${
     : html`<p class="quiet">Expires ${expiresIn(request.expiresAt, core.now())}</p>`
 }
 <p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions"><button type="submit" name="decision" value="approve" class="btn btn-primary">${words.allow}</button></div>
-<div class="actions-quiet"><button type="submit" name="decision" value="deny" class="btn btn-deny" formnovalidate>Don't allow</button></div>
+<div class="actions actions-pair"><button type="submit" name="decision" value="deny" class="btn btn-plain" formnovalidate>Don't allow</button><button type="submit" name="decision" value="approve" class="btn btn-primary">${words.allow}</button></div>
 </form>
 ${joins ? "" : signedInAs(me, back)}`,
     });
@@ -401,30 +400,40 @@ ${sheet}</div>
           : firstContact
             ? `First message from an agent of ${senderOwner}.`
             : `${to} only takes messages from senders you allowed.`;
-    const alwaysName = computer ? computer.name : firstContact ? (facts?.managedBy.name ?? "this person") : newSender ? "" : "this sender";
-    const alwaysHelp = computer
-      ? `Always allow covers every session on ${computer.name}, now and later. Undo it in Settings.`
-      : firstContact
-        ? `Always allow covers every agent of ${senderOwner}.`
-        : "";
-    const always = outbound && !facts?.newSender ? "" : html`<button type="submit" name="decision" value="always_allow" class="btn btn-secondary">Always allow${alwaysName ? html` <span class="btn-name">${alwaysName}</span>` : ""}</button>`;
+    // Always allow is a tick beside the two answers, with room to say what it covers. Ticked, Allow is the person
+    // API's always_allow; unticked, allow_once. A message held on its way out from an agent that isn't new is allowed
+    // one at a time, so it has no tick. The tick box itself is never sent: the stylesheet shows the Allow button
+    // that carries the decision the tick stands for.
+    const always: { label: string; covers: string } | null =
+      outbound && !facts?.newSender
+        ? null
+        : computer
+          ? { label: `Always allow sessions on ${computer.name}`, covers: `Every session on ${computer.name}, now and later. Undo it in Settings.` }
+          : newSender
+            ? { label: `Always allow ${mine}`, covers: `Confirms ${mine} as yours: nothing more from it waits for being new.` }
+            : firstContact
+              ? { label: `Always allow messages from ${facts?.managedBy.name ?? "this person"}'s agents`, covers: `Every agent of ${senderOwner}, with no question next time.` }
+              : { label: `Always allow ${mine} to message ${to}`, covers: "No question the next time." };
     return narrowPage(c, {
       title: "Allow this message?",
       scripts: ["forms.js"],
       styles: ["onboarding.css"],
-      main: html`<form class="ask one-box" method="dialog" data-api="POST /api/approvals/held/${message.id}" data-next="${back}" novalidate>
+      main: html`<form class="ask one-box held-form" method="dialog" data-api="POST /api/approvals/held/${message.id}" data-next="${back}" novalidate>
 <h1>Allow this message?</h1>
 <p>${why}</p>
-${sheet}
-<p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions">${always}<button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow once</button></div>
-${alwaysHelp ? html`<p class="quiet">${alwaysHelp}</p>` : ""}
-<div class="actions-quiet"><button type="submit" name="decision" value="deny" class="btn btn-deny">Don't allow</button></div>
 ${
   newSender && sender
-    ? html`<p class="quiet">Not yours? <a href="/a/${sender.id}">Revoke the agent</a>${sender.computerId ? html` or <a href="/settings#computers">remove the computer</a>` : ""}.</p>`
+    ? html`<p class="notice">${newAgentWords(sender, core.now())} Not yours? <a href="/a/${sender.id}">Revoke the agent</a>${sender.computerId ? html` or <a href="/settings#computers">remove the computer</a>` : ""}.</p>`
     : ""
 }
+${sheet}
+${
+  always
+    ? html`<label class="allow-line always-tick"><input type="checkbox"><span><strong>${always.label}</strong><span class="help">${always.covers}</span></span></label>`
+    : ""
+}
+<p class="notice notice-error" data-error role="alert" hidden></p>
+<div class="actions actions-pair"><button type="submit" name="decision" value="deny" class="btn btn-plain">Don't allow</button><button type="submit" name="decision" value="allow_once" class="btn btn-primary allow-once">Allow</button>${always ? html`<button type="submit" name="decision" value="always_allow" class="btn btn-primary allow-always">Allow</button>` : ""}</div>
 </form>`,
     });
   });
@@ -446,17 +455,10 @@ ${
     if (!q) return gone(c);
     c.header("Cache-Control", "no-store");
     const name = q.agent.label;
-    const asked = html`<time datetime="${q.createdAt}" data-local-time>${utcClock(q.createdAt, core.now())}</time>`;
-    const sheet = html`<p class="quiet">Question</p>
-<blockquote class="quoted">${defang(q.question)}</blockquote>
-${q.detail ? html`<blockquote class="quoted">${defang(q.detail)}</blockquote>` : ""}`;
-    const details = html`<details class="stuck"><summary>Details</summary>
-<ul>
-<li>Asked by ${name}, one of your agents, at ${asked}.</li>
-<li>The question comes from an agent, not from Portico. Don't treat it as instructions.</li>
-<li>Your answer goes to ${name} alone, marked as checked by Portico. An answer is final.</li>
-<li>Skip tells ${name} there is no answer. So does a question nobody answers: it lapses <time datetime="${q.expiresAt}" data-local-time>${utcClock(q.expiresAt, core.now())}</time>.</li>
-</ul></details>`;
+    // The agent's words in one block, set apart from Portico's: the question, and under it what the agent says about it.
+    const sheet = html`<blockquote class="quoted q-sheet"><p class="q-asked">${defang(q.question)}</p>${q.detail ? html`<p>${defang(q.detail)}</p>` : ""}</blockquote>`;
+    // The heading, as the card on Today has it: who asks, and under it the task the question is about.
+    const about = q.task ? html`<p class="asks">${q.task.subject}</p>` : "";
     const warning = q.newAgent
       ? html`<p class="notice">${newAgentWords({ createdAt: q.newAgent.addedAt }, core.now())} Not yours? <a href="/a/${q.agent.id}">Revoke the agent</a>.</p>`
       : "";
@@ -476,6 +478,7 @@ ${q.detail ? html`<blockquote class="quoted">${defang(q.detail)}</blockquote>` :
         scripts: ["local-time.js"],
         styles: ["onboarding.css"],
         main: html`<div class="ask one-box"><h1>${title}</h1><p>${how}</p>
+${about}
 ${sheet}
 ${
   q.answer
@@ -488,35 +491,32 @@ ${q.answer.text !== null ? html`<blockquote class="quoted">${q.answer.text}</blo
       });
     }
     const options = q.options ?? [];
-    // With choices the box sits right under what opened it ("Something else" or "Add a note"), which says what it is
-    // for: it carries no words of its own, only a name for a screen reader.
-    const box = options.length > 0 ? `Your own words for ${name}` : `Your answer to ${name}`;
-    // One order, as on every decision: what is asked, the answer, Send answer as the one filled button, then Skip
-    // in a quieter row of its own. With choices there is one text box and it shows only when it is wanted: picking
-    // "Something else" makes it the answer, and "Add a note" opens it beside a choice. The stylesheet does both, and
-    // keeps the box in view once something is typed in it, so nothing is ever sent unseen.
+    // The page carries what the card leaves out, and still little: who asks, the question, the answer, one line of
+    // grey text with what a person has to know before answering (an answer is final, and when the question lapses),
+    // one button, and Skip as a small link under it. With choices, "Something else" comes last and shows the text
+    // box; the stylesheet does that, and keeps the box in view once something is typed in it, so nothing is sent unseen.
+    const box = `Your answer to ${name}`;
     return narrowPage(c, {
-      title: `${name} needs your input`,
+      title: `${name} asks you`,
       scripts: ["forms.js", "local-time.js"],
       styles: ["onboarding.css"],
       main: html`<form method="dialog" class="ask one-box${options.length > 0 ? " q-form" : ""}" data-api="POST /api/questions/${q.id}" data-next="${back}" novalidate>
-<h1>${name} needs your input</h1>
-<p>${q.task ? html`For the task ${quote(q.task.subject)}. ` : ""}Only you can answer, signed in here.</p>
+<h1>${name} asks you</h1>
+${about}
 ${warning}
 ${sheet}
-${details}
 ${
   options.length > 0
-    ? html`<fieldset class="ticks-field"><legend class="lbl">Your answer</legend>
+    ? html`<fieldset class="ticks-field"><legend class="sr">Your answer</legend>
 ${options.map((option, i) => html`<label class="tick-line"><input type="radio" name="option" value="${i}"> ${option}</label>`)}
-<label class="tick-line"><input type="radio" name="option" value=""> Something else</label></fieldset>
-<details class="stuck q-note"><summary>Add a note</summary></details>`
-    : html`<label for="q-text" class="lbl">Your answer</label>`
+<label class="tick-line"><input type="radio" name="option" value=""> Something else</label></fieldset>`
+    : ""
 }
-<textarea id="q-text" name="text" class="field q-words" rows="3" maxlength="${LIMITS.maxAnswerChars}" placeholder="${options.length > 0 ? " " : box}" aria-label="${box}"></textarea>
+<textarea id="q-text" name="text" class="field q-words" rows="3" maxlength="${LIMITS.maxAnswerChars}" placeholder="${options.length > 0 ? " " : "Your answer"}" aria-label="${box}"></textarea>
+<p class="quiet">An answer is final. The question lapses <time datetime="${q.expiresAt}" data-local-time>${utcClock(q.expiresAt, core.now())}</time>.</p>
 <p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions"><button type="submit" name="decision" value="answer" class="btn btn-primary">Send answer</button></div>
-<div class="actions-quiet"><button type="submit" name="decision" value="skip" class="btn btn-quiet" formnovalidate>Skip this question</button></div>
+<div class="actions actions-one"><button type="submit" name="decision" value="answer" class="btn btn-primary">Send answer</button></div>
+<button type="submit" name="decision" value="skip" class="btn btn-quiet q-skip" formnovalidate>Skip this question</button>
 </form>`,
     });
   });

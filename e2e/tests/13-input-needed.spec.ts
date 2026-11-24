@@ -32,10 +32,15 @@ test("an agent asks its person, the person answers in one press, and the agent g
   const input = page.getByRole("region", { name: "Input needed" });
   const card = input.getByRole("article").filter({ hasText: question });
   await expect(card).toBeVisible();
-  await expect(card.getByRole("heading", { level: 3 })).toHaveText(/needs your input$/);
-  await expect(card).toContainText(`For the task “${subject}”. Only you can answer.`);
+  // The card: who asks and about which task, the question with what the agent says about it, and the answers.
+  await expect(card.getByRole("heading", { level: 3 })).toHaveText(new RegExp(`asks you${subject}$`));
   await expect(card).toContainText("The old tests round half down.");
+  await expect(card).toContainText(/Expires /);
   await expect(card).not.toContainText("New agent");
+  await expect(card.getByRole("button")).toHaveText(["Half down (keep old)", "Half up (new rule)"]);
+  await expect(card.getByRole("link", { name: "Other answer…" })).toHaveAttribute("href", `/q/${asked.question.id}`);
+  await expect(card.getByRole("textbox")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Skip" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: /need(s)? a decision$/ })).not.toHaveText(/^0 /);
   const row = page.getByRole("region", { name: "In progress" }).getByRole("listitem").filter({ hasText: subject });
   await expect(row).toContainText(`Waiting on ${alice.name}`);
@@ -78,8 +83,14 @@ test("an agent asks its person, the person answers in one press, and the agent g
   // A question with no choices, answered in words on its own page: where the agent's link leads.
   const open = unique("Who should review the change?");
   const second = await helper.requestInput({ question: open });
-  await page.goto(second.question.link);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(/needs your input$/);
+  // On Today its card has one button, "Answer…", which opens the page.
+  await page.goto("/");
+  const openCard = page.getByRole("region", { name: "Input needed" }).getByRole("article").filter({ hasText: open });
+  await expect(openCard.getByRole("textbox")).toHaveCount(0);
+  await openCard.getByRole("link", { name: "Answer…" }).click();
+  await expect(page).toHaveURL(second.question.link);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(/asks you$/);
+  await expect(page.getByText("An answer is final. The question lapses")).toBeVisible();
   await expect(page.getByText(open, { exact: true })).toBeVisible();
   // Before Alice answers: Bob, signed in, gets the page for nothing at all, and his API call finds no such question.
   const bobPage = await browserAs(bob);
@@ -103,25 +114,20 @@ test("an agent asks its person, the person answers in one press, and the agent g
   expect(words.question).toMatchObject({ status: "answered", level: "checked", via: "web" });
   expect(words.framed_message).toContain("Answer: Dana, before Thursday.");
 
-  // Skip: the card goes, and the agent is told there is no answer.
+  // Skip is on the question's page, which the card's "Other answer…" opens. There, "Something else" shows the text box.
   const skippable = unique("Should the old fixtures be deleted?");
   const third = await helper.requestInput({ question: skippable, options: ["Delete", "Keep"] });
-  // On its page, a question with choices shows one text box only when it is wanted: "Something else" or "Add a note".
-  await page.goto(third.question.link);
-  const ownWords = page.getByRole("textbox", { name: /^Your own words for / });
-  await expect(ownWords).toBeHidden();
-  await page.getByText("Add a note", { exact: true }).click();
-  await expect(ownWords).toBeVisible();
-  await page.getByText("Add a note", { exact: true }).click();
+  await page.goto("/");
+  const skipCard = page.getByRole("region", { name: "Input needed" }).getByRole("article").filter({ hasText: skippable });
+  await skipCard.getByRole("link", { name: "Other answer…" }).click();
+  await expect(page).toHaveURL(third.question.link);
+  const ownWords = page.getByRole("textbox", { name: /^Your answer to / });
   await expect(ownWords).toBeHidden();
   await page.getByText("Something else", { exact: true }).click();
   await expect(ownWords).toBeVisible();
-  await expect(page.getByText("Add a note", { exact: true })).toBeHidden();
+  await page.getByRole("button", { name: "Skip this question" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Skipped" })).toBeVisible();
   await page.goto("/");
-  const skipCard = page.getByRole("region", { name: "Input needed" }).getByRole("article").filter({ hasText: skippable });
-  await expect(skipCard).toBeVisible();
-  await skipCard.getByRole("button", { name: "Skip" }).click();
-  await expect(page.getByText(/^Skipped\. /)).toBeVisible();
   await expect(page.getByText(skippable, { exact: true })).toHaveCount(0);
   const skipped = await helper.answerTo(third.question.id);
   expect(skipped.question).toMatchObject({ status: "skipped" });

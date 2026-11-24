@@ -31,14 +31,14 @@ test("An agent asks its person a question, and the person answers", async ({ wor
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Today" })).toBeVisible();
   const card = page.getByRole("region", { name: "Input needed" }).getByRole("article").filter({ hasText: question });
-  await expect(card).toContainText("builder needs your input");
+  await expect(card).toContainText("builder asks you");
   await card.scrollIntoViewIfNeeded();
   await rec.pause(1500);
-  await rec.step("today-card", "builder asks its person a question. Today shows it under 'Input needed', with the choices as buttons.", { hold: 6000 });
+  await rec.step("today-card", "builder asks its person a question. Today shows it under 'Input needed': one tap on a choice answers.", { hold: 6000 });
 
   // The link the agent shows its person opens this one question.
   await page.goto(asked.question.link);
-  await expect(page.getByRole("heading", { level: 1, name: "builder needs your input" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "builder asks you" })).toBeVisible();
   await rec.step("question-page", "The agent's link opens the question's own page. Only this person, signed in, can answer.", { hold: 6000 });
 
   await page.getByText("Half up (new rule)", { exact: true }).click();
@@ -74,13 +74,14 @@ test("An agent asks its person a question, and the person answers", async ({ wor
   await newcomer.requestInput({ question: third, options: ["Reset", "Leave as is"] });
   await page.goto("/");
   const warned = page.getByRole("region", { name: "Input needed" }).getByRole("article").filter({ hasText: third });
-  await expect(warned).toContainText("newcomer needs your input");
-  await expect(warned).toContainText(/New agent, added [A-Z][a-z]{2} \d{1,2}\. You haven't confirmed this agent yet\./);
+  await expect(warned).toContainText("newcomer asks you");
+  await expect(warned).toContainText(/New agent, added [A-Z][a-z]{2} \d{1,2} · Expires /);
   await warned.scrollIntoViewIfNeeded();
   await rec.pause(1000);
-  await rec.step("new-agent-card", "An agent not yet confirmed may ask too. Its card says 'New agent', the day it was added, and that it isn't confirmed.", { hold: 6000 });
+  await rec.step("new-agent-card", "An agent not yet confirmed may ask too. Its card says 'New agent' and the day it was added.", { hold: 6000 });
 
-  await warned.getByRole("button", { name: "Skip" }).click();
-  await expect(page.getByText(third, { exact: true })).toHaveCount(0);
-  await rec.step("skipped", "Skip takes the card away and tells the agent there is no answer.", { hold: 4000, shot: false });
+  await warned.getByRole("link", { name: "Other answer…" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "newcomer asks you" })).toBeVisible();
+  await expect(page.getByText(/New agent, added [A-Z][a-z]{2} \d{1,2}\. You haven't confirmed this agent yet\./)).toBeVisible();
+  await rec.step("other-answer", "'Other answer…' opens the question's page: the whole warning, an answer in words, and Skip.", { hold: 5000, shot: false });
 });

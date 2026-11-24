@@ -42,12 +42,13 @@ a.homemark:hover { background: #e3e8e1; }
 .btn-link:hover { background: var(--teal-wash); color: var(--teal); }
 .btn-danger { border: 1px solid var(--danger); background: var(--surface); color: var(--danger); }
 .btn-danger:hover { background: #f8ecea; }
-/* The two ways out of a decision, both plain text. Skipping stops nothing, so it is neutral; Don't allow stops a
-   message or a request, so it keeps the danger color, without a border or a fill. */
-.btn-quiet { border: none; background: transparent; color: var(--muted); }
+/* The answer that turns something down, beside the filled button that lets it through: outlined and neutral, so the
+   pair reads as two answers and only one of them as the main one. */
+.btn-plain { border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.btn-plain:hover { background: #eef1ec; }
+/* A small grey link under a page's one button: a way out that stops nothing. Still a 44px target. */
+.btn-quiet { border: none; background: transparent; color: var(--muted); font-size: 14px; line-height: 20px; }
 .btn-quiet:hover { background: #e3e8e1; color: var(--ink); }
-.btn-deny { border: none; background: transparent; color: var(--danger); }
-.btn-deny:hover { background: #f4e4e1; }
 
 .field { width: 100%; min-height: 44px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 16px; line-height: 24px; }
 .lbl { font-size: 14px; line-height: 20px; font-weight: 600; }
@@ -67,17 +68,12 @@ a.homemark:hover { background: #e3e8e1; }
 .btn-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* Three buttons in a narrow box: a little tighter, so the row fits. */
 .actions-fit .btn { padding: 8px 12px; font-size: 15px; }
-@media (max-width: 480px) { .narrow .actions .btn-name { display: none; } }
-/* A phone: three text buttons share the quiet row ("Skip", "Answer in your own words", "Open the page"), so they are a size smaller and closer, and the row stays one line inside the card. */
-@media (max-width: 420px) { .app .actions-quiet .btn { padding: 8px 6px; font-size: 13px; } .app .actions-quiet > .btn:first-child { margin-left: -6px; } .app .actions-quiet .actions-links { margin-right: -6px; } }
 @media (max-width: 480px) { .actions-fit { gap: 6px; } .actions-fit .btn { padding: 8px; font-size: 14px; } .actions-fit .btn-name { display: none; } }
 
-/* Under the row that carries a decision's main action: a quieter row behind a rule. The way out (Skip, Don't allow)
-   starts the row, far from the main button above; the ways to look closer end it. One line at every width. */
-.actions-quiet { display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--hairline); }
-.actions-quiet .btn { flex: 0 0 auto; }
-.actions-quiet > .btn:first-child { margin-left: -12px; }
-.actions-quiet .actions-links { margin-right: -12px; }
+/* Two answers on one line, each half the width: Don't allow and Allow. Never wraps. */
+.actions-pair .btn { flex: 1 1 0; min-width: 0; }
+/* A page's one button, the whole width of its box. */
+.actions-one .btn { flex: 1 1 auto; }
 
 /* Standalone pages: setup, sign in, invites, join, consent. */
 .top { max-width: 1440px; margin: 0 auto; padding: 16px 32px 0; display: flex; align-items: center; gap: 8px; }

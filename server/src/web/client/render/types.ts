@@ -160,9 +160,6 @@ export interface HomeState {
   consents: ConsentCard[];
   /** "Input needed": what the person's own agents asked the person, still waiting. */
   questions: QuestionCard[];
-  /** The text boxes open on those cards ("Answer in your own words"), and what is typed in each, by question ID. */
-  answerOpen: Record<string, boolean>;
-  answerText: Record<string, string>;
   workspaces: WorkspaceView[];
   workspacePage: WorkspacePageData | null;
   wsForm: WorkspaceForm | null;

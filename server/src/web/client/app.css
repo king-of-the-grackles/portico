@@ -273,20 +273,39 @@ html:has(.sheet-wrap) { overflow: hidden; }
 .dcard { padding: 16px 20px; border-radius: 14px; background: var(--surface); box-shadow: 0 0 0 1px var(--hairline), 0 1px 3px rgba(16, 43, 37, 0.06); display: flex; flex-direction: column; gap: 12px; }
 .dcard-head { display: flex; align-items: flex-start; gap: 12px; }
 .dcard-title { margin: 0; font-size: 17px; line-height: 24px; font-weight: 600; overflow-wrap: anywhere; }
-.actions-links { display: flex; align-items: center; gap: 4px; margin-left: auto; min-width: 0; }
 .dcard-why { margin: 4px 0 0; font-size: 14px; line-height: 20px; color: var(--ink-soft); }
 .code-inline { font-size: 16px; letter-spacing: 0.08em; }
-.dcard .msg-box { box-shadow: 0 0 0 1px var(--hairline); }
-/* Input needed: the agent's question in its box, then the answer. The choices are a list at one width, in the agent's
-   order, and one press on a choice answers: they are the card's main action, so each is a whole-width button and
-   nothing sits beside one. A long choice wraps inside its own button. */
-.q-question { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
-.q-new strong { color: #7a3a0e; }
-.q-text { width: 100%; min-height: 64px; }
+/* A decision card carries one line of who and what, the question or the subject, the answers, and one small grey
+   line. The who-line is the smaller one: the question or the subject is what the person reads. */
+.dcard-opens .dcard-title, .qcard .dcard-title { font-size: 15px; line-height: 22px; }
+.dcard-about { display: block; font-weight: 400; color: var(--ink); }
+.dcard-note { margin: 2px 0 0; font-size: 13px; line-height: 18px; color: var(--muted); }
+.dcard-note strong { font-weight: 600; color: #7a3a0e; }
+.dcard-body { display: flex; flex-direction: column; gap: 4px; }
+.dcard-subject { margin: 0; font-size: 17px; line-height: 24px; font-weight: 600; overflow-wrap: anywhere; }
+.dcard-detail { margin: 0; font-size: 15px; line-height: 22px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The answers to a question: a list at one width, one under another. The agent's choices are outlined in the app's
+   green, and one press on a choice answers. "Other answer…" ends the list at the same width with no outline, so it
+   doesn't read as a choice the agent gave. A long choice wraps inside its own button. */
 .choices { display: flex; flex-direction: column; gap: 8px; }
-.app .btn-choice { width: 100%; justify-content: flex-start; padding: 10px 16px; border: 1px solid var(--teal); background: var(--surface); color: var(--teal-dark); font-size: 15px; line-height: 22px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.app .choices .btn { width: 100%; padding: 10px 16px; font-size: 15px; line-height: 22px; }
+.app .btn-choice, .app .btn-other { justify-content: flex-start; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.app .btn-choice { border: 1px solid var(--teal); background: var(--surface); color: var(--teal-dark); }
 .app .btn-choice:hover { background: var(--teal-wash); }
-.tmsg .choices, .tmsg .q-text { margin-top: 8px; }
+.app .btn-other { border: 1px solid transparent; background: #eef1ec; color: var(--ink-soft); font-weight: 500; }
+.app .btn-other:hover { background: #e3e8e1; color: var(--ink); }
+/* A held message's card opens the message's page: the heading is the link, and its hit area is the whole card. The
+   two buttons sit above that area, so they still take their own presses, and the card shows the link's focus ring. */
+.dcard-opens { position: relative; }
+.dcard-link { color: inherit; text-decoration: none; outline: none; }
+.dcard-link:hover { color: inherit; }
+.dcard-link::after { content: ""; position: absolute; inset: 0; border-radius: 14px; }
+.dcard-opens:hover { box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(16, 43, 37, 0.06); }
+.dcard-opens:has(.dcard-link:focus-visible) { outline: 2px solid var(--teal); outline-offset: 2px; }
+.dcard-opens .actions { position: relative; z-index: 1; }
+/* On a wide page the two answers keep a button's size, under the subject they answer. */
+.dcard .actions-pair { justify-content: flex-start; max-width: 400px; }
+.tmsg .choices { margin-top: 8px; }
 .tmsg .actions { margin-top: 8px; }
 /* A question in its task: on a phone the tag and the time drop to a line of their own instead of breaking the time. */
 .tmsg-q .tmsg-head { flex-wrap: wrap; }
@@ -389,15 +408,11 @@ button.trow-main:hover { background: #f5f7f3; }
   .fsels { margin-left: 0; width: 100%; }
   .fsel { flex: 1 1 160px; min-width: 0; }
   .dcard { padding: 16px; }
-  /* Phones: the main action's row fills the card's width, and the quiet row under it stays on one line. */
-  .dcard .actions { gap: 6px; }
+  /* Phones: a card's row of buttons fills the card's width. */
+  .dcard .actions { gap: 8px; }
+  .dcard .actions-pair { max-width: none; }
   .dcard .actions > .btn { flex: 1 1 0; padding: 8px 6px; }
   .dcard .actions .btn-name { display: none; }
-  .actions-quiet { gap: 0; }
-  .actions-quiet .actions-links { gap: 0; }
-  .actions-quiet .btn { padding: 8px; }
-  .actions-quiet > .btn:first-child { margin-left: -8px; }
-  .actions-quiet .actions-links { margin-right: -8px; }
   .fold-body { padding-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .nav { transition: none; } }

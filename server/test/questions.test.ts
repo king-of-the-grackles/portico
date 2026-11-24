@@ -128,18 +128,24 @@ describe("input needed: an agent asks its own person, and the answer comes back 
     expect(home).toContain(">Needs a decision</h2>");
     expect(home.indexOf(">Input needed</h2>")).toBeGreaterThan(home.indexOf(">Needs a decision</h2>"));
     expect(home.indexOf(">Input needed</h2>")).toBeLessThan(home.indexOf(">In progress</h2>"));
-    expect(home).toContain("Muse needs your input</h3>");
+    expect(home).toContain("Muse asks you</h3>");
     expect(home).toContain(`data-action="q-answer" data-id="${id}" data-option="1">Half up (new rule)</button>`);
-    // One order, read and tabbed: the question, the choices stacked in the agent's order, then a quieter row with
-    // Skip first and the ways to look closer after it. Nothing on the card is a filled button: a choice is the action.
+    // The card carries four things, read and tabbed in this order: who asks, one small grey line, the question with
+    // what the agent says about it, and the answers stacked in the agent's order, ending with the way to the page.
     const card = home.slice(home.indexOf(`data-key="di-${id}"`), home.indexOf("</article>", home.indexOf(`data-key="di-${id}"`)));
-    const order = [QUESTION, 'class="choices"', "Half down (keep old)", "Half up (new rule)", 'class="actions-quiet"', 'class="btn btn-quiet" data-action="q-skip"', "Answer in your own words", "Open the page"].map((part) => card.indexOf(part));
+    const order = ["Muse asks you", 'class="dcard-note', QUESTION, DETAIL, 'class="choices"', "Half down (keep old)", "Half up (new rule)", `<a class="btn btn-other" href="/q/${id}">Other answer…</a>`].map((part) => card.indexOf(part));
     expect(order.every((at) => at >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(card.match(/class="btn btn-choice"/g)).toHaveLength(2);
     expect(card).not.toContain("btn-primary");
-    expect(card).not.toContain("btn-text");
     expect(card).not.toMatch(/tabindex="[1-9]/);
+    // Everything a person reads on it, and nothing more: no Skip, no text box, no sentence about who can answer.
+    expect(visibleCopy(card.slice(card.indexOf(">") + 1).replace(/ alt="[^"]*"/g, "")).replace(/\s+/g, " ").trim()).toBe(
+      `Muse asks you Expires Oct 30 at 12:00 PM ${QUESTION} ${DETAIL} Half down (keep old) Half up (new rule) Other answer…`,
+    );
+    expect(card.match(/class="dcard-note/g)).toHaveLength(1);
+    expect(card).not.toContain("<textarea");
+    expect(card).not.toContain("q-skip");
     expect(home).toContain("1 needs a decision");
     expect(home).toContain('<span class="badge tnum">1<span class="sr"> waiting for a decision</span></span>');
     expect(copyProblems(visibleCopy(home))).toEqual([]);
@@ -201,15 +207,21 @@ describe("input needed: an agent asks its own person, and the answer comes back 
     const page = await callPerson(p, cookie, "GET", `/q/${id}`);
     expect(page.status).toBe(200);
     const html = await page.text();
-    expect(html).toContain("<h1>Muse needs your input</h1>");
+    expect(html).toContain("<h1>Muse asks you</h1>");
     expect(html).toContain(`data-api="POST /api/questions/${id}"`);
-    expect(html).toContain('<blockquote class="quoted">Who should be invited to the design review?</blockquote>');
+    expect(html).toContain('<blockquote class="quoted q-sheet"><p class="q-asked">Who should be invited to the design review?</p></blockquote>');
+    // On Today the card of a question with no choices has one button, to this page, and no text box.
+    const todayCard = await (await callPerson(p, cookie, "GET", "/")).text();
+    expect(todayCard).toContain(`<div class="choices"><a class="btn btn-primary" href="/q/${id}">Answer…</a></div>`);
+    expect(todayCard).not.toContain("<textarea");
     expect(html).toContain('name="decision" value="skip"');
     expect(html).toContain('name="decision" value="answer"');
     expect(html).not.toContain('type="radio"');
     expect(html).not.toContain("New agent");
-    // The question, the box, Send answer as the one filled button, then Skip in a quieter row of its own.
-    const order = ['class="quoted"', 'name="text"', 'value="answer" class="btn btn-primary"', 'class="actions-quiet"', 'value="skip" class="btn btn-quiet"'].map((part) => html.indexOf(part));
+    // The question, the box, one grey line, Send answer as the one button, then Skip as a small link under it.
+    expect(html).not.toContain("<details");
+    expect(html).toContain('<p class="quiet">An answer is final. The question lapses <time datetime="2026-10-30T12:00:00.000Z" data-local-time>Oct 30, 12:00 PM UTC</time>.</p>');
+    const order = ['class="quoted q-sheet"', 'name="text"', "An answer is final.", 'value="answer" class="btn btn-primary"', 'value="skip" class="btn btn-quiet q-skip"'].map((part) => html.indexOf(part));
     expect(order.every((at) => at >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(html.match(/btn-primary/g)).toHaveLength(1);
@@ -234,13 +246,15 @@ describe("input needed: an agent asks its own person, and the answer comes back 
     expect(done).not.toContain("data-api");
     expect(copyProblems(visibleCopy(done))).toEqual([]);
 
-    // With choices, the page offers each, "Something else", and room for a note; a choice and a note go together.
+    // With choices, the page offers each and "Something else" last, which shows the text box. The API still takes a note beside a choice.
     const second = (await rest(p, muse, "POST", "/api/agent/questions", { question: QUESTION, options: OPTIONS })).body.question.id as string;
     const withChoices = await (await callPerson(p, cookie, "GET", `/q/${second}`)).text();
     expect(withChoices).toContain('<input type="radio" name="option" value="0"> Half down (keep old)</label>');
     expect(withChoices).toContain('<input type="radio" name="option" value=""> Something else</label>');
-    // The choices, "Add a note", one text box that the stylesheet shows when it is wanted, Send answer, then Skip.
-    const pageOrder = ['value="0"> Half down', 'value=""> Something else', "<summary>Add a note</summary>", 'name="text" class="field q-words"', 'value="answer" class="btn btn-primary"', 'value="skip" class="btn btn-quiet"'].map((part) => withChoices.indexOf(part));
+    // The choices, one text box that the stylesheet shows for "Something else", Send answer, then Skip.
+    expect(withChoices).not.toContain("Add a note");
+    expect(withChoices).not.toContain("<details");
+    const pageOrder = ['value="0"> Half down', 'value=""> Something else', 'name="text" class="field q-words"', 'value="answer" class="btn btn-primary"', 'value="skip" class="btn btn-quiet q-skip"'].map((part) => withChoices.indexOf(part));
     expect(pageOrder.every((at) => at >= 0)).toBe(true);
     expect([...pageOrder].sort((a, b) => a - b)).toEqual(pageOrder);
     expect(withChoices.match(/<textarea/g)).toHaveLength(1);
@@ -621,7 +635,7 @@ describe("input needed: the task", () => {
     expect(bobHome).not.toContain("Input needed");
     const chrisHome = await (await callPerson(p, cookie, "GET", "/")).text();
     expect(chrisHome).toContain('<span class="pill pill-waiting">Waiting on Chris</span>');
-    expect(chrisHome).toContain("For the task “Update the billing tests”. Only you can answer.");
+    expect(chrisHome).toContain('Muse (muse) asks you<span class="dcard-about">Update the billing tests</span></h3>');
     expect(copyProblems(visibleCopy(bobHome))).toEqual([]);
     expect(copyProblems(visibleCopy(chrisHome))).toEqual([]);
 
@@ -865,8 +879,9 @@ describe("input needed: a new agent may ask, and the card and page say so", () =
 
     // The words and the day are the ones a held message's card and page say about a new agent.
     const home = await (await callPerson(p, cookie, "GET", "/")).text();
-    expect(home).toContain("<strong>New agent, added Oct 27.</strong> You haven't confirmed this agent yet.</p>");
-    expect(visibleCopy(home).replace(/\s+/g, " ")).toContain("New agent, added Oct 27. You haven't confirmed this agent yet.");
+    // The card's one grey line warns in a few words, with the day the question lapses; the whole sentence is on the page.
+    expect(home).toContain('<p class="dcard-note tnum"><strong>New agent, added Oct 27</strong> · Expires Oct 30</p>');
+    expect(home).not.toContain("confirmed this agent yet");
     const page = await (await callPerson(p, cookie, "GET", `/q/${id}`)).text();
     expect(page).toContain(`<p class="notice">${newAgentWords({ createdAt: card.newAgent!.addedAt }, p.clock.now()).replace("'", "&#39;")} Not yours?`);
     expect(visibleCopy(page).replace(/\s+/g, " ")).toContain("New agent, added Oct 27. You haven t confirmed this agent yet.");
