@@ -7,6 +7,7 @@ import type { ConsentRequest, Consents } from "../core/consents";
 import type { Shares } from "../core/shares";
 import type { Agent, Workspace } from "../core/types";
 import type { Workspaces } from "../core/workspaces";
+import { cardNudge } from "./cards";
 
 const str = (description: string, maxLength?: number) => ({ type: "string", description, ...(maxLength === undefined ? {} : { maxLength }) });
 const PORTICO = "Required. A Portico's ID or name, from list_porticos.";
@@ -294,6 +295,8 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
       `and presses Allow. Only ${me} can open that page. The request runs out at ${request.expiresAt}.`,
     request: requestView(request),
     note: "Nothing has changed yet. Show the sentence in show as it is: the link and the time. list_porticos shows the outcome; the same call again gives a fresh link once this one has run out.",
+    // Only for a connector, whose app may draw cards.
+    ...(agent.type === "connector" ? { next: cardNudge(agent, "request", request.id) } : {}),
   });
 
   /** What the agent shows while a request waits for a Portico's owner: no link, since the answer is the owner's. */

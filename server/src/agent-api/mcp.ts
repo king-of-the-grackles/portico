@@ -19,6 +19,8 @@ import { type JsonRpcRequest, parseRequest, rpcError, rpcResult } from "./jsonrp
 import { jsonBodyLimit } from "./limits";
 import { findAgentTask, getAgentTask, listAgentTasks, TASK_FILTERS } from "./tasks";
 import { type AgentViews, UNTRUSTED_PROFILES } from "./views";
+import { cardPage } from "./card-page";
+import { CARD_MIME_TYPE, CARD_URI, cardNudge, cardText, type StatusCard, statusCard } from "./cards";
 import { runPorticoTool, PORTICO_TOOL_NAMES, type PorticoToolDeps, porticoFilter, porticoTools } from "./portico-tools";
 
 /** The versions a client picks with initialize. */
@@ -32,7 +34,10 @@ const META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
 const META_SERVER_INFO = "io.modelcontextprotocol/serverInfo";
 /** The events extension (SEP-3415). ChatGPT reads the older top-level `events` capability, so both are advertised. */
 export const EVENTS_EXTENSION = "io.modelcontextprotocol/events";
-const MODERN_CAPABILITIES = { tools: {}, events: {}, extensions: { [EVENTS_EXTENSION]: {} } };
+/** MCP Apps: a host that knows the extension draws the status card (cards.ts) from portico_status's answer. */
+export const UI_EXTENSION = "io.modelcontextprotocol/ui";
+const MODERN_CAPABILITIES = { tools: {}, resources: {}, events: {}, extensions: { [EVENTS_EXTENSION]: {}, [UI_EXTENSION]: {} } };
+const LEGACY_CAPABILITIES = { tools: { listChanged: false }, resources: {}, extensions: { [UI_EXTENSION]: {} } };
 
 const MAX_WAIT = LIMITS.maxInboxWaitSeconds;
 
@@ -312,8 +317,14 @@ export function mcpTools() {
   ];
 }
 
-/** What /mcp offers: the shared tools, and set_wake_url and set_inbox_schedule for apps and connectors. Sessions get messages pushed. */
-export function appTools() {
+/** The tools only apps and connectors get over /mcp. A session has none of them: the plugin offers mcpTools() and the Portico tools. */
+const APP_ONLY_TOOLS = ["set_wake_url", "set_inbox_schedule", "portico_status"];
+
+/**
+ * What /mcp offers: the shared tools, and set_wake_url, set_inbox_schedule and portico_status for apps and connectors.
+ * Sessions get messages pushed, and run in a terminal that draws no cards.
+ */
+export function appTools(): Tool[] {
   return [
     ...mcpTools(),
     {
@@ -352,7 +363,61 @@ export function appTools() {
         additionalProperties: false,
       },
     },
+    {
+      name: "portico_status",
+      description:
+        "Show where this agent stands on Portico: as text, and in an app that draws cards, as a small card with one link " +
+        "to Portico's page. With no arguments: that this agent has joined, under which name and for which person, " +
+        "whether new messages wake this agent, and how many messages wait for that person's decision. With message, the " +
+        "ID of a message this agent sent: whether the message is held, for whom and why, or how the message ended. With " +
+        "request, the ID of a request this agent made that waits for a person's Allow (from share_portico, join_portico " +
+        "and the like): where the request stands. Call once after joining, whenever the person asks about Portico, and " +
+        "after an answer that says held or waiting_for_person. Only reads: nothing changes, and allowing happens on " +
+        "Portico's page, never here. Give message or request, not both.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          message: str("Optional. The ID of a message this agent sent."),
+          request: str("Optional. The ID of a request this agent made: request.id in an answer that says waiting_for_person."),
+        },
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: true },
+      // Only this tool draws a card: a card on every tool would redraw the frame on every call.
+      _meta: { ui: { resourceUri: CARD_URI } },
+    },
   ];
+}
+
+/** The status card's page, as resources/list names the page. */
+const CARD_RESOURCE = {
+  uri: CARD_URI,
+  name: "portico_status_card",
+  title: "Portico status card",
+  description: "The card an app draws beside portico_status's answer: where a message, a request or this agent stands, with one link to Portico's page.",
+  mimeType: CARD_MIME_TYPE,
+};
+
+/**
+ * resources/read for the card's page. The page asks for nothing from the network, so the host's strictest content
+ * policy fits. ChatGPT opens a link from a card only to a site named in redirect_domains, its own key.
+ */
+function readCard(publicUrl: string) {
+  const origin = new URL(publicUrl).origin;
+  return {
+    contents: [
+      {
+        uri: CARD_URI,
+        mimeType: CARD_MIME_TYPE,
+        text: cardPage(publicUrl),
+        _meta: {
+          // The card draws its own edge and background.
+          ui: { prefersBorder: false },
+          "openai/widgetCSP": { connect_domains: [], resource_domains: [], redirect_domains: [origin] },
+        },
+      },
+    ],
+  };
 }
 
 type TextContent = { type: "text"; text: string }[];
@@ -375,6 +440,7 @@ export interface McpDeps {
   notices: AgentNotices;
   /** What agents ask their own people. An agent can ask here, and nothing more: no tool answers. */
   questions: Questions;
+  now?: () => Date;
 }
 
 /** For apps and connectors, when the message will reach the receiver: Portico can't start their turns, so they wait. */
@@ -419,6 +485,8 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
       agents.checkedIn(agent);
       const content = json(views.sent(message, delivery, workspace, agent));
       if (note) content.push({ type: "text", text: note });
+      const nudge = delivery === "held" ? cardNudge(agent, "message", message.id) : null;
+      if (nudge) content.push({ type: "text", text: nudge });
       // Not for a held message (a person decides within days) or an offline session: waiting would only cost turns.
       // Nor for a message that needs no reply: the note already says none is expected.
       if (!agents.isPush(agent) && !message.noReplyNeeded && (delivery === "pushed" || delivery === "queued")) content.push({ type: "text", text: WAIT_HINT });
@@ -529,11 +597,21 @@ interface Tool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations?: { readOnlyHint?: boolean };
+  /** Only on the one tool that draws a card. */
+  _meta?: { ui: { resourceUri: string } };
 }
 
-/** The tools the agent is offered and may call: sessions get messages pushed, so no set_wake_url for them. */
+/** The tools the agent is offered and may call: sessions get messages pushed, so no set_wake_url for them, and no card. */
 function toolsFor(agent: Agent, all: Tool[]): Tool[] {
-  return agent.type === "session" ? all.filter((tool) => tool.name !== "set_wake_url" && tool.name !== "set_inbox_schedule") : all;
+  return agent.type === "session" ? all.filter((tool) => !APP_ONLY_TOOLS.includes(tool.name)) : all;
+}
+
+/** portico_status: the card as data for a host that draws cards, and first as complete text for every other client. */
+function status(deps: McpDeps, agent: Agent, args: Record<string, unknown>): { content: TextContent; structuredContent: StatusCard } {
+  const { agents, people, consents, workspaces, publicUrl } = deps.porticoTools;
+  const card = statusCard({ agents, people, consents, workspaces, messages: deps.messages, views: deps.views, publicUrl, now: deps.now ?? (() => new Date()) }, agent, args);
+  return { content: [{ type: "text", text: cardText(card) }], structuredContent: card };
 }
 
 async function handle(deps: McpDeps, all: Tool[], agent: Agent, req: JsonRpcRequest, call: Call) {
@@ -546,7 +624,7 @@ async function handle(deps: McpDeps, all: Tool[], agent: Agent, req: JsonRpcRequ
       const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requested) ? requested : SUPPORTED_PROTOCOL_VERSIONS[0]!;
       return rpcResult(id, {
         protocolVersion,
-        capabilities: { tools: { listChanged: false } },
+        capabilities: LEGACY_CAPABILITIES,
         serverInfo: { name: "portico", version: SERVER_VERSION },
         instructions: SERVER_INSTRUCTIONS,
       });
@@ -560,16 +638,29 @@ async function handle(deps: McpDeps, all: Tool[], agent: Agent, req: JsonRpcRequ
       if (typeof name !== "string" || !tools.some((tool) => tool.name === name)) return rpcError(id, -32602, "Unknown tool.");
       const args = (params.arguments ?? {}) as Record<string, unknown>;
       let content: TextContent;
+      let structured: { structuredContent?: StatusCard } = {};
       let isError = false;
       try {
-        content = await callTool(deps, agent, name, args, call);
+        if (name === "portico_status") {
+          const answer = status(deps, agent, args);
+          content = answer.content;
+          structured = { structuredContent: answer.structuredContent };
+        } else content = await callTool(deps, agent, name, args, call);
       } catch (err) {
         if (!(err instanceof PorticoError)) throw err;
         content = [{ type: "text", text: `${err.code}: ${err.message}` }];
         isError = true;
       }
-      return rpcResult(id, { content: [...content, ...unreadLine(deps, agent, name)], isError });
+      return rpcResult(id, { content: [...content, ...unreadLine(deps, agent, name)], ...structured, isError });
     }
+    case "resources/list":
+      return rpcResult(id, { resources: [CARD_RESOURCE] });
+    case "resources/templates/list":
+      return rpcResult(id, { resourceTemplates: [] });
+    case "resources/read":
+      // The initialize-based versions say -32002 for a resource that isn't there.
+      if (params.uri !== CARD_URI) return rpcError(id, -32002, "Resource not found", { uri: typeof params.uri === "string" ? clip(params.uri) : null });
+      return rpcResult(id, readCard(deps.porticoTools.publicUrl()));
     default:
       return rpcError(id, -32601, "Method not found.");
   }
@@ -656,6 +747,15 @@ async function handleModern(
       const answer = await handle(deps, tools, agent, req, call);
       return "result" in answer ? complete(answer.result as Record<string, unknown>) : { status: 200, body: answer };
     }
+    // The card's page is the same for everyone, and changes only with a new address.
+    case "resources/list":
+      return complete({ resources: [CARD_RESOURCE], ttlMs: HOUR_MS, cacheScope: "public" });
+    case "resources/templates/list":
+      return complete({ resourceTemplates: [], ttlMs: HOUR_MS, cacheScope: "public" });
+    case "resources/read":
+      // 2026-07-28 says -32602 for a resource that isn't there.
+      if (params.uri !== CARD_URI) return { status: 200, body: rpcError(id, -32602, "Resource not found", { uri: typeof params.uri === "string" ? clip(params.uri) : null }) };
+      return complete({ ...readCard(deps.porticoTools.publicUrl()), ttlMs: HOUR_MS, cacheScope: "public" });
     case "events/list":
       return complete({ events: eventDefinitions() });
     case "events/subscribe":
@@ -686,6 +786,9 @@ const KNOWN_METHODS = new Set([
   "ping",
   "tools/list",
   "tools/call",
+  "resources/list",
+  "resources/templates/list",
+  "resources/read",
   "notifications/initialized",
   "server/discover",
   "events/list",

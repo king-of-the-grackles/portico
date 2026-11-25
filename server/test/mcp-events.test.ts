@@ -138,7 +138,7 @@ describe("MCP 2026-07-28", () => {
     expect(bare.status).toBe(400);
     expect(bare.body.error?.code).toBe(-32602);
 
-    const unknown = await call(p, dot.token, "resources/list");
+    const unknown = await call(p, dot.token, "prompts/list");
     expect(unknown.status).toBe(404);
     expect(unknown.body.error?.code).toBe(-32601);
     // Gone from 2026-07-28, but still answered for clients that check the server is there.

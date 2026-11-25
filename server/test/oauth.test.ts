@@ -641,12 +641,35 @@ describe("an MCP SDK client end to end", () => {
     await connected.connect(transport);
     const { tools } = await connected.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
-      "list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "submit_feedback", "request_input", "set_wake_url", "set_inbox_schedule",
+      "list_agents", "send_message", "create_upload", "check_inbox", "list_tasks", "get_task", "update_profile", "submit_feedback", "request_input", "set_wake_url", "set_inbox_schedule", "portico_status",
       "list_porticos", "create_portico", "add_to_portico", "remove_from_portico", "rename_portico", "delete_portico", "share_portico", "join_portico",
     ]);
     const listed = await connected.callTool({ name: "list_agents", arguments: {} });
     expect(listed.isError).toBeFalsy();
     expect(p.agents.byAddress("duet")?.type).toBe("connector");
+
+    // The status card, as the SDK's own client reads the parts: the tool names the page, the page is a resource, and
+    // the answer is text first with the card's data beside the text.
+    const status = tools.find((tool) => tool.name === "portico_status")!;
+    expect(status.annotations).toEqual({ readOnlyHint: true });
+    expect(status._meta).toEqual({ ui: { resourceUri: "ui://portico/status-v1.html" } });
+    expect(connected.getServerCapabilities()).toMatchObject({ resources: {} });
+    expect((await connected.listResources()).resources.map((resource) => [resource.uri, resource.mimeType])).toEqual([["ui://portico/status-v1.html", "text/html;profile=mcp-app"]]);
+    const read = await connected.readResource({ uri: (status._meta as { ui: { resourceUri: string } }).ui.resourceUri });
+    expect(read.contents[0]).toMatchObject({ uri: "ui://portico/status-v1.html", mimeType: "text/html;profile=mcp-app" });
+    expect((read.contents[0] as { text: string }).text).toStartWith("<!doctype html>");
+    const joined = await connected.callTool({ name: "portico_status", arguments: {} });
+    expect(joined.isError).toBeFalsy();
+    expect((joined.content as { text: string }[])[0]!.text).toStartWith("Portico: duet is on Portico\nStatus: Joined\nJoined as duet, managed by “Chris”.");
+    expect(joined.structuredContent).toMatchObject({ state: "joined", title: "duet is on Portico", link: { url: `${PUBLIC_URL}/` } });
+
+    // A connector is told to show a waiting request on a card. The request's own answer is the same as for anyone.
+    const share = await connected.callTool({ name: "share_portico", arguments: { portico: "Chris's shared Portico" } });
+    const waiting = JSON.parse((share.content as { text: string }[])[0]!.text) as { status: string; next: string; request: { id: string; link: string } };
+    expect(waiting.status).toBe("waiting_for_person");
+    expect(waiting.next).toBe(`Then call portico_status with request: "${waiting.request.id}": in an app that draws cards, the person sees a card that says where the request stands.`);
+    const asked = await connected.callTool({ name: "portico_status", arguments: { request: waiting.request.id } });
+    expect(asked.structuredContent).toMatchObject({ state: "request", status: "pending", link: { label: "Review on Portico", url: waiting.request.link } });
     await connected.close();
   });
 });

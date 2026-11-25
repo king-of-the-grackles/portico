@@ -68,7 +68,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
   app.route("/files", fileRoutes(core));
   app.route("/api/computer", computerApi(core));
   app.route("/api/join", joinApi(core));
-  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, porticoTools: toolDeps, notices, questions: core.questions }));
+  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, porticoTools: toolDeps, notices, questions: core.questions, now: core.now }));
   // Resend reports bounces and complaints here. The signature is the only credential; the body is read as sent.
   app.post("/api/mail/resend", async (c) => {
     const ok = core.mail.webhook(
