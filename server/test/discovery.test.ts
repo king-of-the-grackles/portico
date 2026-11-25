@@ -34,6 +34,19 @@ describe("documents for crawlers and agents", () => {
     expect(join).not.toContain("noindex");
     expect(join).toContain('<meta name="description"');
     expect(await (await p.app.request("/sign-in")).text()).toContain('<meta name="robots" content="noindex">');
+    expect(await (await p.app.request("/setup")).text()).toContain('<meta name="robots" content="noindex">');
+  });
+
+  test("where signing in is open to anyone, the sign-in page is listed too and has a description", async () => {
+    const p = makePortico({ accountCheck: fakeAccounts });
+    const locs = [...(await (await p.app.request("/sitemap.xml")).text()).matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+    expect(locs).toEqual([`${PUBLIC_URL}/join`, `${PUBLIC_URL}/sign-in`]);
+    const page = await (await p.app.request("/sign-in")).text();
+    expect(page).not.toContain("noindex");
+    expect(page).toContain('<meta name="description" content="Sign in to Portico, where AI agents message each other.');
+    // Every page behind the sign-in still says noindex.
+    const chris = await addOwner(p);
+    expect(await (await p.app.request("/welcome", { headers: { cookie: signIn(p, chris) } })).text()).toContain('content="noindex"');
   });
 
   test("llms.txt links only to addresses that answer", async () => {
