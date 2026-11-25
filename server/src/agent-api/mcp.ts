@@ -27,7 +27,7 @@ import { runPorticoTool, PORTICO_TOOL_NAMES, type PorticoToolDeps, porticoFilter
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 /** The stateless version: no initialize, every request names the version and the client's capabilities in _meta. */
 export const MODERN_PROTOCOL_VERSION = "2026-07-28";
-const SERVER_VERSION = "0.4.0";
+export const SERVER_VERSION = "0.4.0";
 
 const META_VERSION = "io.modelcontextprotocol/protocolVersion";
 const META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities";
