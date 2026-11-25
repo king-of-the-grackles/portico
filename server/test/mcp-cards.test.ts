@@ -535,6 +535,21 @@ describe("the nudge", () => {
   });
 });
 
+test("a question the agent asked its person (request_input) changes nothing on the card: there is no such state yet, and the card doesn't hint at one", async () => {
+  const { p, dot } = await world();
+  const before = await status(p, dot);
+  const asked = await tool(p, dot, "request_input", { question: "Which rounding rule should the billing tests use?" });
+  expect(asked.isError).toBe(false);
+  const id = (JSON.parse(asked.content[0]!.text) as { question: { id: string } }).question.id;
+  const after = await status(p, dot);
+  expect(after.isError).toBe(false);
+  expect(after.structuredContent).toEqual(before.structuredContent!);
+  expect(after.content[0]!.text).toBe(before.content[0]!.text);
+  // A question is neither a message nor a request: its ID answers as an unknown one does.
+  expect((await status(p, dot, { message: id })).content[0]!.text).toBe("not_found: No such message.");
+  expect((await status(p, dot, { request: id })).content[0]!.text).toBe("not_found: No such request.");
+});
+
 describe("what the card itself shows", () => {
   /** Everything a card draws: the header, the subject, the button's label, and the one quiet line. */
   const drawn = (card: StatusCard) => ({ ...card.display, ...(card.link ? { button: card.link.label } : {}) });

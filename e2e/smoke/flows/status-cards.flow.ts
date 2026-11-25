@@ -51,6 +51,7 @@ test("Status cards: joined, a held message, a waiting request, and the same answ
   await page.goto(`/held/${sent.message.id}`);
   await expect(page.getByRole("heading", { level: 1, name: "Allow this message?" })).toBeVisible();
   await expect(page.getByText(subject).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
   await rec.step("held-page", "The button leads to the message's own page on Portico. Allowing happens here, signed in.", { hold: 6000 });
 
   // The person's own shared Portico, and the agent's request to share it: nothing changes until the person allows.
