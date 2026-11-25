@@ -6,8 +6,15 @@ import { SECRET_UNREADABLE, type SecretPlace, type Secrets } from "./secrets";
 import type { Agent } from "./types";
 import { cleanWebhookUrl, laterTimer, postWithRetry, signWebhook, webhookKey, type WebhookPost, type WebhookResult } from "./webhooks";
 
-/** The one event Portico offers: something new in the subscribing agent's inbox. */
+/** A message arrived in the subscribing agent's inbox. */
 export const MESSAGE_RECEIVED = "message.received";
+/**
+ * One of Portico's own notices waits for the subscribing agent, such as the answer to a question asked with
+ * request_input. An event of its own: a message.received subscription never carries one, so a client that reads a
+ * message ID and a sender from every event it gets keeps getting exactly those.
+ */
+export const NOTICE_WAITING = "notice.waiting";
+const EVENT_NAMES = [MESSAGE_RECEIVED, NOTICE_WAITING];
 
 const DEFAULT_TTL_MS = 7 * DAY_MS;
 const MIN_TTL_MS = HOUR_MS;
@@ -42,6 +49,25 @@ export function eventDefinitions() {
           waiting: { type: "integer", description: "How many messages wait in the inbox now." },
         },
         required: ["agent", "message_id", "from", "waiting"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: NOTICE_WAITING,
+      description:
+        "One of Portico's own notices waits for this agent: how a question asked with request_input ended (answered, " +
+        "skipped, lapsed or withdrawn). The event names the notice's ID and kind only: call check_inbox to read the notice.",
+      delivery: ["webhook"],
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      payloadSchema: {
+        type: "object",
+        properties: {
+          agent: { type: "string", description: "The subscribing agent's name on Portico." },
+          notice_id: { type: "string", description: "The notice's ID." },
+          kind: { type: "string", description: "What the notice is about, such as input_answered." },
+          waiting: { type: "integer", description: "How many messages and notices wait in the inbox now." },
+        },
+        required: ["agent", "notice_id", "kind", "waiting"],
         additionalProperties: false,
       },
     },
@@ -88,6 +114,14 @@ export interface EventInfo {
   agentName: string;
   messageId: string;
   from: string;
+  waiting: number;
+}
+
+/** What one notice.waiting delivery says. Never the notice's text. */
+export interface NoticeEventInfo {
+  agentName: string;
+  noticeId: string;
+  kind: string;
   waiting: number;
 }
 
@@ -163,37 +197,40 @@ export class EventSubscriptions {
     return true;
   }
 
-  private active(agentId: string): SubscriptionRow[] {
-    return this.db
+  /** The agent's live subscriptions: to one event when `name` is given, otherwise to any. */
+  private active(agentId: string, name?: string): SubscriptionRow[] {
+    const rows = this.db
       .query("SELECT * FROM event_subscriptions WHERE agent_id = $agentId AND refresh_before > $now ORDER BY created_at")
       .all({ agentId, now: this.now().toISOString() }) as SubscriptionRow[];
+    return name === undefined ? rows : rows.filter((row) => row.name === name);
   }
 
   private get(id: string): SubscriptionRow | null {
     return this.db.query("SELECT * FROM event_subscriptions WHERE id = $id").get({ id }) as SubscriptionRow | null;
   }
 
-  /** The agent's live subscriptions, and how the latest delivery went. */
+  /** The agent's live subscriptions to message.received, which is what wakes it for messages, and how the latest delivery went. */
   view(agentId: string): EventsView | null {
-    const rows = this.active(agentId);
+    const rows = this.active(agentId, MESSAGE_RECEIVED);
     if (rows.length === 0) return null;
     const latest = rows.filter((r) => r.last_at).sort((a, b) => (a.last_at! < b.last_at! ? 1 : -1))[0];
     return { count: rows.length, lastAt: latest?.last_at ?? null, lastStatus: latest?.last_status ?? null };
   }
 
-  has(agentId: string): boolean {
-    return this.active(agentId).length > 0;
+  /** Whether the agent has a live subscription to the event: message.received unless another is named. */
+  has(agentId: string, name: string = MESSAGE_RECEIVED): boolean {
+    return this.active(agentId, name).length > 0;
   }
 
   private checkName(name: unknown): string {
-    if (name !== MESSAGE_RECEIVED) throw new EventsError("invalid_params", `Unknown event. Portico offers ${MESSAGE_RECEIVED}.`);
+    if (typeof name !== "string" || !EVENT_NAMES.includes(name)) throw new EventsError("invalid_params", `Unknown event. Portico offers ${EVENT_NAMES.join(" and ")}.`);
     return name;
   }
 
-  /** message.received takes no arguments, so every subscription's arguments are `{}`, the same in any key order. */
+  /** Neither event takes arguments, so every subscription's arguments are `{}`, the same in any key order. */
   private checkArguments(args: unknown): string {
     if (args !== undefined && args !== null && (typeof args !== "object" || Array.isArray(args) || Object.keys(args).length > 0)) {
-      throw new EventsError("invalid_params", `${MESSAGE_RECEIVED} takes no arguments.`);
+      throw new EventsError("invalid_params", "Portico's events take no arguments.");
     }
     return "{}";
   }
@@ -348,18 +385,33 @@ export class EventSubscriptions {
     }
   }
 
-  /** Sends message.received to each of the agent's live subscriptions. */
+  /** Sends message.received to each of the agent's live subscriptions to that event. */
   deliver(agentId: string, info: EventInfo): void {
-    for (const sub of this.active(agentId)) {
-      // The message's ID makes the event's: the same for every retry, and header-safe ([A-Za-z0-9_-]).
-      const eventId = `evt_${info.messageId.replace(/[^A-Za-z0-9_-]/g, "")}`;
-      const body = JSON.stringify({
-        eventId,
-        name: MESSAGE_RECEIVED,
-        timestamp: this.now().toISOString(),
-        data: { agent: info.agentName, message_id: info.messageId, from: info.from, waiting: info.waiting },
-        cursor: null,
-      });
+    // The message's ID makes the event's: the same for every retry, and header-safe ([A-Za-z0-9_-]).
+    this.sendEvent(agentId, MESSAGE_RECEIVED, `evt_${info.messageId.replace(/[^A-Za-z0-9_-]/g, "")}`, {
+      agent: info.agentName,
+      message_id: info.messageId,
+      from: info.from,
+      waiting: info.waiting,
+    });
+  }
+
+  /**
+   * Sends notice.waiting to each of the agent's live subscriptions to that event, and to no other: a subscription to
+   * message.received gets messages only.
+   */
+  deliverNotice(agentId: string, info: NoticeEventInfo): void {
+    this.sendEvent(agentId, NOTICE_WAITING, `evt_${info.noticeId.replace(/[^A-Za-z0-9_-]/g, "")}`, {
+      agent: info.agentName,
+      notice_id: info.noticeId,
+      kind: info.kind,
+      waiting: info.waiting,
+    });
+  }
+
+  private sendEvent(agentId: string, name: string, eventId: string, data: Record<string, unknown>): void {
+    for (const sub of this.active(agentId, name)) {
+      const body = JSON.stringify({ eventId, name, timestamp: this.now().toISOString(), data, cursor: null });
       const id = sub.id;
       // 410 and 413 turn this one delivery away without retries; the subscription stays.
       postWithRetry({

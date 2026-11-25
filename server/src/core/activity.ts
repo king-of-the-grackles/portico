@@ -21,6 +21,10 @@ export const ACTIVITY_KINDS = [
   "wake_removed",
   "outbound_switched",
   "agent_revoked",
+  // A question an agent asked its own person with request_input, and how the person ended it. Never the text.
+  "input_asked",
+  "input_answered",
+  "input_skipped",
   // A Portico's record. Each carries the Portico.
   "portico_person_joined",
   "portico_person_left",

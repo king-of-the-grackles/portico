@@ -74,13 +74,41 @@ export interface UpdateDelivery {
   framed_message: string;
 }
 
-/** Portico's own notice: who came into or left a Portico this agent is in. Never from another agent. */
+/**
+ * Portico's own notice: who came into or left a Portico this agent is in, or how a question this agent asked its
+ * person ended. Never from another agent.
+ */
 export interface NoticeDelivery {
   id: string;
   at: string;
   text: string;
-  /** The notice wrapped in Portico's `<portico-notice>` frame. */
+  /** The notice in Portico's frame: `<portico-answer>` for how a question ended, `<portico-notice>` for anything else. */
   framed_message: string;
+  /** Present on the notice that says how a question asked with request_input ended. */
+  question?: { id: string; status: string; level: string | null; via: string | null };
+  /**
+   * True on a notice this session is waiting on, such as how its question ended: a stopped session starts a turn for
+   * it. Absent on every other notice, and from a Portico server that doesn't say: then the notice starts no turn.
+   */
+  wake?: boolean;
+}
+
+/** What `POST /api/agent/questions` returns: the question, the line to show the person, and what happens next. */
+export interface AskedQuestion {
+  question: {
+    id: string;
+    status: string;
+    question: string;
+    detail: string | null;
+    options: string[] | null;
+    task: string | null;
+    created_at: string;
+    expires_at: string;
+    /** The question's own page: the link to show the person as is. */
+    link: string;
+  };
+  show: string;
+  note: string;
 }
 
 /** How a sent message will arrive. */
@@ -139,6 +167,18 @@ export interface Inbox {
   /** How many messages wait for a decision by the person who manages this agent, and the sentence to pass on. */
   held_for_person?: number;
   held_note?: string;
+  /** How many of this agent's own questions wait for its person, and the sentence with each one's link. */
+  input_needed?: number;
+  input_note?: string;
+}
+
+/**
+ * Whether what waits is worth starting a turn for, or keeping a conversation going: a message, the outcome of a sent
+ * message, or a notice Portico marks as one the session waits on (the answer to its question). Portico's other
+ * notices, about who came into or left a Portico, start nothing: they ride along with the next message or check.
+ */
+export function startsTurn(inbox: Inbox): boolean {
+  return inbox.messages.length > 0 || inbox.updates.length > 0 || (inbox.notices ?? []).some((notice) => notice.wake === true);
 }
 
 /** The IDs this session delivered, for `POST /api/agent/deliveries/ack`. Updates go by their message's ID. */
@@ -253,6 +293,14 @@ export class PorticoClient {
   /** Files feedback about Portico. Values go as given: Portico checks them. */
   submitFeedback(body: { kind?: unknown; title?: unknown; details?: unknown }): Promise<{ feedback: { id: string; status: string }; note: string }> {
     return this.call("POST", "/api/agent/feedback", body);
+  }
+
+  /**
+   * Asks the person who manages this agent a question. Values go as given: Portico checks them. Portico has no call
+   * that answers one: the answer comes back as a notice.
+   */
+  requestInput(body: { question?: unknown; detail?: unknown; options?: unknown; task?: unknown; expires_in_minutes?: unknown }): Promise<AskedQuestion> {
+    return this.call("POST", "/api/agent/questions", body);
   }
 
   /** Runs one of the Portico tools (list_porticos and the rest): the arguments go as given, and Portico checks them. */

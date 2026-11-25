@@ -118,11 +118,19 @@ export async function joinThroughPage(page: Page, join: Join, opts: AllowOptions
   return body.token;
 }
 
-/** A held message's own page, /held/<id>, answered by the signed-in person with the button of that name. */
-export async function decideHeld(page: Page, messageId: string, button: "Allow once" | "Don't allow" | RegExp): Promise<void> {
+/**
+ * A held message's own page, /held/<id>, answered by the signed-in person: Allow (this message), Always allow (the
+ * tick on the page, then Allow) or Don't allow.
+ */
+export async function decideHeld(page: Page, messageId: string, choice: "Allow" | "Always allow" | "Don't allow"): Promise<void> {
   await page.goto(`/held/${messageId}`);
   await expect(page.getByRole("heading", { level: 1, name: "Allow this message?" })).toBeVisible();
-  await page.getByRole("button", { name: button }).click();
+  // One Allow button: what it sends is "this message", unless the box is ticked.
+  await expect(page.getByRole("button", { name: "Allow", exact: true })).toHaveCount(1);
+  if (choice === "Always allow") await page.getByRole("checkbox", { name: /^Always allow / }).check();
+  const sent = page.waitForRequest((req) => req.method() === "POST" && req.url().endsWith(`/api/approvals/held/${messageId}`));
+  await page.getByRole("button", { name: choice === "Don't allow" ? "Don't allow" : "Allow", exact: true }).click();
+  expect((await sent).postDataJSON(), "what the page sent for this press").toEqual({ decision: choice === "Always allow" ? "always_allow" : choice === "Allow" ? "allow_once" : "deny" });
   await expect(page.getByRole("heading", { level: 1, name: "Already decided" })).toBeVisible();
 }
 
@@ -155,10 +163,26 @@ export interface SendInput {
   attachments?: string[];
 }
 
+/** One of Portico's own notices, as the inbox hands it over. `question` is set on the one about how a question ended. */
+export interface AgentNotice {
+  id: string;
+  text: string;
+  framed_message: string;
+  question?: { id: string; status: string; level: string | null; via: string | null };
+}
+
+/** What request_input answers: the question, with the link the agent shows its person. */
+export interface AskedQuestion {
+  question: { id: string; status: string; question: string; options: string[] | null; task: string | null; expires_at: string; link: string };
+  show: string;
+  note: string;
+}
+
 export class AgentClient {
   /** Everything the inbox handed over so far: a check takes messages out of the inbox, so they are kept here. */
   private got: AgentMessage[] = [];
   private gotUpdates: { message_id: string; status: string }[] = [];
+  private gotNotices: AgentNotice[] = [];
 
   constructor(
     readonly owner: string,
@@ -193,11 +217,33 @@ export class AgentClient {
   }
 
   /** check_inbox once: what arrived since the last check. */
-  async inbox(waitSeconds = 0): Promise<{ messages: AgentMessage[]; updates: { message_id: string; status: string }[] }> {
+  async inbox(waitSeconds = 0): Promise<{ messages: AgentMessage[]; updates: { message_id: string; status: string }[]; notices: AgentNotice[]; input_needed?: number; input_note?: string }> {
     const box = await this.ok("GET", `/inbox${waitSeconds ? `?wait=${waitSeconds}` : ""}`);
     this.got.push(...box.messages);
     this.gotUpdates.push(...box.updates);
+    this.gotNotices.push(...(box.notices ?? []));
     return box;
+  }
+
+  /** request_input: asks this agent's own person a question. `{ question, show, note }`. */
+  requestInput(input: { question: string; detail?: string; options?: string[]; task?: string; expires_in_minutes?: number }): Promise<AskedQuestion> {
+    return this.ok("POST", "/questions", input);
+  }
+
+  /** Checks the inbox until Portico's notice about how a question ended has arrived. */
+  async answerTo(questionId: string, timeoutMs = 20_000): Promise<AgentNotice> {
+    const until = Date.now() + timeoutMs;
+    for (;;) {
+      const found = this.gotNotices.find((n) => n.question?.id === questionId);
+      if (found) return found;
+      if (Date.now() > until) throw new Error(`${this.name} got no notice about the question ${questionId}.`);
+      await this.inbox(3);
+    }
+  }
+
+  /** How many notices about the question the inbox has handed over so far: one, however often the inbox is checked. */
+  noticesAbout(questionId: string): number {
+    return this.gotNotices.filter((n) => n.question?.id === questionId).length;
   }
 
   /** Checks the inbox until a message with this subject has arrived. */

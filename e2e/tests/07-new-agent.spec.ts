@@ -29,10 +29,13 @@ test("a new agent nobody vouched for is held once, and revoking it stops it", as
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Needs a decision" })).toBeVisible();
   await expect(page.getByText(first).first()).toBeVisible();
-  // The card says the agent is new and when it was added, in plain words.
-  await expect(page.getByText(/New agent, added [A-Z][a-z]{2} \d{1,2}\. You haven't confirmed this agent yet\. This is the first message from /)).toBeVisible();
+  // The card says the agent is new and when it was added, in one small line; the page has the whole sentence.
+  await expect(page.getByRole("article").filter({ hasText: first })).toContainText(/New agent, added [A-Z][a-z]{2} \d{1,2} · Expires /);
   await expect(page.getByText(/joined (Portico )?lately/)).toHaveCount(0);
-  await decideHeld(page, sent.message.id, /^Always allow$/);
+  await page.goto(`/held/${sent.message.id}`);
+  await expect(page.getByText(/New agent, added [A-Z][a-z]{2} \d{1,2}\. You haven't confirmed this agent yet\./)).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: new RegExp(`^Always allow ${name}`) })).toBeVisible();
+  await decideHeld(page, sent.message.id, "Always allow");
   expect((await helper.receive(first)).from).toBe(name);
 
   // ---- "Always" vouches for the agent: the next message goes straight through ----

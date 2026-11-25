@@ -5,7 +5,8 @@ import type { Approvals } from "../core/approvals";
 import type { Files } from "../core/files";
 import type { Messages } from "../core/messages";
 import type { People } from "../core/people";
-import { neverSent, type Task, type TaskOutcome, type TaskReason, type TaskStepKind } from "../core/tasks";
+import type { AnswerLevel, AnswerVia, Question, Questions, QuestionStatus } from "../core/questions";
+import { neverSent, type Task, type TaskOutcome, type TaskReason, type Tasks, type TaskStepKind } from "../core/tasks";
 import type { Workspaces } from "../core/workspaces";
 import type {
   Agent,
@@ -122,6 +123,29 @@ export interface HeldCard extends MessageView {
   facts: { managedBy: PersonRef; heldFor: HeldFor; newSender: boolean; replyToRecipient: boolean; earlier: { decision: Decision; at: string }[] };
 }
 
+/**
+ * Something one of the signed-in person's own agents asked that person ("Input needed"), with the text. Only ever
+ * built for the person the question is for: nobody else gets one.
+ */
+export interface QuestionCard {
+  id: string;
+  agent: AgentRef;
+  /** The agent's words: shown as a quote, never as Portico speaking. */
+  question: string;
+  detail: string | null;
+  options: string[] | null;
+  status: QuestionStatus;
+  /** The task the question is about, when it is about one the person can still see. */
+  task: { id: string; subject: string } | null;
+  /** Set while the agent is new and its person hasn't confirmed it: when the agent was added. */
+  newAgent: { addedAt: string } | null;
+  createdAt: string;
+  expiresAt: string;
+  endedAt: string | null;
+  /** The person's own answer, once given: the choice pressed, and what was typed. */
+  answer: { option: string | null; text: string | null; at: string; via: AnswerVia | null; level: AnswerLevel | null } | null;
+}
+
 /** One side of a thread, with who manages the agent: the panel names managers when two people's agents talk. */
 export interface ThreadAgent extends AgentRef {
   owner: PersonRef;
@@ -189,7 +213,15 @@ export interface TaskView extends Place {
   messageCount: number;
   /** A session's folder on either side, for the Project filter. */
   project: string | null;
-  steps: { kind: TaskStepKind; at: string; by: PersonRef | null; decision: Decision | null }[];
+  /** `agent` is set on the steps about a question: the agent that asked its own person. */
+  steps: { kind: TaskStepKind; at: string; by: PersonRef | null; decision: Decision | null; agent?: AgentRef | null }[];
+  /**
+   * One of the two agents waits for its own person's answer: who asked whom. Both people of the task see this, and
+   * never the question.
+   */
+  waitingOn: { person: PersonRef; agent: AgentRef; askedAt: string } | null;
+  /** The questions about this task that were asked of the signed-in person, with the text. Nobody else's. */
+  questions: QuestionCard[];
 }
 
 /** One run of a session agent: a terminal or a Codex conversation. */
@@ -257,6 +289,8 @@ export interface ViewDeps {
   messages: Messages;
   approvals: Approvals;
   files: Files;
+  questions: Questions;
+  tasks: Tasks;
 }
 
 /** The longest text a reply quote or a thread's last line carries; the page clips further. */
@@ -269,7 +303,7 @@ function clipText(text: string, max = QUOTE_MAX): string {
 
 /** View builders for one signed-in person. */
 export function personViews(deps: ViewDeps, me: Person) {
-  const { agents, people, messages, approvals, files, workspaces } = deps;
+  const { agents, people, messages, approvals, files, workspaces, questions } = deps;
   const titles = new Map<string, string>();
   /** Where a conversation between the two runs, and whether anything new can still go there. */
   const place = (workspaceId: string, aId: string, bId: string): Place => {
@@ -446,6 +480,30 @@ export function personViews(deps: ViewDeps, me: Person) {
     return a?.type === "session" ? a.folder : null;
   };
 
+  /**
+   * A question for the signed-in person. `subject` is the task's, when the caller has the task at hand; otherwise the
+   * task is looked up among the conversations the person can read.
+   */
+  const question = (q: Question, subject?: string): QuestionCard => {
+    const asker = agents.get(q.agentId);
+    const taskSubject = q.taskId === null ? null : (subject ?? deps.tasks.get({ person: me.id }, q.taskId, agents.ownedBy(me.id).map((a) => a.id))?.task.subject ?? null);
+    const choice = q.answerOption !== null ? (q.options?.[q.answerOption] ?? null) : null;
+    return {
+      id: q.id,
+      agent: agentRef(q.agentId),
+      question: q.question,
+      detail: q.detail,
+      options: q.options,
+      status: q.status,
+      task: q.taskId !== null && taskSubject !== null ? { id: q.taskId, subject: taskSubject } : null,
+      newAgent: asker && asker.unproven && asker.revokedAt === null ? { addedAt: asker.createdAt } : null,
+      createdAt: q.createdAt,
+      expiresAt: q.expiresAt,
+      endedAt: q.endedAt,
+      answer: q.status === "answered" && q.answeredAt ? { option: choice, text: q.answerText, at: q.answeredAt, via: q.answeredVia, level: q.answerLevel } : null,
+    };
+  };
+
   const task = (t: Task): TaskView => ({
     id: t.id,
     ...place(t.workspaceId, t.fromId, t.toId),
@@ -469,7 +527,11 @@ export function personViews(deps: ViewDeps, me: Person) {
       at: step.at,
       by: step.personId ? personRef(step.personId) : null,
       decision: step.decision,
+      ...(step.agentId ? { agent: agentRef(step.agentId) } : {}),
     })),
+    waitingOn: t.waitingOn ? { person: personRef(t.waitingOn.personId), agent: agentRef(t.waitingOn.agentId), askedAt: t.waitingOn.askedAt } : null,
+    // The text of a question is its own person's alone: the other person of the task sees the steps and no more.
+    questions: t.steps.some((step) => step.kind === "input_asked" && step.personId === me.id) ? questions.ofTaskFor(me.id, t.id).map((q) => question(q, t.subject)) : [],
   });
 
   const run = (r: Run): RunView => ({
@@ -492,7 +554,7 @@ export function personViews(deps: ViewDeps, me: Person) {
     detail: e.detail,
   });
 
-  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef, task, run, activity, place, notYetSent };
+  return { agent, message, held, thread, threadData, person, allowEntry, agentRef, personRef, task, question, run, activity, place, notYetSent };
 }
 
 export type PersonViews = ReturnType<typeof personViews>;

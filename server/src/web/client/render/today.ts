@@ -1,6 +1,6 @@
 // Today: what needs a decision, what's in progress, and what got done today. Pure: state in, HTML out.
 import { esc, ICON, longDate, PICK_ORDER, logo, plural, when } from "./common.js";
-import { renderConsentCard, renderHeldCard, renderTaskRow, renderWaitingCard, taskHead, waitingAgents } from "./tasks.js";
+import { renderConsentCard, renderHeldCard, renderQuestionCard, renderTaskRow, renderWaitingCard, taskHead, waitingAgents } from "./tasks.js";
 import type { HomeState, TaskView } from "./types.js";
 
 function joinNames(list: string[]): string {
@@ -31,7 +31,10 @@ export function renderToday(s: HomeState): string {
   const today = s.today;
   const held = s.held;
   const waiting = waitingAgents(s);
-  const decide = held.length + s.consents.length + waiting.length;
+  const questions = s.questions;
+  // The chip counts everything that waits for the person: decisions, and the input agents need.
+  const decide = held.length + s.consents.length + waiting.length + questions.length;
+  const decisions = decide - questions.length;
   const inProgress = today?.inProgress ?? [];
   const done = today?.done ?? [];
   const failed = today?.failed ?? [];
@@ -54,11 +57,18 @@ export function renderToday(s: HomeState): string {
     <section id="decide" aria-labelledby="h-decide" class="block">
       <h2 id="h-decide" class="h-section">Needs a decision</h2>
       ${
-        decide === 0
+        decisions === 0
           ? `<p class="empty">Nothing needs a decision.</p>`
           : `<div class="dcards">${s.consents.map((r) => renderConsentCard(s, r)).join("")}${held.map((m) => renderHeldCard(s, m)).join("")}${waiting.map((a) => renderWaitingCard(s, a)).join("")}</div>`
       }
     </section>
+    ${when(
+      questions.length > 0,
+      () => `<section id="input" aria-labelledby="h-input" class="block">
+      <h2 id="h-input" class="h-section">Input needed</h2>
+      <div class="dcards">${questions.map((q) => renderQuestionCard(s, q)).join("")}</div>
+    </section>`,
+    )}
     <section id="progress" aria-labelledby="h-progress" class="block">
       <h2 id="h-progress" class="h-section">In progress</h2>
       ${taskList(s, inProgress, "Nothing in progress.")}

@@ -153,6 +153,8 @@ export class Computers {
     const ownerId = this.get(id)?.ownerId;
     const sessions = (this.db.query("SELECT id FROM agents WHERE computer_id = $id").all({ id }) as { id: string }[]).map((row) => row.id);
     const clearContent = this.content.gather(sessions);
+    // While the sessions' rows are still there: what they asked that still waits is withdrawn in this same step.
+    if (ownerId !== undefined && sessions.length > 0) this.onRemoving?.(sessions);
     const removed = this.db.query("DELETE FROM computers WHERE id = $id").run({ id }).changes;
     if (removed === 0) return sessions;
     clearContent();
@@ -160,6 +162,9 @@ export class Computers {
     this.changes.about({ people: [ownerId] }, "computers", "agents", "threads", "approvals");
     return sessions;
   }
+
+  /** Set by portico.ts: a computer is about to be removed, with the sessions that go with it, while their rows are still there. */
+  onRemoving: ((sessionIds: string[]) => void) | null = null;
 
   /** The folder's switch: true on, false off, null when never set (on). */
   folderJoins(computerId: string, folderId: string): boolean | null {

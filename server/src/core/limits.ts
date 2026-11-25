@@ -91,6 +91,22 @@ export const LIMITS = {
   feedbackPerPersonDay: 20,
   /** The most feedback items one review read answers with. */
   feedbackPageMax: 200,
+  /** A question an agent asks its own person with request_input: one line, and optional background. */
+  maxQuestionChars: 200,
+  maxQuestionDetailChars: 1000,
+  /** The choices a question can offer: none, or from two up to this many, each this long at most. */
+  maxQuestionOptions: 4,
+  maxQuestionOptionChars: 40,
+  /** What the person types as an answer, or as a note beside a choice. */
+  maxAnswerChars: 1000,
+  /** A question waits this long for its person unless the agent asks for less, and never less than the minimum. */
+  questionExpiryHours: 72,
+  questionMinExpiryMinutes: 5,
+  /** Questions that can wait at once: from one agent, and for one person from every agent together. */
+  questionsWaitingPerAgent: 3,
+  questionsWaitingPerPerson: 20,
+  /** Questions one agent can ask in an hour, answered or not. */
+  questionsPerAgentHour: 10,
 } as const;
 
 export const MINUTE_MS = 60_000;

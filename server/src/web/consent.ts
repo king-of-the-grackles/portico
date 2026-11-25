@@ -1,8 +1,9 @@
 import { type Context, Hono } from "hono";
 import { html } from "hono/html";
 import type { PersonEnv } from "../api/context";
+import { questionCard } from "../api/questions";
 import { personViews } from "../api/views";
-import { consentWords, quote } from "../core/consent-words";
+import { consentWords, newAgentWords, quote } from "../core/consent-words";
 import { type ConsentView, isJoin } from "../core/consents";
 import type { Core } from "../core/core";
 import { defang, fileSize } from "../core/framing";
@@ -41,7 +42,7 @@ function signedInAs(me: Person, back: string): Html {
 }
 
 /**
- * The consent page, /c/<id>, and a held message's page, /held/<id>: where a person answers what an agent asked, or
+ * The consent page, /c/<id>, a held message's page, /held/<id>, and a question's page, /q/<id>: where a person answers what an agent asked, or
  * decides a message held for one of the person's agents. One page does everything a person needs for it: signing in
  * (the browser comes back here), a handle the first time, and Allow or Don't allow. What an agent of the person's asked
  * is done at Allow. A join isn't: after Allow the page shows the person a code, and the computer or agent that asked
@@ -308,7 +309,7 @@ ${
     : html`<p class="quiet">Expires ${expiresIn(request.expiresAt, core.now())}</p>`
 }
 <p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions"><button type="submit" name="decision" value="deny" class="btn btn-secondary" formnovalidate>Don't allow</button><button type="submit" name="decision" value="approve" class="btn btn-primary">${words.allow}</button></div>
+<div class="actions actions-pair"><button type="submit" name="decision" value="deny" class="btn btn-plain" formnovalidate>Don't allow</button><button type="submit" name="decision" value="approve" class="btn btn-primary">${words.allow}</button></div>
 </form>
 ${joins ? "" : signedInAs(me, back)}`,
     });
@@ -399,29 +400,125 @@ ${sheet}</div>
           : firstContact
             ? `First message from an agent of ${senderOwner}.`
             : `${to} only takes messages from senders you allowed.`;
-    const alwaysName = computer ? computer.name : firstContact ? (facts?.managedBy.name ?? "this person") : newSender ? "" : "this sender";
-    const alwaysHelp = computer
-      ? `Always allow covers every session on ${computer.name}, now and later. Undo it in Settings.`
-      : firstContact
-        ? `Always allow covers every agent of ${senderOwner}.`
-        : "";
-    const always = outbound && !facts?.newSender ? "" : html`<button type="submit" name="decision" value="always_allow" class="btn btn-secondary">Always allow${alwaysName ? html` <span class="btn-name">${alwaysName}</span>` : ""}</button>`;
+    // Always allow is a tick beside the two answers, with room to say what it covers. There is one Allow button, and
+    // it says allow_once: the page's form script sends always_allow in its place only while the box is ticked
+    // (`data-when`, in forms.ts). So without the tick, or with anything on the page not working, Allow can only be
+    // the narrower answer. A message held on its way out from an agent that isn't new is allowed one at a time, so
+    // it has no tick.
+    const always: { label: string; covers: string } | null =
+      outbound && !facts?.newSender
+        ? null
+        : computer
+          ? { label: `Always allow sessions on ${computer.name}`, covers: `Every session on ${computer.name}, now and later. Undo it in Settings.` }
+          : newSender
+            ? { label: `Always allow ${mine}`, covers: `Confirms ${mine} as yours: nothing more from it waits for being new.` }
+            : firstContact
+              ? { label: `Always allow messages from ${facts?.managedBy.name ?? "this person"}'s agents`, covers: `Every agent of ${senderOwner}, with no question next time.` }
+              : { label: `Always allow ${mine} to message ${to}`, covers: "No question the next time." };
     return narrowPage(c, {
       title: "Allow this message?",
       scripts: ["forms.js"],
       styles: ["onboarding.css"],
-      main: html`<form class="ask one-box" method="dialog" data-api="POST /api/approvals/held/${message.id}" data-next="${back}" novalidate>
+      main: html`<form class="ask one-box held-form" method="dialog" data-api="POST /api/approvals/held/${message.id}" data-next="${back}" novalidate>
 <h1>Allow this message?</h1>
 <p>${why}</p>
-${sheet}
-<p class="notice notice-error" data-error role="alert" hidden></p>
-<div class="actions actions-fit"><button type="submit" name="decision" value="deny" class="btn btn-secondary">Don't allow</button>${always}<button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow once</button></div>
-${alwaysHelp ? html`<p class="quiet">${alwaysHelp}</p>` : ""}
 ${
   newSender && sender
-    ? html`<p class="quiet">Not yours? <a href="/a/${sender.id}">Revoke the agent</a>${sender.computerId ? html` or <a href="/settings#computers">remove the computer</a>` : ""}.</p>`
+    ? html`<p class="notice">${newAgentWords(sender, core.now())} Not yours? <a href="/a/${sender.id}">Revoke the agent</a>${sender.computerId ? html` or <a href="/settings#computers">remove the computer</a>` : ""}.</p>`
     : ""
 }
+${sheet}
+${
+  always
+    ? html`<label class="allow-line always-tick"><input type="checkbox" name="always" value="always_allow" data-sets="decision" data-when="allow_once"><span><strong>${always.label}</strong><span class="help">${always.covers}</span></span></label>`
+    : ""
+}
+<p class="notice notice-error" data-error role="alert" hidden></p>
+<div class="actions actions-pair"><button type="submit" name="decision" value="deny" class="btn btn-plain">Don't allow</button><button type="submit" name="decision" value="allow_once" class="btn btn-primary">Allow</button></div>
+</form>`,
+    });
+  });
+
+  // ---- input needed: a question one of the person's own agents asked the person ----
+
+  /**
+   * The question's own page, where the link an agent shows its person leads. Only the person the question is for
+   * sees it; anyone else gets the same page as for an address that names nothing. The form posts to the person API,
+   * which takes the answer from this signed-in browser alone.
+   */
+  route.get("/q/:id", (c) => {
+    const id = c.req.param("id");
+    const back = `/q/${encodeURIComponent(id)}`;
+    const me = c.get("person");
+    if (!me) return signInFirst(c, back);
+    if (me.status !== "active") return waitingForOwner(c);
+    const q = questionCard(core, me, id);
+    if (!q) return gone(c);
+    c.header("Cache-Control", "no-store");
+    const name = q.agent.label;
+    // The agent's words in one block, set apart from Portico's: the question, and under it what the agent says about it.
+    const sheet = html`<blockquote class="quoted q-sheet"><p class="q-asked">${defang(q.question)}</p>${q.detail ? html`<p>${defang(q.detail)}</p>` : ""}</blockquote>`;
+    // The heading, as the card on Today has it: who asks, and under it the task the question is about. The task's
+    // subject is an agent's words: shown as a quote, like every name and subject on these pages.
+    const about = q.task ? html`<p class="asks">${quote(q.task.subject)}</p>` : "";
+    const warning = q.newAgent
+      ? html`<p class="notice">${newAgentWords({ createdAt: q.newAgent.addedAt }, core.now())} Not yours? <a href="/a/${q.agent.id}">Revoke the agent</a>.</p>`
+      : "";
+    if (q.status !== "waiting") {
+      const title = q.status === "answered" ? "Answer sent" : q.status === "skipped" ? "Skipped" : q.status === "expired" ? "This question lapsed" : "This question was withdrawn";
+      const how =
+        q.status === "answered" && q.answer
+          ? html`Your answer went to ${name} at <time datetime="${q.answer.at}" data-local-time>${utcClock(q.answer.at, core.now())}</time>. An answer is final.`
+          : q.status === "skipped"
+            ? html`${name} was told there is no answer.`
+            : q.status === "expired"
+              ? html`Nobody answered in time. ${name} was told there is no answer.`
+              : html`${name} was revoked or removed before an answer.`;
+      return narrowPage(c, {
+        title,
+        status: q.status === "expired" ? 410 : 200,
+        scripts: ["local-time.js"],
+        styles: ["onboarding.css"],
+        main: html`<div class="ask one-box"><h1>${title}</h1><p>${how}</p>
+${about}
+${sheet}
+${
+  q.answer
+    ? html`<p class="quiet">Your answer</p>
+${q.answer.option !== null ? html`<blockquote class="quoted">${q.answer.option}</blockquote>` : ""}
+${q.answer.text !== null ? html`<blockquote class="quoted">${q.answer.text}</blockquote>` : ""}`
+    : ""
+}</div>
+<p class="help"><a href="/">Go to Portico</a></p>`,
+      });
+    }
+    const options = q.options ?? [];
+    // The page carries what the card leaves out, and still little: who asks, the question, the answer, one line of
+    // grey text with what a person has to know before answering (an answer is final, and when the question lapses),
+    // one button, and Skip as a small link under it. With choices, "Something else" comes last and shows the text
+    // box; the stylesheet does that, and keeps the box in view once something is typed in it, so nothing is sent unseen.
+    const box = `Your answer to ${name}`;
+    return narrowPage(c, {
+      title: `${name} asks you`,
+      scripts: ["forms.js", "local-time.js"],
+      styles: ["onboarding.css"],
+      main: html`<form method="dialog" class="ask one-box${options.length > 0 ? " q-form" : ""}" data-api="POST /api/questions/${q.id}" data-next="${back}" novalidate>
+<h1>${name} asks you</h1>
+${about}
+${warning}
+${sheet}
+${
+  options.length > 0
+    ? html`<fieldset class="ticks-field"><legend class="sr">Your answer</legend>
+${options.map((option, i) => html`<label class="tick-line"><input type="radio" name="option" value="${i}"> ${option}</label>`)}
+<label class="tick-line"><input type="radio" name="option" value=""> Something else</label></fieldset>`
+    : ""
+}
+<textarea id="q-text" name="text" class="field q-words" rows="3" maxlength="${LIMITS.maxAnswerChars}" placeholder="${options.length > 0 ? " " : "Your answer"}" aria-label="${box}"></textarea>
+<p class="quiet">An answer is final. The question lapses <time datetime="${q.expiresAt}" data-local-time>${utcClock(q.expiresAt, core.now())}</time>.</p>
+<p class="notice notice-error" data-error role="alert" hidden></p>
+<div class="actions actions-one"><button type="submit" name="decision" value="answer" class="btn btn-primary">Send answer</button></div>
+<button type="submit" name="decision" value="skip" class="btn btn-quiet q-skip" formnovalidate>Skip this question</button>
 </form>`,
     });
   });

@@ -5,9 +5,9 @@ import { waitingAgents } from "./tasks.js";
 import type { AgentView, HomeState, WorkspaceView } from "./types.js";
 import { initials } from "./workspace.js";
 
-/** What needs a decision: held messages, what agents asked, and coding agents with a question. */
+/** What needs a decision: held messages, what agents asked, coding agents with a question, and the input agents need. */
 export function decisionCount(s: HomeState): number {
-  return s.held.length + s.consents.length + waitingAgents(s).length;
+  return s.held.length + s.consents.length + waitingAgents(s).length + s.questions.length;
 }
 
 /** How many agents an open Portico lists in the navigation before "Show all". */

@@ -5,12 +5,14 @@ import { type Task, TASK_OUTCOMES, type TaskOutcome } from "../core/tasks";
 import type { Person } from "../core/types";
 import { type PersonEnv, currentPerson } from "./context";
 import { type ConsentCard, consentCards } from "./consents";
+import { questionCards } from "./questions";
 import {
   type ActivityView,
   type AgentView,
   agentsInOrder,
   type HeldCard,
   personViews,
+  type QuestionCard,
   type TaskView,
 } from "./views";
 
@@ -46,7 +48,8 @@ function projects(core: Core, visible: string[] | null): string[] {
 export interface TodayData {
   since: string;
   counts: { decide: number; inProgress: number; done: number; failed: number };
-  decisions: { held: HeldCard[]; consents: ConsentCard[]; waiting: AgentView[] };
+  /** `questions` is "Input needed": what the person's own agents asked the person. */
+  decisions: { held: HeldCard[]; consents: ConsentCard[]; waiting: AgentView[]; questions: QuestionCard[] };
   inProgress: TaskView[];
   done: TaskView[];
   failed: TaskView[];
@@ -65,6 +68,7 @@ export function todayData(core: Core, me: Person, since: string): TodayData {
   const tasks = core.tasks.all({ person: me.id }, { visible: visibleAgents(core, me) });
   const held = core.approvals.heldFor(me.id).map(views.held);
   const consents = consentCards(core, me);
+  const questions = questionCards(core, me);
   const waiting = agentsInOrder(core.agents, me)
     .filter((a) => a.ownerId === me.id && core.agents.entry(a).status === "waiting")
     .map(views.agent);
@@ -74,8 +78,8 @@ export function todayData(core: Core, me: Person, since: string): TodayData {
   const failed = ended("failed");
   return {
     since,
-    counts: { decide: held.length + consents.length + waiting.length, inProgress: inProgress.length, done: done.length, failed: failed.length },
-    decisions: { held, consents, waiting },
+    counts: { decide: held.length + consents.length + waiting.length + questions.length, inProgress: inProgress.length, done: done.length, failed: failed.length },
+    decisions: { held, consents, waiting, questions },
     inProgress: inProgress.slice(0, 20).map(views.task),
     done: done.slice(0, 20).map(views.task),
     failed: failed.slice(0, 20).map(views.task),

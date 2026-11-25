@@ -27,14 +27,22 @@ test("first contact between two people is held: once per message, or never again
   await page.goto(`/held/${one.message.id}`);
   await expect(page.getByText("First message from an agent of")).toBeVisible();
   await expect(page.getByText("May my person's agents write to yours?")).toBeVisible();
-  await decideHeld(page, one.message.id, "Allow once");
+  // This message only is Allow; always for this person is the tick, which says whom it covers.
+  await expect(page.getByRole("checkbox", { name: `Always allow messages from ${bob.name}'s agents` , exact: false })).not.toBeChecked();
+  await decideHeld(page, one.message.id, "Allow");
   await helper.receive(first);
 
   // ---- so the next one is asked about again; this time, always for this person ----
   const second = unique("Second contact");
   const two = await scout.send({ to, subject: second, text: "Asking once more." });
   expect(two.delivery).toBe("held");
-  await decideHeld(page, two.message.id, /^Always allow /);
+  // Ticked and then Don't allow is still only Don't allow: the tick widens Allow and nothing else.
+  const three = await scout.send({ to, subject: unique("Third contact"), text: "And once more." });
+  expect(three.delivery).toBe("held");
+  await page.goto(`/held/${three.message.id}`);
+  await page.getByRole("checkbox", { name: /^Always allow / }).check();
+  await decideHeld(page, three.message.id, "Don't allow");
+  await decideHeld(page, two.message.id, "Always allow");
   await helper.receive(second);
 
   // ---- and from then on Bob's agents get through ----

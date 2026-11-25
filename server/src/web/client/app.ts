@@ -26,6 +26,7 @@ import type {
   PasskeyView,
   PersonRow,
   PersonView,
+  QuestionCard,
   Route,
   SettingsData,
   SettingsState,
@@ -438,8 +439,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
   // -- fetching: each loader drops its answer if the page moved on meanwhile --
   const loadAgents = async () => page.set({ agents: (await api<{ agents: AgentView[] }>("GET", "/api/agents")).agents });
   const loadApprovals = async () => {
-    const r = await api<{ held: HeldCard[]; consents?: ConsentCard[] }>("GET", "/api/approvals");
-    page.set({ held: r.held, consents: r.consents ?? [] });
+    const r = await api<{ held: HeldCard[]; consents?: ConsentCard[]; questions?: QuestionCard[] }>("GET", "/api/approvals");
+    page.set({ held: r.held, consents: r.consents ?? [], questions: r.questions ?? [] });
   };
   const loadWorkspaces = async () => {
     page.set({ workspaces: (await api<{ workspaces: WorkspaceView[] }>("GET", "/api/porticos")).workspaces });
@@ -644,13 +645,35 @@ function startHome(root: HTMLElement, data: HomeData): void {
       page.set({ held: s().held.filter((m) => m.id !== id) });
       note(
         decision === "allow_once"
-          ? `Allowed once. Sent to ${card.to.label}.`
+          ? `Allowed. Sent to ${card.to.label}.`
           : decision === "always_allow"
             ? `Sent. ${card.from.label} is always allowed now.`
             : `Not allowed. ${card.from.label} was told.`,
         true,
       );
       refresh(["approvals", "threads", "agents"]);
+    } catch (err) {
+      fail(err);
+      refresh(["approvals"]);
+    } finally {
+      page.set({ busy: null });
+    }
+  };
+
+  /**
+   * One press on a choice: the person's answer to a question one of the person's own agents asked. The call is the
+   * person API's, with this browser's sign-in: nothing else can answer. An answer is final, so the card goes once it
+   * is sent. An answer in words, and Skip, are on the question's own page.
+   */
+  const answerQuestion = async (id: string, option: number) => {
+    const card = s().questions.find((q) => q.id === id);
+    if (!card || s().busy || !Number.isInteger(option)) return;
+    page.set({ busy: `question:${id}` });
+    try {
+      await api("POST", `/api/questions/${encodeURIComponent(id)}`, { decision: "answer", option });
+      page.set({ questions: s().questions.filter((q) => q.id !== id) });
+      note(`Answer sent to ${card.agent.label}.`, true);
+      refresh(["approvals", "activity"]);
     } catch (err) {
       fail(err);
       refresh(["approvals"]);
@@ -1102,6 +1125,8 @@ function startHome(root: HTMLElement, data: HomeData): void {
           return page.set({ settingsOpen: !s().settingsOpen, confirmRemove: false, confirmRevoke: false });
         case "decide":
           return void decide(id, el.dataset.decision as "allow_once" | "always_allow" | "deny");
+        case "q-answer":
+          return void answerQuestion(id, Number(el.dataset.option));
         case "edit-start": {
           const agent = pageAgent();
           if (agent) page.set({ edit: { name: agent.name, description: agent.description, error: "" }, saved: false, settingsOpen: true });

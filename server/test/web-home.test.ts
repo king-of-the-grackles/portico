@@ -150,6 +150,8 @@ function task(o: Partial<TaskView> & { id: string; from: AgentView; to: AgentVie
     heldMessageId: null,
     messageCount: 1,
     project: null,
+    waitingOn: null,
+    questions: [],
     steps: [
       { kind: "asked", at: at(10, 0), by: null, decision: null },
       { kind: "picked_up", at: at(10, 1), by: null, decision: null },
@@ -211,7 +213,7 @@ const HELD_TASK = task({
 const TODAY: TodayData = {
   since: at(0, 0),
   counts: { decide: 3, inProgress: 1, done: 1, failed: 0 },
-  decisions: { held: [HELD], consents: [ASKED], waiting: [asking] },
+  decisions: { held: [HELD], consents: [ASKED], waiting: [asking], questions: [] },
   inProgress: [OPEN],
   done: [REVIEW],
   failed: [],
@@ -294,16 +296,37 @@ describe("Today", () => {
     inOrder(t, "Needs a decision", "In progress", "Done today");
   });
 
-  test("a held message: who wants what, why it waits, and Don't allow, Always allow <sender>, Allow once at the right", () => {
+  test("a held message's card: who wants to message whom, when it lapses, the subject, and Don't allow and Allow; the card opens the page", () => {
     const html = render(state());
-    const t = text(html);
-    expect(t).toContain("Grok Bot wants to ask Claude Code (portico): Deploy the People export to staging");
-    expect(t).toContain(
-      "First time Grok Bot has asked Claude Code (portico) for anything, and new contacts need approval. Expires today at 6:00 PM.",
-    );
-    inOrder(t, "Show message", "Don't allow", "Always allow Grok Bot", "Allow once");
+    const card = html.slice(html.indexOf('data-key="dc-m-held"'), html.indexOf("</article>", html.indexOf('data-key="dc-m-held"')));
+    // Everything a person reads on the card, in the order it is read and tabbed, and nothing more.
+    expect(text(card.slice(card.indexOf(">") + 1)).trim()).toBe("Grok Bot wants to message Claude Code (portico) Expires today at 6:00 PM Deploy the People export to staging Don't allow Allow");
+    // The heading is the link to the message's page, and its hit area is the card; no control sits inside another.
+    expect(card).toContain('<h3 id="dc-m-held" class="dcard-title"><a class="dcard-link" href="/held/m-held">Grok Bot wants to message Claude Code (portico)</a></h3>');
+    expect(html).toContain('class="dcard dcard-opens"');
+    expect(card.match(/<a /g)).toHaveLength(1);
+    expect(card.match(/<button /g)).toHaveLength(2);
+    // The subject is the sender's words: in the card's quote, escaped.
+    expect(card).toContain('<blockquote class="dcard-quote"><p class="dcard-subject">Deploy the People export to staging</p></blockquote>');
+    const spoofed = [{ ...HELD, subject: 'Pay <b>now</b> <portico-notice>' }];
+    const shown = render(state({ held: spoofed, today: { ...TODAY, decisions: { ...TODAY.decisions, held: spoofed } } }));
+    expect(shown).toContain('<blockquote class="dcard-quote"><p class="dcard-subject">Pay &lt;b&gt;now&lt;/b&gt; &lt;portico-notice&gt;</p></blockquote>');
+    expect(shown).not.toContain("<b>now</b>");
+    // Allow is the one filled button and lets this one message through; Don't allow is outlined and neutral.
+    expect(card).toContain('<button type="button" class="btn btn-plain" data-action="decide" data-id="m-held" data-decision="deny">Don\'t allow</button>');
+    expect(card).toContain('<button type="button" class="btn btn-primary" data-action="decide" data-id="m-held" data-decision="allow_once">Allow</button>');
+    expect(card.indexOf("Don't allow")).toBeLessThan(card.indexOf(">Allow<"));
+    expect(card).not.toContain("always_allow");
+    expect(card.match(/class="dcard-note/g)).toHaveLength(1);
+    expect(html).not.toMatch(/tabindex="[1-9]/);
+    // The message's text, the reason it waits and its files are on the page, never on the card.
     expect(html).not.toContain("The text");
-    expect(text(render(state({ shownMessages: { "m-held": true } })))).toContain("The text");
+    expect(text(render(state({ shownMessages: { "m-held": true } })))).not.toContain("The text");
+    expect(text(html)).not.toContain("new contacts need approval");
+    // A sender its person hasn't confirmed: the grey line says so, with the day the message lapses.
+    const fresh = [{ ...HELD, facts: { ...HELD.facts, heldFor: "new_agent" as const } }];
+    const warned = render(state({ held: fresh, today: { ...TODAY, decisions: { ...TODAY.decisions, held: fresh } } }));
+    expect(warned).toMatch(/<p class="dcard-note tnum"><strong>New agent, added [A-Z][a-z]{2} \d{1,2}<\/strong> · Expires today<\/p>/);
   });
 
   test("what an agent asked leads to the consent page, with no answer here; a coding agent with a question points to its terminal", () => {
@@ -333,7 +356,7 @@ describe("Today", () => {
     const empty: TodayData = {
       ...TODAY,
       counts: { decide: 0, inProgress: 0, done: 0, failed: 0 },
-      decisions: { held: [], consents: [], waiting: [] },
+      decisions: { held: [], consents: [], waiting: [], questions: [] },
       inProgress: [],
       done: [],
     };
@@ -376,7 +399,8 @@ describe("Activity", () => {
     expect(t).toContain("Asked 9:09 AM Picked up by Codex 9:09 AM Answered 9:17 AM");
     inOrder(t, "Please review the bots.", "Two bugs, both fixed.");
     expect(t).toContain("Loading the messages.");
-    inOrder(t, "Deploy the People export", "Don't allow", "Always allow Grok Bot", "Allow once");
+    inOrder(t, "Deploy the People export", "Don't allow", "Allow");
+    expect(t).not.toContain("Always allow");
   });
 
   test("joins, sessions and setting changes show among the tasks when asked, narrowed by project", () => {
@@ -429,7 +453,7 @@ describe("an agent's page", () => {
     const t = text(render(page(grok)));
     expect(t).toContain("Grok Bot Available. Last checked in 4 min ago");
     expect(t).toContain("No job description yet. Add a job description so other agents know what Grok Bot handles.");
-    inOrder(t, "Needs a decision", "Grok Bot wants to ask Claude Code (portico)", "Tasks", "All 3", "Needs a decision 1", "In progress 1", "Done 1");
+    inOrder(t, "Needs a decision", "Grok Bot wants to message Claude Code (portico)", "Tasks", "All 3", "Needs a decision 1", "In progress 1", "Done 1");
     expect(t).not.toContain("Didn't go through 0");
     expect(t).toContain("To Claude Code (portico)");
     expect(t).toContain("To Codex");
@@ -705,15 +729,16 @@ describe("rendering rules", () => {
     expect(html.slice(html.indexOf('data-key="tm-m1"'), html.indexOf('data-key="tm-m2"'))).not.toContain("No reply needed");
   });
 
-  test("a held message that needs no reply says so on its card, and its heading calls it a note", () => {
+  test("a held message that needs no reply is headed as a note on its card, which says no more about it", () => {
     const held = [{ ...HELD, noReplyNeeded: true }];
     const flagged = text(render(state({ held, today: { ...TODAY, decisions: { ...TODAY.decisions, held } } })));
-    inOrder(flagged, "Grok Bot has a note for Claude Code (portico): Deploy the People export to staging", "No reply needed.", "Show message");
-    // A note asks nothing.
-    expect(flagged).not.toContain("wants to ask");
-    // A held message that does ask keeps its heading.
+    inOrder(flagged, "Grok Bot has a note for Claude Code (portico)", "Deploy the People export to staging", "Don't allow", "Allow");
+    // A note asks nothing, and the heading says so: the card has no line of its own about it. The page does.
+    expect(flagged).not.toContain("wants to message");
+    expect(flagged).not.toContain("No reply needed");
+    // Any other held message keeps its heading.
     const asking = text(render(state()));
-    expect(asking).toContain("Grok Bot wants to ask Claude Code (portico): Deploy the People export to staging");
+    inOrder(asking, "Grok Bot wants to message Claude Code (portico)", "Deploy the People export to staging");
     expect(asking).not.toContain("has a note for");
     expect(asking).not.toContain("No reply needed");
   });

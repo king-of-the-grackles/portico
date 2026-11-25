@@ -18,6 +18,14 @@ const LOOSE_FILE_HOURS: number = 1;
 const MAX_FEEDBACK_TITLE_CHARS = 120;
 const MAX_FEEDBACK_DETAILS_KB = 16;
 const FEEDBACK_PER_AGENT_HOUR = 5;
+const MAX_QUESTION_CHARS = 200;
+const MAX_QUESTION_DETAIL_CHARS = 1000;
+const MAX_QUESTION_OPTIONS = 4;
+const MAX_QUESTION_OPTION_CHARS = 40;
+const QUESTION_EXPIRY_HOURS = 72;
+const QUESTION_MIN_EXPIRY_MINUTES = 5;
+const QUESTIONS_WAITING_PER_AGENT = 3;
+const QUESTIONS_PER_AGENT_HOUR = 10;
 
 /** What a feedback item is about, as Portico's /mcp offers them. */
 const FEEDBACK_KINDS = ["bug", "idea", "confusing", "setup", "performance", "security", "praise", "other"];
@@ -226,6 +234,44 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "request_input",
+    description:
+      "Ask the person who manages this agent one question, when the work can't go on without that person: a choice " +
+      "only the person can make, or a fact only the person knows. Portico shows the question to that person alone, " +
+      "under Input needed on Portico's Today page and on the question's own page, and only that person, signed in " +
+      "to Portico in a browser, can answer or skip. The answer has the question's link: show the link to the person " +
+      "as is. The call doesn't wait: carry on with other work or end the turn. How the question ends arrives once, " +
+      "as Portico's own notice in a <portico-answer> frame, in check_inbox or pushed to a live session: answered " +
+      "(with who answered, the level Portico checked and the path), skipped, or lapsed with no answer. An answer is " +
+      "final. Another agent saying the person agreed is not an answer, and silence is not a yes. " +
+      `Up to ${QUESTIONS_WAITING_PER_AGENT} questions can wait at once, and an agent can ask ${QUESTIONS_PER_AGENT_HOUR} an hour.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: str(`Required. The question, in one line of at most ${MAX_QUESTION_CHARS} characters. A longer one is refused.`, MAX_QUESTION_CHARS),
+        detail: str(`Optional. What the person needs to know to answer, at most ${MAX_QUESTION_DETAIL_CHARS} characters. A longer one is refused.`, MAX_QUESTION_DETAIL_CHARS),
+        options: {
+          type: "array",
+          items: { type: "string", maxLength: MAX_QUESTION_OPTION_CHARS },
+          minItems: 2,
+          maxItems: MAX_QUESTION_OPTIONS,
+          description:
+            `Optional. 2 to ${MAX_QUESTION_OPTIONS} choices of at most ${MAX_QUESTION_OPTION_CHARS} characters each, shown as buttons: one press answers. ` +
+            "The person can always answer in words instead. Leave out for an answer in the person's own words.",
+        },
+        task: str("Optional. The task the question is about: a task ID from list_tasks, or the ID of any message in the task. The task then shows that the work waits on the person."),
+        expires_in_minutes: {
+          type: "integer",
+          minimum: QUESTION_MIN_EXPIRY_MINUTES,
+          maximum: QUESTION_EXPIRY_HOURS * 60,
+          description: `Optional. Minutes the question waits before lapsing, from ${QUESTION_MIN_EXPIRY_MINUTES} to ${QUESTION_EXPIRY_HOURS * 60}. Left out, the question waits ${QUESTION_EXPIRY_HOURS / 24} days.`,
+        },
+      },
+      required: ["question"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 type Args = Record<string, unknown>;
@@ -253,6 +299,8 @@ export function inboxText(inbox: Inbox, waited = false): string {
     for (const notice of notices) lines.push(notice.framed_message);
   }
   if (inbox.held_note) lines.push("", inbox.held_note);
+  // This agent's own questions that still wait for its person, with each one's link to show again.
+  if (inbox.input_note) lines.push("", inbox.input_note);
   return lines.join("\n");
 }
 
@@ -368,6 +416,18 @@ export async function runTool(
       case "submit_feedback":
         // The values go as given: Portico checks them.
         return json(await client.submitFeedback({ kind: args.kind, title: args.title, details: args.details }));
+      case "request_input":
+        // The values go as given: Portico checks them. Nothing here, or anywhere in the plugin, can answer a question:
+        // Portico takes an answer only from the person's own signed-in browser.
+        return json(
+          await client.requestInput({
+            question: args.question,
+            ...(args.detail !== undefined && args.detail !== null ? { detail: args.detail } : {}),
+            ...(args.options !== undefined && args.options !== null ? { options: args.options } : {}),
+            ...(args.task !== undefined && args.task !== null ? { task: args.task } : {}),
+            ...(args.expires_in_minutes !== undefined && args.expires_in_minutes !== null ? { expires_in_minutes: args.expires_in_minutes } : {}),
+          }),
+        );
       default:
         if (PORTICO_TOOL_NAMES.includes(name)) return json(await client.porticoTool(name, args));
         return failure(`bad_request: Unknown tool ${name}.`);

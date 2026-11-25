@@ -44,6 +44,7 @@ export function homeState(data: Omit<HomeData, "page"> & { now: number }): HomeS
     agents: data.agents,
     held: data.approvals.held,
     consents: data.approvals.consents ?? [],
+    questions: data.approvals.questions ?? [],
     workspaces: data.workspaces,
     workspacePage: data.workspacePage ?? null,
     wsForm: null,

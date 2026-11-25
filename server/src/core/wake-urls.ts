@@ -52,6 +52,22 @@ export interface WakeInfo {
   lastCheckIn: string | null;
 }
 
+/**
+ * What a wake for one of Portico's own notices says: who it's for, how much waits in the inbox, and the notice's ID
+ * and kind (such as `input_answered`). Never the notice's text. Any feature whose notice should start an app's run
+ * sends one of these; a message's wake stays as it was.
+ */
+export interface NoticeWakeInfo {
+  agentName: string;
+  waiting: number;
+  noticeId: string;
+  kind: string;
+  lastCheckIn: string | null;
+}
+
+/** The `event` a wake URL is posted for one of Portico's own notices, beside `message.received` and `wake.test`. */
+export const NOTICE_WAKE_EVENT = "notice.waiting";
+
 export interface WakeUrlsDeps {
   db: Database;
   post: WebhookPost;
@@ -224,10 +240,12 @@ export class WakeUrls {
   }
 
   /**
-   * A message for the agent is waiting: wake the agent, unless a wake already went through and the agent hasn't
-   * checked in since it was sent (for less than REWAKE_MS), one is on its way, or the hourly cap is reached.
+   * A message for the agent is waiting, or one of Portico's own notices: wake the agent, unless a wake already went
+   * through and the agent hasn't checked in since it was sent (for less than REWAKE_MS), one is on its way, or the
+   * hourly cap is reached. A notice's wake has the same envelope as a message's, with its own `event` and a `notice`
+   * in place of `latest`: there is no message behind it.
    */
-  kick(agentId: string, info: WakeInfo): void {
+  kick(agentId: string, info: WakeInfo | NoticeWakeInfo): void {
     const row = this.row(agentId);
     if (!row || this.sending.has(agentId)) return;
     const now = this.now().getTime();
@@ -245,12 +263,15 @@ export class WakeUrls {
     const generation = this.generation.get(agentId) ?? 0;
     const current = () => (this.generation.get(agentId) ?? 0) === generation;
     const body = JSON.stringify({
-      portico: {
-        event: "message.received",
-        agent: info.agentName,
-        waiting: info.waiting,
-        latest: { message_id: info.messageId, from: info.from },
-      },
+      portico:
+        "messageId" in info
+          ? {
+              event: "message.received",
+              agent: info.agentName,
+              waiting: info.waiting,
+              latest: { message_id: info.messageId, from: info.from },
+            }
+          : { event: NOTICE_WAKE_EVENT, agent: info.agentName, waiting: info.waiting, notice: { id: info.noticeId, kind: info.kind } },
     });
     postWithRetry({
       post: this.post,

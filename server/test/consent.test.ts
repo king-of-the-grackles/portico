@@ -823,7 +823,10 @@ describe("a held message's page", () => {
     expect(copy).toContain("Robert (robert)");
     expect(copy).toContain("the Portico “Launch”");
     expect(copy).toContain("muse only takes messages from senders you allowed.");
-    for (const choice of ["deny", "always_allow", "allow_once"]) expect(mine.html).toContain(`name="decision" value="${choice}"`);
+    // Two buttons, Don't allow and Allow (this message); Always allow is the tick beside them, never a button.
+    for (const choice of ["deny", "allow_once"]) expect(mine.html).toContain(`name="decision" value="${choice}"`);
+    expect(mine.html).not.toContain('name="decision" value="always_allow"');
+    expect(mine.html).toContain('<input type="checkbox" name="always" value="always_allow" data-sets="decision" data-when="allow_once">');
     expect(mine.html).toContain(`data-api="POST /api/approvals/held/${message.id}"`);
     expect(mine.html).not.toContain('name="code"');
     expect(copyProblems(copy.replace(/Subject[\s\S]*?Details/, ""))).toEqual([]);

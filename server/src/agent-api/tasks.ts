@@ -130,12 +130,8 @@ export function listAgentTasks(
   return { tasks: shown.map((t) => agentTaskView(deps.views, agent, t)), more: tasks.length > shown.length };
 }
 
-/** One of the agent's tasks, found by its ID or any of its messages' IDs, with every message. */
-export async function getAgentTask(
-  deps: AgentTaskDeps,
-  agent: Agent,
-  id: unknown,
-): Promise<{ task: AgentTaskView; messages: AgentTaskMessageView[] }> {
+/** One of the agent's own tasks, found by its ID or any of its messages' IDs. Not found for a task the agent isn't in or may not see yet. */
+export function findAgentTask(deps: Pick<AgentTaskDeps, "messages" | "tasks">, agent: Agent, id: unknown): { task: Task; messageIds: string[] } {
   if (typeof id !== "string" || id.trim() === "") throw new PorticoError("bad_request", "task must be a task or message ID.");
   // Looked for only in the workspaces this agent is or was in.
   const scope = { agent: agent.id };
@@ -144,6 +140,16 @@ export async function getAgentTask(
   const root = asked && asked.fromId !== agent.id && neverSent(asked) ? null : deps.tasks.rootOf(scope, id.trim());
   const found = root ? deps.tasks.get(scope, root, [agent.id]) : null;
   if (!found || !visibleTo(agent, found.task)) throw new PorticoError("not_found", "No such task among this agent's tasks.");
+  return found;
+}
+
+/** One of the agent's tasks, found by its ID or any of its messages' IDs, with every message. */
+export async function getAgentTask(
+  deps: AgentTaskDeps,
+  agent: Agent,
+  id: unknown,
+): Promise<{ task: AgentTaskView; messages: AgentTaskMessageView[] }> {
+  const found = findAgentTask(deps, agent, id);
   deps.agents.checkedIn(agent);
   /** Each file with a fresh download address; a file Portico won't hand out says why instead. */
   const withLinks = (message: Message): Promise<AgentTaskFileView[]> =>

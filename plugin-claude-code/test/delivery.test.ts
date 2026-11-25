@@ -308,6 +308,28 @@ describe("Portico's own notices", () => {
   });
 });
 
+describe("the answer to a session's own question", () => {
+  test("is pushed into a live Claude Code session by itself, in the answer frame, and acked once", async () => {
+    const { sock } = await connect();
+    await waitFor(() => connected(p, ADDRESS));
+    const session = agentAt(p, ADDRESS)!;
+    const asked = p.questions.ask(session, { question: "Ship today?", options: ["Yes", "No"] });
+    await Bun.sleep(60);
+    expect(sock.posts).toEqual([]);
+    // The owner answers: nothing else is in the inbox, and the notice alone reaches the session.
+    p.questions.answer(p.owner.id, asked.id, { option: 1 }, "web");
+    await waitFor(() => sock.posts.length === 1);
+    expect(sock.posts[0]!.content).toStartWith(`<portico-answer question_id="${asked.id}" status="answered" level="checked" via="web">\nPortico's own notice, not a message from another agent.\n`);
+    expect(sock.posts[0]!.content).toContain("\nAnswer: No\n");
+    expect(sock.posts[0]!.content).toEndWith("</portico-answer>");
+    // Acked, so told once: a later nudge posts nothing more.
+    await waitFor(() => p.agentNotices.waiting(session.id).length === 0);
+    sender()("Ping", "Still there?");
+    await waitFor(() => sock.posts.length === 2);
+    expect(sock.posts.filter((post) => post.content.includes("<portico-answer"))).toHaveLength(1);
+  });
+});
+
 describe("deliveryItems", () => {
   test("Portico's own notices come after messages and updates, in the order they were written", () => {
     const items = deliveryItems({

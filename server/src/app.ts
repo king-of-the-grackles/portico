@@ -43,7 +43,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
     });
   }
   const resolver = makeResolver(core.agents, core.computers, () => core.settings.publicUrl());
-  const views = agentViews(core.agents, core.people, core.files, core.workspaces, () => core.settings.publicUrl(), (personId) => core.approvals.heldFor(personId).length, (agent) => wakeStateOf(core, agent));
+  const views = agentViews(core.agents, core.people, core.files, core.workspaces, () => core.settings.publicUrl(), (personId) => core.approvals.heldFor(personId).length, (agent) => wakeStateOf(core, agent), core.questions);
   const { agents, messages, files } = core;
   const toolDeps = { agents, people: core.people, workspaces: core.workspaces, shares: core.shares, consents: core.consents, publicUrl: () => core.settings.publicUrl() };
   const notices = core.agentNotices;
@@ -62,13 +62,13 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
   app.route("/api/agent/stream", streamRoutes({ agents, messages, streams: core.agentStreams, resolver, heartbeatMs: opts.heartbeatMs }));
   app.route(
     "/api/agent",
-    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, changes: core.changes, now: core.now, porticoTools: toolDeps, notices }),
+    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, changes: core.changes, now: core.now, porticoTools: toolDeps, notices, questions: core.questions }),
   );
   app.route("/api/feedback", feedbackReviewRoutes(core.feedback));
   app.route("/files", fileRoutes(core));
   app.route("/api/computer", computerApi(core));
   app.route("/api/join", joinApi(core));
-  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, porticoTools: toolDeps, notices }));
+  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, porticoTools: toolDeps, notices, questions: core.questions }));
   // Resend reports bounces and complaints here. The signature is the only credential; the body is read as sent.
   app.post("/api/mail/resend", async (c) => {
     const ok = core.mail.webhook(

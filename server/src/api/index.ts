@@ -14,6 +14,7 @@ import { eventRoutes } from "./events";
 import { meRoutes } from "./me";
 import { passkeyRoutes } from "./passkeys";
 import { peopleRoutes } from "./people";
+import { questionRoutes } from "./questions";
 import { sessionRoutes } from "./session";
 import { setupRoutes } from "./setup";
 import { threadRoutes } from "./threads";
@@ -108,6 +109,7 @@ export function personApi(core: Core, opts: { heartbeatMs?: number } = {}): Hono
   api.route("/threads", threadRoutes(core));
   api.route("/", taskRoutes(core));
   api.route("/consents", consentRoutes(core));
+  api.route("/questions", questionRoutes(core));
   api.route("/computers", computerRoutes(core));
   api.route("/events", eventRoutes(core, opts));
 
