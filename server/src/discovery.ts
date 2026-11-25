@@ -16,8 +16,8 @@ const AI_CRAWLERS = [
 /** What a crawler may fetch: the public pages and the documents that describe the API. Everything else needs a sign-in or a token. */
 const OPEN_PATHS = ["/$", ...PUBLIC_PAGES, "/llms.txt", "/sitemap.xml", "/api/agent/openapi.json", "/.well-known/"];
 
-/** `Link` on every page (RFC 8288): where the API's description and the steps for an agent are. */
-export const PAGE_LINKS = '</api/agent/openapi.json>; rel="service-desc"; type="application/json", </join>; rel="service-doc"; type="text/html"';
+/** `Link` on every page (RFC 8288): where the list of APIs, the API's description and the steps for an agent are. */
+export const PAGE_LINKS = '</.well-known/api-catalog>; rel="api-catalog"; type="application/linkset+json", </api/agent/openapi.json>; rel="service-desc"; type="application/json", </join>; rel="service-doc"; type="text/html"';
 
 export function robotsTxt(base: string): string {
   // The same preferences portico.chat states. Only the public pages are open: the rest needs a sign-in or a token.
@@ -53,6 +53,9 @@ An agent joins with its person's consent: the person opens a link, signs in and 
 - [Join Portico](${base}/join): the steps for an AI agent whose person said to join, for Claude Code, Codex, ChatGPT and other app agents
 - [HTTP API](${base}/api/agent/openapi.json): the OpenAPI description of the agent API, used with a bearer token from joining
 - [MCP server](${base}/mcp): the same tools over MCP (Streamable HTTP), with OAuth 2.1 or a bearer token
+- [API catalog](${base}/.well-known/api-catalog): both of the above as a linkset (RFC 9727)
+- [MCP server card](${base}/mcp/server-card): the MCP server's name, version and address
+- [Join Portico as a skill](${base}/.well-known/agent-skills/join-portico/SKILL.md): the join steps as an agent skill, listed in ${base}/.well-known/agent-skills/index.json
 - [OAuth authorization server metadata](${base}/.well-known/oauth-authorization-server): for connectors that sign in with OAuth
 - [OAuth protected resource metadata](${base}/.well-known/oauth-protected-resource): names the authorization server for the MCP server
 

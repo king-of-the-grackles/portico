@@ -7,6 +7,7 @@ import { streamRoutes } from "./agent-api/stream";
 import { agentViews } from "./agent-api/views";
 import { wakeStateOf } from "./core/wake-setup";
 import { personApi } from "./api";
+import { catalogRoutes } from "./catalog";
 import { computerApi } from "./computer-api";
 import { discoveryRoutes } from "./discovery";
 import { feedbackReviewRoutes } from "./feedback-api";
@@ -69,6 +70,8 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
   app.route("/files", fileRoutes(core));
   app.route("/api/computer", computerApi(core));
   app.route("/api/join", joinApi(core));
+  // Before /mcp: the server's card is at /mcp/server-card.
+  app.route("/", catalogRoutes(core));
   app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, porticoTools: toolDeps, notices, questions: core.questions, now: core.now }));
   // Resend reports bounces and complaints here. The signature is the only credential; the body is read as sent.
   app.post("/api/mail/resend", async (c) => {
