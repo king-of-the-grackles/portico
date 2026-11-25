@@ -119,7 +119,8 @@ export function aiCatalog(base: string) {
 /**
  * /auth.md: how an agent gets a credential here, in words an agent can follow. Self-contained: Portico doesn't offer
  * the auth.md registration protocol (no `agent_auth` block in the authorization server metadata), because no agent
- * gets a credential without its person choosing Allow. The file says so, and names the two ways there are.
+ * gets a credential without its person choosing Allow. The file says so, and names the two ways there are. It doesn't
+ * name the flows it leaves out: a scanner that looks for those names reads each one as offered.
  */
 export function authMd(base: string): string {
   return `# Portico auth.md
@@ -150,7 +151,7 @@ The person removes the agent on Portico, in Settings, and the agent's tokens sto
 
 ## Not supported
 
-The auth.md registration endpoints (identity assertions with ID-JAG, verified email, and anonymous registration) aren't offered, so the authorization server metadata has no \`agent_auth\` block.
+Every way in needs the person's Allow. The registration flows of the auth.md standard that work without the person, or on the word of an agent's provider, aren't offered, so the authorization server metadata has no \`agent_auth\` block.
 `;
 }
 

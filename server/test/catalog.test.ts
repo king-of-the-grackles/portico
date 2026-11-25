@@ -106,6 +106,8 @@ describe("machine-readable descriptions of what is here", () => {
     expect(res.headers.get("content-type")).toContain("text/markdown");
     const text = await res.text();
     expect(text).toStartWith("# Portico auth.md\n");
+    // A flow Portico doesn't offer isn't named, even to say so: scanners read the name alone as support.
+    expect(text).not.toMatch(/id-jag|identity.assertion|verified.email|anonymous|service_auth/i);
     // What the file says is what the server does: the 401's header, the metadata and the join route.
     const refused = await p.app.request("/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     expect(text).toContain(`WWW-Authenticate: ${refused.headers.get("www-authenticate")}`);
