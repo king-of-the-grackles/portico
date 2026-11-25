@@ -99,6 +99,26 @@ describe("machine-readable descriptions of what is here", () => {
     }
   });
 
+  test("auth.md names the two real ways to a credential, and claims no registration protocol", async () => {
+    const p = makePortico();
+    const res = await p.app.request("/auth.md");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/markdown");
+    const text = await res.text();
+    expect(text).toStartWith("# Portico auth.md\n");
+    // What the file says is what the server does: the 401's header, the metadata and the join route.
+    const refused = await p.app.request("/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(text).toContain(`WWW-Authenticate: ${refused.headers.get("www-authenticate")}`);
+    const metadata = (await (await p.app.request("/.well-known/oauth-authorization-server")).json()) as Record<string, unknown>;
+    expect(metadata.agent_auth).toBeUndefined();
+    expect(metadata.registration_endpoint).toBe(`${PUBLIC_URL}/oauth/register`);
+    expect(metadata.code_challenge_methods_supported).toEqual(["S256"]);
+    expect(metadata.grant_types_supported).toEqual(["authorization_code", "refresh_token"]);
+    const asked = await p.app.request("/api/join", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "agent", name: "muse-work", client: "muse" }) });
+    expect(Object.keys((await asked.json()) as object)).toEqual(expect.arrayContaining(["id", "link", "poll_secret", "expires_at", "show"]));
+    expect(await (await p.app.request("/robots.txt")).text()).toContain("Allow: /auth.md\n");
+  });
+
   test("the OAuth documents and the MCP endpoint answer as before", async () => {
     const p = makePortico();
     const preflight = await p.app.request("/.well-known/oauth-authorization-server", {
