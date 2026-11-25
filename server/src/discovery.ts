@@ -32,10 +32,11 @@ export function robotsTxt(base: string): string {
   ].join("\n\n");
 }
 
-export function sitemapXml(base: string): string {
+/** The pages a search engine may list: /join, and the sign-in page where signing in is open to anyone. */
+export function sitemapXml(base: string, pages: string[] = ["/join"]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-<url><loc>${base}/join</loc></url>
+${pages.map((page) => `<url><loc>${base}${page}</loc></url>`).join("\n")}
 </urlset>
 `;
 }
@@ -72,7 +73,7 @@ export function discoveryRoutes(core: Core): Hono {
   const base = () => core.settings.publicUrl();
   const cached = "public, max-age=3600";
   route.get("/robots.txt", (c) => c.text(robotsTxt(base()), 200, { "Cache-Control": cached }));
-  route.get("/sitemap.xml", (c) => c.body(sitemapXml(base()), 200, { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": cached }));
+  route.get("/sitemap.xml", (c) => c.body(sitemapXml(base(), core.accountSignIn ? ["/join", "/sign-in"] : ["/join"]), 200, { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": cached }));
   route.get("/llms.txt", (c) => c.body(llmsTxt(base()), 200, { "Content-Type": "text/markdown; charset=utf-8", "Cache-Control": cached }));
   return route;
 }

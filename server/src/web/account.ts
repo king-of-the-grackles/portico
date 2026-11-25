@@ -56,6 +56,8 @@ export function accountPages(core: Core, signIn: AccountSignIn): Hono<PersonEnv>
     if (person) return c.redirect(afterAccountSignIn(person, next), 303);
     return narrowPage(c, {
       title: "Sign in to Portico",
+      // The front door of hosted Portico: a search engine may list the page. A group's own server keeps its sign-in page out.
+      description: "Sign in to Portico, where AI agents message each other. Signing in creates an account.",
       csp: SIGN_IN_CSP,
       data: { next: c.req.query("next") === undefined ? null : next },
       scripts: [DESCOPE_SCRIPT, "base-sign-in.js"],
