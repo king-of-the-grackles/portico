@@ -526,25 +526,28 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
    * Tells one agent in Portico's own words: the notice waits for the agent's next check, a session's stream is nudged
    * and a waiting check_inbox returns. With `wakeKind`, an app agent is woken for the notice as well, as for a
    * message: for a notice the agent is waiting on. Returns the notice's ID, or null when nothing was saved. A revoked
-   * agent is told nothing, unless `evenRevoked`: then the notice is saved, and nothing is woken.
+   * agent is told nothing.
    */
-  const tellAgent = (agentId: string, text: string, opts: { wakeKind?: string; evenRevoked?: boolean } = {}): string | null => {
+  const tellAgent = (agentId: string, text: string, opts: { wakeKind?: string } = {}): string | null => {
     const agent = agents.get(agentId);
-    if (!agent || (agent.revokedAt !== null && !opts.evenRevoked)) return null;
+    if (!agent || agent.revokedAt !== null) return null;
     const noticeId = agentNotices.add(agent.id, text);
-    if (agent.revokedAt !== null) return noticeId;
     wake(agent.id);
-    const kind = opts.wakeKind;
-    if (kind !== undefined) {
-      queueMicrotask(() => {
-        try {
-          wakeAppForNotice(agent.id, noticeId, kind);
-        } catch (err) {
-          log("error", "notice_wake_failed", { kind, error: errorName(err) });
-        }
-      });
-    }
+    if (opts.wakeKind !== undefined) wakeForNotice(agent.id, noticeId, opts.wakeKind);
     return noticeId;
+  };
+  /**
+   * A saved notice the agent is waiting on: an app agent is woken for it, as for a message, once the write that made
+   * the notice is done. Never throws, and does nothing for an agent that is gone or revoked.
+   */
+  const wakeForNotice = (agentId: string, noticeId: string, kind: string) => {
+    queueMicrotask(() => {
+      try {
+        wakeAppForNotice(agentId, noticeId, kind);
+      } catch (err) {
+        log("error", "notice_wake_failed", { kind, error: errorName(err) });
+      }
+    });
   };
 
   // ---- questions an agent asks its own person ----
@@ -581,9 +584,16 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     activity,
     changes,
     publicUrl: () => settings.publicUrl(),
-    // The agent that asked is waiting on this notice, so an app agent is woken for it. A revoked agent's notice is
-    // saved all the same: the record of what Portico said.
-    tell: (agentId, text, kind) => tellAgent(agentId, text, { wakeKind: kind, evenRevoked: true }) ?? "",
+    // The notice is saved inside the transaction that ends the question, also for a revoked agent: the record of what
+    // Portico said. Once that is done the agent is woken, when it can still be reached: a session's stream is nudged,
+    // a waiting check_inbox returns, and an app agent is woken as for a message.
+    saveNotice: (agentId, text) => agentNotices.add(agentId, text),
+    wake: (agentId, noticeId, kind) => {
+      const agent = agents.get(agentId);
+      if (!agent || agent.revokedAt !== null) return;
+      wake(agent.id);
+      wakeForNotice(agent.id, noticeId, kind);
+    },
     taskAgents: (q) => {
       const found = q.taskId ? tasks.get({ agent: q.agentId }, q.taskId) : null;
       return found ? [found.task.fromId, found.task.toId] : [];
@@ -596,13 +606,19 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   // The notices an agent is waiting on: how its questions ended. This list is what marks a notice as one that wakes
   // a stopped session and keeps it in every batch; a later feature adds its own notices' IDs here.
   agentNotices.waking = (agentId) => questions.noticesOf(agentId);
-  agents.onGone = (agentIds) => {
+  // Every way an agent goes or is revoked withdraws what it asked that still waits, in the same step and never left
+  // to the sweep: one agent removed or revoked, a computer removed with its sessions, a person removed with every
+  // agent that person had. A failure here never stops the removal itself: the sweep and the answer route's own check
+  // then withdraw what is left.
+  const withdrawQuestions = (agentIds: string[]) => {
     try {
       questions.withdrawFor(agentIds);
     } catch (err) {
       log("error", "questions_withdraw_failed", { error: errorName(err) });
     }
   };
+  agents.onGone = withdrawQuestions;
+  computers.onRemoving = withdrawQuestions;
   const named = (subject: Agent, viewer: Agent) => `\`${agents.nameFor(subject, viewer.ownerId)}\``;
   const onWorkspaceEvent = (event: WorkspaceEvent) => {
     const { workspace } = event;
@@ -673,6 +689,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   // A person's account is about to be removed: the person leaves each Portico of someone else's first, as if taken
   // out, so the record says so, the agents there are told, and what was on its way is withdrawn.
   people.onRemoving = (personId) => {
+    withdrawQuestions(agents.ownedBy(personId).map((agent) => agent.id));
     for (const workspace of workspaces.forPerson(personId)) {
       if (workspace.kind !== "shared" || workspace.ownerId === personId) continue;
       try {

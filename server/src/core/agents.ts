@@ -946,9 +946,10 @@ export class Agents {
   remove(personId: string, agentId: string): Agent {
     const agent = this.requireManaged(personId, agentId);
     const clearContent = this.content.gather([agent.id]);
+    // While the agent's row is still there: what it asked that still waits is withdrawn in this same step.
+    this.onGone?.([agent.id]);
     this.db.query("DELETE FROM agents WHERE id = $id").run({ id: agent.id });
     clearContent();
-    this.onGone?.([agent.id]);
     this.activity?.record("agent_removed", { personId, detail: { name: addressOf(agent), kind: agent.kind } });
     this.forget([agent.id]);
     this.log("agent_removed", { agent_id: agent.id });
@@ -1083,7 +1084,10 @@ export class Agents {
    * connector is on the person's account, and the person is told at once.
    */
   onJoined: ((agent: Agent) => void) | null = null;
-  /** Agents were revoked or removed by their person: what they asked that still waits is withdrawn. Set by portico.ts. */
+  /**
+   * Agents are being removed (called before their rows go) or were just revoked: what they asked that still waits
+   * is withdrawn, in the same step. Set by portico.ts.
+   */
   onGone: ((agentIds: string[]) => void) | null = null;
 
   private iso(offsetMs = 0): string {

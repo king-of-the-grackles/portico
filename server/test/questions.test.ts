@@ -573,6 +573,197 @@ describe("input needed: skip, expiry and revoke", () => {
   });
 });
 
+describe("input needed: an agent that is gone or revoked takes no answer", () => {
+  const WITHDRAWN = "This question was withdrawn.";
+  /** No row of the record names an agent or a person that isn't there. */
+  const noDanglingRecord = (p: TestPortico) => {
+    expect(p.db.query("SELECT COUNT(*) AS n FROM activity WHERE agent_id IS NOT NULL AND agent_id NOT IN (SELECT id FROM agents)").get()).toEqual({ n: 0 });
+    expect(p.db.query("SELECT COUNT(*) AS n FROM activity WHERE person_id IS NOT NULL AND person_id NOT IN (SELECT id FROM people)").get()).toEqual({ n: 0 });
+    expect(p.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  };
+  async function sessionWorld() {
+    const p = makePortico();
+    const chris = await addOwner(p, "Chris");
+    const { computer, token } = addComputer(p, chris);
+    const { agent, key } = addSession(p, computer);
+    return { p, chris, computer, agent, session: { agent, token, key }, cookie: signIn(p, chris) };
+  }
+
+  test("a session asks, its computer is removed, and the owner answers before any sweep: refused as withdrawn, never a 500, and the same for skip", async () => {
+    for (const decision of ["answer", "skip"] as const) {
+      const { p, computer, agent, cookie } = await sessionWorld();
+      const asked = p.questions.ask(agent, { question: QUESTION, options: OPTIONS });
+      // The computer's row goes, and its session's agent with it, by a path that withdrew nothing: the case the
+      // answer route has to stand on its own for.
+      p.db.query("DELETE FROM computers WHERE id = $id").run({ id: computer.id });
+      expect(p.agents.get(agent.id)).toBeNull();
+      expect(p.questions.get(asked.id)!.status).toBe("waiting");
+
+      const res = await person(p, cookie, "POST", `/api/questions/${asked.id}`, decision === "answer" ? { decision, option: 1 } : { decision });
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: "wrong_status", message: WITHDRAWN });
+      // Withdrawn, with nothing of an answer on it, nothing in the record, and no card left.
+      expect(p.questions.get(asked.id)).toMatchObject({ status: "withdrawn", answerOption: null, answerText: null, answeredBy: null, answeredAt: null, answerLevel: null });
+      expect(p.activity.list({ limit: 50 }).filter((e) => e.kind === "input_answered" || e.kind === "input_skipped")).toEqual([]);
+      noDanglingRecord(p);
+      expect((await today(p, cookie)).decisions.questions).toEqual([]);
+      expect((await today(p, cookie)).counts.decide).toBe(0);
+      // Again, and the other way: the same plain answer each time.
+      expect((await person(p, cookie, "POST", `/api/questions/${asked.id}`, { decision: "skip" })).body.message).toBe(WITHDRAWN);
+      expect((await person(p, cookie, "POST", `/api/questions/${asked.id}`, { decision: "answer", text: "Yes" })).status).toBe(409);
+      const page = await (await callPerson(p, cookie, "GET", `/q/${asked.id}`)).text();
+      expect(page).toContain("<h1>This question was withdrawn</h1>");
+    }
+  });
+
+  test("the same when one agent's row is gone, and when an agent is revoked, by a path that withdrew nothing", async () => {
+    const { p, muse, grok, cookie } = await world();
+    const gone = (await rest(p, muse, "POST", "/api/agent/questions", { question: "From an agent about to go?" })).body.question.id as string;
+    const revoked = (await rest(p, grok, "POST", "/api/agent/questions", { question: "From an agent about to be revoked?", options: OPTIONS })).body.question.id as string;
+    p.db.query("DELETE FROM agents WHERE id = $id").run({ id: muse.agent.id });
+    p.db.query("UPDATE agents SET revoked_at = $at WHERE id = $id").run({ id: grok.agent.id, at: p.clock.now().toISOString() });
+
+    const first = await person(p, cookie, "POST", `/api/questions/${gone}`, { decision: "answer", text: "Yes" });
+    expect([first.status, first.body.message]).toEqual([409, WITHDRAWN]);
+    const second = await person(p, cookie, "POST", `/api/questions/${revoked}`, { decision: "answer", option: 0 });
+    expect([second.status, second.body.message]).toEqual([409, WITHDRAWN]);
+    expect(p.questions.get(gone)).toMatchObject({ status: "withdrawn", answeredBy: null });
+    expect(p.questions.get(revoked)).toMatchObject({ status: "withdrawn", answeredBy: null, answerOption: null });
+    // The revoked agent's row is still there, so the one notice about the withdrawal is kept; the removed agent has none.
+    expect(p.agentNotices.waiting(grok.agent.id).map((n) => n.text.split("\n")[0])).toEqual([
+      "Portico withdrew this agent's question before “Chris” answered: this agent was revoked or removed. No answer was given.",
+    ]);
+    expect(p.activity.list({ limit: 50 }).filter((e) => e.kind === "input_answered" || e.kind === "input_skipped")).toEqual([]);
+    noDanglingRecord(p);
+    expect((await today(p, cookie)).decisions.questions).toEqual([]);
+    // The sweep, the safety net, finds nothing more to do.
+    expect(p.questions.withdrawOrphans()).toBe(0);
+  });
+
+  test("every way an agent goes withdraws its waiting questions at once, with no sweep: a computer, one agent, a revoke, a person", async () => {
+    const { p, chris, bob, muse, grok, scout, cookie, bobCookie } = await world();
+    const { computer } = addComputer(p, chris);
+    const session = addSession(p, computer).agent;
+    const fromSession = p.questions.ask(session, { question: "From a session?" });
+    const fromMuse = p.questions.ask(p.agents.require(muse.agent.id), { question: "From muse?" });
+    const fromGrok = p.questions.ask(p.agents.require(grok.agent.id), { question: "From grok?" });
+    const fromScout = p.questions.ask(p.agents.require(scout.agent.id), { question: "From Bob's scout?" });
+    expect((await today(p, cookie)).decisions.questions.map((q) => q.id)).toEqual([fromSession.id, fromMuse.id, fromGrok.id]);
+    expect((await today(p, bobCookie)).decisions.questions.map((q) => q.id)).toEqual([fromScout.id]);
+    const status = (id: string) => p.questions.get(id)!.status;
+    const left = async () => (await today(p, cookie)).decisions.questions.map((q) => q.id);
+
+    // Removing a computer, as the person does in Settings: its sessions' questions go with it.
+    expect((await person(p, cookie, "DELETE", `/api/computers/${computer.id}`)).status).toBe(204);
+    expect(p.agents.get(session.id)).toBeNull();
+    expect(status(fromSession.id)).toBe("withdrawn");
+    expect(await left()).toEqual([fromMuse.id, fromGrok.id]);
+
+    // Removing one agent.
+    expect((await person(p, cookie, "DELETE", `/api/agents/${muse.agent.id}`)).status).toBeLessThan(300);
+    expect(status(fromMuse.id)).toBe("withdrawn");
+    expect(await left()).toEqual([fromGrok.id]);
+
+    // Revoking an agent: withdrawn, and the one notice is kept.
+    expect((await person(p, cookie, "POST", `/api/agents/${grok.agent.id}/revoke`)).status).toBe(200);
+    expect(status(fromGrok.id)).toBe("withdrawn");
+    expect(p.agentNotices.waiting(grok.agent.id)).toHaveLength(1);
+    expect(await left()).toEqual([]);
+
+    // Removing a person takes that person's agents along, and what they asked.
+    expect((await person(p, cookie, "DELETE", `/api/people/${bob.id}`)).status).toBe(204);
+    expect(p.agents.get(scout.agent.id)).toBeNull();
+    expect(status(fromScout.id)).toBe("withdrawn");
+
+    // Nothing was left for the sweep, each answer is refused as withdrawn, and the record names nothing that is gone.
+    expect(p.questions.withdrawOrphans()).toBe(0);
+    for (const id of [fromSession.id, fromMuse.id, fromGrok.id]) {
+      const res = await person(p, cookie, "POST", `/api/questions/${id}`, { decision: "answer", text: "Late" });
+      expect([res.status, res.body.message]).toEqual([409, WITHDRAWN]);
+    }
+    noDanglingRecord(p);
+    // A removed person's questions are deleted with the next daily sweep.
+    p.sweepDaily();
+    expect(p.questions.get(fromScout.id)).toBeNull();
+  });
+
+  test("a computer that leaves by its own token withdraws its sessions' questions too", async () => {
+    const { p, computer, agent, cookie } = await sessionWorld();
+    const asked = p.questions.ask(agent, { question: QUESTION });
+    p.agents.forget(p.computers.remove(computer.id));
+    expect(p.questions.get(asked.id)!.status).toBe("withdrawn");
+    expect((await today(p, cookie)).decisions.questions).toEqual([]);
+    noDanglingRecord(p);
+  });
+
+  test("ending a question is all or nothing: when the record or the notice can't be written, the question still waits and is then answered as usual", async () => {
+    const { p, chris, muse, cookie } = await world();
+    const id = (await rest(p, muse, "POST", "/api/agent/questions", { question: QUESTION, options: OPTIONS })).body.question.id as string;
+    const untouched = () => {
+      expect(p.questions.get(id)).toMatchObject({ status: "waiting", answerOption: null, answerText: null, answeredBy: null, answeredAt: null, answeredVia: null, answerLevel: null, endedAt: null });
+      expect(p.db.query("SELECT notice_id FROM questions WHERE id = $id").get({ id })).toEqual({ notice_id: null });
+      expect(p.agentNotices.count(muse.agent.id)).toBe(0);
+      expect(p.activity.list({ limit: 50 }).filter((e) => e.kind === "input_answered" || e.kind === "input_skipped")).toEqual([]);
+    };
+
+    // The record can't be written, after the row was changed and the notice saved: all of it is undone.
+    const record = p.activity.record.bind(p.activity);
+    p.activity.record = () => {
+      throw new Error("the record is full");
+    };
+    for (const body of [{ decision: "answer", option: 1 }, { decision: "skip" }]) {
+      expect((await person(p, cookie, "POST", `/api/questions/${id}`, body)).status).toBe(500);
+      untouched();
+    }
+    p.activity.record = record;
+
+    // The notice can't be saved: the same.
+    const add = p.agentNotices.add.bind(p.agentNotices);
+    p.agentNotices.add = () => {
+      throw new Error("no room for a notice");
+    };
+    expect((await person(p, cookie, "POST", `/api/questions/${id}`, { decision: "answer", option: 1 })).status).toBe(500);
+    untouched();
+    // A lapse that can't be written is tried again by the next sweep, not lost.
+    const lapsing = (await rest(p, muse, "POST", "/api/agent/questions", { question: "Lapse?", expires_in_minutes: 5 })).body.question.id as string;
+    p.clock.advance(6 * MINUTE);
+    p.sweepMinute();
+    expect(p.questions.get(lapsing)!.status).toBe("waiting");
+    p.agentNotices.add = add;
+    p.sweepMinute();
+    expect(p.questions.get(lapsing)!.status).toBe("expired");
+    await notices(p, muse);
+
+    // The card is still there, and the answer now goes through as any other: once, with its one notice and one record.
+    expect((await today(p, cookie)).decisions.questions.map((q) => q.id)).toEqual([id]);
+    expect((await person(p, cookie, "POST", `/api/questions/${id}`, { decision: "answer", option: 1 })).status).toBe(200);
+    expect(p.questions.get(id)).toMatchObject({ status: "answered", answerOption: 1, answeredBy: chris.id, answerLevel: "checked" });
+    expect((await notices(p, muse)).map((n) => n.question)).toEqual([{ id, status: "answered", level: "checked", via: "web" }]);
+    expect(p.activity.list({ limit: 50 }).filter((e) => e.kind === "input_answered").map((e) => e.detail.question)).toEqual([id]);
+
+    // Asking is one transaction too: a question is never saved without its record.
+    p.activity.record = () => {
+      throw new Error("the record is full");
+    };
+    const before = p.db.query("SELECT COUNT(*) AS n FROM questions").get();
+    expect((await rest(p, muse, "POST", "/api/agent/questions", { question: "Saved?" })).status).toBe(500);
+    expect(p.db.query("SELECT COUNT(*) AS n FROM questions").get()).toEqual(before);
+    p.activity.record = record;
+  });
+
+  test("an agent revoked or removed a moment ago asks nothing", async () => {
+    const { p, muse, grok, cookie } = await world();
+    const stale = p.agents.require(muse.agent.id);
+    const other = p.agents.require(grok.agent.id);
+    await person(p, cookie, "POST", `/api/agents/${muse.agent.id}/revoke`);
+    await person(p, cookie, "DELETE", `/api/agents/${grok.agent.id}`);
+    // The caller still holds the agent as it was: the question is refused all the same, and nothing is saved.
+    expect(() => p.questions.ask(stale, { question: "Still me?" })).toThrow("A revoked agent can't ask.");
+    expect(() => p.questions.ask(other, { question: "Still me?" })).toThrow("A revoked agent can't ask.");
+    expect(p.db.query("SELECT COUNT(*) AS n FROM questions").get()).toEqual({ n: 0 });
+  });
+});
+
 describe("input needed: the task", () => {
   test("shows Waiting on the owner and the asked and answered steps to both people, and the text to the owner alone", async () => {
     const { p, chris, muse, scout, cookie, bobCookie } = await world();

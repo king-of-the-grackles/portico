@@ -132,10 +132,12 @@ export interface QuestionsDeps {
   changes: Changes;
   publicUrl: () => string;
   /**
-   * Tells the agent in Portico's own words, once: saves the notice, and wakes the agent when it can still be reached.
-   * Returns the notice's ID.
+   * Saves Portico's notice to the agent, for its next check, and returns the notice's ID. Only a write to the
+   * directory: it runs inside the transaction that ends the question.
    */
-  tell: (agentId: string, text: string, kind: QuestionNoticeKind) => string;
+  saveNotice: (agentId: string, text: string) => string;
+  /** The question has ended and its notice is saved: the agent is woken for it, when it can still be reached. */
+  wake: (agentId: string, noticeId: string, kind: QuestionNoticeKind) => void;
   /** The two agents of the task a question is about, so both people's pages hear of a change. */
   taskAgents?: (question: Question) => string[];
   /** A question was asked: the person is emailed the page's link. */
@@ -173,7 +175,8 @@ export class Questions {
   private readonly activity: Activity;
   private readonly changes: Changes;
   private readonly publicUrl: () => string;
-  private readonly tell: QuestionsDeps["tell"];
+  private readonly saveNotice: QuestionsDeps["saveNotice"];
+  private readonly wake: QuestionsDeps["wake"];
   private readonly taskAgents: (question: Question) => string[];
   private readonly onAsked: (question: Question) => void;
   private readonly now: () => Date;
@@ -187,7 +190,8 @@ export class Questions {
     this.activity = deps.activity;
     this.changes = deps.changes;
     this.publicUrl = deps.publicUrl;
-    this.tell = deps.tell;
+    this.saveNotice = deps.saveNotice;
+    this.wake = deps.wake;
     this.taskAgents = deps.taskAgents ?? (() => []);
     this.onAsked = deps.onAsked ?? (() => {});
     this.now = deps.now ?? (() => new Date());
@@ -276,7 +280,9 @@ export class Questions {
    * or null. Nothing here takes a person to ask: the question always goes to the person who manages the agent.
    */
   ask(agent: Agent, input: { question?: unknown; detail?: unknown; options?: unknown; taskId?: string | null; expiresInMinutes?: unknown }): Question {
-    if (agent.revokedAt !== null) throw new PorticoError("not_allowed", "A revoked agent can't ask.");
+    // Read again, not taken from the caller: an agent revoked or removed a moment ago asks nothing.
+    const asker = this.agents.get(agent.id);
+    if (!asker || asker.revokedAt !== null) throw new PorticoError("not_allowed", "A revoked agent can't ask.");
     const question = oneLine(input.question);
     if (question === "") throw new PorticoError("bad_request", "question must be one line saying what the person is asked.");
     checkLength("question", question, LIMITS.maxQuestionChars);
@@ -317,10 +323,10 @@ export class Questions {
           at: iso,
           expiresAt: new Date(at.getTime() + expiresMs).toISOString(),
         });
+      // The record says who asked whom, never what. In the same transaction: a question is never saved without it.
+      this.activity.record("input_asked", { agentId: agent.id, subjectId: agent.ownerId, detail: { question: id, ...(input.taskId ? { task: input.taskId } : {}) } });
     })();
     const asked = this.get(id)!;
-    // The record says who asked whom, never what.
-    this.activity.record("input_asked", { agentId: agent.id, subjectId: agent.ownerId, detail: { question: id, ...(asked.taskId ? { task: asked.taskId } : {}) } });
     this.log("input_asked", { question_id: id, agent_id: agent.id, options: options?.length ?? 0 });
     this.changed(asked);
     this.onAsked(asked);
@@ -375,11 +381,19 @@ export class Questions {
     return this.end(this.open(personId, id), "skipped", { by: personId, via, option: null, text: null });
   }
 
-  /** The waiting question, for its own person. Not found for anyone else; a question that ended says how. */
+  /**
+   * The waiting question, for its own person. Not found for anyone else; a question that ended says how. A question
+   * whose agent is gone or revoked takes no answer: it is withdrawn here, whether or not a sweep or the removal
+   * itself got to it first, so nothing is ever recorded for an agent that isn't there to hear it.
+   */
   private open(personId: string, id: string): Question {
     const question = this.forPersonById(personId, id);
     if (!question) throw new PorticoError("not_found", "No such question.");
-    if (question.status === "waiting" && question.expiresAt <= this.now().toISOString()) this.end(question, "expired", null);
+    if (question.status === "waiting") {
+      const agent = this.agents.get(question.agentId);
+      if (!agent || agent.revokedAt !== null) this.end(question, "withdrawn", null);
+      else if (question.expiresAt <= this.now().toISOString()) this.end(question, "expired", null);
+    }
     const now = this.get(id)!;
     if (now.status !== "waiting") {
       throw new PorticoError(
@@ -397,8 +411,10 @@ export class Questions {
   }
 
   /**
-   * Ends a waiting question, once: the row changes only while it still waits, so two answers at once can't both
-   * count, and the agent is told once.
+   * Ends a waiting question, once, and all of it or none: the row's new status, the notice to the agent, the
+   * notice's ID on the row and the record are one transaction on the directory. The row changes only while it still
+   * waits, so two answers at once can't both count; and when any step fails, nothing is kept and the question waits
+   * as before, to be answered again. The agent is woken only after everything is saved.
    */
   private end(
     question: Question,
@@ -406,39 +422,46 @@ export class Questions {
     answer: { by: string; via: AnswerVia; option: number | null; text: string | null } | null,
   ): Question {
     const at = status === "expired" ? question.expiresAt : this.now().toISOString();
-    const changed = this.db
-      .query(
-        `UPDATE questions SET status = $status, ended_at = $at, answer_option = $option, answer_text = $text, answered_by = $by,
-           answered_at = $answeredAt, answered_via = $via, answer_level = $level
-         WHERE id = $id AND status = 'waiting'`,
-      )
-      .run({
-        id: question.id,
-        status,
-        at,
-        option: answer?.option ?? null,
-        text: answer?.text ?? null,
-        by: answer?.by ?? null,
-        answeredAt: status === "answered" ? at : null,
-        via: answer?.via ?? null,
-        // The only level there is: the signed-in session of the person the question was for.
-        level: answer ? "checked" : null,
-      }).changes;
-    if (changed === 0) throw new PorticoError("wrong_status", "This question is no longer waiting.");
-    const ended = this.get(question.id)!;
-    // A removed agent has nobody to tell: its row, and with it its notices, is gone.
-    if (this.agents.get(ended.agentId)) {
-      const noticeId = this.tell(ended.agentId, this.outcomeText(ended), NOTICE_KIND[status]);
-      this.db.query("UPDATE questions SET notice_id = $noticeId WHERE id = $id").run({ id: ended.id, noticeId });
-    }
-    if (status === "answered" || status === "skipped") {
-      this.activity.record(status === "answered" ? "input_answered" : "input_skipped", {
-        agentId: ended.agentId,
-        personId: ended.answeredBy,
-        detail: { question: ended.id, via: ended.answeredVia, level: ended.answerLevel, ...(ended.taskId ? { task: ended.taskId } : {}) },
-      });
-    }
+    const { ended, noticeId } = this.db.transaction(() => {
+      const changed = this.db
+        .query(
+          `UPDATE questions SET status = $status, ended_at = $at, answer_option = $option, answer_text = $text, answered_by = $by,
+             answered_at = $answeredAt, answered_via = $via, answer_level = $level
+           WHERE id = $id AND status = 'waiting'`,
+        )
+        .run({
+          id: question.id,
+          status,
+          at,
+          option: answer?.option ?? null,
+          text: answer?.text ?? null,
+          by: answer?.by ?? null,
+          answeredAt: status === "answered" ? at : null,
+          via: answer?.via ?? null,
+          // The only level there is: the signed-in session of the person the question was for.
+          level: answer ? "checked" : null,
+        }).changes;
+      if (changed === 0) throw new PorticoError("wrong_status", "This question is no longer waiting.");
+      const ended = this.get(question.id)!;
+      // A removed agent has nobody to tell: its row, and with it its notices, is gone.
+      const agentThere = this.agents.get(ended.agentId) !== null;
+      let noticeId: string | null = null;
+      if (agentThere) {
+        noticeId = this.saveNotice(ended.agentId, this.outcomeText(ended));
+        this.db.query("UPDATE questions SET notice_id = $noticeId WHERE id = $id").run({ id: ended.id, noticeId });
+      }
+      if (status === "answered" || status === "skipped") {
+        this.activity.record(status === "answered" ? "input_answered" : "input_skipped", {
+          // The record names only an agent and a person who are still there: a row that is gone is no name at all.
+          agentId: agentThere ? ended.agentId : null,
+          personId: ended.answeredBy !== null && this.people.get(ended.answeredBy) ? ended.answeredBy : null,
+          detail: { question: ended.id, via: ended.answeredVia, level: ended.answerLevel, ...(ended.taskId ? { task: ended.taskId } : {}) },
+        });
+      }
+      return { ended, noticeId };
+    })();
     this.log(`input_${status}`, { question_id: ended.id, agent_id: ended.agentId, ...(answer ? { via: answer.via, level: "checked" } : {}) });
+    if (noticeId !== null) this.wake(ended.agentId, noticeId, NOTICE_KIND[status]);
     this.changed(ended);
     return ended;
   }
