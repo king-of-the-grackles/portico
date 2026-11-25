@@ -8,6 +8,7 @@ import { agentViews } from "./agent-api/views";
 import { wakeStateOf } from "./core/wake-setup";
 import { personApi } from "./api";
 import { computerApi } from "./computer-api";
+import { discoveryRoutes } from "./discovery";
 import { feedbackReviewRoutes } from "./feedback-api";
 import { fileRoutes } from "./file-api";
 import type { Core } from "./core/core";
@@ -77,6 +78,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
     );
     return ok ? c.json({ ok: true }) : c.json({ error: "unauthorized", message: "The signature doesn't check out." }, 401);
   });
+  app.route("/", discoveryRoutes(core));
   app.route("/", oauthRoutes(core));
   app.route("/api", personApi(core, opts));
   app.route("/", webRoutes(core));

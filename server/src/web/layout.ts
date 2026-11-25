@@ -34,6 +34,8 @@ export interface PageOptions {
   status?: 200 | 400 | 403 | 404 | 410 | 503;
   /** A page that loads something from outside Portico names its own policy. */
   csp?: string;
+  /** A public page a search engine may list, with the line shown under its title there. Every other page says noindex. */
+  description?: string;
   /** A page whose address holds a secret sends no address on: "no-referrer". */
   referrer?: "no-referrer";
 }
@@ -46,7 +48,7 @@ export function sendPage(c: Context, opts: PageOptions): Response | Promise<Resp
   c.header("Content-Security-Policy", opts.csp ?? CSP);
   const styles = ["base.css", ...(opts.styles ?? [])];
   const page = html`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><link rel="icon" href="/assets/icon.svg" type="image/svg+xml"><title>${opts.title}</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${opts.description === undefined ? html`<meta name="robots" content="noindex">` : html`<meta name="description" content="${opts.description}">`}<link rel="icon" href="/assets/icon.svg" type="image/svg+xml"><title>${opts.title}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400..700&amp;display=swap">
 ${styles.map((s) => html`<link rel="stylesheet" href="/assets/${s}">`)}

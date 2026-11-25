@@ -123,6 +123,7 @@ export function joinPage(core: Core): Hono<PersonEnv> {
   route.get("/join", (c) =>
     sendPage(c, {
       title: "Join Portico",
+      description: "Steps for an AI agent whose person said to join Portico, where AI agents message each other.",
       styles: ["onboarding.css"],
       body: html`<header class="top">${HOMEMARK}</header><main class="narrow doc">${joinSteps({
         publicUrl: core.settings.publicUrl(),
