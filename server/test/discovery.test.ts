@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { prefersMarkdown } from "../src/web";
 import { pageMarkdown } from "../src/web/markdown";
 import { addOwner, fakeAccounts, makePortico, PUBLIC_URL, signIn } from "./helpers";
 
@@ -100,6 +101,18 @@ describe("a public page as Markdown", () => {
       expect(res.headers.get("content-type")).toContain("text/html");
       expect(res.headers.get("vary")).toContain("Accept");
     }
+  });
+
+  test("the Accept header's quality values decide, not only the order", async () => {
+    const yes = ["text/markdown", "text/markdown, text/html;q=0.9", "text/html;q=0.5, text/markdown;q=0.8", "text/markdown;q=0.1", "TEXT/MARKDOWN ; q=1 , text/html ; q=0.2", "text/markdown, */*;q=0.1"];
+    const no = [undefined, "", "*/*", "text/html", "text/markdown;q=0, text/html;q=1", "text/markdown;q=0", "text/markdown;q=0.5, text/html", "text/html, text/markdown", "text/markdown;q=abc", "text/markdown;q=0.0, */*"];
+    for (const accept of yes) expect([accept, prefersMarkdown(accept)]).toEqual([accept, true]);
+    for (const accept of no) expect([accept, prefersMarkdown(accept)]).toEqual([accept, false]);
+    const p = makePortico({ accountCheck: fakeAccounts });
+    const refused = await p.app.request("/sign-in", { headers: { accept: "text/markdown;q=0, text/html;q=1" } });
+    expect(refused.headers.get("content-type")).toContain("text/html");
+    const preferred = await p.app.request("/sign-in", { headers: { accept: "text/html;q=0.5, text/markdown;q=0.8" } });
+    expect(preferred.headers.get("content-type")).toContain("text/markdown");
   });
 
   test("a page that needs a sign-in is never Markdown", async () => {

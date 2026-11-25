@@ -25,12 +25,23 @@ const NOT_PAGES = /^\/(api|mcp|oauth|\.well-known|healthz|assets|codex|favicon\.
 /** A page's path with nothing in it a browser could read as another site: single slashes and plain segments. */
 const PLAIN_PATH = /^(\/[A-Za-z0-9._~-]+)+$/;
 
-/** Whether the Accept header names text/markdown, and names it before text/html when both are there. */
-function prefersMarkdown(accept: string | undefined): boolean {
-  const types = (accept ?? "").toLowerCase().split(",").map((type) => type.split(";")[0]!.trim());
-  const markdown = types.indexOf("text/markdown");
-  const htmlAt = types.indexOf("text/html");
-  return markdown !== -1 && (htmlAt === -1 || markdown < htmlAt);
+/**
+ * Whether the Accept header asks for Markdown before HTML: text/markdown with a quality above 0, and above
+ * text/html's, or equal to it and named first. A reader that names neither, or only a wildcard, gets HTML.
+ */
+export function prefersMarkdown(accept: string | undefined): boolean {
+  const quality = new Map<string, { q: number; at: number }>();
+  (accept ?? "").toLowerCase().split(",").forEach((part, at) => {
+    const [type, ...params] = part.split(";").map((piece) => piece.trim());
+    const q = params.find((param) => param.startsWith("q="));
+    const value = q === undefined ? 1 : Number(q.slice(2));
+    if (type && !quality.has(type)) quality.set(type, { q: Number.isFinite(value) ? value : 0, at });
+  });
+  const markdown = quality.get("text/markdown");
+  const page = quality.get("text/html");
+  if (!markdown || markdown.q <= 0) return false;
+  if (!page) return true;
+  return markdown.q > page.q || (markdown.q === page.q && markdown.at < page.at);
 }
 
 /** Every page. Pages read who is signed in; each page decides whether it needs someone. */
