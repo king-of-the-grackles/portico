@@ -240,12 +240,19 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     const by = agents.get(byId);
     if (!starter || !by || completed.has(first.id)) return;
     remember(completed, first.id);
-    analytics.capture("task_completed", starter.ownerId, {
-      task_id: first.id,
-      by_agent_id: by.id,
-      cross_owner: starter.ownerId !== by.ownerId,
-      minutes: Math.max(0, Math.floor((now().getTime() - Date.parse(first.createdAt)) / MINUTE_MS)),
-    });
+    analytics.capture(
+      "task_completed",
+      starter.ownerId,
+      {
+        task_id: first.id,
+        by_agent_id: by.id,
+        cross_owner: starter.ownerId !== by.ownerId,
+        minutes: Math.max(0, Math.floor((now().getTime() - Date.parse(first.createdAt)) / MINUTE_MS)),
+      },
+      undefined,
+      // The agent that answered may be another person's: left out, that person's agent isn't named.
+      { by_agent_id: by.ownerId },
+    );
   };
   const captureNotice = (notice: Notice) => {
     const m = notice.message;
@@ -266,10 +273,14 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
         has_files: files.of(m).length > 0,
         no_reply_needed: m.noReplyNeeded,
       };
-      analytics.capture("message_sent", sender.ownerId, properties);
+      // The receiving agent may be another person's, and so may the Portico: left out, neither is named.
+      const others: Record<string, string> = { to_agent_id: receiver.ownerId };
+      const through = workspaces.get(m.workspaceId);
+      if (through) others.portico_id = through.ownerId;
+      analytics.capture("message_sent", sender.ownerId, properties, undefined, others);
       if (!senders.has(sender.ownerId)) {
         remember(senders, sender.ownerId);
-        if (!messages.sentBefore(sender.ownerId, m.id)) analytics.capture("first_message_sent", sender.ownerId, properties);
+        if (!messages.sentBefore(sender.ownerId, m.id)) analytics.capture("first_message_sent", sender.ownerId, properties, undefined, others);
       }
     }
     // A task's outcome is worked out from its messages, never stored, so the step that completes one is seen here: a

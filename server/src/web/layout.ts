@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
-import { type Analytics, optedOut } from "../core/analytics";
+import { optedOut } from "../core/analytics";
 
 export type Html = HtmlEscapedString | Promise<HtmlEscapedString>;
 
@@ -59,13 +59,10 @@ export function sendPage(c: Context, opts: PageOptions): Response | Promise<Resp
   c.header("X-Frame-Options", "DENY");
   c.header("Content-Security-Policy", opts.csp ?? CSP);
   const styles = ["base.css", ...(opts.styles ?? [])];
-  // Not for a browser that says Do Not Track or Global Privacy Control: the module isn't even loaded, and the
-  // signed-in person is left out of every event until a visit without either.
-  const on = opts.analytics ? (c.get(ANALYTICS_ON) as Analytics | undefined) : undefined;
-  const out = optedOut((name) => c.req.header(name));
-  const person = on ? (c.get("person") as { id: string } | null | undefined) : null;
-  if (on && person) on.setOptOut(person.id, out);
-  const analytics = on !== undefined && !out;
+  // Not for a browser that says Do Not Track or Global Privacy Control: the module isn't even loaded. That the
+  // signed-in person is left out of every event is recorded where the person is read (loadPerson), on every page
+  // and call, whether or not the page would load the module.
+  const analytics = Boolean(opts.analytics) && c.get(ANALYTICS_ON) !== undefined && !optedOut((name) => c.req.header(name));
   const page = html`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${opts.description === undefined ? html`<meta name="robots" content="noindex">` : html`<meta name="description" content="${opts.description}">`}${opts.canonical === undefined ? "" : html`<link rel="canonical" href="${opts.canonical}">`}<link rel="icon" href="/assets/icon.svg" type="image/svg+xml"><title>${opts.title}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

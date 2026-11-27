@@ -76,6 +76,10 @@ const page = async (p: ReturnType<typeof makePortico>, path: string, cookie: str
   return { status: res.status, html: await res.text() };
 };
 const TAG = '<script type="module" src="/assets/analytics.js"';
+/** The same Portico as a browser that sends these headers with every request, as Do Not Track and Global Privacy Control are sent. */
+const browserWith = (p: ReturnType<typeof makePortico>, headers: Record<string, string>) => ({
+  app: { request: (path: string, init: RequestInit = {}) => p.app.request(path, { ...init, headers: { ...(init.headers as Record<string, string>), ...headers } }) },
+});
 
 afterEach(() => captureLogs(null));
 
@@ -611,10 +615,12 @@ describe("server events", () => {
     const adaId = p.people.byExternalId("acct-ada")!.id;
     const bobId = p.people.byExternalId("acct-bob")!.id;
     expect(p.settings.get("analytics_opt_out")).toBe(JSON.stringify([adaId, bobId]));
-    for (const [cookie, handle] of [[ada, "ada"], [bob, "bob"]] as const) {
-      expect((await callPerson(p, cookie, "POST", "/api/welcome", { name: "A Person", handle })).status).toBe(200);
+    // A browser sends its preference with every request, so every call of Ada's and Bob's carries it.
+    const adaBrowser = browserWith(p, { DNT: "1" });
+    for (const [browser, cookie, handle] of [[adaBrowser, ada, "ada"], [browserWith(p, { "Sec-GPC": "1" }), bob, "bob"]] as const) {
+      expect((await callPerson(browser, cookie, "POST", "/api/welcome", { name: "A Person", handle })).status).toBe(200);
     }
-    const joined = await finishJoin(p, ada, await askToJoin(p, { kind: "agent", name: "helper" }), { mine: true });
+    const joined = await finishJoin(adaBrowser as never, ada, await askToJoin(p, { kind: "agent", name: "helper" }), { mine: true });
     const second = addAppAgent(p, p.people.require(adaId), "second");
     const mcp = (q: ReturnType<typeof makePortico>, body: unknown) => callAs(q, { token: joined.token }, "POST", "/mcp", body);
     const message = await toolAnswer<{ message: { id: string } }>(mcp(p, tool("send_message", { to: "second", subject: "s", text: "t" })));
@@ -921,6 +927,78 @@ describe("server events", () => {
     p.messages.send(again, { replyTo: asked.id, subject: "s", text: "done, once more" });
     p.messages.send(again, { replyTo: second.id, subject: "s", text: "done, once more" });
     expect(await completions(p)).toHaveLength(2);
+  });
+});
+
+describe("a person left out is left out of other people's events, and wherever the preference is seen", () => {
+  test("another person's events don't name an opted-out person's agents", async () => {
+    const { p, events } = start();
+    const bob = await addOwner(p, "Bob");
+    const alice = await addMember(p, "Alice");
+    const asker = addAppAgent(p, bob, "grok-bot");
+    const answerer = addAppAgent(p, alice, "scout");
+    together(p, asker.agent, answerer.agent);
+    // Alice's browser says Global Privacy Control on any page or call of hers.
+    expect((await page(p, "/settings", signIn(p, alice), { "Sec-GPC": "1" })).status).toBe(200);
+    expect(p.settings.get("analytics_opt_out")).toBe(JSON.stringify([alice.id]));
+
+    const asked = p.messages.send(asker.agent, { to: "alice/scout", subject: "s", text: "t" }).message;
+    expect(asked.status).toBe("pending");
+    p.messages.inbox(answerer.agent);
+    p.messages.send(answerer.agent, { replyTo: asked.id, subject: "s", text: "done" });
+
+    const all = await events();
+    const sent = all.find((e) => e.event === "message_sent")!;
+    expect(sent.distinct_id).toBe(bob.id);
+    expect(sent.properties).toMatchObject({ agent_id: asker.agent.id, to_agent_id: null, cross_owner: true });
+    const done = all.find((e) => e.event === "task_completed")!;
+    expect(done.distinct_id).toBe(bob.id);
+    expect(done.properties).toMatchObject({ task_id: asked.id, by_agent_id: null, cross_owner: true });
+    // Nothing anywhere names Alice or her agent: not as the one an event is about, and not inside someone else's.
+    const text = JSON.stringify(all);
+    expect(text).not.toContain(alice.id);
+    expect(text).not.toContain(answerer.agent.id);
+  });
+
+  test("events still waiting lose an agent's ID when that agent's person opts out", async () => {
+    const { p, events } = start();
+    const bob = await addOwner(p, "Bob");
+    const alice = await addMember(p, "Alice");
+    const asker = addAppAgent(p, bob, "grok-bot");
+    const answerer = addAppAgent(p, alice, "scout");
+    together(p, asker.agent, answerer.agent);
+    p.messages.send(asker.agent, { to: "alice/scout", subject: "s", text: "t" });
+    await flush();
+    p.analytics.setOptOut(alice.id, true);
+    const sent = (await events()).find((e) => e.event === "message_sent")!;
+    expect(sent.properties.to_agent_id).toBeNull();
+    expect(JSON.stringify(await events())).not.toContain(answerer.agent.id);
+  });
+
+  test("a consent page opened directly records the preference: allowing a join there is not counted, nor what the agent does after", async () => {
+    const { p, events } = start();
+    const chris = await addOwner(p);
+    const cookie = signIn(p, chris);
+    // No page with the analytics module was ever opened: the first thing this browser does is the consent page.
+    const asked = await askToJoin(p, { kind: "agent", name: "helper" });
+    const browser = browserWith(p, { "Sec-GPC": "1" });
+    const consent = await browser.app.request(`${PUBLIC_URL}/c/${asked.id}`, { headers: { host: "portico.example.com", cookie } });
+    expect(consent.status).toBe(200);
+    expect(await consent.text()).not.toContain("analytics.js");
+    expect(p.settings.get("analytics_opt_out")).toBe(JSON.stringify([chris.id]));
+    const joined = await finishJoin(browser as never, cookie, asked, { mine: true });
+    expect(await callAs(p, { token: joined.token }, "POST", "/mcp", tool("list_agents"))).toBeDefined();
+    expect((await callAs(p, { token: joined.token }, "GET", "/api/agent/agents")).status).toBe(200);
+    expect(await events()).toEqual([]);
+
+    // The same on a call alone, with no page at all: a person's call that says Do Not Track is enough.
+    const maya = await addMember(p);
+    const hers = signIn(p, maya);
+    expect((await callPerson(browserWith(p, { DNT: "1" }), hers, "GET", "/api/me")).status).toBe(200);
+    expect(JSON.parse(p.settings.get("analytics_opt_out")!)).toEqual([chris.id, maya.id]);
+    // And a request without either brings the person back.
+    expect((await callPerson(p, hers, "GET", "/api/me")).status).toBe(200);
+    expect(JSON.parse(p.settings.get("analytics_opt_out")!)).toEqual([chris.id]);
   });
 });
 

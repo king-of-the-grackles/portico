@@ -17,6 +17,13 @@ interface Queued {
   properties: Record<string, unknown>;
 }
 
+/**
+ * Properties of an event that name something of another person than the one the event is about (the agent a message
+ * went to, the agent that answered a task): each property's name, with that other person's ID. Such a property is
+ * sent empty when that person is left out.
+ */
+export type OthersNamed = Record<string, string>;
+
 /** The IDs of the people left out of analytics, kept where a restart finds them. */
 export interface OptOutStore {
   load(): string[];
@@ -51,6 +58,8 @@ export class Analytics {
   private readonly now: () => Date;
   private readonly log: (level: "warn", msg: string, fields: Record<string, unknown>) => void;
   private queue: Queued[] = [];
+  /** For events still waiting, which of their properties name something of another person. Never sent. */
+  private readonly othersOf = new WeakMap<Queued, OthersNamed>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private sending: Promise<void> | null = null;
   private readonly optOuts: OptOutStore | null;
@@ -75,17 +84,22 @@ export class Analytics {
 
   /**
    * Queues one event. Never throws and never waits. `setOnce` holds properties PostHog keeps on the person only the
-   * first time it sees them.
+   * first time it sees them. `others` says which properties name something of another person: a person who is left
+   * out is left out of other people's events too.
    */
-  capture(event: string, distinctId: string, properties: AnalyticsProperties = {}, setOnce?: AnalyticsProperties): void {
+  capture(event: string, distinctId: string, properties: AnalyticsProperties = {}, setOnce?: AnalyticsProperties, others: OthersNamed = {}): void {
     if (!this.config) return;
     try {
-      if (this.leftOut().has(distinctId)) return;
+      const out = this.leftOut();
+      if (out.has(distinctId)) return;
       const sent: Record<string, unknown> = clean(properties);
+      for (const [key, personId] of Object.entries(others)) if (key in sent && out.has(personId)) sent[key] = null;
       if (setOnce && Object.keys(clean(setOnce)).length > 0) sent.$set_once = clean(setOnce);
       // The request to PostHog comes from this server, so its address says nothing about where the person is.
       Object.assign(sent, { environment: this.config.environment, $lib: "portico-server", $geoip_disable: true });
-      this.queue.push({ event, distinct_id: distinctId, timestamp: this.now().toISOString(), properties: sent });
+      const queued: Queued = { event, distinct_id: distinctId, timestamp: this.now().toISOString(), properties: sent };
+      if (Object.keys(others).length > 0) this.othersOf.set(queued, others);
+      this.queue.push(queued);
       // PostHog is slow or away: the oldest events go first.
       if (this.queue.length > QUEUE_MAX) this.queue.splice(0, this.queue.length - QUEUE_MAX);
       if (this.queue.length >= BATCH) void this.flush();
@@ -119,6 +133,9 @@ export class Analytics {
         out.add(personId);
         // What already waits about the person doesn't leave either.
         this.queue = this.queue.filter((queued) => queued.distinct_id !== personId);
+        for (const queued of this.queue) {
+          for (const [key, owner] of Object.entries(this.othersOf.get(queued) ?? {})) if (owner === personId && key in queued.properties) queued.properties[key] = null;
+        }
       } else out.delete(personId);
       this.optOuts?.save([...out]);
     } catch {

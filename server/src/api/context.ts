@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import { SESSION_COOKIE } from "../core/accounts";
+import { optedOut } from "../core/analytics";
 import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
 import type { Person } from "../core/types";
@@ -20,6 +21,10 @@ export function loadPerson(core: Core): MiddlewareHandler<PersonEnv> {
   return async (c, next) => {
     const person = core.accounts.personForSession(getCookie(c, SESSION_COOKIE));
     c.set("person", person);
+    // What the person's browser says about being counted, on every page and call that comes with the person's sign-in:
+    // Do Not Track or Global Privacy Control leaves the person out of analytics, and a request without either brings
+    // the person back. Nothing happens while analytics is off.
+    if (person) core.analytics.track((a) => a.setOptOut(person.id, optedOut((name) => c.req.header(name))));
     // A person signed in with an outside account who has no handle yet can only pick one: nothing else opens, on any surface a person reaches.
     if (core.accountSignIn && person && person.handle === null && !OPEN_WITHOUT_HANDLE.test(c.req.path)) {
       if (c.req.path.startsWith("/api/")) return c.json({ error: "not_allowed", message: "Pick a handle first, at /welcome." }, 403);
