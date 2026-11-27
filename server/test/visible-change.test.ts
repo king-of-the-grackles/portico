@@ -151,12 +151,12 @@ describe("the Deploy workflow's wait for a visible change", () => {
     expect(production).toContain("needs.plan-production.outputs.migration == 'true' && 'production-migration' || 'production'");
   });
 
-  test("the script, the workflow and the README name the same environment and label", () => {
+  test("the script, the workflow and CONTRIBUTING.md name the same environment and label", () => {
     const sh = readFileSync(script, "utf8");
     expect(sh).toContain("ENVIRONMENT=visible-change");
     expect(sh).toContain("LABEL=visible");
-    const readme = readFileSync(join(root, "README.md"), "utf8");
-    expect(readme).toContain("Environment `visible-change`");
+    const contributing = readFileSync(join(root, "CONTRIBUTING.md"), "utf8");
+    expect(contributing).toContain("Environment `visible-change`");
   });
 });
 
