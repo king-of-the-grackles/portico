@@ -4,6 +4,7 @@ import type { Content } from "./content";
 import { PorticoError } from "./errors";
 import { DAY_MS, LIMITS } from "./limits";
 import type { SecretPlace, Secrets } from "./secrets";
+import { firstMessageKey } from "./settings";
 import { hashSecret, LINK_SECRET, newLinkSecret } from "./tokens";
 import type { Person, PersonStatus, Role } from "./types";
 import { nameKey } from "./names";
@@ -402,6 +403,8 @@ export class People {
           .run({ key: handleKey(handle), handle, id, at: this.iso() });
       }
       this.db.query("DELETE FROM people WHERE id = $id").run({ id });
+      // What analytics kept about the person's first message goes with the person.
+      this.db.query("DELETE FROM settings WHERE key = $key").run({ key: firstMessageKey(id) });
     })();
     clearContent?.();
     this.onWorkspacesGone?.(gone);

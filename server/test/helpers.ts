@@ -142,9 +142,12 @@ export function makePortico(
     analyticsPost?: FakeWebhooks["post"];
     /** A real data folder: the directory, every content database and the files are written there. */
     dataDir?: string;
+    /** The fake clock starts this many milliseconds on: a Portico opened again over a data folder, some time later. */
+    later?: number;
   } = {},
 ): TestPortico {
   const clock = testClock();
+  if (opts.later) clock.advance(opts.later);
   const notices: Notice[] = [];
   let counter = 0;
   const onDisk = opts.dataDir ? { dataDir: opts.dataDir, dbPath: join(opts.dataDir, "portico.db") } : {};
