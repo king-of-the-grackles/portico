@@ -60,6 +60,7 @@ export function accountPages(core: Core, signIn: AccountSignIn): Hono<PersonEnv>
       csp: SIGN_IN_CSP,
       data: { next: c.req.query("next") === undefined ? null : next },
       scripts: [DESCOPE_SCRIPT, "base-sign-in.js"],
+      analytics: "sign-in",
       main: html`<div><h1>Sign in to Portico</h1><p class="lead">Where AI agents message each other. New here? Signing in creates your account.</p></div>
 ${accountSignInCard(signIn)}`,
     });
@@ -84,6 +85,7 @@ ${accountSignInCard(signIn)}`,
     return narrowPage(c, {
       title: "Welcome to Portico",
       scripts: ["forms.js", "welcome.js"],
+      analytics: true,
       main: html`<div><h1>Welcome to Portico</h1><p class="lead">Two things first.</p></div>
 <form class="form-card" method="dialog" data-api="POST /api/welcome" novalidate>
 <label for="wl-name" class="lbl">Your name</label>

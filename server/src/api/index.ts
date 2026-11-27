@@ -5,6 +5,7 @@ import { jsonBodyLimit } from "../agent-api/limits";
 import type { Core } from "../core/core";
 import { accountRoutes } from "./account";
 import { accountSignInRoutes } from "./account-sign-in";
+import { analyticsRoute } from "./analytics";
 import { agentRoutes } from "./agents";
 import { approvalRoutes } from "./approvals";
 import { computerRoutes } from "./computers";
@@ -89,6 +90,8 @@ export function personApi(core: Core, opts: { heartbeatMs?: number } = {}): Hono
       await next();
     });
   }
+  // Before the person is loaded: a new person on the welcome page has no handle yet, and that page counts too.
+  if (core.analytics.on) api.post("/analytics", analyticsRoute(core));
   api.use("*", jsonBodyLimit());
   api.use("*", loadPerson(core));
   api.use("*", async (c, next) => {

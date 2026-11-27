@@ -74,9 +74,13 @@ export async function serveCommand(io: CliIo): Promise<number | "running"> {
     } else if (localBeforeSetup(running.portico, io.env)) {
       io.out(SETUP_LINK_HINT);
     }
+    let stopping = false;
     const shutdown = () => {
+      if (stopping) return;
+      stopping = true;
       running.stop();
-      process.exit(0);
+      // Analytics events still waiting go out first, for two seconds at most.
+      void Promise.race([running.portico.analytics.flush(), new Promise((done) => setTimeout(done, 2000))]).finally(() => process.exit(0));
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);

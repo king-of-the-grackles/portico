@@ -87,6 +87,7 @@ export function homePage(core: Core): Hono<PersonEnv> {
       body: html`<div id="app">${raw(first)}</div>`,
       data,
       scripts: ["app.js"],
+      analytics: true,
       styles: ["app.css"],
     });
   };

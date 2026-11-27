@@ -38,14 +38,31 @@ const fail = (message: string) => {
 
 const flow = document.querySelector("descope-wc");
 
+/**
+ * Where analytics is on, the page carries analytics.js: its anonymous ID goes along, so Portico can tie the visit
+ * before sign-in to the person. Anywhere else, and whenever that module fails, nothing is added.
+ */
+async function visit(): Promise<{ anon_id?: string }> {
+  if (!document.querySelector('script[src="/assets/analytics.js"]')) return {};
+  try {
+    const { anonId } = (await import("./analytics.js")) as { anonId: () => string | null };
+    const id = anonId();
+    return id === null ? {} : { anon_id: id };
+  } catch {
+    return {};
+  }
+}
+
 flow?.addEventListener("success", (event) => {
   const token = (event as CustomEvent<{ sessionJwt?: string }>).detail?.sessionJwt;
   void (async () => {
     try {
-      const answer = await api<{ next: string }>("POST", "/api/session", { token, next });
+      const answer = await api<{ next: string }>("POST", "/api/session", { token, next, ...(await visit()) });
       try {
         // Portico's own cookie carries the sign-in from here: what Descope's component kept is no longer needed.
         localStorage.removeItem(KEPT_NEXT);
+        // Portico has been told which visit this was (see analytics.ts): the visit's ID is done.
+        localStorage.removeItem("portico-anon");
         for (const key of ["DS", "DSR", "DSI"]) localStorage.removeItem(key);
       } catch {
         // Nothing to clear.

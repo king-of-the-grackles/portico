@@ -39,6 +39,7 @@ export function signInPage(_core: Core): Hono<PersonEnv> {
     narrowPage(c, {
       title: "Sign in to Portico",
       scripts: ["forms.js", "passkey.js"],
+      analytics: "sign-in",
       main: html`<h1>Sign in to Portico</h1>
 ${localSignInCard(safeNext(c.req.query("next")))}
 <p class="help">No account yet? Ask the person who runs this Portico server for an invite link.</p>`,

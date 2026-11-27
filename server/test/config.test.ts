@@ -23,7 +23,37 @@ describe("config", () => {
       files: null,
       mail: null,
       descopeProjectId: null,
+      analytics: null,
     });
+  });
+
+  test("analytics is off without PORTICO_POSTHOG_KEY, and with it needs prod or dev and an https:// host with no path", () => {
+    // The deployment files say which deployment each is, and nothing more: alone, that turns nothing on.
+    expect(parseEnv({ PORTICO_POSTHOG_ENV: "prod", PORTICO_POSTHOG_HOST: "https://eu.i.posthog.com" }, "k").analytics).toBeNull();
+    expect(parseEnv({ PORTICO_POSTHOG_KEY: " phc_abc ", PORTICO_POSTHOG_ENV: "dev" }, "k").analytics).toEqual({ key: "phc_abc", host: "https://us.i.posthog.com", environment: "dev" });
+    expect(parseEnv({ PORTICO_POSTHOG_KEY: "phc_abc", PORTICO_POSTHOG_ENV: "prod", PORTICO_POSTHOG_HOST: "https://eu.i.posthog.com/" }, "k").analytics).toEqual({
+      key: "phc_abc",
+      host: "https://eu.i.posthog.com",
+      environment: "prod",
+    });
+    for (const environment of [undefined, "", "production", "staging"]) {
+      expect(() => parseEnv({ PORTICO_POSTHOG_KEY: "phc_abc", PORTICO_POSTHOG_ENV: environment }, "k")).toThrow("PORTICO_POSTHOG_ENV must be prod or dev");
+    }
+    for (const host of ["http://us.i.posthog.com", "us.i.posthog.com", "https://us.i.posthog.com/batch", "https://user:pass@us.i.posthog.com", "https://us.i.posthog.com?x=1"]) {
+      expect(() => parseEnv({ PORTICO_POSTHOG_KEY: "phc_abc", PORTICO_POSTHOG_ENV: "prod", PORTICO_POSTHOG_HOST: host }, "k")).toThrow("PORTICO_POSTHOG_HOST");
+    }
+    // A problem never repeats the key.
+    try {
+      parseEnv({ PORTICO_POSTHOG_KEY: "phc_secret_value", PORTICO_POSTHOG_ENV: "nope", PORTICO_POSTHOG_HOST: "bad" }, "k");
+      throw new Error("expected a ConfigError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      expect((err as Error).message).not.toContain("phc_secret_value");
+    }
+    const root = join(import.meta.dir, "..", "..");
+    expect(readFileSync(join(root, "fly.dev.toml"), "utf8")).toContain('PORTICO_POSTHOG_ENV = "dev"');
+    expect(readFileSync(join(root, "fly.hosted.toml"), "utf8")).toContain('PORTICO_POSTHOG_ENV = "prod"');
+    for (const file of ["fly.dev.toml", "fly.hosted.toml", "fly.toml", "render.yaml", "Dockerfile"]) expect(readFileSync(join(root, file), "utf8")).not.toMatch(/PORTICO_POSTHOG_KEY\s*=/);
   });
 
   test("PORTICO_JOIN_STARTS_PER_ADDRESS is a whole number from 1 to 1000, and no deployment file but dev's sets it", () => {

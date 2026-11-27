@@ -1,8 +1,12 @@
 import type { Context } from "hono";
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
+import { optedOut } from "../core/analytics";
 
 export type Html = HtmlEscapedString | Promise<HtmlEscapedString>;
+
+/** The request variable the app sets to the Analytics instance while analytics is on. */
+export const ANALYTICS_ON = "analyticsOn";
 
 /** Portico's own scripts and styles, Manrope from Google Fonts, and API calls back to Portico only. */
 export const CSP =
@@ -40,6 +44,12 @@ export interface PageOptions {
   canonical?: string;
   /** A page whose address holds a secret sends no address on: "no-referrer". */
   referrer?: "no-referrer";
+  /**
+   * The page counts as a page view where analytics is on: it loads analytics.js, which reports the visit to Portico
+   * itself. "sign-in" for the sign-in page, which reports that as well. Only pages whose address and content hold no
+   * secret say so: never a consent, held-message, join, share or invite page.
+   */
+  analytics?: boolean | "sign-in";
 }
 
 /** Sends a page with the headers every Portico page uses. */
@@ -49,6 +59,10 @@ export function sendPage(c: Context, opts: PageOptions): Response | Promise<Resp
   c.header("X-Frame-Options", "DENY");
   c.header("Content-Security-Policy", opts.csp ?? CSP);
   const styles = ["base.css", ...(opts.styles ?? [])];
+  // Not for a browser that says Do Not Track or Global Privacy Control: the module isn't even loaded. That the
+  // signed-in person is left out of every event is recorded where the person is read (loadPerson), on every page
+  // and call, whether or not the page would load the module.
+  const analytics = Boolean(opts.analytics) && c.get(ANALYTICS_ON) !== undefined && !optedOut((name) => c.req.header(name));
   const page = html`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${opts.description === undefined ? html`<meta name="robots" content="noindex">` : html`<meta name="description" content="${opts.description}">`}${opts.canonical === undefined ? "" : html`<link rel="canonical" href="${opts.canonical}">`}<link rel="icon" href="/assets/icon.svg" type="image/svg+xml"><title>${opts.title}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -57,6 +71,7 @@ ${styles.map((s) => html`<link rel="stylesheet" href="/assets/${s}">`)}
 ${opts.data === undefined ? "" : html`<script type="application/json" id="first-data">${raw(scriptJson(opts.data))}</script>`}
 ${(opts.scripts ?? []).includes("forms.js") ? html`<link rel="modulepreload" href="/assets/api.js">` : ""}
 ${(opts.scripts ?? []).map((s) => html`<script type="module" src="${s.startsWith("https://") ? s : `/assets/${s}`}"></script>`)}
+${analytics ? html`<script type="module" src="/assets/analytics.js" data-view="${opts.analytics === "sign-in" ? "sign-in" : "page"}"></script>` : ""}
 </head><body>${opts.body}</body></html>`;
   return c.html(page, opts.status ?? 200);
 }

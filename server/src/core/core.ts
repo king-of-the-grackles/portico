@@ -3,6 +3,7 @@ import type { AgentStreams } from "../agent-api/stream";
 import type { PersonStreams } from "../api/events";
 import type { Accounts } from "./accounts";
 import type { Activity } from "./activity";
+import type { Analytics } from "./analytics";
 import type { Agents } from "./agents";
 import type { AllowList, Approvals, Contacts } from "./approvals";
 import type { AgentNotices } from "./notices";
@@ -31,6 +32,8 @@ import type { Questions } from "./questions";
  */
 export interface Core {
   config: PorticoConfig;
+  /** Product analytics, when PORTICO_POSTHOG_KEY is set: otherwise every call does nothing. */
+  analytics: Analytics;
   /** The directory: people, agents, workspaces and who is in each. No route reads message content from here. */
   db: Database;
   /** Each workspace's own content database, by the caller's scope. Routes reach content through the core modules. */

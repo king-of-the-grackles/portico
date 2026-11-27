@@ -27,6 +27,9 @@ primary_region = "iad"
   # The address from before the move to app.portico.chat: every request there answers 410 Gone with the new address.
   PORTICO_RETIRED_HOSTS = "super.portico.chat"
   PORTICO_PLUGIN_SOURCE = "king-of-the-grackles/portico"
+  # Product analytics (PostHog). The key itself is a Fly secret, PORTICO_POSTHOG_KEY, set by a person: without it
+  # nothing is captured and this line does nothing.
+  PORTICO_POSTHOG_ENV = "prod"
 
 # SQLite lives on one volume, so hosted Portico runs on one machine: deploy with --ha=false.
 [mounts]

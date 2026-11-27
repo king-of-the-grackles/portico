@@ -232,6 +232,7 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     const { client, redirectUri } = checked;
     const handle = typeof fields.handle === "string" ? fields.handle.trim().toLowerCase() : "";
     if (person.handle === null && handle === "") throw new PorticoError("bad_request", "Pick a handle first.");
+    let vouched = true;
     const { agent, code } = core.db.transaction(() => {
       if (person.handle === null) {
         core.people.setHandle(person.id, handle);
@@ -241,13 +242,18 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
       // Without the page's tick ("started this myself") the connector starts unproven, like any agent that just joined:
       // its first messages wait for the person, and it asks before changing a Portico. A plain form post sends "on".
       const mine = (fields as Record<string, unknown>).mine;
-      if (mine !== true && mine !== "on" && mine !== "true") core.agents.markUnproven({ agentId: made.id });
+      vouched = mine === true || mine === "on" || mine === "true";
+      if (!vouched) core.agents.markUnproven({ agentId: made.id });
       const agent = core.agents.require(made.id);
       core.agents.onJoined?.(agent);
       const code = store.issueCode({ clientId: client.clientId, agentId: agent.id, redirectUri, challenge: rest.request.challenge });
       return { agent, code };
     })();
     log("info", "connector_authorized", { agent_id: agent.id, client_id: client.clientId });
+    core.analytics.track((a) => {
+      if (person.handle === null) a.capture("welcome_completed", person.id, { via: "connector" });
+      a.capture("agent_joined", person.id, { agent_id: agent.id, kind: "connector", agent_kind: agent.kind, vouched });
+    });
     const next = redirectWith(redirectUri, { code, state: rest.request.state });
     return json ? c.json({ next }) : c.redirect(next, 303);
   });

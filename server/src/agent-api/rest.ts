@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 import type { Agents } from "../core/agents";
+import type { Analytics } from "../core/analytics";
 import type { Changes } from "../core/changes";
 import { HTTP_STATUS, PorticoError } from "../core/errors";
 import type { Files } from "../core/files";
@@ -89,6 +90,8 @@ export interface AgentRestDeps {
   notices: AgentNotices;
   /** What agents ask their own people. An agent can ask here, and nothing more: no route answers. */
   questions: Questions;
+  /** Product analytics: one event per call, with the route's pattern and never the body. */
+  analytics?: Analytics;
 }
 
 /**
@@ -101,6 +104,32 @@ export function agentRestRoutes(deps: AgentRestDeps): Hono<AgentEnv> {
 
   api.use("*", jsonBodyLimit());
   api.use("*", requireAgent(deps.resolver));
+  // Claude Code sessions and the Codex bridge call these routes, not /mcp: each call is one analytics event, named by
+  // the route's pattern (never the path, which holds IDs).
+  api.use("*", async (c, next) => {
+    const started = performance.now();
+    // Here the route is this middleware's own, `<where the router is mounted>/*`; after next(), the one that answered.
+    const mount = c.req.routePath.replace(/\/\*$/, "");
+    await next();
+    deps.analytics?.track((a) => {
+      const agent = c.get("agent");
+      const matched = c.req.routePath;
+      const route = matched.endsWith("/*") || !matched.startsWith(mount) ? "other" : matched.slice(mount.length);
+      const tool = route === "/portico-tools/:name" ? c.req.path.split("/").at(-1) : undefined;
+      const status = c.res.status;
+      a.capture("agent_api_called", agent.ownerId, {
+        route,
+        tool_name: tool !== undefined && PORTICO_TOOL_NAMES.includes(tool) ? tool : undefined,
+        method: c.req.method,
+        agent_id: agent.id,
+        agent_type: agent.type,
+        agent_kind: agent.kind,
+        outcome: status >= 200 && status < 300 ? "success" : status === 429 ? "rate_limited" : "error",
+        status,
+        duration_ms: Math.round(performance.now() - started),
+      });
+    });
+  });
 
   api.get("/agents", (c) => {
     const agent = c.get("agent");

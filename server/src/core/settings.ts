@@ -1,9 +1,12 @@
 import type { Database } from "bun:sqlite";
 import type { PorticoConfig } from "./types";
 
-type Key = "public_url" | "setup_done_at";
+type Key = "public_url" | "setup_done_at" | "analytics_opt_out";
 
-/** Portico-wide values kept in the database: the public URL confirmed at setup, and when setup was done. */
+/**
+ * Portico-wide values kept in the database: the public URL confirmed at setup, when setup was done, and the people
+ * whose browser said to leave them out of analytics (a JSON list of person IDs).
+ */
 export class Settings {
   constructor(
     private readonly db: Database,

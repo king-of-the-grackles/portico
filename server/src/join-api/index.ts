@@ -89,6 +89,11 @@ export function joinApi(core: Core): Hono {
     core.consents.poll(c.req.param("id"), secret);
     const body = (await readJson(c).catch(() => null)) as { code?: unknown } | null;
     const { request, agent, computer, token } = core.consents.submitCode(c.req.param("id"), secret, body?.code);
+    core.analytics.track((a) => {
+      const vouched = request.detail.mine === true;
+      if (agent) a.capture("agent_joined", agent.ownerId, { agent_id: agent.id, kind: "agent", agent_kind: agent.kind, vouched });
+      else if (computer) a.capture("agent_joined", computer.ownerId, { computer_id: computer.id, kind: "computer", agent_kind: request.agentKind, vouched });
+    });
     c.header("Cache-Control", "no-store");
     const publicUrl = core.settings.publicUrl();
     if (request.kind === "computer") return c.json({ status: request.status, computer: computer ? { id: computer.id, name: computer.name } : null, token });

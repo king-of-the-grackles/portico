@@ -16,7 +16,7 @@ import type { Core } from "./core/core";
 import { oauthRoutes } from "./oauth";
 import { joinApi } from "./join-api";
 import { webRoutes } from "./web";
-import { narrowPage } from "./web/layout";
+import { ANALYTICS_ON, narrowPage } from "./web/layout";
 import { html } from "hono/html";
 import { bodyLimit } from "hono/body-limit";
 import { MAX_BODY_BYTES } from "./core/limits";
@@ -44,6 +44,13 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
         : c.json({ error: "gone", message }, 410);
     });
   }
+  // Pages reach analytics only where analytics is on (see sendPage).
+  if (core.analytics.on) {
+    app.use("*", (c, next) => {
+      c.set(ANALYTICS_ON as never, core.analytics as never);
+      return next();
+    });
+  }
   const resolver = makeResolver(core.agents, core.computers, () => core.settings.publicUrl());
   const views = agentViews(core.agents, core.people, core.files, core.workspaces, () => core.settings.publicUrl(), (personId) => core.approvals.heldFor(personId).length, (agent) => wakeStateOf(core, agent), core.questions);
   const { agents, messages, files } = core;
@@ -64,7 +71,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
   app.route("/api/agent/stream", streamRoutes({ agents, messages, streams: core.agentStreams, resolver, heartbeatMs: opts.heartbeatMs }));
   app.route(
     "/api/agent",
-    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, changes: core.changes, now: core.now, porticoTools: toolDeps, notices, questions: core.questions }),
+    agentRestRoutes({ agents, messages, tasks: core.tasks, files, presence: core.presence, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, changes: core.changes, now: core.now, porticoTools: toolDeps, notices, questions: core.questions, analytics: core.analytics }),
   );
   app.route("/api/feedback", feedbackReviewRoutes(core.feedback));
   app.route("/files", fileRoutes(core));
@@ -72,7 +79,7 @@ export function buildApp(core: Core, opts: { heartbeatMs?: number; retiredHosts?
   app.route("/api/join", joinApi(core));
   // Before /mcp: the server's card is at /mcp/server-card.
   app.route("/", catalogRoutes(core));
-  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, porticoTools: toolDeps, notices, questions: core.questions, now: core.now }));
+  app.route("/mcp", mcpRoutes({ agents, messages, tasks: core.tasks, files, events: core.events, wakeUrls: core.wakeUrls, feedback: core.feedback, views, resolver, porticoTools: toolDeps, notices, questions: core.questions, now: core.now, analytics: core.analytics }));
   // Resend reports bounces and complaints here. The signature is the only credential; the body is read as sent.
   app.post("/api/mail/resend", async (c) => {
     const ok = core.mail.webhook(

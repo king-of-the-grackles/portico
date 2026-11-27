@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { consentWords } from "../core/consent-words";
-import type { ConsentKind, ConsentRequest } from "../core/consents";
+import { type ConsentKind, type ConsentRequest, isJoin } from "../core/consents";
 import type { Core } from "../core/core";
 import { PorticoError } from "../core/errors";
 import type { Person } from "../core/types";
@@ -51,8 +51,18 @@ export function consentRoutes(core: Core): Hono<PersonEnv> {
     const id = c.req.param("id");
     // The page's ticks arrive as `agents`: one ID, or a list. Absent, the asking agent alone comes in.
     const agents = body.agents === undefined ? undefined : Array.isArray(body.agents) ? body.agents : [body.agents];
+    let before: string | undefined;
+    core.analytics.track(() => (before = core.consents.describe(me, id)?.request.status));
     const { request, share } = core.consents.decide(me.id, id, { decision: body.decision, name: body.name, handle: body.handle, person: body.person, allow: body.allow, agents, mine: body.mine });
     log("info", "consent_answered", { request_id: request.id, kind: request.kind, status: request.status });
+    core.analytics.track((a) => {
+      // The consent page takes a new person's handle with the answer.
+      if (me.handle === null && core.people.get(me.id)?.handle) a.capture("welcome_completed", me.id, { via: "consent" });
+      // Allow on a join joins nothing yet: the page now shows the code. Pressed again, the same code shows and nothing is counted.
+      if (isJoin(request.kind) && request.status === "allowed") {
+        if (before === "pending") a.capture("join_code_created", me.id, { kind: request.kind, agent_kind: request.agentKind });
+      } else a.capture("approval_decided", me.id, { kind: isJoin(request.kind) ? "join" : request.kind, decision: request.status === "denied" ? "deny" : "allow" });
+    });
     // A share made for an address is emailed to that address now. Whatever happens to the email, the link works.
     if (share && share.email !== null) {
       const secret = core.shares.secretFor(me.id, share.id);

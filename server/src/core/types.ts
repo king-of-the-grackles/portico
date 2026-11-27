@@ -305,6 +305,21 @@ export interface PorticoConfig {
    * passwords and passkeys, with a setup link for the first account and invites for the rest (a self-hosted server).
    */
   descopeProjectId: string | null;
+  /**
+   * PORTICO_POSTHOG_KEY: product analytics, sent by this server to PostHog (see core/analytics.ts). Null when unset:
+   * nothing is captured, no page loads the browser module, and no request leaves for PostHog.
+   */
+  analytics: AnalyticsConfig | null;
+}
+
+/** Where analytics events go, and which deployment each one says it came from. */
+export interface AnalyticsConfig {
+  /** The PostHog project's key. */
+  key: string;
+  /** PORTICO_POSTHOG_HOST: an https:// origin, no trailing slash. */
+  host: string;
+  /** PORTICO_POSTHOG_ENV: sent on every event, so one PostHog project can hold both deployments. */
+  environment: "prod" | "dev";
 }
 
 /**

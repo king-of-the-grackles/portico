@@ -5,7 +5,7 @@ import { SECRETS_KEY_HELP, SECRETS_KEY_MISSING, secretsKeyBytes } from "./core/s
 import { REVIEW_TOKEN_MIN_CHARS } from "./core/feedback";
 import { LIMITS } from "./core/limits";
 import { cleanPublicUrl } from "./core/settings";
-import type { BucketConfig, MailConfig, PorticoConfig } from "./core/types";
+import type { AnalyticsConfig, BucketConfig, MailConfig, PorticoConfig } from "./core/types";
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {
@@ -36,7 +36,7 @@ export const JOIN_STARTS_MAX = 1000;
 /**
  * Everything is optional: PORT, PORTICO_DATA_DIR (default ./data), PORTICO_PUBLIC_URL, PORTICO_PLUGIN_SOURCE,
  * PORTICO_WEBHOOKS_ALLOW_PRIVATE, PORTICO_SECRETS_KEY (optional here, required to serve: see loadConfig), the bucket for files, email through Resend, and PORTICO_DESCOPE_PROJECT_ID, which
- * switches sign-in from this server's own passwords to Descope. The signing key is passed in, so this stays free of
+ * switches sign-in from this server's own passwords to Descope, and PORTICO_POSTHOG_KEY, which turns product analytics on. The signing key is passed in, so this stays free of
  * file access (see loadConfig).
  */
 export function parseEnv(env: Env, signingKey: string): PorticoConfig {
@@ -92,6 +92,7 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
   }
   const files = bucketConfig(env, problems);
   const mail = mailConfig(env, problems, publicUrl ? `Portico <invites@mail.${new URL(publicUrl).hostname}>` : null);
+  const analytics = analyticsConfig(env, problems);
   if (problems.length > 0) throw new ConfigError(problems);
   const dataDir = env.PORTICO_DATA_DIR?.trim() || DEFAULT_DATA_DIR;
   return {
@@ -111,7 +112,30 @@ export function parseEnv(env: Env, signingKey: string): PorticoConfig {
     files,
     mail,
     descopeProjectId,
+    analytics,
   };
+}
+
+/**
+ * Product analytics through PostHog, only when PORTICO_POSTHOG_KEY is set. PORTICO_POSTHOG_ENV must then say which
+ * deployment this is, so dev events never count as production's. The key's value is never put in a message.
+ */
+function analyticsConfig(env: Env, problems: string[]): AnalyticsConfig | null {
+  const key = env.PORTICO_POSTHOG_KEY?.trim();
+  if (!key) return null;
+  const environment = env.PORTICO_POSTHOG_ENV?.trim();
+  if (environment !== "prod" && environment !== "dev") problems.push("PORTICO_POSTHOG_ENV must be prod or dev when PORTICO_POSTHOG_KEY is set");
+  const rawHost = env.PORTICO_POSTHOG_HOST?.trim() || "https://us.i.posthog.com";
+  let host: string | null = null;
+  try {
+    const url = new URL(rawHost);
+    if (url.protocol === "https:" && url.pathname === "/" && !url.search && !url.hash && !url.username && !url.password) host = url.origin;
+  } catch {
+    // Not an address at all.
+  }
+  if (host === null) problems.push(`PORTICO_POSTHOG_HOST "${rawHost}" must be an https:// address with no path, such as https://us.i.posthog.com`);
+  if (host === null || (environment !== "prod" && environment !== "dev")) return null;
+  return { key, host, environment };
 }
 
 /**

@@ -656,7 +656,7 @@ export class Consents {
           this.workspaces.remove(person.id, request.workspaceId!);
           break;
         case "create": {
-          workspace = this.workspaces.create(person.id, request.detail.name);
+          workspace = this.workspaces.create(person.id, request.detail.name, "consent");
           const wanted = new Set(request.detail.agentIds ?? []);
           for (const a of this.agents.ownedBy(person.id)) if (wanted.has(a.id) && a.revokedAt === null) this.workspaces.addAgent(person.id, workspace.id, a.id);
           break;
