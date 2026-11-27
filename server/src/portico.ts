@@ -243,7 +243,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     remember(senders, personId);
   };
   /**
-   * Once per Portico server, before the first look for a first message: everyone with a message stored from before
+   * Once per Portico server, before the history is pruned and before the first look for a first message: everyone with a message stored from before
    * this process started has sent one already, also the people who send nothing more before those messages are pruned.
    * A message from this process is left to its own notice, which may still be to come.
    */
@@ -1052,6 +1052,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       void sweepRecordMail();
     },
     sweepDaily() {
+      // Before the prune, which the server also runs as it starts: what is about to go is the last word on who sent
+      // a message before analytics noted first messages.
+      if (analytics.on) sweep("first_messages", () => backfillFirsts());
       sweep("history", () => messages.prune());
       void sweepArchived();
       sweep("runs", () => agents.pruneRuns());

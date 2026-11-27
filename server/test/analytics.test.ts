@@ -985,6 +985,33 @@ describe("server events", () => {
     expect(p.settings.get(firstMessageKey(chris.id))).not.toBeNull();
   });
 
+  test("the prune a server runs as it starts doesn't lose who sent before: they are noted first", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "portico-analytics-"));
+    const posts = fakeWebhooks();
+    let p = makePortico({ dataDir });
+    const chris = await addOwner(p);
+    const grok = addAppAgent(p, chris, "grok-bot");
+    const muse = addAppAgent(p, chris, "muse");
+    p.messages.send(grok.agent, { to: "muse", subject: "s", text: "t" });
+    p.messages.inbox(muse.agent);
+    p.close();
+    p.db.close();
+
+    // Analytics comes on with an upgrade, when the message is older than the history window: startup prunes it.
+    p = makePortico({ dataDir, config: { analytics: CONFIG }, analyticsPost: posts.post, later: (LIMITS.historyDays + 1) * 24 * 60 * 60_000 });
+    p.sweepDaily();
+    let stored = 0;
+    p.content.each(({ db }) => (stored += (db.query("SELECT count(*) AS n FROM messages").get() as { n: number }).n));
+    expect(stored).toBe(0);
+    expect(p.settings.get(firstMessageKey(chris.id))).not.toBeNull();
+    p.messages.send(p.agents.get(grok.agent.id)!, { to: "muse", subject: "s", text: "back" });
+    await flush();
+    await p.analytics.flush();
+    const sent = posts.sent.flatMap((req) => (JSON.parse(req.body) as { batch: Sent[] }).batch);
+    expect(sent.filter((e) => e.event === "message_sent")).toHaveLength(1);
+    expect(sent.filter((e) => e.event === "first_message_sent")).toHaveLength(0);
+  });
+
   test("a note picked up is completed once: an answer to it later, also after a restart, completes nothing more", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "portico-analytics-"));
     const posts = fakeWebhooks();
