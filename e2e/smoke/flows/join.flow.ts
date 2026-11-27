@@ -14,7 +14,7 @@ test("A person signs in, an agent joins, and it shows in the app", async ({ worl
   await expect(page.getByRole("heading", { level: 1, name: "Sign in to Portico" })).toBeVisible();
   await expect(page.locator("descope-wc")).toBeAttached();
   await rec.pause(2500);
-  await rec.step("sign-in", "A signed-out visitor is sent to the sign-in page.");
+  await rec.step("sign-in", "A signed-out visitor sees the sign-in page.");
 
   // A new test person of this run, signed in the way the browser suite does: the teardown removes them and their agent.
   const person = await world.newcomer("sam");

@@ -61,7 +61,9 @@ export function webRoutes(core: Core): Hono<PersonEnv> {
     c.header("Link", PAGE_LINKS);
     await next();
     // A public page is also there as Markdown, for a reader that asks for Markdown before HTML.
-    if (!PUBLIC_PAGES.includes(c.req.path)) return;
+    // Signed out, / is the sign-in page, so it is there as Markdown too. Signed in, / is the person's own page: HTML only.
+    const signedOutFirstPage = c.req.path === "/" && !c.get("person");
+    if (!PUBLIC_PAGES.includes(c.req.path) && !signedOutFirstPage) return;
     c.res.headers.append("Vary", "Accept");
     if (!prefersMarkdown(c.req.header("accept")) || c.res.status !== 200) return;
     if (!(c.res.headers.get("content-type") ?? "").startsWith("text/html")) return;

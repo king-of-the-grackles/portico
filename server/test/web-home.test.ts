@@ -778,11 +778,15 @@ function firstData(html: string): Record<string, any> {
 describe("the pages", () => {
   test("signed out, each page goes to sign in and comes back", async () => {
     const { p } = await setup();
-    for (const path of ["/", "/activity", "/a/a1"]) {
+    for (const path of ["/activity", "/a/a1"]) {
       const res = await p.app.request(path);
       expect(res.status).toBe(303);
-      expect(res.headers.get("location")).toBe(path === "/" ? "/sign-in" : `/sign-in?next=${encodeURIComponent(path)}`);
+      expect(res.headers.get("location")).toBe(`/sign-in?next=${encodeURIComponent(path)}`);
     }
+    // The first page is the sign-in page itself, with no redirect. /sign-in answers the same page.
+    const first = await p.app.request("/");
+    expect(first.status).toBe(200);
+    expect(await first.text()).toBe(await (await p.app.request("/sign-in")).text());
   });
 
   test("a claim still waiting for approval goes to the invite page", async () => {

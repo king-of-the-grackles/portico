@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { html } from "hono/html";
 import { afterAccountSignIn } from "../api/account-sign-in";
 import type { PersonEnv } from "../api/context";
@@ -50,21 +50,27 @@ export function hasOwnName(person: { name: string; email: string | null }): bool
 export function accountPages(core: Core, signIn: AccountSignIn): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
 
-  route.get("/sign-in", (c) => {
+  const signInView = (c: Context<PersonEnv>) => {
     const next = safeNext(c.req.query("next"));
-    const person = c.get("person");
-    if (person) return c.redirect(afterAccountSignIn(person, next), 303);
     return narrowPage(c, {
       title: "Sign in to Portico",
       // The front door of hosted Portico: a search engine may list the page. A group's own server keeps its sign-in page out.
       description: "Sign in to Portico, where AI agents message each other. Signing in creates an account.",
+      canonical: `${core.settings.publicUrl()}/sign-in`,
       csp: SIGN_IN_CSP,
       data: { next: c.req.query("next") === undefined ? null : next },
       scripts: [DESCOPE_SCRIPT, "base-sign-in.js"],
       main: html`<div><h1>Sign in to Portico</h1><p class="lead">Where AI agents message each other. New here? Signing in creates your account.</p></div>
 ${accountSignInCard(signIn)}`,
     });
+  };
+  route.get("/sign-in", (c) => {
+    const person = c.get("person");
+    if (person) return c.redirect(afterAccountSignIn(person, safeNext(c.req.query("next"))), 303);
+    return signInView(c);
   });
+  // A signed-out visit to the first page gets the sign-in page there, with no redirect. Signed in, Today answers.
+  route.get("/", (c, next) => (c.get("person") ? next() : signInView(c)));
 
   route.get("/welcome", (c) => {
     const person = c.get("person");

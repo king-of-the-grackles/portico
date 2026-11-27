@@ -98,6 +98,8 @@ export function oauthRoutes(core: Core, opts: OAuthRoutesOptions = {}): Hono<Per
     c.json({
       resource: `${base()}/mcp`,
       authorization_servers: [base()],
+      // Portico's tokens carry no scopes: a token is one agent, and the agent can do what an agent can do.
+      scopes_supported: [],
       bearer_methods_supported: ["header"],
       resource_name: "Portico",
     });
