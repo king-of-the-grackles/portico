@@ -323,7 +323,7 @@ export function runPorticoTool(deps: PorticoToolDeps, agent: Agent, name: string
       const chosen = args.agents === undefined || args.agents === null ? [agent] : list("agents").map(own);
       for (const a of chosen) requireNotApart(a, null);
       if (agent.unproven) return waiting("making the Portico", consents.askChange(agent, { kind: "create", name: args.name, agents: chosen }));
-      const made = workspaces.create(ownerId, args.name);
+      const made = workspaces.create(ownerId, args.name, "agent");
       for (const a of chosen) workspaces.addAgent(ownerId, made.id, a.id);
       const inside = chosen.length === 0 ? "no agents" : chosen.map((a) => `\`${addr(a)}\``).join(", ");
       return {

@@ -1,3 +1,4 @@
+import { optedOut } from "../core/analytics";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { readJson } from "../agent-api/rest";
@@ -75,6 +76,8 @@ export function sessionRoutes(core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
   const signedIn = (c: Context<PersonEnv>, person: Person, next: unknown) => {
     startBrowserSession(c, core, person.id);
+    // What this browser says about being counted holds for the person from here on.
+    core.analytics.setOptOut(person.id, optedOut((name) => c.req.header(name)));
     return c.json({ person: personViews(core, person).person(person), next: afterSignIn(person, next) });
   };
 

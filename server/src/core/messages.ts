@@ -1058,6 +1058,19 @@ export class Messages {
   }
 
   /**
+   * Whether any message from one of the person's agents is still stored, besides the one named: for counting a
+   * person's first message. History is pruned after a while, so "none" can also mean none lately.
+   */
+  sentBefore(personId: string, exceptId: string): boolean {
+    const ids = this.agents.ownedBy(personId).map((agent) => agent.id);
+    if (ids.length === 0) return false;
+    const marks = ids.map(() => "?").join(", ");
+    return this.content
+      .of({ person: personId })
+      .some(({ db }) => db.query(`SELECT 1 FROM messages WHERE id != ? AND from_id IN (${marks}) LIMIT 1`).get(exceptId, ...ids) !== null);
+  }
+
+  /**
    * The hourly limit counts the sender's messages in every workspace the sender is or was in. The loop guard counts the
    * messages between the two in the workspaces the two share now.
    */

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Agents } from "../core/agents";
+import type { Analytics } from "../core/analytics";
 import { PorticoError } from "../core/errors";
 import { eventDefinitions, type EventSubscriptions, EventsError } from "../core/events";
 import type { Files } from "../core/files";
@@ -441,6 +442,8 @@ export interface McpDeps {
   /** What agents ask their own people. An agent can ask here, and nothing more: no tool answers. */
   questions: Questions;
   now?: () => Date;
+  /** Product analytics: one event per tools/call, never with the arguments. */
+  analytics?: Analytics;
 }
 
 /** For apps and connectors, when the message will reach the receiver: Portico can't start their turns, so they wait. */
@@ -457,6 +460,27 @@ interface Call {
   signal: AbortSignal;
   /** Whether the request's credential still names the caller. */
   valid: () => boolean;
+  /** Set by send_message when the message was held, for analytics: the answer's text is never read back. */
+  held?: boolean;
+  /** The MCP client, as it named itself, for analytics. */
+  client?: ClientInfo;
+}
+
+interface ClientInfo {
+  name: string | null;
+  version: string | null;
+}
+
+/** A client's own name or version as analytics takes one: short, and only plain characters. */
+function clientText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return value.replace(/[^\w .\-/()]/g, "").slice(0, 60).trim() || null;
+}
+
+/** The first product of a User-Agent header (`name/version`), for a client that never said initialize. */
+function clientFromUserAgent(userAgent: string | undefined): ClientInfo {
+  const match = /^([^\s/]+)\/(\S+)/.exec(userAgent?.trim() ?? "");
+  return { name: clientText(match?.[1]), version: clientText(match?.[2]) };
 }
 
 /** Thrown when the caller's credential stopped working during the call: answered as the route's 401. */
@@ -483,6 +507,7 @@ async function callTool(deps: McpDeps, agent: Agent, name: string, args: Record<
         attachments: args.attachments,
       });
       agents.checkedIn(agent);
+      call.held = delivery === "held";
       const content = json(views.sent(message, delivery, workspace, agent));
       if (note) content.push({ type: "text", text: note });
       const nudge = delivery === "held" ? cardNudge(agent, "message", message.id) : null;
@@ -635,7 +660,26 @@ async function handle(deps: McpDeps, all: Tool[], agent: Agent, req: JsonRpcRequ
       return rpcResult(id, { tools });
     case "tools/call": {
       const name = params.name;
-      if (typeof name !== "string" || !tools.some((tool) => tool.name === name)) return rpcError(id, -32602, "Unknown tool.");
+      const started = performance.now();
+      const called = (toolName: string, outcome: "success" | "error" | "held" | "rate_limited", errorCode?: string) =>
+        deps.analytics?.track((a) =>
+          a.capture("mcp_tool_called", agent.ownerId, {
+            tool_name: toolName,
+            agent_id: agent.id,
+            agent_type: agent.type,
+            agent_kind: agent.kind,
+            client_name: call.client?.name ?? null,
+            client_version: call.client?.version ?? null,
+            outcome,
+            error_code: errorCode,
+            duration_ms: Math.round(performance.now() - started),
+          }),
+        );
+      if (typeof name !== "string" || !tools.some((tool) => tool.name === name)) {
+        // Never the name as sent: a name Portico doesn't know is whatever the client typed.
+        called("unknown", "error", "unknown_tool");
+        return rpcError(id, -32602, "Unknown tool.");
+      }
       const args = (params.arguments ?? {}) as Record<string, unknown>;
       let content: TextContent;
       let structured: { structuredContent?: StatusCard } = {};
@@ -647,10 +691,15 @@ async function handle(deps: McpDeps, all: Tool[], agent: Agent, req: JsonRpcRequ
           structured = { structuredContent: answer.structuredContent };
         } else content = await callTool(deps, agent, name, args, call);
       } catch (err) {
-        if (!(err instanceof PorticoError)) throw err;
+        if (!(err instanceof PorticoError)) {
+          if (!(err instanceof SignedOut)) called(name, "error", "internal");
+          throw err;
+        }
+        called(name, err.code === "rate_limited" ? "rate_limited" : "error", err.code);
         content = [{ type: "text", text: `${err.code}: ${err.message}` }];
         isError = true;
       }
+      if (!isError) called(name, call.held ? "held" : "success");
       return rpcResult(id, { content: [...content, ...unreadLine(deps, agent, name)], ...structured, isError });
     }
     case "resources/list":
@@ -809,6 +858,9 @@ export function mcpRoutes(deps: McpDeps): Hono {
   // Some clients cancel without closing the request, and a wait that went on would pick up messages nobody reads.
   const inFlight = new Map<string, AbortController>();
   const callKey = (agent: Agent, id: unknown) => `${agent.id} ${JSON.stringify(id)}`;
+  // What each client called itself at initialize, for analytics: the server keeps no session, so a later tools/call
+  // finds the name here. In memory and bounded: after a restart, or beyond the bound, the User-Agent header stands in.
+  const clients = new Map<string, ClientInfo>();
 
   mcp.get("/", (c) =>
     c.json({ error: "method_not_allowed", message: "This server doesn't offer a server-to-client stream." }, 405, {
@@ -837,6 +889,12 @@ export function mcpRoutes(deps: McpDeps): Hono {
     };
     if (req.method === "initialize") {
       fields.protocol_version = clip((req.params as { protocolVersion?: unknown } | undefined)?.protocolVersion);
+      const info = (req.params as { clientInfo?: { name?: unknown; version?: unknown } } | undefined)?.clientInfo;
+      if (deps.analytics?.on && info && typeof info === "object") {
+        clients.delete(agent.id);
+        if (clients.size >= 5000) clients.delete(clients.keys().next().value!);
+        clients.set(agent.id, { name: clientText(info.name), version: clientText(info.version) });
+      }
     } else if (era.kind !== "legacy") {
       fields.protocol_version = clip((req.params as { _meta?: Record<string, unknown> } | undefined)?._meta?.[META_VERSION]);
     }
@@ -858,6 +916,7 @@ export function mcpRoutes(deps: McpDeps): Hono {
     const call: Call = {
       signal: AbortSignal.any([c.req.raw.signal, cancel.signal]),
       valid: () => deps.resolver.agent(authorization, sessionKey)?.id === agent.id,
+      client: clients.get(agent.id)?.name ? clients.get(agent.id) : clientFromUserAgent(c.req.header("user-agent")),
     };
     try {
       if (era.kind === "modern") {

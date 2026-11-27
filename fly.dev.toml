@@ -21,6 +21,9 @@ primary_region = "iad"
   # Dev only. The browser suite joins 8 agents a run from one address, and runs follow each other: the usual limit of
   # 10 starts per address per 15 minutes would fail every second run. The live app's file never has this line.
   PORTICO_JOIN_STARTS_PER_ADDRESS = "500"
+  # Product analytics (PostHog). The key itself is a Fly secret, PORTICO_POSTHOG_KEY, set by a person: without it
+  # nothing is captured and this line does nothing.
+  PORTICO_POSTHOG_ENV = "dev"
 
 # SQLite lives on one volume, so Portico runs on one machine: deploy with --ha=false.
 [mounts]

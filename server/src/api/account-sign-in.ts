@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import type { Core } from "../core/core";
 import { NO_PASSWORD } from "../core/accounts";
+import { ANON_ID, optedOut } from "../core/analytics";
 import { PorticoError } from "../core/errors";
 import { checkHandle, cleanPersonName } from "../core/people";
 import type { Account, AccountSignIn, Person } from "../core/types";
@@ -54,6 +55,7 @@ export function accountSignInRoutes(core: Core, signIn: AccountSignIn): Hono<Per
     const body = await jsonObject(c);
     const account = await signIn.account(body.token);
     let person = people.byExternalId(account.id);
+    const signedUp = !person;
     if (!person) {
       person = people.create({ name: firstName(account), role: "member", status: "active", passwordHash: NO_PASSWORD, externalId: account.id });
       log("info", "account_person_created", { person_id: person.id });
@@ -70,6 +72,15 @@ export function accountSignInRoutes(core: Core, signIn: AccountSignIn): Hono<Per
     }
     startBrowserSession(c, core, person.id);
     log("info", "account_sign_in", { person_id: person.id });
+    const personId = person.id;
+    core.analytics.track((a) => {
+      // A browser that says Do Not Track or Global Privacy Control leaves the person out from here on, sign-up included.
+      a.setOptOut(personId, optedOut((name) => c.req.header(name)));
+      // The browser's anonymous ID, when the page sent one: the visit before sign-in becomes this person's.
+      const anonId = body.anon_id;
+      if (typeof anonId === "string" && ANON_ID.test(anonId)) a.identify(personId, anonId);
+      if (signedUp) a.capture("signed_up", personId);
+    });
     return c.json({ next: afterAccountSignIn(person, body.next) });
   });
 
@@ -111,6 +122,7 @@ export function accountSignInRoutes(core: Core, signIn: AccountSignIn): Hono<Per
       return named;
     })();
     log("info", "handle_set", { person_id: person.id });
+    if (me.handle === null) core.analytics.track((a) => a.capture("welcome_completed", person.id, { via: "welcome" }));
     return c.json({ next: afterAccountSignIn(person, body.next) });
   });
 

@@ -54,6 +54,7 @@ export function testConfig(overrides: Partial<PorticoConfig> = {}): PorticoConfi
     mail: null,
     files: null,
     descopeProjectId: null,
+    analytics: null,
     ...overrides,
   };
 }
@@ -137,6 +138,8 @@ export function makePortico(
     mailPost?: FakeWebhooks["post"];
     /** Sign-in with an outside account, as Descope does it: who a sign-in token belongs to. */
     accountCheck?: AccountCheck;
+    /** Where analytics events go: a fake's `post`. */
+    analyticsPost?: FakeWebhooks["post"];
     /** A real data folder: the directory, every content database and the files are written there. */
     dataDir?: string;
   } = {},
@@ -159,6 +162,8 @@ export function makePortico(
     mailPost: opts.mailPost ?? (async () => ({ status: null, error: "no_mail_in_tests" })),
     schedule: opts.webhooks?.schedule,
     accountCheck: opts.accountCheck,
+    // Never the network.
+    analyticsPost: opts.analyticsPost ?? (async () => ({ status: null, error: "no_analytics_in_tests" })),
   });
   if (opts.setup !== false) portico.settings.set("setup_done_at", T0.toISOString());
   return Object.assign(portico, { clock, notices });

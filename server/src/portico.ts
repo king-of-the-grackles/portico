@@ -5,6 +5,7 @@ import { PersonStreams } from "./api/events";
 import { buildApp } from "./app";
 import { Accounts } from "./core/accounts";
 import { Activity, type ActivityEntry } from "./core/activity";
+import { Analytics } from "./core/analytics";
 import { Agents } from "./core/agents";
 import { AllowList, Approvals, Contacts } from "./core/approvals";
 import { AgentNotices } from "./core/notices";
@@ -55,6 +56,8 @@ export interface PorticoOptions {
   webhookPost?: WebhookPost;
   /** Where share emails are posted; tests pass a fake. */
   mailPost?: WebhookPost;
+  /** Where analytics events are posted; tests pass a fake. */
+  analyticsPost?: WebhookPost;
   /** Where files' bytes live; by default the configured bucket, or the data folder. */
   fileStore?: FileStore;
   /**
@@ -117,6 +120,20 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     log: logInfo,
   });
   const settings = new Settings(db, config);
+  const analytics = new Analytics({
+    config: config.analytics,
+    post: opts.analyticsPost ?? safePost({ timeoutMs: 5000 }),
+    now,
+    log,
+    // The people whose browser said Do Not Track or Global Privacy Control, as one JSON list among the settings.
+    optOuts: {
+      load: () => {
+        const ids: unknown = JSON.parse(settings.get("analytics_opt_out") ?? "[]");
+        return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+      },
+      save: (ids) => settings.set("analytics_opt_out", JSON.stringify(ids)),
+    },
+  });
   const presence = new Presence();
   const agentStreams = new AgentStreams();
   const inboxWaits = new InboxWaits();
@@ -153,7 +170,19 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   const activity = new Activity({ db, changes, now });
   const people = new People({ db, changes, content, secrets, signInByName: check === null, now, newId });
   const accounts = new Accounts({ db, people, now, newId });
-  const workspaces = new Workspaces({ db, changes, now, newId, log: logInfo });
+  // A Portico that was made is an analytics event. The core only logs it, possibly inside a transaction still open:
+  // the microtask runs once that transaction has committed or rolled back, and looks for what is really there.
+  const workspaceLog = (msg: string, fields: Record<string, unknown>) => {
+    logInfo(msg, fields);
+    if (msg !== "workspace_created" || !analytics.on) return;
+    queueMicrotask(() =>
+      analytics.track((a) => {
+        const made = workspaces.get(String(fields.workspace_id));
+        if (made) a.capture("portico_created", made.ownerId, { kind: made.kind, via: typeof fields.via === "string" ? fields.via : "auto", portico_id: made.id });
+      }),
+    );
+  };
+  const workspaces = new Workspaces({ db, changes, now, newId, log: workspaceLog });
   const computers = new Computers({ db, changes, activity, content, now, newId, log: logInfo });
   const agents: Agents = new Agents({
     db,
@@ -191,7 +220,67 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       } catch (err) {
         log("error", "notice_failed", { kind: notice.kind, error: errorName(err) });
       }
+      analytics.track(() => captureNotice(notice));
     });
+  };
+
+  // ---- analytics: what a notice says happened, as IDs and kinds only ----
+
+  /** A set that forgets its oldest entry beyond 10,000, so it can't grow for as long as the process runs. */
+  const remember = (set: Set<string>, id: string) => {
+    if (set.size >= 10_000) set.delete(set.values().next().value!);
+    set.add(id);
+  };
+  /** People this process has seen send, so the search for an earlier message runs once per person. */
+  const senders = new Set<string>();
+  /** Tasks this process has counted as completed: a second final answer doesn't count the task again. */
+  const completed = new Set<string>();
+  const taskCompleted = (first: Message, byId: string) => {
+    const starter = agents.get(first.fromId);
+    const by = agents.get(byId);
+    if (!starter || !by || completed.has(first.id)) return;
+    remember(completed, first.id);
+    analytics.capture("task_completed", starter.ownerId, {
+      task_id: first.id,
+      by_agent_id: by.id,
+      cross_owner: starter.ownerId !== by.ownerId,
+      minutes: Math.max(0, Math.floor((now().getTime() - Date.parse(first.createdAt)) / MINUTE_MS)),
+    });
+  };
+  const captureNotice = (notice: Notice) => {
+    const m = notice.message;
+    const sender = agents.get(m.fromId);
+    const receiver = agents.get(m.toId);
+    if (!sender || !receiver) return;
+    // Only the send itself: a message let go by the sender's person and held again for the receiver's comes through
+    // as message_sent a second time, with who let it go.
+    if (notice.kind === "message_sent" && m.decidedBy === null) {
+      const properties = {
+        agent_id: sender.id,
+        to_agent_id: receiver.id,
+        portico_id: m.workspaceId,
+        delivery: m.status === "held" ? "held" : agents.tier(receiver),
+        held_for: m.status === "held" ? (m.heldFor ?? "approval") : undefined,
+        is_reply: m.replyTo !== null,
+        cross_owner: sender.ownerId !== receiver.ownerId,
+        has_files: files.of(m).length > 0,
+        no_reply_needed: m.noReplyNeeded,
+      };
+      analytics.capture("message_sent", sender.ownerId, properties);
+      if (!senders.has(sender.ownerId)) {
+        remember(senders, sender.ownerId);
+        if (!messages.sentBefore(sender.ownerId, m.id)) analytics.capture("first_message_sent", sender.ownerId, properties);
+      }
+    }
+    // A task's outcome is worked out from its messages, never stored, so the step that completes one is seen here: a
+    // final answer that went through, from the agent the task's first message was sent to.
+    const through = (notice.kind === "message_sent" || notice.kind === "message_decided") && (m.status === "pending" || m.status === "delivered");
+    if (through && m.final && m.replyTo !== null && m.rootId !== m.id) {
+      const first = messages.get({ agent: m.fromId, workspace: m.workspaceId }, m.rootId);
+      if (first && first.toId === m.fromId) taskCompleted(first, m.fromId);
+    }
+    // Or a first message that needs no reply, picked up.
+    if (notice.kind === "message_delivered" && m.rootId === m.id && m.noReplyNeeded) taskCompleted(m, m.toId);
   };
   // "The inbox has something": a session's stream gets a nudge (a Codex conversation only when its bridge can wake
   // it), and an app's or connector's waiting check_inbox wakes.
@@ -689,6 +778,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   // A person's account is about to be removed: the person leaves each Portico of someone else's first, as if taken
   // out, so the record says so, the agents there are told, and what was on its way is withdrawn.
   people.onRemoving = (personId) => {
+    // A removed person's ID isn't kept on the opt-out list.
+    analytics.setOptOut(personId, false);
     withdrawQuestions(agents.ownedBy(personId).map((agent) => agent.id));
     for (const workspace of workspaces.forPerson(personId)) {
       if (workspace.kind !== "shared" || workspace.ownerId === personId) continue;
@@ -808,6 +899,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
 
   const core: Core = {
     config,
+    analytics,
     db,
     content,
     settings,

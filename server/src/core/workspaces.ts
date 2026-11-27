@@ -441,13 +441,13 @@ export class Workspaces {
    * A new shared workspace, owned by the person, who is its first member. No agents yet: the person puts them in. The
    * name is optional: without one the workspace is named after the people in it, until someone names it.
    */
-  create(personId: string, rawName?: unknown): Workspace {
+  create(personId: string, rawName?: unknown, via: "page" | "agent" | "consent" = "page"): Workspace {
     this.requireHandle(personId);
     const id = this.newId();
     const name = cleanWorkspaceName(rawName);
     this.requireFreeName(name, [personId]);
     this.db.transaction(() => this.insert({ id, name, kind: "shared", ownerId: personId, createdAt: this.iso() }))();
-    this.log("workspace_created", { workspace_id: id, kind: "shared" });
+    this.log("workspace_created", { workspace_id: id, kind: "shared", via });
     this.changes.about({ people: [personId] }, "workspaces");
     return this.get(id)!;
   }
