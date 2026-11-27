@@ -78,7 +78,7 @@ with video on, beside the suite's `world`:
 ```ts
 test("What the video shows, as its title", async ({ world, rec }) => {
   await rec.page.goto("/");
-  await rec.step("sign-in", "A signed-out visitor is sent to the sign-in page.");
+  await rec.step("sign-in", "A signed-out visitor sees the sign-in page.");
   await rec.type("Handle", "sam");                      // typed a key at a time
   await rec.step("welcome", "The person picks a handle.", { shot: false });   // in the video, no screenshot
   rec.cannotShow("Typing into the sign-in screen.");    // said in steps.md

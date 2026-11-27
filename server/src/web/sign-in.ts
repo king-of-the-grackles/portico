@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { html } from "hono/html";
 import type { PersonEnv } from "../api/context";
 import type { Core } from "../core/core";
@@ -35,17 +35,20 @@ export function localSignInCard(next: string): Html {
  */
 export function signInPage(_core: Core): Hono<PersonEnv> {
   const route = new Hono<PersonEnv>();
-  route.get("/sign-in", (c) => {
-    const next = safeNext(c.req.query("next"));
-    const person = c.get("person");
-    if (person) return c.redirect(person.status === "pending" ? "/invite" : next, 303);
-    return narrowPage(c, {
+  const signInView = (c: Context<PersonEnv>) =>
+    narrowPage(c, {
       title: "Sign in to Portico",
       scripts: ["forms.js", "passkey.js"],
       main: html`<h1>Sign in to Portico</h1>
-${localSignInCard(next)}
+${localSignInCard(safeNext(c.req.query("next")))}
 <p class="help">No account yet? Ask the person who runs this Portico server for an invite link.</p>`,
     });
+  route.get("/sign-in", (c) => {
+    const person = c.get("person");
+    if (person) return c.redirect(person.status === "pending" ? "/invite" : safeNext(c.req.query("next")), 303);
+    return signInView(c);
   });
+  // A signed-out visit to the first page gets the sign-in page there, with no redirect. Signed in, Today answers.
+  route.get("/", (c, next) => (c.get("person") ? next() : signInView(c)));
   return route;
 }

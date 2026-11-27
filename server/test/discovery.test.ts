@@ -73,8 +73,12 @@ describe("documents for crawlers and agents", () => {
   test("every page carries Link headers to the API description and the steps for an agent", async () => {
     const p = makePortico();
     const chris = await addOwner(p);
-    const pages = [await p.app.request("/"), await p.app.request("/sign-in"), await p.app.request("/join"), await p.app.request("/", { headers: { cookie: signIn(p, chris) } })];
+    const pages = [await p.app.request("/activity"), await p.app.request("/sign-in"), await p.app.request("/join"), await p.app.request("/", { headers: { cookie: signIn(p, chris) } })];
     expect(pages.map((res) => res.status)).toEqual([303, 200, 200, 200]);
+    // Signed in, / is the person's own page: HTML, also for a reader that asks for Markdown.
+    const own = await p.app.request("/", { headers: { cookie: signIn(p, chris), accept: "text/markdown" } });
+    expect(own.headers.get("content-type")).toContain("text/html");
+    expect(await own.text()).toContain('id="app"');
     for (const res of pages) {
       expect(res.headers.get("link")).toContain('</api/agent/openapi.json>; rel="service-desc"');
       expect(res.headers.get("link")).toContain('</join>; rel="service-doc"');

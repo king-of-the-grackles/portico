@@ -19,10 +19,21 @@ describe("signing in with an account", () => {
     const { p, signIn, page } = start();
     expect(p.settings.setupDone()).toBe(true);
     expect(p.people.list()).toHaveLength(0);
-    expect((await page("/")).headers.get("location")).toBe("/sign-in");
     const signInPage = await page("/sign-in");
     expect(signInPage.status).toBe(200);
-    expect(await signInPage.text()).toContain("<descope-wc");
+    const signInHtml = await signInPage.text();
+    expect(signInHtml).toContain("<descope-wc");
+    // Signed out, the first page is the sign-in page itself: the same page, with no redirect.
+    const first = await page("/");
+    expect(first.status).toBe(200);
+    expect(first.headers.get("location")).toBeNull();
+    expect(await first.text()).toBe(signInHtml);
+    expect(signInHtml).toContain(`<link rel="canonical" href="${PUBLIC_URL}/sign-in">`);
+    expect(first.headers.get("content-security-policy")).toBe(signInPage.headers.get("content-security-policy"));
+    // A reader that asks for Markdown gets the sign-in page's words at / too.
+    const markdown = await p.app.request("/", { headers: { accept: "text/markdown" } });
+    expect(markdown.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
+    expect(await markdown.text()).toContain("# Sign in to Portico");
     await signIn("account:first::Ada");
     expect(p.people.list().map((x) => [x.name, x.role, x.status])).toEqual([["Ada", "member", "active"]]);
   });

@@ -129,7 +129,7 @@ describe("metadata", () => {
     const p = makePortico();
     for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
       const res = await p.app.request(path);
-      expect(await res.json()).toMatchObject({ resource: `${PUBLIC_URL}/mcp`, authorization_servers: [PUBLIC_URL] });
+      expect(await res.json()).toEqual({ resource: `${PUBLIC_URL}/mcp`, authorization_servers: [PUBLIC_URL], scopes_supported: [], bearer_methods_supported: ["header"], resource_name: "Portico" });
       expect(res.headers.get("access-control-allow-origin")).toBe("*");
     }
     expect(await json(p.app.request("/.well-known/oauth-authorization-server"))).toEqual({

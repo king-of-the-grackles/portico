@@ -9,9 +9,10 @@ test("a new person signs in, picks a handle and sees their Portico", async ({ wo
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  // Signed out, Portico sends the browser to the sign-in page, which loads Descope's component.
-  await page.goto("/");
-  await expect(page).toHaveURL(/\/sign-in/);
+  // Signed out, the first page is the sign-in page, with no redirect. It loads Descope's component.
+  const first = await page.goto("/");
+  expect(first?.status()).toBe(200);
+  expect(new URL(page.url()).pathname).toBe("/");
   await expect(page.getByRole("heading", { level: 1, name: "Sign in to Portico" })).toBeVisible();
   await expect(page.locator("descope-wc")).toBeAttached();
 
