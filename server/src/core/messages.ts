@@ -1058,16 +1058,31 @@ export class Messages {
   }
 
   /**
-   * Whether any message from one of the person's agents is still stored, besides the one named: for counting a
-   * person's first message. History is pruned after a while, so "none" can also mean none lately.
+   * When one of the person's agents sent a message before this one, if any such message is still stored: for counting
+   * a person's first message. "Before" is by the order messages were saved, never "any other": two messages saved in
+   * one moment must not each take the other for the earlier one. In the message's own database that order is the
+   * row's; across databases it is the time, then the ID. History is pruned after a while, so null can also mean none
+   * lately.
    */
-  sentBefore(personId: string, exceptId: string): boolean {
+  sentEarlier(personId: string, message: Pick<Message, "id" | "createdAt">): string | null {
     const ids = this.agents.ownedBy(personId).map((agent) => agent.id);
-    if (ids.length === 0) return false;
-    const marks = ids.map(() => "?").join(", ");
-    return this.content
-      .of({ person: personId })
-      .some(({ db }) => db.query(`SELECT 1 FROM messages WHERE id != ? AND from_id IN (${marks}) LIMIT 1`).get(exceptId, ...ids) !== null);
+    if (ids.length === 0) return null;
+    // ?1 is this message's time and ?2 its ID; the agents follow.
+    const marks = ids.map((_, i) => `?${i + 3}`).join(", ");
+    let earliest: string | null = null;
+    for (const { db } of this.content.of({ person: personId })) {
+      const row = db
+        .query(
+          `SELECT created_at AS at FROM messages
+            WHERE from_id IN (${marks}) AND id != ?2
+              AND (created_at < ?1 OR (created_at = ?1 AND
+                CASE WHEN EXISTS (SELECT 1 FROM messages WHERE id = ?2) THEN rowid < (SELECT rowid FROM messages WHERE id = ?2) ELSE id < ?2 END))
+            ORDER BY created_at LIMIT 1`,
+        )
+        .get(message.createdAt, message.id, ...ids) as { at: string } | null;
+      if (row && (earliest === null || row.at < earliest)) earliest = row.at;
+    }
+    return earliest;
   }
 
   /**
@@ -1075,7 +1090,7 @@ export class Messages {
    * completed once: what is stored says so after a restart too. An answer just sent looks only at earlier ones, so two
    * sent in one moment don't each see the other. One a person let through later looks at every other.
    */
-  answeredBefore(first: Message, answerId: string, opts: { earlierOnly: boolean }): boolean {
+  answeredBefore(first: Message, answerId: string | null, opts: { earlierOnly: boolean }): boolean {
     return this.content.of({ agent: first.toId }).some(
       ({ db }) =>
         db
@@ -1083,7 +1098,7 @@ export class Messages {
             `SELECT 1 FROM messages WHERE root_id = ? AND from_id = ? AND id != ? AND final = 1 AND reply_to IS NOT NULL
                AND status IN ('pending', 'delivered') AND (? = 0 OR rowid < (SELECT rowid FROM messages WHERE id = ?)) LIMIT 1`,
           )
-          .get(first.id, first.toId, answerId, opts.earlierOnly ? 1 : 0, answerId) !== null,
+          .get(first.id, first.toId, answerId ?? "", opts.earlierOnly ? 1 : 0, answerId ?? "") !== null,
     );
   }
 

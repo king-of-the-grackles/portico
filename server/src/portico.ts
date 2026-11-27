@@ -231,8 +231,9 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     if (set.size >= 10_000) set.delete(set.values().next().value!);
     set.add(id);
   };
-  /** People this process has seen send, so the search for an earlier message runs once per person. */
+  /** People whose first message is settled, so the search for an earlier message isn't run again for them. */
   const senders = new Set<string>();
+  const startedAt = now().getTime();
   /** Tasks this process has counted as completed, to save the look at what is stored: that look is what decides. */
   const completed = new Set<string>();
   const taskCompleted = (first: Message, byId: string) => {
@@ -278,9 +279,14 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       const through = workspaces.get(m.workspaceId);
       if (through) others.portico_id = through.ownerId;
       analytics.capture("message_sent", sender.ownerId, properties, undefined, others);
+      // The first message is the one with nothing saved before it. What is stored decides, so it holds after a
+      // restart and whatever order notices arrive in. The cache only saves the look: a person goes in once the first
+      // message is counted, or once an earlier message from before this process started is found. An earlier one
+      // from this process may be the first itself, with its own notice still to come, so that settles nothing yet.
       if (!senders.has(sender.ownerId)) {
-        remember(senders, sender.ownerId);
-        if (!messages.sentBefore(sender.ownerId, m.id)) analytics.capture("first_message_sent", sender.ownerId, properties, undefined, others);
+        const earlier = messages.sentEarlier(sender.ownerId, m);
+        if (earlier === null) analytics.capture("first_message_sent", sender.ownerId, properties, undefined, others);
+        if (earlier === null || Date.parse(earlier) < startedAt) remember(senders, sender.ownerId);
       }
     }
     // A task's outcome is worked out from its messages, never stored, so the step that completes one is seen here: a
@@ -289,10 +295,13 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     if (through && m.final && m.replyTo !== null && m.rootId !== m.id) {
       const first = messages.get({ agent: m.fromId, workspace: m.workspaceId }, m.rootId);
       // Once per task: a later final answer, in this process or after a restart, finds the earlier one stored.
-      if (first && first.toId === m.fromId && !messages.answeredBefore(first, m.id, { earlierOnly: notice.kind === "message_sent" })) taskCompleted(first, m.fromId);
+      // A note that needed no reply was completed when it was picked up: an answer to it afterwards completes nothing.
+      const pickedUpNote = first !== null && first.noReplyNeeded && first.status === "delivered";
+      if (first && first.toId === m.fromId && !pickedUpNote && !messages.answeredBefore(first, m.id, { earlierOnly: notice.kind === "message_sent" })) taskCompleted(first, m.fromId);
     }
     // Or a first message that needs no reply, picked up.
-    if (notice.kind === "message_delivered" && m.rootId === m.id && m.noReplyNeeded) taskCompleted(m, m.toId);
+    // Unless a final answer to it already went through, which completed the task then.
+    if (notice.kind === "message_delivered" && m.rootId === m.id && m.noReplyNeeded && !messages.answeredBefore(m, null, { earlierOnly: false })) taskCompleted(m, m.toId);
   };
   // "The inbox has something": a session's stream gets a nudge (a Codex conversation only when its bridge can wake
   // it), and an app's or connector's waiting check_inbox wakes.

@@ -864,27 +864,81 @@ describe("server events", () => {
     expect(last).toMatchObject({ distinct_id: chris.id, properties: { task_id: home.id, by_agent_id: grok.agent.id, cross_owner: false } });
   });
 
-  test("first_message_sent looks for an earlier message from any of the person's agents, as after a restart", async () => {
+  test("first_message_sent is the message with nothing saved before it, from any of the person's agents", async () => {
     const { p, named } = start();
     const chris = await addOwner(p);
     const grok = addAppAgent(p, chris, "grok-bot");
     const muse = addAppAgent(p, chris, "muse");
+    // Two messages saved before either notice is handled: the first one is the first, and it is counted.
     const first = p.messages.send(grok.agent, { to: "muse", subject: "s", text: "t" }).message;
-    await flush();
     const second = p.messages.send(muse.agent, { to: "grok-bot", subject: "s", text: "t" }).message;
+    expect(p.messages.sentEarlier(chris.id, first)).toBeNull();
+    expect(p.messages.sentEarlier(chris.id, second)).toBe(first.createdAt);
+    const counted = await named("first_message_sent");
+    expect(counted).toHaveLength(1);
+    expect(counted[0]!.properties.agent_id).toBe(grok.agent.id);
+    p.messages.send(grok.agent, { to: "muse", subject: "s", text: "again" });
     expect(await named("first_message_sent")).toHaveLength(1);
-    // What a process that just started would find, whichever agent of the person's sends next.
-    expect(p.messages.sentBefore(chris.id, first.id)).toBe(true);
-    expect(p.messages.sentBefore(chris.id, "a-new-message")).toBe(true);
+
+    // Another person: nothing of hers is stored, and other people's messages don't count as hers.
     const maya = await addMember(p);
     const scout = addAppAgent(p, maya, "scout");
     addAppAgent(p, maya, "dots");
-    expect(p.messages.sentBefore(maya.id, "a-new-message")).toBe(false);
     const hers = p.messages.send(scout.agent, { to: "dots", subject: "s", text: "t" }).message;
-    expect(p.messages.sentBefore(maya.id, hers.id)).toBe(false);
-    expect(p.messages.sentBefore(maya.id, second.id)).toBe(true);
-    expect(p.messages.sentBefore("no-such-person", hers.id)).toBe(false);
+    expect(p.messages.sentEarlier(maya.id, hers)).toBeNull();
+    expect(p.messages.sentEarlier("no-such-person", hers)).toBeNull();
     expect((await named("first_message_sent")).map((e) => e.distinct_id)).toEqual([chris.id, maya.id]);
+  });
+
+  test("first_message_sent is counted once across a restart, also when the first two messages were saved in one moment", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "portico-analytics-"));
+    const posts = fakeWebhooks();
+    const open = () => makePortico({ dataDir, config: { analytics: CONFIG }, analyticsPost: posts.post });
+    const firsts = async (p: ReturnType<typeof makePortico>) => {
+      await flush();
+      await p.analytics.flush();
+      return posts.sent.flatMap((req) => (JSON.parse(req.body) as { batch: Sent[] }).batch).filter((e) => e.event === "first_message_sent");
+    };
+    let p = open();
+    const chris = await addOwner(p);
+    const grok = addAppAgent(p, chris, "grok-bot");
+    const muse = addAppAgent(p, chris, "muse");
+    p.messages.send(grok.agent, { to: "muse", subject: "s", text: "t" });
+    p.messages.send(muse.agent, { to: "grok-bot", subject: "s", text: "t" });
+    expect(await firsts(p)).toHaveLength(1);
+    p.close();
+    p.db.close();
+    p = open();
+    p.clock.advance(60_000);
+    p.messages.send(p.agents.get(grok.agent.id)!, { to: "muse", subject: "s", text: "after the restart" });
+    p.messages.send(p.agents.get(muse.agent.id)!, { to: "grok-bot", subject: "s", text: "and once more" });
+    expect(await firsts(p)).toHaveLength(1);
+  });
+
+  test("a note picked up is completed once: an answer to it later, also after a restart, completes nothing more", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "portico-analytics-"));
+    const posts = fakeWebhooks();
+    const open = () => makePortico({ dataDir, config: { analytics: CONFIG }, analyticsPost: posts.post });
+    const completions = async (p: ReturnType<typeof makePortico>) => {
+      await flush();
+      await p.analytics.flush();
+      return posts.sent.flatMap((req) => (JSON.parse(req.body) as { batch: Sent[] }).batch).filter((e) => e.event === "task_completed");
+    };
+    let p = open();
+    const chris = await addOwner(p);
+    const grok = addAppAgent(p, chris, "grok-bot");
+    const muse = addAppAgent(p, chris, "muse");
+    const note = p.messages.send(grok.agent, { to: "muse", subject: "s", text: "fyi", noReplyNeeded: true }).message;
+    p.messages.inbox(muse.agent);
+    expect((await completions(p)).map((e) => e.properties.task_id)).toEqual([note.id]);
+    // In the same process, and then in a new one: the receiver answers the note after all.
+    p.messages.send(muse.agent, { replyTo: note.id, subject: "s", text: "thanks" });
+    expect(await completions(p)).toHaveLength(1);
+    p.close();
+    p.db.close();
+    p = open();
+    p.messages.send(p.agents.get(muse.agent.id)!, { replyTo: note.id, subject: "s", text: "thanks again" });
+    expect(await completions(p)).toHaveLength(1);
   });
 
   test("a task counted as completed is not counted again after a restart, nor when an answer held earlier is let through", async () => {
