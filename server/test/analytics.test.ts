@@ -884,7 +884,7 @@ describe("server events", () => {
   test("a task counted as completed is not counted again after a restart, nor when an answer held earlier is let through", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "portico-analytics-"));
     const posts = fakeWebhooks();
-    const open = (opts: Parameters<typeof makePortico>[0] = {}) => makePortico({ dataDir, config: { analytics: CONFIG }, analyticsPost: posts.post, ...opts });
+    const open = () => makePortico({ dataDir, config: { analytics: CONFIG }, analyticsPost: posts.post });
     const completions = async (p: ReturnType<typeof makePortico>) => {
       await flush();
       await p.analytics.flush();
@@ -916,7 +916,7 @@ describe("server events", () => {
     // A restart: the same data folder, a new process's memory. Another final answer to each task.
     p.close();
     p.db.close();
-    p = open({ newId: () => crypto.randomUUID() });
+    p = open();
     const again = p.agents.get(dots.agent.id)!;
     p.messages.send(again, { replyTo: asked.id, subject: "s", text: "done, once more" });
     p.messages.send(again, { replyTo: second.id, subject: "s", text: "done, once more" });
