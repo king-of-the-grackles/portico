@@ -233,7 +233,7 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
   };
   /** People this process has seen send, so the search for an earlier message runs once per person. */
   const senders = new Set<string>();
-  /** Tasks this process has counted as completed: a second final answer doesn't count the task again. */
+  /** Tasks this process has counted as completed, to save the look at what is stored: that look is what decides. */
   const completed = new Set<string>();
   const taskCompleted = (first: Message, byId: string) => {
     const starter = agents.get(first.fromId);
@@ -277,7 +277,8 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     const through = (notice.kind === "message_sent" || notice.kind === "message_decided") && (m.status === "pending" || m.status === "delivered");
     if (through && m.final && m.replyTo !== null && m.rootId !== m.id) {
       const first = messages.get({ agent: m.fromId, workspace: m.workspaceId }, m.rootId);
-      if (first && first.toId === m.fromId) taskCompleted(first, m.fromId);
+      // Once per task: a later final answer, in this process or after a restart, finds the earlier one stored.
+      if (first && first.toId === m.fromId && !messages.answeredBefore(first, m.id, { earlierOnly: notice.kind === "message_sent" })) taskCompleted(first, m.fromId);
     }
     // Or a first message that needs no reply, picked up.
     if (notice.kind === "message_delivered" && m.rootId === m.id && m.noReplyNeeded) taskCompleted(m, m.toId);

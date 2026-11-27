@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Analytics } from "../src/core/analytics";
+import { readKept, resolveVisit } from "../src/web/client/visit-id";
 import { LIMITS } from "../src/core/limits";
 import type { WebhookRequest, WebhookResult } from "../src/core/webhooks";
 import { captureLogs } from "../src/log";
@@ -879,6 +880,48 @@ describe("server events", () => {
     expect(p.messages.sentBefore("no-such-person", hers.id)).toBe(false);
     expect((await named("first_message_sent")).map((e) => e.distinct_id)).toEqual([chris.id, maya.id]);
   });
+
+  test("a task counted as completed is not counted again after a restart, nor when an answer held earlier is let through", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "portico-analytics-"));
+    const posts = fakeWebhooks();
+    const open = (opts: Parameters<typeof makePortico>[0] = {}) => makePortico({ dataDir, config: { analytics: CONFIG }, analyticsPost: posts.post, ...opts });
+    const completions = async (p: ReturnType<typeof makePortico>) => {
+      await flush();
+      await p.analytics.flush();
+      return posts.sent.flatMap((req) => (JSON.parse(req.body) as { batch: Sent[] }).batch).filter((e) => e.event === "task_completed");
+    };
+    let p = open();
+    const chris = await addOwner(p);
+    const grok = addAppAgent(p, chris, "grok-bot", { approvalRequired: true });
+    const muse = addAppAgent(p, chris, "muse");
+    const dots = addAppAgent(p, chris, "dots");
+    const asked = p.messages.send(muse.agent, { to: "dots", subject: "s", text: "t" }).message;
+    p.messages.inbox(dots.agent);
+    p.messages.send(dots.agent, { replyTo: asked.id, subject: "s", text: "done" });
+    expect(await completions(p)).toHaveLength(1);
+
+    // A final answer held first, and let through only after another one went through: still one for that task.
+    const second = p.messages.send(grok.agent, { to: "dots", subject: "s", text: "t" }).message;
+    p.messages.inbox(dots.agent);
+    p.clock.advance(25 * 60 * 60_000);
+    const held = p.messages.send(dots.agent, { replyTo: second.id, subject: "s", text: "late answer" }).message;
+    expect(held.status).toBe("held");
+    expect(await completions(p)).toHaveLength(1);
+    p.approvals.decide(chris.id, held.id, "always_allow");
+    expect((await completions(p)).map((e) => e.properties.task_id)).toEqual([asked.id, second.id]);
+    const other = p.messages.send(dots.agent, { replyTo: second.id, subject: "s", text: "and again" }).message;
+    expect(other.status).not.toBe("held");
+    expect(await completions(p)).toHaveLength(2);
+
+    // A restart: the same data folder, a new process's memory. Another final answer to each task.
+    p.close();
+    p.db.close();
+    p = open({ newId: () => crypto.randomUUID() });
+    const again = p.agents.get(dots.agent.id)!;
+    p.messages.send(again, { replyTo: asked.id, subject: "s", text: "done, once more" });
+    p.messages.send(again, { replyTo: second.id, subject: "s", text: "done, once more" });
+    expect(await completions(p)).toHaveLength(2);
+  });
 });
 
 describe("mcp_tool_called", () => {
@@ -1025,5 +1068,36 @@ describe("agent_api_called", () => {
     expect(status).toBe(429);
     const last = (await named("agent_api_called")).at(-1)!;
     expect(last.properties).toMatchObject({ route: "/messages", status: 429, outcome: "rate_limited" });
+  });
+});
+
+describe("the visit ID (web/client/visit-id.ts)", () => {
+  const MINUTE = 60_000;
+  const fresh = () => "new-visit-id";
+
+  test("a kept ID ends 30 minutes after it was first kept, however often the page is opened", () => {
+    const start = 1_800_000_000_000;
+    let stored = JSON.stringify(resolveVisit(null, null, start, fresh));
+    // Opening the sign-in page every 20 minutes: the ID is used again, and what goes back into storage keeps its first time.
+    const again = resolveVisit(null, readKept(stored, start + 20 * MINUTE), start + 20 * MINUTE, () => "another-id");
+    expect(again).toEqual({ id: "new-visit-id", at: start });
+    stored = JSON.stringify(again);
+    expect(readKept(stored, start + 30 * MINUTE - 1)).toEqual({ id: "new-visit-id", at: start });
+    expect(readKept(stored, start + 30 * MINUTE)).toBeNull();
+    expect(resolveVisit(null, readKept(stored, start + 40 * MINUTE), start + 40 * MINUTE, () => "another-id")).toEqual({ id: "another-id", at: start + 40 * MINUTE });
+  });
+
+  test("an ID a link carries replaces a kept one and starts its own time; the same one carried again doesn't start over", () => {
+    const kept = { id: "kept-visit-id", at: 1000 };
+    expect(resolveVisit("from-the-link", kept, 5000, fresh)).toEqual({ id: "from-the-link", at: 5000 });
+    expect(resolveVisit("kept-visit-id", kept, 5000, fresh)).toEqual(kept);
+    expect(resolveVisit("no", kept, 5000, fresh)).toEqual(kept);
+    expect(resolveVisit("<script>", null, 5000, fresh)).toEqual({ id: "new-visit-id", at: 5000 });
+  });
+
+  test("what is kept is read only when it is a visit ID with a time that makes sense", () => {
+    for (const raw of [null, "", "not json", "{}", JSON.stringify({ id: "short", at: 1 }), JSON.stringify({ id: "kept-visit-id" }), JSON.stringify({ id: "kept-visit-id", at: 9e15 })]) {
+      expect(readKept(raw, 10_000)).toBeNull();
+    }
   });
 });

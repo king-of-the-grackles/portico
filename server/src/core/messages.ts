@@ -1071,6 +1071,23 @@ export class Messages {
   }
 
   /**
+   * Whether the task had a final answer that went through before this one. For analytics, which counts a task as
+   * completed once: what is stored says so after a restart too. An answer just sent looks only at earlier ones, so two
+   * sent in one moment don't each see the other. One a person let through later looks at every other.
+   */
+  answeredBefore(first: Message, answerId: string, opts: { earlierOnly: boolean }): boolean {
+    return this.content.of({ agent: first.toId }).some(
+      ({ db }) =>
+        db
+          .query(
+            `SELECT 1 FROM messages WHERE root_id = ? AND from_id = ? AND id != ? AND final = 1 AND reply_to IS NOT NULL
+               AND status IN ('pending', 'delivered') AND (? = 0 OR rowid < (SELECT rowid FROM messages WHERE id = ?)) LIMIT 1`,
+          )
+          .get(first.id, first.toId, answerId, opts.earlierOnly ? 1 : 0, answerId) !== null,
+    );
+  }
+
+  /**
    * The hourly limit counts the sender's messages in every workspace the sender is or was in. The loop guard counts the
    * messages between the two in the workspaces the two share now.
    */

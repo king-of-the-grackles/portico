@@ -1,12 +1,12 @@
 // Page views, reported to Portico itself (POST /api/analytics), which sends on only the page's shape. On a page only
-// where analytics is on. One thing is kept in the browser: a random visit ID, in localStorage for up to 30 minutes and
-// until sign-in, so a sign-in that leaves the page and comes back (Google's, an emailed link) is still the same
+// where analytics is on. One thing is kept in the browser: a random visit ID, in localStorage for at most 30 minutes from when it
+// was first kept and until sign-in, so a sign-in that leaves the page and comes back (Google's, an emailed link) is still the same
 // visit. No cookie, no sessionStorage, nothing else. For a browser that says Do Not Track or Global Privacy Control
 // nothing runs, nothing is read, and a kept ID is removed.
 
-const ID = /^[A-Za-z0-9_.:-]{8,128}$/;
+import { type KeptVisit, readKept, resolveVisit } from "./visit-id.js";
+
 const KEPT = "portico-anon";
-const KEPT_MS = 30 * 60_000;
 const privacy = navigator as Navigator & { doNotTrack?: string | null; globalPrivacyControl?: boolean };
 const off = privacy.doNotTrack === "1" || privacy.globalPrivacyControl === true;
 const signInPage = document.querySelector('script[src="/assets/analytics.js"][data-view="sign-in"]') !== null;
@@ -21,23 +21,20 @@ function forget(): void {
   }
 }
 
-function kept(): string | null {
+function kept(): KeptVisit | null {
   try {
-    const value = JSON.parse(localStorage.getItem(KEPT) ?? "null") as { id?: unknown; at?: unknown } | null;
-    if (value && typeof value.id === "string" && ID.test(value.id) && typeof value.at === "number" && Date.now() - value.at < KEPT_MS) return value.id;
+    return readKept(localStorage.getItem(KEPT), Date.now());
   } catch {
-    // Nothing kept, or nothing readable.
+    return null;
   }
-  return null;
 }
 
-function keep(id: string): string {
+function keep(visit: KeptVisit): void {
   try {
-    localStorage.setItem(KEPT, JSON.stringify({ id, at: Date.now() }));
+    localStorage.setItem(KEPT, JSON.stringify(visit));
   } catch {
     // No storage: the ID lasts for this page.
   }
-  return id;
 }
 
 /**
@@ -48,9 +45,10 @@ function visitId(): string | null {
   if (off || !signInPage) forget();
   if (off) return null;
   try {
-    const carried = query.get("ph_id") ?? "";
-    const id = ID.test(carried) ? carried : ((signInPage ? kept() : null) ?? crypto.randomUUID());
-    return signInPage ? keep(id) : id;
+    // The time the ID was first kept goes back into storage unchanged: opening the page again never renews it.
+    const visit = resolveVisit(query.get("ph_id"), signInPage ? kept() : null, Date.now(), () => crypto.randomUUID());
+    if (signInPage) keep(visit);
+    return visit.id;
   } catch {
     return null;
   }
