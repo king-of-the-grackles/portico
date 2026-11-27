@@ -27,7 +27,7 @@ import { ShareMail } from "./core/mail";
 import { Messages } from "./core/messages";
 import { People } from "./core/people";
 import { Presence } from "./core/presence";
-import { Settings } from "./core/settings";
+import { firstMessageKey, Settings } from "./core/settings";
 import { Shares } from "./core/shares";
 import { neverSent, Tasks } from "./core/tasks";
 import type { AccountSignIn, Agent, Message, Notice, Person, PorticoConfig, Workspace } from "./core/types";
@@ -231,9 +231,35 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
     if (set.size >= 10_000) set.delete(set.values().next().value!);
     set.add(id);
   };
-  /** People whose first message is settled, so the search for an earlier message isn't run again for them. */
+  /** People whose first message is settled, so neither the settings nor the messages are looked at again for them. */
   const senders = new Set<string>();
   const startedAt = now().getTime();
+  /**
+   * Notes for good that the person has sent a message. Messages are pruned after a while, so what is stored of them
+   * stops saying so; this stays, and the first message is never counted a second time.
+   */
+  const settleFirst = (personId: string) => {
+    settings.setOnce(firstMessageKey(personId), now().toISOString());
+    remember(senders, personId);
+  };
+  /**
+   * Once per Portico server, before the first look for a first message: everyone with a message stored from before
+   * this process started has sent one already, also the people who send nothing more before those messages are pruned.
+   * A message from this process is left to its own notice, which may still be to come.
+   */
+  const backfillFirsts = () => {
+    if (settings.get("first_message_sent_backfilled") !== null) return;
+    const before = new Date(startedAt).toISOString();
+    const at = now().toISOString();
+    content.each(({ db: contentDb }) => {
+      const rows = contentDb.query("SELECT DISTINCT from_id AS id FROM messages WHERE created_at < ?1").all(before) as { id: string }[];
+      for (const { id } of rows) {
+        const owner = agents.get(id)?.ownerId;
+        if (owner) settings.setOnce(firstMessageKey(owner), at);
+      }
+    });
+    settings.set("first_message_sent_backfilled", at);
+  };
   /** Tasks this process has counted as completed, to save the look at what is stored: that look is what decides. */
   const completed = new Set<string>();
   const taskCompleted = (first: Message, byId: string) => {
@@ -279,14 +305,19 @@ export function createPortico(config: PorticoConfig, opts: PorticoOptions): Port
       const through = workspaces.get(m.workspaceId);
       if (through) others.portico_id = through.ownerId;
       analytics.capture("message_sent", sender.ownerId, properties, undefined, others);
-      // The first message is the one with nothing saved before it. What is stored decides, so it holds after a
-      // restart and whatever order notices arrive in. The cache only saves the look: a person goes in once the first
-      // message is counted, or once an earlier message from before this process started is found. An earlier one
-      // from this process may be the first itself, with its own notice still to come, so that settles nothing yet.
+      // The first message is the one with nothing saved before it, from a person not noted as having sent one. The
+      // note is what holds for good: it is written when the first message is counted, or when an earlier message
+      // from before this process started is found. An earlier one from this process may be the first itself, with
+      // its own notice still to come, so that settles nothing yet. What is stored decides, never the order notices
+      // arrive in.
       if (!senders.has(sender.ownerId)) {
-        const earlier = messages.sentEarlier(sender.ownerId, m);
-        if (earlier === null) analytics.capture("first_message_sent", sender.ownerId, properties, undefined, others);
-        if (earlier === null || Date.parse(earlier) < startedAt) remember(senders, sender.ownerId);
+        backfillFirsts();
+        if (settings.get(firstMessageKey(sender.ownerId)) !== null) remember(senders, sender.ownerId);
+        else {
+          const earlier = messages.sentEarlier(sender.ownerId, m);
+          if (earlier === null) analytics.capture("first_message_sent", sender.ownerId, properties, undefined, others);
+          if (earlier === null || Date.parse(earlier) < startedAt) settleFirst(sender.ownerId);
+        }
       }
     }
     // A task's outcome is worked out from its messages, never stored, so the step that completes one is seen here: a

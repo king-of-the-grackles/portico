@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Analytics } from "../src/core/analytics";
 import { readKept, resolveVisit } from "../src/web/client/visit-id";
 import { LIMITS } from "../src/core/limits";
+import { firstMessageKey } from "../src/core/settings";
 import type { WebhookRequest, WebhookResult } from "../src/core/webhooks";
 import { captureLogs } from "../src/log";
 import {
@@ -913,6 +914,75 @@ describe("server events", () => {
     p.messages.send(p.agents.get(grok.agent.id)!, { to: "muse", subject: "s", text: "after the restart" });
     p.messages.send(p.agents.get(muse.agent.id)!, { to: "grok-bot", subject: "s", text: "and once more" });
     expect(await firsts(p)).toHaveLength(1);
+  });
+
+  test("first_message_sent is not counted again once the person's messages are pruned, in the same process or after a restart", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "portico-analytics-"));
+    const posts = fakeWebhooks();
+    const open = () => makePortico({ dataDir, config: { analytics: CONFIG }, analyticsPost: posts.post });
+    const firsts = async (p: ReturnType<typeof makePortico>) => {
+      await flush();
+      await p.analytics.flush();
+      return posts.sent.flatMap((req) => (JSON.parse(req.body) as { batch: Sent[] }).batch).filter((e) => e.event === "first_message_sent");
+    };
+    /** What the history window does in the end: nothing of anyone's messages is stored any more. */
+    const prune = (p: ReturnType<typeof makePortico>) => p.content.each(({ db }) => db.run("DELETE FROM messages"));
+    let p = open();
+    const chris = await addOwner(p);
+    const grok = addAppAgent(p, chris, "grok-bot");
+    const muse = addAppAgent(p, chris, "muse");
+    p.messages.send(grok.agent, { to: "muse", subject: "s", text: "t" });
+    expect(await firsts(p)).toHaveLength(1);
+    expect(p.settings.get(firstMessageKey(chris.id))).not.toBeNull();
+    prune(p);
+    p.messages.send(muse.agent, { to: "grok-bot", subject: "s", text: "after the prune" });
+    expect(await firsts(p)).toHaveLength(1);
+    prune(p);
+    p.close();
+    p.db.close();
+    p = open();
+    p.clock.advance(60_000);
+    p.messages.send(p.agents.get(grok.agent.id)!, { to: "muse", subject: "s", text: "after the prune and a restart" });
+    expect(await firsts(p)).toHaveLength(1);
+  });
+
+  test("people with messages stored from before analytics was on have sent their first: noted once, and it outlasts the prune", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "portico-analytics-"));
+    const posts = fakeWebhooks();
+    const firsts = async (p: ReturnType<typeof makePortico>) => {
+      await flush();
+      await p.analytics.flush();
+      return posts.sent.flatMap((req) => (JSON.parse(req.body) as { batch: Sent[] }).batch).filter((e) => e.event === "first_message_sent");
+    };
+    // Analytics off: nothing is counted and nothing is noted.
+    let p = makePortico({ dataDir });
+    const chris = await addOwner(p);
+    const grok = addAppAgent(p, chris, "grok-bot");
+    addAppAgent(p, chris, "muse");
+    const maya = await addMember(p);
+    const scout = addAppAgent(p, maya, "scout");
+    addAppAgent(p, maya, "dots");
+    p.messages.send(grok.agent, { to: "muse", subject: "s", text: "t" });
+    await flush();
+    expect(p.settings.get(firstMessageKey(chris.id))).toBeNull();
+    p.close();
+    p.db.close();
+
+    // Analytics on, later. Maya, who never sent, sends her first: that look notes Chris, who sends nothing for now.
+    p = makePortico({ dataDir, config: { analytics: CONFIG }, analyticsPost: posts.post, later: 60_000 });
+    p.messages.send(p.agents.get(scout.agent.id)!, { to: "dots", subject: "s", text: "t" });
+    expect((await firsts(p)).map((e) => e.distinct_id)).toEqual([maya.id]);
+    expect(p.settings.get(firstMessageKey(chris.id))).not.toBeNull();
+    expect(p.settings.get("first_message_sent_backfilled")).not.toBeNull();
+    // His messages are pruned, and then he sends again: not a first.
+    p.content.each(({ db }) => db.run("DELETE FROM messages"));
+    p.messages.send(p.agents.get(grok.agent.id)!, { to: "muse", subject: "s", text: "back" });
+    expect((await firsts(p)).map((e) => e.distinct_id)).toEqual([maya.id]);
+
+    // What was noted about a person goes when the person does.
+    p.people.remove(maya.id);
+    expect(p.settings.get(firstMessageKey(maya.id))).toBeNull();
+    expect(p.settings.get(firstMessageKey(chris.id))).not.toBeNull();
   });
 
   test("a note picked up is completed once: an answer to it later, also after a restart, completes nothing more", async () => {
