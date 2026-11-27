@@ -40,16 +40,16 @@ test("a file is sent, downloaded by the receiver, and passed on into another Por
   const got = await helper.receive(onward);
   expect(got.attachments.map((f) => f.id)).toEqual([reportId]);
 
-  // The bytes are copied into that Portico's own storage after the send, so the download may take a moment to work.
+  // The bytes are copied into that Portico's own storage after the send. Until the copy is there, with a bucket, the
+  // download reads the first Portico's bytes: so the check waits for an address of the copy's own. Each Portico keeps
+  // its own copy, and the two download addresses differ beyond their signatures. Without a bucket (./local.sh: files
+  // in the data folder) Portico serves every file itself at /files/<id>, so that one check is left out there.
   let copy!: { bytes: Buffer; url: string };
   await expect(async () => {
     copy = await helper.download(got.id, reportId);
+    if (new URL(copy.url).origin !== new URL(BASE_URL).origin) {
+      expect(new URL(copy.url).pathname).not.toBe(new URL(report.url).pathname);
+    }
   }).toPass({ timeout: 30_000 });
   expect(copy.bytes.equals(bytes)).toBe(true);
-  // With a bucket, each Portico keeps its own copy: the two download addresses differ beyond their signatures.
-  // Without one (./local.sh: files in the data folder) Portico serves every file itself at /files/<id>, so this one
-  // check is left out there.
-  if (new URL(copy.url).origin !== new URL(BASE_URL).origin) {
-    expect(new URL(copy.url).pathname).not.toBe(new URL(report.url).pathname);
-  }
 });
