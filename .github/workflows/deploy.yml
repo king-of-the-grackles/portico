@@ -48,7 +48,9 @@ jobs:
           && github.event.workflow_run.head_repository.full_name == github.repository)
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Only a backstop: the steps that can hang carry their own limits (two builds 17 minutes, release 10.5, wait 5,
+    # rollback 15.5, the rest about 2: 50 at the very worst), so the rollback is never what gets cut.
+    timeout-minutes: 60
     environment: dev
     steps:
       - uses: actions/checkout@v7
@@ -86,11 +88,21 @@ jobs:
           echo "image=$image" >>"$GITHUB_OUTPUT"
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
 
+      # Builds and pushes only: nothing on dev changes, so a build that hangs is cut off and tried once more.
+      - name: Build the image
+        id: build
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: scripts/deploy/build-image.sh fly.dev.toml "$DEV_APP" "$DEPLOY_SHA"
+
+      # The release, from the image just built. Never tried again by itself. One that takes over 10 minutes is stopped
+      # and counts as failed, which leaves the time for the rollback below.
       - name: Deploy
         id: deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --build-arg "PORTICO_COMMIT=$DEPLOY_SHA"
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: timeout --kill-after=30 600 flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --image "$IMAGE"
 
       - name: Wait until dev answers with this commit
         id: healthz
@@ -117,7 +129,7 @@ jobs:
             echo "action=none" >>"$GITHUB_OUTPUT"
           else
             echo "Running now: ${now:-unknown}. Deploying $PREVIOUS_IMAGE again."
-            flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --image "$PREVIOUS_IMAGE"
+            timeout --kill-after=30 600 flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --image "$PREVIOUS_IMAGE"
             echo "action=redeployed" >>"$GITHUB_OUTPUT"
           fi
           scripts/deploy/wait-healthz.sh "$DEV_URL" "" 300
@@ -127,6 +139,7 @@ jobs:
         env:
           RESULT: ${{ job.status }}
           PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
           HEALTHZ_OUTCOME: ${{ steps.healthz.outcome }}
           ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
@@ -137,7 +150,11 @@ jobs:
             echo "- App: \`$DEV_APP\` ($DEV_URL)"
             echo "- Commit: \`$DEPLOY_SHA\`"
             echo "- Image running before: \`${PREVIOUS_IMAGE:-not recorded}\`"
-            echo "- Deploy: ${DEPLOY_OUTCOME:-not run}. Wait for this commit on /healthz: ${HEALTHZ_OUTCOME:-not run}."
+            echo "- Build: ${BUILD_OUTCOME:-not run}. Deploy: ${DEPLOY_OUTCOME:-not run}. Wait for this commit on /healthz: ${HEALTHZ_OUTCOME:-not run}."
+            if [ "$BUILD_OUTCOME" = "failure" ]; then
+              echo
+              echo "**The image could not be built, in two tries. Dev was not touched** and still runs \`${PREVIOUS_IMAGE:-what it ran before}\`."
+            fi
             if [ "$DEPLOY_OUTCOME" != "failure" ] && [ "$HEALTHZ_OUTCOME" != "failure" ]; then
               echo "- Rollback: none."
             elif [ -z "$PREVIOUS_IMAGE" ]; then
@@ -300,7 +317,10 @@ jobs:
       && (needs.watch-dev.result == 'success'
         || (needs.watch-dev.result == 'skipped' && needs.plan-production.outputs.visible == 'false'))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Only a backstop: the steps that can hang carry their own limits, so the rollback is never what gets cut. At the
+    # very worst, without a migration: two builds 17 minutes, release 10.5, smoke check 8, rollback 15.5, the rest
+    # about 2: 53. With a migration: the snapshot 16 more and no rollback: 53.5.
+    timeout-minutes: 70
     # 'production-migration' has a required reviewer (set in the repository's settings), so a deploy that may change
     # the database waits for a person. Each environment holds its own copy of FLY_API_TOKEN.
     environment: ${{ needs.plan-production.outputs.migration == 'true' && 'production-migration' || 'production' }}
@@ -375,11 +395,22 @@ jobs:
             sleep 10
           done
 
+      # Builds and pushes only: production is not touched, so a build that hangs is cut off and tried once more.
+      - name: Build the image
+        id: build
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: scripts/deploy/build-image.sh fly.hosted.toml "$PRODUCTION_APP" "$DEPLOY_SHA"
+
+      # The release, from the image just built. Never tried again by itself: a release that failed halfway is for the
+      # rollback below, or for a person. One that takes over 10 minutes is stopped and counts as failed, which leaves
+      # the time for that rollback.
       - name: Deploy
         id: deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl deploy -c fly.hosted.toml -a "$PRODUCTION_APP" --ha=false --build-arg "PORTICO_COMMIT=$DEPLOY_SHA"
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: timeout --kill-after=30 600 flyctl deploy -c fly.hosted.toml -a "$PRODUCTION_APP" --ha=false --image "$IMAGE"
 
       # Read-only: four GETs. Nothing here signs in or makes a person, an agent or a message.
       - name: Smoke check
@@ -415,7 +446,7 @@ jobs:
             echo "The previous image is still the one running: nothing to roll back."
             echo "action=none" >>"$GITHUB_OUTPUT"
           else
-            flyctl deploy -c fly.hosted.toml -a "$PRODUCTION_APP" --ha=false --image "$PREVIOUS_IMAGE"
+            timeout --kill-after=30 600 flyctl deploy -c fly.hosted.toml -a "$PRODUCTION_APP" --ha=false --image "$PREVIOUS_IMAGE"
             echo "action=redeployed" >>"$GITHUB_OUTPUT"
           fi
           scripts/deploy/wait-healthz.sh "$PRODUCTION_URL" "" 300
@@ -427,6 +458,7 @@ jobs:
           PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
           SNAPSHOT_ID: ${{ steps.snapshot.outputs.id }}
           SNAPSHOT_VOLUME: ${{ steps.snapshot.outputs.volume }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
           ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
@@ -441,7 +473,11 @@ jobs:
             if [ "$MIGRATION" = "true" ]; then
               echo "- Volume snapshot taken first: \`${SNAPSHOT_ID:-none}\` of volume \`${SNAPSHOT_VOLUME:-unknown}\`"
             fi
-            echo "- Deploy: $DEPLOY_OUTCOME. Smoke check: $SMOKE_OUTCOME."
+            echo "- Build: $BUILD_OUTCOME. Deploy: $DEPLOY_OUTCOME. Smoke check: $SMOKE_OUTCOME."
+            if [ "$BUILD_OUTCOME" = "failure" ]; then
+              echo
+              echo "**The image could not be built, in two tries. Production was not touched** and still runs \`$PREVIOUS_IMAGE\`. Commit \`$DEPLOY_SHA\` is not live; run the failed job again."
+            fi
             if [ "$DEPLOY_OUTCOME" = "failure" ] || [ "$SMOKE_OUTCOME" = "failure" ]; then
               echo
               if [ "$MIGRATION" = "true" ]; then

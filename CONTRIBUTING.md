@@ -43,6 +43,8 @@ This is how the hosted app (`app.portico.chat`) and its dev copy (`dev.portico.c
 5. **Production.** Without a migration, deploys in the `production` environment. With one, deploys in `production-migration`, which waits for a reviewer, and snapshots the volume first. Then it checks, with GETs only, that `/healthz` answers with the commit and that the sign-in page and `/api/agent/openapi.json` answer 200.
 6. **If that check fails.** Without a migration, the previous image is deployed again and the run fails. With one, nothing is rolled back, because the old code would run on a changed database: the run fails and its summary names the snapshot, for a person to decide.
 
+On dev and on production the image is built and pushed first (`scripts/deploy/build-image.sh`), and released from that image in a second step. The build changes nothing that runs, so one that hangs is cut off after 8 minutes and tried once more, on Fly's own builder instead of Depot. The release is never tried again by itself; one that takes over 10 minutes is stopped and counts as failed, so the rollback that follows always has its time.
+
 Nothing runs unless the repository variable `DEPLOY_ENABLED` is `true`; unset it to stop deploys. Each run's summary page says what was deployed and how it went.
 
 | Where in GitHub's settings | What to create |
