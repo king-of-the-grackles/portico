@@ -48,7 +48,9 @@ jobs:
           && github.event.workflow_run.head_repository.full_name == github.repository)
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Only a backstop: the steps that can hang carry their own limits (two builds 17 minutes, release 10.5, wait 5,
+    # rollback 15.5, the rest about 2: 50 at the very worst), so the rollback is never what gets cut.
+    timeout-minutes: 60
     environment: dev
     steps:
       - uses: actions/checkout@v7
@@ -93,13 +95,14 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: scripts/deploy/build-image.sh fly.dev.toml "$DEV_APP" "$DEPLOY_SHA"
 
-      # The release, from the image just built. Never tried again by itself.
+      # The release, from the image just built. Never tried again by itself. One that takes over 10 minutes is stopped
+      # and counts as failed, which leaves the time for the rollback below.
       - name: Deploy
         id: deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           IMAGE: ${{ steps.build.outputs.image }}
-        run: flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --image "$IMAGE"
+        run: timeout --kill-after=30 600 flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --image "$IMAGE"
 
       - name: Wait until dev answers with this commit
         id: healthz
@@ -126,7 +129,7 @@ jobs:
             echo "action=none" >>"$GITHUB_OUTPUT"
           else
             echo "Running now: ${now:-unknown}. Deploying $PREVIOUS_IMAGE again."
-            flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --image "$PREVIOUS_IMAGE"
+            timeout --kill-after=30 600 flyctl deploy -c fly.dev.toml -a "$DEV_APP" --ha=false --image "$PREVIOUS_IMAGE"
             echo "action=redeployed" >>"$GITHUB_OUTPUT"
           fi
           scripts/deploy/wait-healthz.sh "$DEV_URL" "" 300
@@ -314,9 +317,10 @@ jobs:
       && (needs.watch-dev.result == 'success'
         || (needs.watch-dev.result == 'skipped' && needs.plan-production.outputs.visible == 'false'))
     runs-on: ubuntu-latest
-    # Two builds of at most 8.5 minutes, the release, the smoke check and a rollback fit in this. A deploy with a
-    # migration first waits up to 15 minutes for the volume snapshot, so that one gets longer.
-    timeout-minutes: ${{ needs.plan-production.outputs.migration == 'true' && 40 || 25 }}
+    # Only a backstop: the steps that can hang carry their own limits, so the rollback is never what gets cut. At the
+    # very worst, without a migration: two builds 17 minutes, release 10.5, smoke check 8, rollback 15.5, the rest
+    # about 2: 53. With a migration: the snapshot 16 more and no rollback: 53.5.
+    timeout-minutes: 70
     # 'production-migration' has a required reviewer (set in the repository's settings), so a deploy that may change
     # the database waits for a person. Each environment holds its own copy of FLY_API_TOKEN.
     environment: ${{ needs.plan-production.outputs.migration == 'true' && 'production-migration' || 'production' }}
@@ -399,13 +403,14 @@ jobs:
         run: scripts/deploy/build-image.sh fly.hosted.toml "$PRODUCTION_APP" "$DEPLOY_SHA"
 
       # The release, from the image just built. Never tried again by itself: a release that failed halfway is for the
-      # rollback below, or for a person.
+      # rollback below, or for a person. One that takes over 10 minutes is stopped and counts as failed, which leaves
+      # the time for that rollback.
       - name: Deploy
         id: deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           IMAGE: ${{ steps.build.outputs.image }}
-        run: flyctl deploy -c fly.hosted.toml -a "$PRODUCTION_APP" --ha=false --image "$IMAGE"
+        run: timeout --kill-after=30 600 flyctl deploy -c fly.hosted.toml -a "$PRODUCTION_APP" --ha=false --image "$IMAGE"
 
       # Read-only: four GETs. Nothing here signs in or makes a person, an agent or a message.
       - name: Smoke check
@@ -441,7 +446,7 @@ jobs:
             echo "The previous image is still the one running: nothing to roll back."
             echo "action=none" >>"$GITHUB_OUTPUT"
           else
-            flyctl deploy -c fly.hosted.toml -a "$PRODUCTION_APP" --ha=false --image "$PREVIOUS_IMAGE"
+            timeout --kill-after=30 600 flyctl deploy -c fly.hosted.toml -a "$PRODUCTION_APP" --ha=false --image "$PREVIOUS_IMAGE"
             echo "action=redeployed" >>"$GITHUB_OUTPUT"
           fi
           scripts/deploy/wait-healthz.sh "$PRODUCTION_URL" "" 300
